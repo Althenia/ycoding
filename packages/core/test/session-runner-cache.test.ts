@@ -452,8 +452,21 @@ test("native openrouter route uses camelCase fields", () => {
   const result = SessionRunnerCache.providerOptions(input)
   expect(result.providerOptions.openrouter.sessionID).toMatch(/^[0-9a-f]{64}$/)
   expect(result.providerOptions.openrouter.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
-  expect(result.providerOptions.openrouter).not.toHaveProperty("session_id")
-  expect(result.providerOptions.openrouter).not.toHaveProperty("prompt_cache_key")
+  expect(result.providerOptions.openrouter.session_id).toMatch(/^[0-9a-f]{64}$/)
+  expect(result.providerOptions.openrouter.prompt_cache_key).toMatch(/^[0-9a-f]{64}$/)
+})
+
+test("openrouter-responses route uses snake_case fields", () => {
+  const input = {
+    ...base,
+    sessionID: "ses_camel_resp",
+    routeID: "openrouter-responses",
+  }
+  const result = SessionRunnerCache.providerOptions(input)
+  expect(result.providerOptions.openrouter.session_id).toMatch(/^[0-9a-f]{64}$/)
+  expect(result.providerOptions.openrouter.prompt_cache_key).toMatch(/^[0-9a-f]{64}$/)
+  expect(result.providerOptions.openrouter.sessionID).toMatch(/^[0-9a-f]{64}$/)
+  expect(result.providerOptions.openrouter.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
 })
 
 test("rotates prompt_cache_key every 15m for providers that support it", () => {
