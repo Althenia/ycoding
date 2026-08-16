@@ -159,11 +159,11 @@ describe("OpenAIPlugin", () => {
     }),
   )
 
-  it.effect("corrects gpt-5.6 context limits only for the OpenAI catalog", () =>
+  it.effect("preserves gpt-5.6 context limits from master data for the OpenAI catalog", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       const family = ["gpt-5.6", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]
-      const inflatedLimit = { context: 1_050_000, input: 922_000, output: 128_000 }
+      const masterLimit = { context: 1_050_000, input: 922_000, output: 128_000 }
       yield* catalog.transform((catalog) => {
         const item = ProviderV2.Info.make({
           ...ProviderV2.Info.empty(ProviderV2.ID.openai),
@@ -174,24 +174,22 @@ describe("OpenAIPlugin", () => {
         })
         for (const id of family) {
           catalog.model.update(item.id, ModelV2.ID.make(id), (model) => {
-            model.limit = { ...inflatedLimit }
+            model.limit = { ...masterLimit }
           })
         }
         catalog.model.update(item.id, ModelV2.ID.make("gpt-5.5"), (model) => {
           model.limit = { context: 400_000, input: 300_000, output: 100_000 }
         })
         catalog.model.update(ProviderV2.ID.openrouter, ModelV2.ID.make("gpt-5.6"), (model) => {
-          model.limit = { ...inflatedLimit }
+          model.limit = { ...masterLimit }
         })
       })
       yield* addPlugin()
 
       for (const id of family) {
-        expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make(id))).limit).toEqual({
-          context: 372_000,
-          input: 922_000,
-          output: 128_000,
-        })
+        expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make(id))).limit).toEqual(
+          masterLimit,
+        )
       }
       expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.5"))).limit).toEqual({
         context: 400_000,
@@ -199,7 +197,7 @@ describe("OpenAIPlugin", () => {
         output: 100_000,
       })
       expect(required(yield* catalog.model.get(ProviderV2.ID.openrouter, ModelV2.ID.make("gpt-5.6"))).limit).toEqual(
-        inflatedLimit,
+        masterLimit,
       )
     }),
   )

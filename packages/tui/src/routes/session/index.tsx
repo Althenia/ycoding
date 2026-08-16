@@ -3223,7 +3223,14 @@ function safeToolDetailText(value: string) {
     )
   )
     return "Sensitive response detail omitted."
-  if (/^[\[{]/.test(text)) return "Structured response omitted."
+  if (/^[\[{]/.test(text)) {
+    try {
+      const parsed = JSON.parse(text)
+      const lines = safeToolDetailLines(parsed)
+      if (lines.length > 0) return lines.slice(0, 20).join("\n")
+    } catch {}
+    return text.slice(0, 2000)
+  }
   return text
 }
 

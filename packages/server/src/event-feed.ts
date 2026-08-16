@@ -75,8 +75,26 @@ export const make = Effect.fn("EventFeed.make")(function* (
     }
   })
 
+  const HEARTBEAT = ": keep-alive\n\n"
+  const HEARTBEAT_INTERVAL_MS = 20000
+  const heartbeatInterval = yield* Effect.sync(() => {
+    const id = setInterval(() => {
+      if (subscribers.size === 0) return
+      for (const subscriber of Array.from(subscribers)) {
+        if (Queue.offerUnsafe(subscriber, HEARTBEAT)) continue
+        subscribers.delete(subscriber)
+        Queue.failCauseUnsafe(subscriber, Cause.fail(new SubscriberOverflowError({ capacity })))
+      }
+    }, HEARTBEAT_INTERVAL_MS)
+    const maybeUnref = (id as unknown as { unref?: () => void }).unref
+    if (typeof maybeUnref === "function") maybeUnref.call(id)
+    return id
+  })
+
   const unsubscribe = yield* observe(publish)
-  yield* Effect.addFinalizer(() => unsubscribe)
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => clearInterval(heartbeatInterval)).pipe(Effect.andThen(unsubscribe)),
+  )
 
   return Service.of({
     subscribe: Effect.acquireRelease(
