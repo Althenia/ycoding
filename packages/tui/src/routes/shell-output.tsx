@@ -161,7 +161,7 @@ export function ShellOutput() {
       }>
         {(s) => (
           <>
-            <ShellOutputHeader shell={s()} owner={owner()} />
+            <ShellOutputHeader shell={s()} owner={owner()} now={now()} />
             <ShellOutputStream text={outputText()} loading={loading()} />
             <ShellOutputMetadata shell={s()} owner={owner()} now={now()} />
             <ShellOutputFooter shell={s()} owner={owner()} onKill={kill} onBack={back} />

@@ -1,16 +1,19 @@
 import { createEffect, createMemo, For, onCleanup, Show, useContext, createContext } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useTheme } from "../../../context/theme"
-import { SplitBorder } from "../../../ui/border"
 import { Keymap } from "../../../context/keymap"
+import { useData } from "../../../context/data"
+import { groupSessionShells } from "../../../util/session"
+import { activeSubagentCount } from "../../../util/subagent"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 
 export interface ComposerHint {
   label: string
   shortcut: string
+  gapAfter?: number
 }
 
 interface Tab {
@@ -37,11 +40,13 @@ export type ComposerProps = {
   open: boolean
   defaultTab?: string
   onClose?: () => void
+  prompt?: JSX.Element
 }
 
 export function Composer(props: ComposerProps) {
   const { themeV2 } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
+  const data = useData()
 
   const [store, setStore] = createStore({
     tabs: {} as Record<string, Tab>,
@@ -51,14 +56,34 @@ export function Composer(props: ComposerProps) {
   const tabList = createMemo(() => Object.values(store.tabs))
   const activeTab = createMemo(() => tabList().find((t) => t.id === store.active))
   const footerHints = createMemo(() => activeTab()?.hints?.() ?? [])
+  const session = createMemo(() => data.session.get(props.sessionID))
+  const shells = createMemo(() =>
+    groupSessionShells(data.shell.list(session()?.location), data.session.list(), props.sessionID).reduce(
+      (count, group) => count + group.shells.length,
+      0,
+    ),
+  )
+  const subagents = createMemo(() => activeSubagentCount(data.session.subagent.list(props.sessionID)))
+  const hasActiveContent = createMemo(() =>
+    activeTab()?.id === "shell" ? shells() > 0 : activeTab()?.id === "subagents" ? subagents() > 0 : false,
+  )
 
   // Set active tab when opened
+  let defaultTabApplied = false
+
   createEffect(() => {
-    if (!props.open) return
+    if (!props.open) {
+      defaultTabApplied = false
+      if (store.active) setStore("active", "")
+      return
+    }
+    if (defaultTabApplied) return
     const tabs = tabList()
     if (tabs.length === 0) return
     const match = props.defaultTab && tabs.find((t) => t.id === props.defaultTab)
+    if (props.defaultTab && !match) return
     setStore("active", match ? match.id : tabs[0].id)
+    defaultTabApplied = true
   })
 
   function close() {
@@ -111,72 +136,81 @@ export function Composer(props: ComposerProps) {
 
   return (
     <ComposerContext.Provider value={ctx}>
-      <box flexShrink={0} visible={props.open} minHeight={Math.ceil(dimensions().height / 2)}>
+      <box
+        flexShrink={0}
+        visible={props.open}
+        minHeight={hasActiveContent() ? Math.ceil(dimensions().height / 2) : undefined}
+      >
         <box
-          {...SplitBorder}
-          border={["left"]}
-          borderColor={themeV2.border.default}
           backgroundColor={themeV2.background.default}
-          paddingLeft={1}
+          paddingLeft={activeTab()?.id === "shell" ? 1 : 3}
           paddingRight={2}
-          paddingTop={1}
+          paddingTop={activeTab()?.id === "shell" ? 7 : props.prompt ? 5 : 3}
           paddingBottom={1}
         >
           <box gap={1}>
-            <box flexDirection="row" justifyContent="space-between" paddingLeft={1}>
+            <box flexDirection="row" paddingLeft={0}>
+              <text fg={themeV2.text.subdued}>Prompt</text>
+              <box width={5} />
               <Show
                 when={tabList().length > 1}
                 fallback={
-                  <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+                  <text fg={themeV2.text.feedback.success.default} attributes={TextAttributes.BOLD}>
                     {tabList()[0]?.label ?? ""}
                   </text>
                 }
               >
-                <box flexDirection="row" gap={2}>
+                <box flexDirection="row">
                   <For each={tabList()}>
-                    {(t) => {
-                      const isActive = createMemo(() => store.active === t.id)
+                    {(tab) => {
+                      const isActive = createMemo(() => store.active === tab.id)
                       return (
-                        <text
-                          fg={isActive() ? themeV2.text.default : themeV2.text.subdued}
-                          attributes={isActive() ? TextAttributes.BOLD : undefined}
-                          onMouseUp={() => setStore("active", t.id)}
-                        >
-                          {t.label}
-                        </text>
+                        <>
+                          <text
+                            fg={isActive() ? themeV2.text.feedback.success.default : themeV2.text.subdued}
+                            attributes={isActive() ? TextAttributes.BOLD : undefined}
+                            onMouseUp={() => setStore("active", tab.id)}
+                          >
+                            {tab.label}
+                          </text>
+                          <Show when={tab.id === "shell"}>
+                            <box width={1} />
+                            <text fg={themeV2.text.feedback.info.default}>{shells()}</text>
+                            <box width={4} />
+                          </Show>
+                          <Show when={tab.id === "subagents"}>
+                            <box width={2} />
+                            <text fg={themeV2.text.feedback.warning.default}>{subagents()}</text>
+                          </Show>
+                        </>
                       )
                     }}
                   </For>
                 </box>
               </Show>
-              <text fg={themeV2.text.subdued} onMouseUp={close}>
-                esc
-              </text>
             </box>
-            <SubagentsTab sessionID={props.sessionID} />
             <ShellTab sessionID={props.sessionID} />
-            <box flexDirection="row" gap={2} paddingLeft={1} flexShrink={0}>
+            <SubagentsTab sessionID={props.sessionID} />
+            <box flexDirection="row" flexShrink={0}>
               <For each={footerHints()}>
                 {(hint) => (
-                  <text>
-                    <span style={{ fg: themeV2.text.default }}>
-                      <b>{hint.label}</b>{" "}
-                    </span>
-                    <span style={{ fg: themeV2.text.subdued }}>{hint.shortcut}</span>
-                  </text>
+                  <>
+                    <text>
+                      <span style={{ fg: themeV2.text.default }}>
+                        <b>{hint.label}</b>{" "}
+                      </span>
+                      <span style={{ fg: themeV2.text.subdued }}>{hint.shortcut}</span>
+                    </text>
+                    <Show when={hint.gapAfter} keyed>
+                      {(gap) => <box width={gap} />}
+                    </Show>
+                  </>
                 )}
               </For>
-              <Show when={tabList().length > 1}>
-                <text>
-                  <span style={{ fg: themeV2.text.default }}>
-                    <b>tabs</b>{" "}
-                  </span>
-                  <span style={{ fg: themeV2.text.subdued }}>←/→</span>
-                </text>
-              </Show>
             </box>
           </box>
         </box>
+        <Show when={props.prompt}>{(prompt) => <box position="absolute" top={0} left={0} right={0} zIndex={1}>{prompt()}</box>}</Show>
       </box>
     </ComposerContext.Provider>
   )

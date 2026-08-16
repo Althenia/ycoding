@@ -19,8 +19,11 @@ export const ID = IDSchema.pipe(
 )
 export type ID = typeof ID.Type
 
-export const Status = Schema.Literals(["running", "exited", "timeout", "killed"])
+export const Status = Schema.Literals(["running", "exited", "timeout", "memory-limit", "killed"])
 export type Status = typeof Status.Type
+
+export const MAX_MEMORY_LIMIT_MB = 1_048_576
+export const MemoryLimitMb = NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX_MEMORY_LIMIT_MB))
 
 export const Time = Schema.Struct({
   started: Schema.Finite,
@@ -58,6 +61,7 @@ export const CreateInput = Schema.Struct({
   command: Schema.String,
   cwd: optional(Schema.String),
   timeout: NonNegativeInt,
+  memoryLimitMb: optional(MemoryLimitMb),
   metadata: optional(Metadata),
 })
 export interface CreateInput extends Schema.Schema.Type<typeof CreateInput> {}

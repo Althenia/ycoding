@@ -9,6 +9,7 @@ import { ThemeProvider } from "../../src/context/theme"
 import { DialogProvider, useDialog } from "../../src/ui/dialog"
 import { DialogSelect } from "../../src/ui/dialog-select"
 import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
+import { RouteProvider } from "../../src/context/route"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 
@@ -45,11 +46,11 @@ test("renders a full dialog panel with its selected model", async () => {
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ToastProvider>
+              <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
                 <DialogProvider>
                   <DialogFixture />
                 </DialogProvider>
-              </ToastProvider>
+              </ToastProvider></RouteProvider>
             </ThemeProvider>
           </Keymap.Provider>
         </ConfigProvider>
@@ -82,9 +83,9 @@ test("renders the variant glyph and label in toast titles", async () => {
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ToastProvider>
+            <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
               <ToastFixture />
-            </ToastProvider>
+            </ToastProvider></RouteProvider>
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
@@ -122,11 +123,11 @@ async function renderDialogPanel(
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ToastProvider>
+              <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
                 <DialogProvider>
                   <DialogFixture />
                 </DialogProvider>
-              </ToastProvider>
+              </ToastProvider></RouteProvider>
             </ThemeProvider>
           </Keymap.Provider>
         </ConfigProvider>

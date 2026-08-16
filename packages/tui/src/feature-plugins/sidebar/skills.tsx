@@ -25,9 +25,7 @@ export function SkillsRailContent(props: {
   const { themeV2 } = useTheme()
   const active = createMemo(() => props.skills.filter((skill) => skill.state === "active").length)
   const conflicts = createMemo(() => skillConflicts(props.skills))
-  const summary = createMemo(
-    () => `${active()} active${conflicts().length > 0 ? `, ${conflicts().length} conflict${conflicts().length === 1 ? "" : "s"}` : ""}`,
-  )
+  const summary = createMemo(() => String(active()))
   return (
     <Show when={props.skills.length > 0}>
       <RailSection section="skills" title="SKILLS" summary={summary()} attention={conflicts().length > 0}>
@@ -50,7 +48,7 @@ export function SkillsRailContent(props: {
         <For each={props.skills}>
           {(skill) => (
             <text fg={skill.conflicts.length ? themeV2.text.feedback.warning.default : themeV2.text.subdued}>
-              {skill.name} {sessionSkillLabel(skill)}
+              {skill.name} {skill.scope ?? sessionSkillLabel(skill)}
             </text>
           )}
         </For>

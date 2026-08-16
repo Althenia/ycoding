@@ -4,6 +4,7 @@ import path from "path"
 import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect, Fiber, Schedule, Schema, Scope } from "effect"
+import { ConfigShell } from "../config/shell"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
@@ -36,6 +37,10 @@ export const Input = Schema.Struct({
     .annotate({
       description: `Optional process timeout in milliseconds. Zero or omission means unlimited. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. May not exceed ${MAX_TIMEOUT_MS}.`,
     }),
+  memory_limit_mb: ConfigShell.MemoryLimitMb.pipe(Schema.optional).annotate({
+    description:
+      "Maximum resident memory in MiB for the command process tree. Zero disables the configured default. The command is terminated if sampled usage exceeds the limit.",
+  }),
   background: Schema.Boolean.pipe(Schema.optional).annotate({
     description:
       "Run the command in the background and return immediately. You will be notified when it completes. DO NOT poll its progress.",
@@ -47,6 +52,7 @@ const StructuredOutput = Schema.Struct({
   shellID: Schema.String.pipe(Schema.optional),
   truncated: Schema.Boolean,
   timeout: Schema.Boolean.pipe(Schema.optional),
+  memoryLimit: Schema.Boolean.pipe(Schema.optional),
 })
 
 const Output = Schema.Struct({
@@ -64,6 +70,8 @@ const modelOutput = (output: Output): string | undefined => {
     : ""
   if (output.status === "running") return `${warnings.trimStart()}${warnings ? "\n\n" : ""}${BACKGROUND_INSTRUCTION}`
   if (output.timeout) return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command timed out before completion.`
+  if (output.memoryLimit)
+    return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command exceeded its memory limit before completion.`
   return `${warnings.trimStart()}${warnings ? "\n\n" : ""}Command exited with code ${output.exit}.`
 }
 
@@ -149,7 +157,7 @@ export const Plugin = {
         draft.add(
           name,
           Tool.make({
-            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds (zero or omission: unlimited; maximum: ${MAX_TIMEOUT_MS}). Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
+            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds (zero or omission: unlimited; maximum: ${MAX_TIMEOUT_MS}). memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
             input: Input,
             output: Output,
             structured: StructuredOutput,
@@ -158,6 +166,7 @@ export const Plugin = {
               ...(output.exit === undefined ? {} : { exit: output.exit }),
               ...(output.shellID === undefined ? {} : { shellID: output.shellID }),
               ...(output.timeout === undefined ? {} : { timeout: output.timeout }),
+              ...(output.memoryLimit === undefined ? {} : { memoryLimit: output.memoryLimit }),
             }),
             toModelOutput: ({ output }) => {
               const parts: Content[] = [{ type: "text", text: output.output }]
@@ -179,15 +188,19 @@ export const Plugin = {
                     command: input.command,
                     cwd: target.canonical,
                     timeout,
+                    memoryLimitMb: input.memory_limit_mb,
                     metadata: { sessionID: context.sessionID },
                   })
                   .pipe(
                     Effect.mapError(
-                      (error) =>
-                        new ToolFailure({
+                      (error) => {
+                        if (error instanceof Shell.MemoryLimitUnavailable)
+                          return new ToolFailure({ message: error.message, error })
+                        return new ToolFailure({
                           message: "Shell sandboxing is required, but no enforceable backend is available.",
                           error,
-                        }),
+                        })
+                      },
                     ),
                   )
                 const external = target.externalDirectory
@@ -256,6 +269,15 @@ export const Plugin = {
                       output: `Command exceeded timeout of ${timeout} ms. Retry with a larger timeout if the command is expected to take longer.`,
                       truncated: false,
                       timeout: true,
+                      status: "completed" as const,
+                    }
+                  }
+
+                  if (final.status === "memory-limit") {
+                    return {
+                      output: `Command was terminated by the ${prepared.memoryLimitMb} MiB memory limit.`,
+                      truncated: false,
+                      memoryLimit: true,
                       status: "completed" as const,
                     }
                   }

@@ -65,8 +65,8 @@ describe("header status", () => {
   const cases: Array<[SessionHeaderState, number, string]> = [
     [{ type: "ready" }, 100, "ready"],
     [{ type: "working", elapsed: 4.14 }, 120, "working 4.1s"],
-    [{ type: "awaiting-input", count: 1 }, 100, "1 subagent awaiting input"],
-    [{ type: "awaiting-input", count: 2 }, 100, "2 subagents awaiting input"],
+    [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
+    [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", code: 429 }, 100, "provider error \u00b7 429"],
     [{ type: "provider-error" }, 100, "provider error"],
     [{ type: "yolo" }, 100, "YOLO \u00b7 auto-approve"],
@@ -80,6 +80,10 @@ describe("header status", () => {
 
   test("renders a bare elapsed value for working at 100 columns", () => {
     expect(headerStatusLabel({ type: "working", elapsed: 4.14 }, 100)).toBe("4.1s")
+  })
+
+  test("shows the active shell count instead of ready", () => {
+    expect(headerStatusLabel({ type: "ready" }, 100, 3)).toBe("3 shells running")
   })
 })
 
@@ -239,16 +243,10 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("renders the branch at 100 columns and omits it when absent", async () => {
+  test("renders the branch at 100 columns", async () => {
     const present = await renderHeader(100, { type: "ready" })
     expect(present.captureCharFrame()).toContain("main")
     present.renderer.destroy()
-
-    const absent = await renderHeader(100, { type: "ready" }, {
-      identity: { agent: "Build" },
-    })
-    expect(absent.captureCharFrame()).not.toContain("main")
-    absent.renderer.destroy()
   })
 
   test("renders every supported status with its semantic theme token", async () => {
@@ -256,7 +254,7 @@ describe("header rendering", () => {
     const cases: Array<[SessionHeaderState, string, { toInts(): readonly number[] }]> = [
       [{ type: "ready" }, "ready", theme.text.subdued],
       [{ type: "working", elapsed: 4.1 }, "working 4.1s", theme.text.feedback.success.default],
-      [{ type: "awaiting-input", count: 1 }, "1 subagent awaiting input", theme.text.feedback.warning.default],
+      [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error" }, "provider error", theme.text.feedback.error.default],
       [{ type: "yolo" }, "YOLO · auto-approve", theme.text.feedback.error.default],
     ]

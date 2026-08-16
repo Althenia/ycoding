@@ -68,11 +68,28 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
           )
         const first = messages[0]
         const last = messages.at(-1)
+        // Describes what the `next` cursor still has behind it. Absent rather than zero when there
+        // is no next cursor at all, so a client can tell "no more history" from "not reported".
+        const remaining = last
+          ? yield* session
+              .messageRemainder({ sessionID: ctx.params.sessionID, afterID: last.id, order })
+              .pipe(
+                Effect.catchTag("Session.NotFoundError", (error) =>
+                  Effect.fail(
+                    new SessionNotFoundError({
+                      sessionID: error.sessionID,
+                      message: `Session not found: ${error.sessionID}`,
+                    }),
+                  ),
+                ),
+              )
+          : undefined
         return {
           data: messages,
           cursor: {
             previous: first ? cursor.encode(first, order, "previous") : undefined,
             next: last ? cursor.encode(last, order, "next") : undefined,
+            messages: remaining,
           },
         }
       }),

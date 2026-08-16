@@ -68,8 +68,8 @@ test("renders the responsive rail placement bands", async () => {
     try {
       const line = screen.lines().find((value) => value.includes("SESSION"))
       const railWidth = viewport.width >= 160 ? 50 : 32
-      const padding = viewport.width >= 160 ? 3 : 2
-      expect(line?.indexOf("SESSION")).toBe(viewport.width - railWidth + padding + 2)
+      const labelOffset = viewport.width >= 160 ? 10 : 4
+      expect(line?.indexOf("SESSION")).toBe(viewport.width - railWidth + labelOffset)
       expect(screen.frame()).toContain(session.title)
     } finally {
       await screen.dispose()

@@ -237,12 +237,9 @@ function unavailable(status: Status.State) {
 }
 
 /**
- * The managed server owns restart continuity: it resumes Sessions the previous server suspended and
- * suspends its own active Sessions on graceful shutdown. Suspension runs while the drains are still
- * alive: connections close first, this finalizer runs next, and Session execution teardown follows.
+ * The managed server marks its active Sessions as suspended on graceful shutdown. Startup never
+ * replays suspended provider work; that needs explicit crash-recovery design and admission rules.
  */
 const installRestartContinuity = Effect.fnUntraced(function* (restart: SessionRestart.Interface) {
-  yield* Effect.forkScoped(restart.resumeSuspendedSessions)
-  // Registered after the fork so suspension observes still-running resumed drains during teardown.
   yield* Effect.addFinalizer(() => restart.suspendActiveSessions)
 })

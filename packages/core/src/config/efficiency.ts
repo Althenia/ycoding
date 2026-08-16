@@ -9,10 +9,18 @@ export class PromptCache extends Schema.Class<PromptCache>("ConfigEfficiency.Pro
   openai_extended_retention: Schema.Boolean.pipe(Schema.optional),
 }) {}
 
+export const HelperModel = Schema.Union([Schema.Literal("session"), ConfigModel.Selection])
+
+export class HelperModels extends Schema.Class<HelperModels>("ConfigEfficiency.HelperModels")({
+  title: HelperModel.pipe(Schema.optional),
+  goal: HelperModel.pipe(Schema.optional),
+  compaction: HelperModel.pipe(Schema.optional),
+}) {}
+
 export class Info extends Schema.Class<Info>("ConfigEfficiency.Info")({
   title: Schema.Literals(["local", "model", "off"]).pipe(Schema.optional),
   goal_synthesis: Schema.Literals(["local", "model"]).pipe(Schema.optional),
-  helper_model: ConfigModel.Selection.pipe(Schema.optional),
+  helper_models: HelperModels.pipe(Schema.optional),
   prompt_cache: PromptCache.pipe(Schema.optional),
   openai_responses_continuation: Schema.Literals(["auto", "on", "off"]).pipe(Schema.optional),
 }) {}

@@ -95,6 +95,11 @@ export function messageHistoryPlaceholders(placeholders: readonly DataMessageHis
   })
 }
 
+// The generated client widens JSON numbers to include non-finite string sentinels. Only a real
+// number is a usable count; anything else is unreported rather than zero.
+const finiteCount = (value: number | "Infinity" | "-Infinity" | "NaN" | null | undefined) =>
+  typeof value === "number" ? value : undefined
+
 const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
 
 // Global MCP elicitations temporarily use "global" instead of a real session ID, so the
@@ -596,12 +601,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       return bounded
     }
 
-    function resetMessageHistory(sessionID: string, cursor?: string) {
+    function resetMessageHistory(sessionID: string, cursor?: string, remaining?: number) {
       messageLoad.delete(sessionID)
       clearMessagePage(sessionID)
+      // The server reports how many messages sit behind the cursor, so a collapsed archive can state
+      // its size before any of it is fetched. The page range stays with the per-page metadata that
+      // tracks real loaded pages; a range derived from a nominal page size would not survive the
+      // server returning short pages.
+      const archived = remaining !== undefined && remaining > 0 ? { count: remaining } : undefined
       setStore("session", "messageHistory", sessionID, {
         stale: false,
-        placeholders: cursor ? [{ sessionID, cursor, state: "collapsed" }] : [],
+        placeholders: cursor ? [{ sessionID, cursor, state: "collapsed", ...archived }] : [],
       })
     }
 
@@ -674,6 +684,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         const seen = new Set(messages.map((message) => message.id))
         const cursors = new Set<string>()
         let cursor = first.cursor.next ?? undefined
+        let remaining = finiteCount(first.cursor.messages)
         let completed = messages.filter(isMessageComplete).length
         while (completed < MESSAGE_HOT_LIMIT && cursor) {
           if (messageSyncLoad.get(sessionID) !== token) return
@@ -695,6 +706,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             if (isMessageComplete(message)) completed++
           })
           cursor = response.cursor.next ?? undefined
+          remaining = finiteCount(response.cursor.messages)
         }
         if (messageSyncLoad.get(sessionID) !== token) return
         const active = new Set(store.session.input[sessionID] ?? [])
@@ -707,7 +719,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           sessionID,
           reconcileCanonicalMessages(messages.toReversed(), store.session.message[sessionID] ?? [], touched, active),
         )
-        resetMessageHistory(sessionID, cursor)
+        resetMessageHistory(sessionID, cursor, remaining)
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
       }

@@ -49,7 +49,7 @@ test("renders provider prompt cache without application artifact diagnostics", a
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 48, height: 18 },
+    { width: 48, height: 24 },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Hit ratio"))
@@ -101,7 +101,7 @@ test("keeps a last-step model and limit when session selection changes", async (
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 48, height: 18 },
+    { width: 48, height: 24 },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Hit ratio"))

@@ -38,3 +38,8 @@ test("rejects unknown sources and non-positive counters", () => {
   expect(() => decode({ ...record, request: 0 })).toThrow()
   expect(() => decode({ ...record, attempts: 0 })).toThrow()
 })
+
+test("decodes cache reset invalidation reasons", () => {
+  for (const invalidation of ["compaction-reset", "model-switched", "model-variant-switched"] as const)
+    expect(decode({ ...record, invalidation }).invalidation).toBe(invalidation)
+})

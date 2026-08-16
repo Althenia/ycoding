@@ -32,6 +32,7 @@ import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigProviderUsage } from "./config/provider-usage"
 import { ConfigReference } from "./config/reference"
+import { ConfigShell } from "./config/shell"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigVariable } from "./config/variable"
 import { ConfigWatcher } from "./config/watcher"
@@ -47,6 +48,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   shell_sandbox: Schema.Literals(["disabled", "optional", "required"]).pipe(Schema.optional).annotate({
     description:
       "Shell isolation policy. disabled preserves host execution; optional uses an enforceable backend when available and warns otherwise; required rejects before approval or spawn when unavailable.",
+  }),
+  shell_memory_limit_mb: ConfigShell.MemoryLimitMb.pipe(Schema.optional).annotate({
+    description:
+      "Default resident-memory limit in MiB for shell command process trees. Zero or omission means unlimited; a command may override it.",
   }),
   model: ConfigModel.Selection.pipe(Schema.optional).annotate({
     description: "Default model to use when no session or agent model is selected",

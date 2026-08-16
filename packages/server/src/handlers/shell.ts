@@ -30,6 +30,10 @@ export const ShellHandler = HttpApiBuilder.group(Api, "server.shell", (handlers)
                   "ShellSandbox.Unavailable",
                   (error) => new ServiceUnavailableError({ message: error.message, service: "shell-sandbox" }),
                 ),
+                Effect.catchTag(
+                  "Shell.MemoryLimitUnavailable",
+                  (error) => new ServiceUnavailableError({ message: error.message, service: "shell-memory" }),
+                ),
                 Effect.catchTag("Shell.SpawnError", (error) => new InvalidRequestError({ message: error.message })),
               ),
           )

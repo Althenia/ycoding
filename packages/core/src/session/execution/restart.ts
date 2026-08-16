@@ -12,13 +12,13 @@ export interface Interface {
    * Call once new work has stopped arriving and before teardown interrupts the drains.
    */
   readonly suspendActiveSessions: Effect.Effect<void>
-  /** Resumes suspended Sessions. Each suspension is consumed atomically, so a Session resumes at most once. */
+  /** Explicitly resumes suspended Sessions. Each suspension is consumed atomically, so a Session resumes at most once. */
   readonly resumeSuspendedSessions: Effect.Effect<void>
 }
 
 /**
- * Restart continuity actions for the managed server. The service is inert until called: only the
- * managed server invokes it, so default, embedded, and stdio servers never suspend or auto-resume.
+ * Restart continuity actions for the managed server. The service is inert until called: managed
+ * startup never resumes suspended Sessions, and default, embedded, and stdio servers never suspend.
  */
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionRestart") {}
 

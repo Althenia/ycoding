@@ -27,6 +27,8 @@ A drain discovers the session's Location when execution starts. There is no clus
 
 One step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Context-overflow recovery completes the old request as a fallback, compacts the context, and rebuilds a new logical request.
 
+Transport, rate-limit, and provider-internal failures retry only before observable assistant output. Status-less provider messages with a recognized code prefix, including OpenAI `server_error:`, retain their provider-internal classification and use the bounded exponential retry schedule instead of immediately ending the Session response.
+
 The durable provider-request ledger stores identifiers, model and route identity, stable prompt/cache digests, attempt counts, normalized tokens, cost, continuation mode, and invalidation reason. It does not store prompt, message, tool-result, or response text.
 
 The runtime reloads projected history before durable continuation. It does not delegate V2 orchestration to a legacy in-memory prompt loop.
@@ -41,7 +43,15 @@ Session titles and goal text are local by default:
 - `title: "off"` keeps the initial generated Session title;
 - compaction remains model-based.
 
-Model-based helpers resolve the hidden agent's explicit model first, then `efficiency.helper_model`, then the current Session model. Helper provider requests use the same content-free request ledger as normal Session steps.
+Model-based helpers resolve the hidden agent's explicit model first, then the matching `efficiency.helper_models.title`, `.goal`, or `.compaction` selection. A missing role or the explicit value `session` uses the current Session model. Helper provider requests use the same content-free request ledger as normal Session steps.
+
+Compaction bounds the summary request to the selected compaction model's declared context minus its output reserve. History that does not fit the summary request remains verbatim in the checkpoint's recent-context suffix, so selecting a smaller compaction model reduces the summary chunk without dropping Session history.
+
+### Shell resource control
+
+Shell commands may inherit `shell_memory_limit_mb` or override it with the tool's `memory_limit_mb` input. Zero means unlimited. A finite limit supplies Go and Node runtime memory hints, then monitors aggregate resident memory for the POSIX command process group. If sampled usage exceeds the limit, the existing scoped process-group kill path terminates the command once and records the distinct `memory-limit` terminal status; timeout, normal exit, interruption, and memory enforcement still compete through one first-terminal-state-wins boundary.
+
+The model-visible built-in guidance directs agents to use finite memory limits for high-memory builds, typechecks, test suites, bundlers, and large data processing rather than ordinary commands. The POSIX monitor is sampled resource control with a 250 ms overshoot window, not hard isolation. Windows rejects finite limits until the process launcher can assign a Job Object before execution.
 
 Completed compaction messages implement optional backend metrics for the messages folded by that operation and the normalized provider-reported token usage that produced its summary. Token usage retains input, output, reasoning, cache-read, and cache-write components; clients format any aggregate. If the provider reports no usage, the token metric is absent rather than zero. Older completed-compaction events also project both metrics as absent.
 
@@ -55,7 +65,7 @@ MCP server instruction blocks are sorted by server ID, normalized to LF line end
 
 ### Provider prompt caching
 
-The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v5`, so requests created under older placement rules do not silently share the same namespace.
+The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v5`, so requests created under older placement rules do not silently share the same namespace. Compaction helpers add an internal `compaction` namespace scope, so their provider-cache key cannot share normal Session-step state; ordinary Session-step key bytes remain unchanged.
 
 Anthropic-compatible requests start with a concrete five-minute policy. The process-local cache runtime tracks provider-reported read and write usage by stable namespace. Two reusable observations within five minutes promote later requests for an extended-TTL-capable model to one hour. Missing telemetry, stale observations, namespace rotation, and unsupported model profiles remain at five minutes. The state is bounded, non-durable, and never required to reconstruct a Session.
 
@@ -71,6 +81,10 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 - **Queue** inputs remain pending until the session would otherwise become idle.
 - Promoting new user input resets the selected agent's step allowance.
 - Durable pending user and synthetic inputs are projected back into the hot transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
+
+### Restart safety
+
+Managed-server shutdown marks only process-local active Sessions as suspended before the owned drains stop. Managed-server startup never replays suspended provider work or resumes a Session automatically. Post-crash continuation recovery requires an explicit durable design before it may retry a provider request; retained suspension markers therefore do not themselves admit or execute work.
 
 ## Autonomy
 
@@ -91,6 +105,8 @@ Terminal goal states are:
 - `completed` — the model emitted the recognized goal-completion marker and the turn settled;
 - `stopped` — the user or runtime left goal mode;
 - `exhausted` — repeated identical progress reached the configured no-progress bound.
+
+An active goal does not advance or complete while a direct durable child task is `starting`, `running`, `waiting`, or `cancelling`. Terminal child states (`cancelled`, `completed`, `failed`, and `lost`) do not block the next parent wake, including the existing durable child-notification wake path.
 
 A tool-only turn with no assistant text spends an iteration but does not increment the no-progress counter. The TUI refreshes autonomy when session execution reaches a terminal event so displayed progress is not one iteration stale.
 
@@ -270,9 +286,9 @@ Anthropic cache-control placement is normalized across direct and compatible pro
 
 The runtime preserves provider-reported cache reads, writes, creation detail, mechanisms, and model/context identity where available. Missing provider telemetry is reported as unreported rather than silently treated as zero.
 
-The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost. Cost is calculated from the selected catalog model's input, output, cache-read, cache-write, and eligible context-tier prices. ChatGPT/Codex and Claude Code subscription routes retain those catalog prices, so their nonzero total is an API-equivalent usage estimate rather than a claim about the subscription invoice.
+The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost. Cost is calculated from the selected catalog model's input, output, cache-read, cache-write, and eligible context-tier prices. ChatGPT/Codex and Claude Code subscription routes retain those catalog prices, so their nonzero total is an API-equivalent usage estimate rather than a claim about the subscription invoice. Parent and child Sessions can reuse a prefix only when every model-visible namespace input matches; changing provider, model, variant, policy, permission ceiling, system, or tool definitions creates a distinct key.
 
-Session diagnostics also expose a bounded request summary: logical requests, transport attempts, helper calls, continued requests, fallbacks, raw token categories, estimated cost, and the latest cache invalidation reason. Only the first eight characters of the latest prompt-cache namespace are exposed; prompt content, full cache keys, system digests, tool digests, and internal provider-request events remain private. When any request lacks catalog pricing, estimated request cost is absent and the TUI renders `Estimated cost unavailable` instead of `$0.00`.
+Session diagnostics also expose a bounded request summary: logical requests, transport attempts, helper calls, continued requests, fallbacks, raw token categories, estimated cost, and the latest cache invalidation reason. The reader recognizes historical records without an explicit variant as the default variant. For a new request, `compaction-reset` takes precedence over `model-switched`, which takes precedence over `model-variant-switched`; unchanged model identity then reports system, tool, or generic prefix changes. Only the first eight characters of the latest prompt-cache namespace are exposed; prompt content, full cache keys, system digests, tool digests, and internal provider-request events remain private. When any request lacks catalog pricing, estimated request cost is absent and the TUI renders `Estimated cost unavailable` instead of `$0.00`.
 
 ## Provider quota and credit diagnostics
 
@@ -288,7 +304,7 @@ Provider usage is a read-only Location service separate from Session-local token
 - unknown amounts remain absent and render as `Not reported`, not zero;
 - Protocol and TUI state contain normalized values only, not credential values or provider response bodies.
 
-The Session command palette exposes a **Provider Usage** dialog. It keeps external quota windows separate from the local **YCoding requests** section, shows active provider windows with freshness and stability, separates Spark and other named lanes, and uses stable ten-character ASCII progress bars for reported percentages. Missing windows and account tiers remain unreported rather than becoming zero or being inferred. The command remains available when local request diagnostics exist even if no external quota provider is currently running.
+The Session command palette exposes a **Provider Usage** dialog when a provider selected by any Session in the current root family has visible quota data, including idle family members, or when local request diagnostics exist. It keeps external quota windows separate from the local **YCoding requests** section, shows provider windows with freshness and stability, separates Spark and other named lanes, and uses stable ten-character ASCII progress bars for reported percentages. Missing windows and account tiers remain unreported rather than becoming zero or being inferred.
 
 ## Shell output
 

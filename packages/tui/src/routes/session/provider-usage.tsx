@@ -22,15 +22,13 @@ import {
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 
-export function runningProviderIDs(
+export function selectedProviderIDs(
   sessionIDs: readonly string[],
   getSession: (sessionID: string) => Pick<SessionInfo, "model"> | undefined,
-  getStatus: (sessionID: string) => string,
 ) {
   return [
     ...new Set(
       sessionIDs.flatMap((sessionID) => {
-        if (getStatus(sessionID) !== "running") return []
         const providerID = getSession(sessionID)?.model?.providerID
         return providerID ? [providerID] : []
       }),
@@ -101,10 +99,9 @@ export function ProviderUsageCommand() {
     return sessionIDs.length > 0 ? sessionIDs : [route.sessionID]
   })
   const providerIDs = createMemo(() =>
-    runningProviderIDs(
+    selectedProviderIDs(
       family(),
       (sessionID) => data.session.get(sessionID),
-      (sessionID) => data.session.status(sessionID),
     ),
   )
   const diagnostics = createMemo(() => data.session.diagnostics.get(route.sessionID))
@@ -241,10 +238,11 @@ export function ProviderUsageDialogContent(props: {
 
   const sessionProviderIDs = createMemo(() => {
     if (!props.sessionID || !props.getSession) return undefined
-    const ids = runningProviderIDs(
-      [props.sessionID],
-      (sid) => props.getSession!(sid),
-      (sid) => props.getStatus?.(sid) ?? "",
+    // Only sessions that are actually running contribute a provider. `selectedProviderIDs` does not
+    // filter by status, so the status filter belongs here rather than in a second near-identical helper.
+    const ids = selectedProviderIDs(
+      [props.sessionID].filter((sessionID) => (props.getStatus?.(sessionID) ?? "") === "running"),
+      (sessionID) => props.getSession!(sessionID),
     )
     return ids.length > 0 ? new Set(ids) : undefined
   })
@@ -253,7 +251,10 @@ export function ProviderUsageDialogContent(props: {
     if (!props.sessionFamily || !props.sessionID || !props.getSession) return undefined
     const subagentIDs = props.sessionFamily.filter((id) => id !== props.sessionID)
     if (subagentIDs.length === 0) return undefined
-    const ids = runningProviderIDs(subagentIDs, (sid) => props.getSession!(sid), (sid) => props.getStatus?.(sid) ?? "")
+    const ids = selectedProviderIDs(
+      subagentIDs.filter((sessionID) => (props.getStatus?.(sessionID) ?? "") === "running"),
+      (sessionID) => props.getSession!(sessionID),
+    )
     return ids.length > 0 ? new Set(ids) : undefined
   })
   const hasSessionGroups = createMemo(() => !!sessionProviderIDs() || !!subagentProviderIDs())

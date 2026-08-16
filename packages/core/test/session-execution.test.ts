@@ -26,6 +26,7 @@ import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope } from "effect"
+import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SessionStore.node])))
@@ -245,6 +246,56 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  for (const state of ["running", "waiting"] as const) {
+    it.effect(`keeps a goal active until a direct ${state} child settles`, () =>
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        const parentID = SessionV2.ID.make(`ses_goal_${state}_parent`)
+        const childID = SessionV2.ID.make(`ses_goal_${state}_child`)
+        yield* seedSessions(database, [parentID, childID])
+        yield* seedTask(database, { parentID, childID, state })
+        const autonomy = SessionAutonomy.make({ db: database.db })
+        yield* autonomy.setGoal({ sessionID: parentID, text: "Ship the fix" })
+
+        let drains = 0
+        const scope = yield* Scope.make()
+        const context = yield* buildExecution(scope, () =>
+          Effect.gen(function* () {
+            drains += 1
+            yield* recordAssistant(database, parentID, drains, [
+              { type: "text", text: `Verified. ${SessionAutonomy.CompletionMarker}` },
+            ])
+          }),
+        )
+        const execution = Context.get(context, SessionExecution.Service)
+
+        yield* execution.resume(parentID)
+        yield* execution.awaitIdle(parentID)
+
+        expect(drains).toBe(1)
+        expect(yield* autonomy.get(parentID)).toMatchObject({ mode: "goal", goal: { status: "active", iteration: 0 } })
+        expect(yield* admittedInputs(database)).toEqual([])
+
+        yield* database.db
+          .update(SessionTaskTable)
+          .set({ state: "completed" })
+          .where(eq(SessionTaskTable.session_id, childID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* execution.wake(parentID)
+        yield* execution.awaitIdle(parentID)
+
+        expect(drains).toBe(2)
+        expect(yield* autonomy.get(parentID)).toMatchObject({
+          mode: "normal",
+          goal: { status: "completed", iteration: 1 },
+        })
+        expect(yield* admittedInputs(database)).toEqual([])
+        yield* Scope.close(scope, Exit.void)
+      }),
+    )
+  }
+
   it.effect("settles the goal before publishing the terminal execution event", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -372,6 +423,30 @@ function recordAssistant(
       seq,
       time_created: DateTime.toEpochMillis(created),
       data,
+    })
+    .run()
+    .pipe(Effect.orDie, Effect.asVoid)
+}
+
+function seedTask(
+  database: Database.Service["Service"],
+  input: { parentID: SessionV2.ID; childID: SessionV2.ID; state: "running" | "waiting" },
+) {
+  return database.db
+    .insert(SessionTaskTable)
+    .values({
+      session_id: input.childID,
+      parent_id: input.parentID,
+      parent_assistant_message_id: SessionMessage.ID.make("msg_parent"),
+      tool_call_id: "call_goal_child",
+      input_id: SessionMessage.ID.make("msg_goal_child_input"),
+      description: "goal child",
+      agent: AgentV2.ID.make("reviewer"),
+      model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("model") }),
+      prompt_digest: "digest",
+      background: true,
+      delivery: "steer",
+      state: input.state,
     })
     .run()
     .pipe(Effect.orDie, Effect.asVoid)

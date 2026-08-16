@@ -50,7 +50,7 @@ const make = (dependencies: Dependencies) => {
       return dependencies.helpers.localGoal(input.text) || undefined
     const agent = yield* dependencies.agents.get(AgentV2.ID.make("goal"))
     if (!agent) return
-    const resolved = yield* dependencies.helpers.resolveModel(input.session, agent)
+    const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
     if (!resolved) return
     const history = yield* SessionHistory.load(db, input.session.id)
     const context = history

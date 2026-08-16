@@ -9,7 +9,7 @@ import {
   loadProviderUsageSnapshots,
   ProviderUsageDialogContent,
   providerUsageCommandDefinition,
-  runningProviderIDs,
+  selectedProviderIDs,
   visibleProviderSnapshots,
 } from "../../../src/routes/session/provider-usage"
 
@@ -27,27 +27,19 @@ const snapshot = (providerID: string, status: Snapshot["status"]): Snapshot => (
   windows: [],
 })
 
-test("selects unique providers from running sessions only", () => {
+test("selects unique providers from every selected session, including idle sessions", () => {
   const sessions: Record<string, SessionFixture> = {
     root: { model: { providerID: "anthropic", id: "claude" } },
     "child-a": { model: { providerID: "anthropic", id: "claude" } },
     "child-b": { model: { providerID: "openai", id: "gpt" } },
     idle: { model: { providerID: "openrouter", id: "router" } },
   }
-  const statuses: Record<string, string> = {
-    root: "running",
-    "child-a": "running",
-    "child-b": "running",
-    idle: "idle",
-  }
-
   expect(
-    runningProviderIDs(
+    selectedProviderIDs(
       ["root", "child-a", "child-b", "idle"],
       (sessionID) => sessions[sessionID],
-      (sessionID) => statuses[sessionID] ?? "idle",
     ),
-  ).toEqual(["anthropic", "openai"])
+  ).toEqual(["anthropic", "openai", "openrouter"])
 })
 
 test("omits unsupported snapshots and preserves visible failure states", () => {

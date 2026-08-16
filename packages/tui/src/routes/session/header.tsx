@@ -1,15 +1,19 @@
 import { createMemo, For, Show } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
+import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
+import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { header } from "../../logo"
 import { getGlyph } from "../../ui/glyph"
+import { Locale } from "../../util/locale"
+import { formatDuration } from "../../util/format"
 
 export type SessionHeaderState =
   // Penpot's resting frame displays the existing working state with its elapsed value.
   | { type: "ready" }
   | { type: "working"; elapsed: number }
-  | { type: "awaiting-input"; count: number }
+  | { type: "awaiting-input"; count: number; elapsed?: number }
   | { type: "provider-error"; code?: number }
   | { type: "yolo" }
 
@@ -22,6 +26,8 @@ export type SessionHeaderIdentity = {
   model?: string
   variant?: string
 }
+
+type ResolvedSessionHeaderIdentity = SessionHeaderIdentity & { runningShells?: number }
 
 const SEGMENT_HINT: Partial<Record<SessionHeaderSegmentKey, { command: string; verb: string }>> = {
   path: { command: "session.move", verb: "move" },
@@ -48,12 +54,18 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
   return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
 }
 
-export function headerStatusLabel(state: SessionHeaderState, width: number) {
-  if (state.type === "working") return width < 120 ? `${state.elapsed.toFixed(1)}s` : `working ${state.elapsed.toFixed(1)}s`
-  if (state.type === "awaiting-input")
-    return `${state.count} subagent${state.count > 1 ? "s" : ""} awaiting input`
+export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, subagent = false) {
+  if (state.type === "working" || state.type === "awaiting-input") {
+    // One rule for every surface: the design writes sub-minute working time with a decimal
+    // ("4.1s", "8.4s") and anything longer as "2m14s". formatDuration floors to whole seconds, so
+    // it alone cannot express the decimal form.
+    const elapsed = state.elapsed === undefined ? undefined : state.elapsed < 60 ? `${state.elapsed.toFixed(1)}s` : formatDuration(state.elapsed)
+    if (state.type === "working") return width < 120 ? elapsed : `working ${elapsed}`
+    return elapsed ? `? awaiting input · ${elapsed}` : "? awaiting input"
+  }
   if (state.type === "provider-error") return state.code ? `provider error \u00b7 ${state.code}` : "provider error"
   if (state.type === "yolo") return "YOLO \u00b7 auto-approve"
+  if (runningShells) return `${runningShells} shell${runningShells === 1 ? "" : "s"} running`
   return "ready"
 }
 
@@ -64,14 +76,15 @@ export function Header(
   const dimensions = useTerminalDimensions()
   const shortcuts = Keymap.useShortcuts()
   const leaderActive = Keymap.useLeaderActive()
+  const identity = createMemo(() => resolveIdentity(props))
   const segments = createMemo(() =>
     headerSegments({
       width: dimensions().width,
-      path: props.path,
-      branch: props.branch,
-      agent: props.agent,
-      model: props.model,
-      variant: props.variant,
+      path: identity().path,
+      branch: identity().branch,
+      agent: identity().agent,
+      model: identity().model,
+      variant: identity().variant,
     }),
   )
   const statusColor = createMemo(() => {
@@ -136,7 +149,7 @@ export function Header(
           </For>
         </text>
         <text fg={statusColor()} wrapMode="none" flexShrink={0}>
-          {headerStatusLabel(props.state, dimensions().width)}
+          {headerStatusLabel(props.state, dimensions().width, identity().runningShells, props.subagent)}
         </text>
       </box>
       <Show when={props.state.type === "yolo"}>
@@ -144,6 +157,31 @@ export function Header(
       </Show>
     </>
   )
+}
+
+function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIdentity {
+  if (props.agent && props.model && props.variant) return props
+  const route = useRoute().data
+  const data = useData()
+  if (route.type === "home") {
+    const model = data.location.model.list(data.location.default())?.find((item) => item.name === props.model)
+    return { ...props, variant: props.variant ?? model?.variants.at(0)?.id }
+  }
+  if (route.type !== "session") return props
+  const session = data.session.get(route.sessionID)
+  const sessionModel = session?.model
+  if (!session || !sessionModel) return props
+  const model = data.location
+    .model
+    .list(session.location)
+    ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
+  return {
+    ...props,
+    agent: props.agent ?? (session.agent ? Locale.titlecase(session.agent) : undefined),
+    model: props.model ?? model?.name ?? Locale.titlecase(sessionModel.id.replaceAll("-", " ")),
+    variant: props.variant ?? sessionModel.variant,
+    runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,
+  }
 }
 
 function truncatePath(value: string | undefined, width: number) {

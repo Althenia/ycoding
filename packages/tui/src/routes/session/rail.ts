@@ -14,17 +14,21 @@ export type RailSectionKey =
   | "guardrails"
   | "lsp"
 
-/**
- * A fifth expanded section collapses the least recently expanded one, so the rail never turns into a
- * scroll wall where every section is half visible.
- */
-export const MAX_EXPANDED = 4
+// Penpot's 32px section bands occupy 2.76 terminal rows at the measured 11.594px row height.
+export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
 
 /**
  * Sections that carry no summary on their header row, so collapsing them would hide information.
  * The remaining sections summarise themselves and stay collapsed until an attention event.
  */
-export function defaultExpanded(input: { goal?: boolean; autonomy?: boolean; shellSurface?: boolean }): RailSectionKey[] {
+export function defaultExpanded(input: {
+  goal?: boolean
+  autonomy?: boolean
+  shellSurface?: boolean
+  allExpanded?: boolean
+}): RailSectionKey[] {
+  if (input.allExpanded)
+    return ["session", "goal", "autonomy", "context", "subagents", "shells", "skills"]
   if (input.shellSurface)
     return [
       "shells" as const,
@@ -32,21 +36,21 @@ export function defaultExpanded(input: { goal?: boolean; autonomy?: boolean; she
       ...(input.goal ? (["goal"] as const) : []),
       ...(input.autonomy ? (["autonomy"] as const) : []),
       "todo" as const,
-    ].slice(0, MAX_EXPANDED)
+    ]
   return [
     "session" as const,
     "context" as const,
     ...(input.goal ? (["goal"] as const) : []),
     ...(input.autonomy ? (["autonomy"] as const) : []),
     "todo" as const,
-  ].slice(-MAX_EXPANDED)
+  ]
 }
 
 /**
  * `order` is a recency list with the least recently expanded section first.
  */
 export function expandSection(order: RailSectionKey[], key: RailSectionKey): RailSectionKey[] {
-  return [...order.filter((item) => item !== key), key].slice(-MAX_EXPANDED)
+  return [...order.filter((item) => item !== key), key]
 }
 
 export function collapseSection(order: RailSectionKey[], key: RailSectionKey): RailSectionKey[] {
@@ -95,7 +99,9 @@ export function railWidth(width: number) {
 export function railMetrics(width: number) {
   const fullWidth = railWidth(width) >= DESIGN_RAIL_WIDTH
   return {
-    paddingLeft: fullWidth ? 3 : 2,
+    paddingLeft: fullWidth ? 7 : 2,
+    paddingRight: 3,
+    sectionLabelPadding: fullWidth ? 1 : 0,
     sessionGap: fullWidth ? 1 : 0,
     sessionPaddingBottom: fullWidth ? 1 : 0,
   }

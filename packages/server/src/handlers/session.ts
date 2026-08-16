@@ -606,6 +606,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 "ShellSandbox.Unavailable",
                 (error) => new ServiceUnavailableError({ message: error.message, service: "shell-sandbox" }),
               ),
+              Effect.catchTag(
+                "Shell.MemoryLimitUnavailable",
+                (error) => new ServiceUnavailableError({ message: error.message, service: "shell-memory" }),
+              ),
               Effect.catchTag("Shell.SpawnError", (error) => new InvalidRequestError({ message: error.message })),
               Effect.catchTag(
                 "Guardrail.BlockedError",

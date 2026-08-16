@@ -300,6 +300,12 @@ describe("SessionProjector", () => {
       })
       expect(secondPage.map((message) => (message.type === "user" ? message.text : message.type))).toEqual(["second"])
       expect(
+        yield* sessions.messageRemainder({ sessionID, afterID: firstPage[0]!.id, order: "asc" }),
+      ).toEqual(1)
+      expect(
+        yield* sessions.messageRemainder({ sessionID, afterID: secondPage[0]!.id, order: "asc" }),
+      ).toEqual(0)
+      expect(
         (yield* sessions.messages({
           sessionID,
           limit: 1,

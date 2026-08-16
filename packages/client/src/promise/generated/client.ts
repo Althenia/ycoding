@@ -1822,6 +1822,7 @@ export function make(options: ClientOptions) {
               command: input["command"],
               cwd: input["cwd"],
               timeout: input["timeout"],
+              memoryLimitMb: input["memoryLimitMb"],
               metadata: input["metadata"],
             },
             successStatus: 200,

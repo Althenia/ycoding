@@ -13,7 +13,7 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { expect, test } from "bun:test"
-import { Effect, Schedule, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -226,7 +226,7 @@ test("clean managed service shutdown removes its registration", async () => {
   }
 }, 30_000)
 
-test("concurrent service processes elect one server", async () => {
+test("concurrent service processes elect one server without resuming suspended Sessions", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-service-election-"))
   const database = path.join(root, "ycoding.db")
   const env = {
@@ -317,6 +317,7 @@ test("concurrent service processes elect one server", async () => {
       contender.kill("SIGTERM")
       await contender.exited
     }
+    await Bun.sleep(250)
     expect(
       await withDatabase(
         database,
@@ -329,8 +330,8 @@ test("concurrent service processes elect one server", async () => {
             .pipe(Effect.orDie)
         }),
       ),
-    ).toEqual({ timeSuspended: null })
-    expect(await waitForExecutionStart(database, sessionID)).toBe(1)
+    ).toMatchObject({ timeSuspended: expect.any(Number) })
+    expect(await executionStarts(database, sessionID)).toBe(0)
     await Effect.runPromise(Service.stop({ file: registration }).pipe(Effect.provide(NodeFileSystem.layer)))
     await winner.exited
     const winnerOutput = (await new Response(winner.stdout).text()) + (await new Response(winner.stderr).text())
@@ -577,7 +578,7 @@ function withDatabase<A, E>(file: string, effect: Effect.Effect<A, E, Database.S
   return Effect.runPromise(effect.pipe(Effect.provide(Database.layer({ path: file })), Effect.scoped))
 }
 
-function waitForExecutionStart(file: string, sessionID: SessionV2.ID) {
+function executionStarts(file: string, sessionID: SessionV2.ID) {
   return withDatabase(
     file,
     Effect.gen(function* () {
@@ -599,9 +600,7 @@ function waitForExecutionStart(file: string, sessionID: SessionV2.ID) {
                   ),
             ),
           ),
-          Effect.filterOrFail((rows) => rows.length > 0),
           Effect.map((rows) => rows.length),
-          Effect.retry(Schedule.max([Schedule.spaced("50 millis"), Schedule.recurs(200)])),
         )
     }),
   )

@@ -1065,6 +1065,7 @@ export type Endpoint23_1Input = {
   readonly command: Endpoint23_1Request["payload"]["command"]
   readonly cwd?: Endpoint23_1Request["payload"]["cwd"]
   readonly timeout: Endpoint23_1Request["payload"]["timeout"]
+  readonly memoryLimitMb?: Endpoint23_1Request["payload"]["memoryLimitMb"]
   readonly metadata?: Endpoint23_1Request["payload"]["metadata"]
 }
 export type Endpoint23_1Output = EffectValue<ReturnType<RawClient["server.shell"]["shell.create"]>>

@@ -1294,12 +1294,19 @@ type Endpoint23_1Input = {
   readonly command: Endpoint23_1Request["payload"]["command"]
   readonly cwd?: Endpoint23_1Request["payload"]["cwd"]
   readonly timeout: Endpoint23_1Request["payload"]["timeout"]
+  readonly memoryLimitMb?: Endpoint23_1Request["payload"]["memoryLimitMb"]
   readonly metadata?: Endpoint23_1Request["payload"]["metadata"]
 }
 const Endpoint23_1 = (raw: RawClient["server.shell"]) => (input: Endpoint23_1Input) =>
   raw["shell.create"]({
     query: { location: input["location"] },
-    payload: { command: input["command"], cwd: input["cwd"], timeout: input["timeout"], metadata: input["metadata"] },
+    payload: {
+      command: input["command"],
+      cwd: input["cwd"],
+      timeout: input["timeout"],
+      memoryLimitMb: input["memoryLimitMb"],
+      metadata: input["metadata"],
+    },
   }).pipe(Effect.mapError(mapClientError))
 
 type Endpoint23_2Request = Parameters<RawClient["server.shell"]["shell.get"]>[0]

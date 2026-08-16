@@ -42,10 +42,17 @@ import { toolIdentity, executeTool, settleTool, toolDefinitions, waitForTool } f
 const sessionID = SessionV2.ID.make("ses_shell_tool_test")
 const sessionModel = ModelV2.Ref.make({ id: ModelV2.ID.make("test"), providerID: ProviderV2.ID.make("test") })
 const testShell = process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh"
-const configDocument = (shellSandbox?: "disabled" | "optional" | "required") =>
+const configDocument = (
+  shellSandbox?: "disabled" | "optional" | "required",
+  shellMemoryLimitMb?: number,
+) =>
   new Config.Document({
     type: "document",
-    info: new Config.Info({ shell: testShell, shell_sandbox: shellSandbox }),
+    info: new Config.Info({
+      shell: testShell,
+      shell_sandbox: shellSandbox,
+      shell_memory_limit_mb: shellMemoryLimitMb,
+    }),
   })
 const assertions: PermissionV2.AssertInput[] = []
 let configEntries: Config.Entry[] = [configDocument()]
@@ -362,6 +369,11 @@ const mixedOutputCommand = isWindows
   ? "[Console]::Out.Write('stdout'); Start-Sleep -Milliseconds 50; [Console]::Error.Write('stderr'); Start-Sleep -Milliseconds 100"
   : "printf stdout; sleep 0.05; printf stderr >&2"
 const idleCommand = isWindows ? "Start-Sleep -Seconds 60" : "sleep 60"
+const memoryHogCommand = [
+  `"${process.execPath}" -e 'const retained = [Buffer.alloc(48 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
+  `"${process.execPath}" -e 'const retained = [Buffer.alloc(48 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
+  "wait",
+].join(" ")
 const bodyExitCommand = isWindows
   ? "[Console]::Out.Write('body'); Start-Sleep -Milliseconds 100; exit 7"
   : "printf body && exit 7"
@@ -574,6 +586,112 @@ describe("ShellTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
+
+  fakeIt.effect("passes an explicit memory limit to shell preparation", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withSession(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const settling = yield* settleTool(
+              registry,
+              call({ command: "fake memory-bound command", memory_limit_mb: 768 }, "call-memory-override"),
+            ).pipe(Effect.forkChild)
+            while (!fakeShellState.complete) yield* Effect.yieldNow
+            expect(fakeShellState.prepared).toMatchObject([{ memoryLimitMb: 768 }])
+            yield* fakeShellState.complete()
+            yield* Fiber.join(settling)
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  it.live("applies the configured memory default and accepts an unlimited override", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        configEntries = [configDocument(undefined, 512)]
+        return withSession(tmp.path, () =>
+          Effect.gen(function* () {
+            const shell = yield* Shell.Service
+            expect((yield* shell.prepare({ command: helloCommand, timeout: 0 })).memoryLimitMb).toBe(512)
+            expect(
+              (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 0 })).memoryLimitMb,
+            ).toBeUndefined()
+            expect((yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 256 })).memoryLimitMb).toBe(
+              256,
+            )
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+    ),
+  )
+
+  if (!isWindows)
+    it.live(
+      "supplies matching Go and Node runtime memory hints",
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => {
+            reset()
+            const command = "printf '%s|%s' \"$GOMEMLIMIT\" \"$NODE_OPTIONS\""
+            return withSession(tmp.path, (registry) =>
+              settleTool(registry, call({ command, memory_limit_mb: 512 }, "call-memory-runtime-hints")).pipe(
+                Effect.tap((settled) =>
+                  Effect.sync(() => {
+                    const content = settled.output?.content[0]
+                    expect(content?.type).toBe("text")
+                    if (content?.type !== "text") return
+                    expect(content.text).toContain("512MiB|")
+                    expect(content.text).toContain("--max-old-space-size=512")
+                  }),
+                ),
+              ),
+            )
+          },
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+    )
+
+  if (!isWindows)
+    it.live(
+      "terminates a command process tree after it exceeds the memory limit",
+      () =>
+        Effect.acquireUseRelease(
+          Effect.promise(() => tmpdir()),
+          (tmp) => {
+            reset()
+            return withSession(tmp.path, (registry) =>
+              settleTool(
+                registry,
+                call({ command: memoryHogCommand, memory_limit_mb: 128, timeout: 10_000 }, "call-memory-limit"),
+              ).pipe(
+                Effect.tap((settled) =>
+                  Effect.sync(() => {
+                    expect(settled.output?.structured).toMatchObject({ memoryLimit: true, truncated: false })
+                    expect(settled.output?.content[0]).toMatchObject({
+                      type: "text",
+                      text: "Command was terminated by the 128 MiB memory limit.",
+                    })
+                    expect(settled.output?.content[1]).toMatchObject({
+                      type: "text",
+                      text: expect.stringContaining("exceeded its memory limit"),
+                    })
+                  }),
+                ),
+              ),
+            )
+          },
+          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+        ),
+      { timeout: 15_000 },
+    )
 
   it.live("registers and returns real successful output from the active Location", () =>
     Effect.acquireUseRelease(

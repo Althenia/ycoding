@@ -82,7 +82,7 @@ const helperPolicy = Layer.succeed(
   SessionHelperPolicy.Service,
   SessionHelperPolicy.Service.of({
     get settings() {
-      return { titleMode: "local" as const, goalMode }
+      return { titleMode: "local" as const, goalMode, models: {} }
     },
     localTitle,
     localGoal,

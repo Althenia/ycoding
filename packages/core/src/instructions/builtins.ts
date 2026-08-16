@@ -63,6 +63,17 @@ const layer = Layer.effect(
               },
             }),
             Instructions.make({
+              key: Instructions.Key.make("core/shell-memory"),
+              codec: Schema.toCodecJson(Schema.String),
+              read: Effect.succeed(
+                "Shell commands accept memory_limit_mb to constrain memory used by the command process tree. A finite limit supplies matching Go and Node runtime hints and terminates the process tree if sampled aggregate resident memory still exceeds the limit. Use it for commands likely to consume large amounts of memory, including builds, typechecks, test suites, bundlers, and large data processing. Leave ordinary commands uncapped unless the project or user supplies a default. If a command reaches the limit, inspect its workload before increasing the cap; never remove the limit only to force completion.",
+              ),
+              render: {
+                initial: (instruction) => instruction,
+                changed: (_previous, instruction) => instruction,
+              },
+            }),
+            Instructions.make({
               key: Instructions.Key.make("core/project-artifact-authoring"),
               codec: Schema.toCodecJson(Schema.String),
               read: Effect.succeed("At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact."),

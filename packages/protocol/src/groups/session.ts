@@ -263,7 +263,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.diagnostics",
             summary: "Get session cache diagnostics",
             description:
-              "Retrieve normalized context occupancy and provider cache usage for the latest assistant step after the last completed compaction.",
+              "Retrieve normalized context occupancy, provider cache usage, and the bounded latest cache invalidation reason for the latest assistant step after the last completed compaction.",
           }),
         ),
     )

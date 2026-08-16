@@ -59,6 +59,14 @@ describe("provider error classification", () => {
     ).toEqual(["ProviderInternal", "ProviderInternal"])
   })
 
+  test("classifies a plain-text server_error prefix as provider-internal", () => {
+    expect(
+      classifyProviderFailure({
+        message: "server_error: An error occurred while processing your request. You can retry your request.",
+      })._tag,
+    ).toBe("ProviderInternal")
+  })
+
   test("classifies nested provider codes when a top-level code is also present", () => {
     expect(
       [

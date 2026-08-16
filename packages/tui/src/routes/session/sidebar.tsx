@@ -23,6 +23,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
   const dimensions = useTerminalDimensions()
   const session = createMemo(() => data.session.get(props.sessionID))
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
+  const allExpanded = () => props.autonomy.mode === "yolo" && Boolean(props.autonomy.goal)
 
   return (
     <Show when={session()}>
@@ -30,30 +31,35 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
         backgroundColor={themeV2.background.default}
         width={railWidth(dimensions().width)}
         height="100%"
-        paddingTop={1}
         paddingBottom={1}
-        paddingLeft={railMetrics(dimensions().width).paddingLeft}
-        paddingRight={2}
         position={props.overlay ? "absolute" : "relative"}
       >
         <scrollbox
           flexGrow={1}
+          marginTop={allExpanded() ? -1 : 0}
+          marginBottom={allExpanded() ? -2 : 0}
           scrollAcceleration={scrollAcceleration()}
           verticalScrollbarOptions={{
+            position: "absolute",
+            right: 0,
             trackOptions: {
-              backgroundColor: themeV2.background.default,
+              backgroundColor: "transparent",
               foregroundColor: themeV2.scrollbar.default,
             },
           }}
         >
-          <box flexShrink={0} gap={1} paddingRight={1}>
+          <box flexShrink={0}>
             <RailProvider
               goal={Boolean(props.autonomy.goal)}
               autonomy={props.autonomy.mode !== "normal"}
               shellSurface={props.shellSurface}
+              allExpanded={allExpanded()}
             >
               <Show when={props.shellSurface}>
-                <PluginSlot name="sidebar.shells" input={{ sessionID: props.sessionID, shellSurface: true }} />
+                <PluginSlot
+                  name="sidebar.shells"
+                  input={{ sessionID: props.sessionID, shellSurface: () => Boolean(props.shellSurface) }}
+                />
               </Show>
               <SessionRailContent sessionID={props.sessionID} title={session().title}>
                 <pluginRuntime.Slot
@@ -66,7 +72,10 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
                 </pluginRuntime.Slot>
               </SessionRailContent>
               <AutonomyRailContent autonomy={props.autonomy} />
-              <PluginSlot name="sidebar.content" input={{ sessionID: props.sessionID, shellSurface: props.shellSurface }} />
+              <PluginSlot
+                name="sidebar.content"
+                input={{ sessionID: props.sessionID, shellSurface: () => Boolean(props.shellSurface) }}
+              />
               <Show when={pluginRuntime.status().length > 0}>
                 <RailSection section="plugins" title="PLUGINS" summary={String(pluginRuntime.status().length)}>
                   <For each={pluginRuntime.status()}>
@@ -86,7 +95,15 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
           </box>
         </scrollbox>
 
-        <box flexShrink={0} border={["top"]} borderColor={themeV2.border.default} paddingTop={1} paddingBottom={1}>
+        <box
+          flexShrink={0}
+          border={["top"]}
+          borderColor={themeV2.border.default}
+          paddingTop={1}
+          paddingRight={2}
+          paddingBottom={1}
+          paddingLeft={railMetrics(dimensions().width).paddingLeft}
+        >
           <RailFooter directory={session().location.directory} />
         </box>
       </box>
@@ -169,6 +186,7 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
                 )}
               </For>
             </box>
+            <box height={1} flexShrink={0} />
             <RailRow
               label="Status"
               value={goal().status}
@@ -178,6 +196,7 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
                   : themeV2.text.feedback.warning.default
               }
             />
+            <box height={2} flexShrink={0} />
           </RailSection>
         )}
       </Show>

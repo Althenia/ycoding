@@ -1,30 +1,56 @@
 import type { RGBA } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { createContext, createEffect, createMemo, createSignal, Show, useContext, type ParentProps } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { collapseSection, defaultExpanded, expandSection, type RailSectionKey } from "./rail"
+import {
+  collapseSection,
+  defaultExpanded,
+  expandSection,
+  railMetrics,
+  RAIL_SECTION_BAND_HEIGHT,
+  type RailSectionKey,
+} from "./rail"
 
 type RailStore = {
+  allExpanded: () => boolean
   expanded: (key: RailSectionKey) => boolean
+  shellSurface: boolean
+  showTodo: () => boolean
   toggle: (key: RailSectionKey) => void
   attend: (key: RailSectionKey, needsAttention: boolean) => void
 }
 
 const RailContext = createContext<RailStore>()
 
-export function RailProvider(props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean }>) {
+export function RailProvider(props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean; allExpanded?: boolean }>) {
   const [order, setOrder] = createSignal(
-    defaultExpanded({ goal: props.goal, autonomy: props.autonomy, shellSurface: props.shellSurface }),
+    defaultExpanded({
+      goal: props.goal,
+      autonomy: props.autonomy,
+      shellSurface: props.shellSurface,
+      allExpanded: props.allExpanded,
+    }),
   )
   // Tracks which sections are open only because of an attention event, so clearing the event can
   // re-collapse exactly those and leave the default-expanded ones alone.
   const [attending, setAttending] = createSignal<RailSectionKey[]>([])
 
   createEffect(() =>
-    setOrder(defaultExpanded({ goal: props.goal, autonomy: props.autonomy, shellSurface: props.shellSurface })),
+    setOrder(
+      defaultExpanded({
+        goal: props.goal,
+        autonomy: props.autonomy,
+        shellSurface: props.shellSurface,
+        allExpanded: props.allExpanded,
+      }),
+    ),
   )
 
   const store: RailStore = {
+    allExpanded: () => Boolean(props.allExpanded),
     expanded: (key) => order().includes(key),
+    shellSurface: Boolean(props.shellSurface),
+    showTodo: () => !props.allExpanded,
     toggle: (key) =>
       setOrder((current) => (current.includes(key) ? collapseSection(current, key) : expandSection(current, key))),
     attend: (key, needsAttention) => {
@@ -59,7 +85,9 @@ export function RailSection(
   }>,
 ) {
   const { themeV2 } = useTheme()
+  const dimensions = useTerminalDimensions()
   const rail = useRail()
+  const metrics = createMemo(() => railMetrics(dimensions().width))
   const expanded = createMemo(() => (rail ? rail.expanded(props.section) : true))
   const headerColor = createMemo(() => {
     if (props.attention) return themeV2.text.feedback.warning.default
@@ -71,13 +99,24 @@ export function RailSection(
 
   return (
     <box flexShrink={0}>
-      <box flexDirection="row" gap={1}>
+      <box
+        width="100%"
+        flexDirection="row"
+        gap={1}
+        height={RAIL_SECTION_BAND_HEIGHT}
+        alignItems={rail ? "center" : "flex-start"}
+        paddingLeft={rail ? metrics().paddingLeft : 0}
+        paddingRight={rail ? metrics().paddingRight : 0}
+        backgroundColor={themeV2.background.surface.overlay}
+      >
         <text fg={headerColor()} wrapMode="none" flexShrink={0} onMouseUp={toggle}>
           {expanded() ? "\u2212" : "\u002b"}
         </text>
-        <text fg={headerColor()} wrapMode="none" flexGrow={1} onMouseUp={toggle}>
-          <b>{props.title}</b>
-        </text>
+        <box flexGrow={1} paddingLeft={metrics().sectionLabelPadding} onMouseUp={toggle}>
+          <text fg={headerColor()} wrapMode="none">
+            <b>{props.title}</b>
+          </text>
+        </box>
         <Show when={props.summary}>
           {(summary) => (
             <text
@@ -91,7 +130,25 @@ export function RailSection(
           )}
         </Show>
       </box>
-      <Show when={expanded()}>{props.children}</Show>
+      <Show when={expanded()}>
+        <box
+          width="100%"
+          paddingLeft={rail ? metrics().paddingLeft : 0}
+          paddingRight={rail ? metrics().paddingRight : 0}
+        >
+          <Show when={rail}>
+            <box height={1} flexShrink={0} />
+          </Show>
+          {props.children}
+          <Show when={props.section === "autonomy"}>
+            <>
+              <box height={1} flexShrink={0} />
+              <RailRow label="Guardrails" value="enforced" valueColor={themeV2.text.feedback.success.default} />
+              <box height={2} flexShrink={0} />
+            </>
+          </Show>
+        </box>
+      </Show>
     </box>
   )
 }

@@ -8,6 +8,7 @@ import { ThemeProvider } from "../../src/context/theme"
 import { railPlacement, railWidth } from "../../src/routes/session/rail"
 import { SessionRailContent } from "../../src/routes/session/sidebar"
 import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
+import { RouteProvider } from "../../src/context/route"
 import { json } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
@@ -43,9 +44,11 @@ for (const current of variants) {
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig()}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ToastProvider>
-                <ToastFixture />
-              </ToastProvider>
+              <RouteProvider initialRoute={{ type: "home" }}>
+                <ToastProvider>
+                  <ToastFixture />
+                </ToastProvider>
+              </RouteProvider>
             </ThemeProvider>
           </ConfigProvider>
         </TestTuiContexts>
@@ -99,6 +102,7 @@ test("keeps a capped toast clear of the docked session rail", async () => {
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <RouteProvider initialRoute={{ type: "session", sessionID: "ses_toast" }}>
             <ToastProvider>
               <box width={width} height={24}>
                 <box flexGrow={1} />
@@ -110,6 +114,7 @@ test("keeps a capped toast clear of the docked session rail", async () => {
                 <ToastFixture />
               </box>
             </ToastProvider>
+            </RouteProvider>
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
@@ -135,6 +140,51 @@ test("keeps a capped toast clear of the docked session rail", async () => {
     expect(toastWidth).toBe(92)
     expect(toastRight).toBe(railStart - 2)
     expect(app.captureCharFrame()).toContain(title)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps the toast on the right margin when the route renders no rail", async () => {
+  const width = 220
+
+  function ToastFixture() {
+    const toast = useToast()
+    onMount(() => toast.show({ variant: "info", message: "Provider usage refreshed", duration: 60_000 }))
+    return <Toast />
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <RouteProvider initialRoute={{ type: "home" }}>
+              <ToastProvider>
+                <box width={width} height={24}>
+                  <ToastFixture />
+                </box>
+              </ToastProvider>
+            </RouteProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width, height: 24 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Provider usage refreshed"))
+
+  try {
+    const toast = descendants(app.renderer.root).find((item) =>
+      item.getChildren().some((child) => child instanceof TextRenderable && child.plainText.includes("Info")),
+    )
+
+    expect(railPlacement(width)).toBe("docked")
+    expect(toast).toBeDefined()
+    // The home route renders no rail, so the toast must sit on the right margin instead of
+    // reserving the width of a rail that is not on screen.
+    expect((toast?.x ?? 0) + (toast?.width ?? 0)).toBe(width - 2)
   } finally {
     app.renderer.destroy()
   }

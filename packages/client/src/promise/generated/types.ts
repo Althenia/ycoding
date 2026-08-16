@@ -110,7 +110,7 @@ export type SessionMessageShell = {
   type: "shell"
   shellID: string
   command: string
-  status: "running" | "exited" | "timeout" | "killed"
+  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   exit?: number | "Infinity" | "-Infinity" | "NaN"
   output?: { output: string; cursor: number; size: number; truncated: boolean }
 }
@@ -158,7 +158,7 @@ export type SessionOrchestrationAnswer = { questionID: string; text?: string; da
 
 export type ShellInfo = {
   id: string
-  status: "running" | "exited" | "timeout" | "killed"
+  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   command: string
   cwd: string
   shell: string
@@ -370,7 +370,7 @@ export type SessionStatus =
 
 export type ShellInfo1 = {
   id: string
-  status: "running" | "exited" | "timeout" | "killed"
+  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   command: string
   cwd: string
   shell: string
@@ -481,6 +481,9 @@ export type ProviderRequestSummary = {
   tokens: TokenUsageInfo
   latestInvalidation?:
     | "first-request"
+    | "compaction-reset"
+    | "model-switched"
+    | "model-variant-switched"
     | "stable-hit"
     | "prefix-changed"
     | "system-prefix-changed"
@@ -947,7 +950,7 @@ export type ShellExited = {
   metadata?: { [x: string]: any }
   type: "shell.exited"
   location?: LocationRef
-  data: { id: string; exit?: number; status: "running" | "exited" | "timeout" | "killed" }
+  data: { id: string; exit?: number; status: "running" | "exited" | "timeout" | "memory-limit" | "killed" }
 }
 
 export type ShellDeleted = {
@@ -2331,7 +2334,11 @@ export type SessionEventPublicDurable =
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessageInfo>
-  cursor: { previous?: string | null; next?: string | null }
+  cursor: {
+    previous?: string | null
+    next?: string | null
+    messages?: number | "Infinity" | "-Infinity" | "NaN" | null
+  }
 }
 
 export type V2Event =
@@ -5180,24 +5187,35 @@ export type ShellCreateInput = {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["command"]
   readonly cwd?: {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["cwd"]
   readonly timeout: {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["timeout"]
+  readonly memoryLimitMb?: {
+    readonly command: string
+    readonly cwd?: string
+    readonly timeout: number
+    readonly memoryLimitMb?: number
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["memoryLimitMb"]
   readonly metadata?: {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["metadata"]
 }

@@ -8,7 +8,7 @@ import { captureRoute } from "./capture"
 
 const renders = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
 const sessionID = "ses_shell_capture"
-const shellID = "sh_0f21"
+const shellID = "sh_0f21…"
 const directory = "/tmp/ycoding/shell-output"
 const location = { directory, project: { id: "proj_shell", directory } }
 const now = Date.now()
@@ -27,7 +27,7 @@ const model = {
 }
 const session = {
   id: sessionID,
-  title: "Provider tests",
+  title: "Main chat",
   projectID: "proj_shell",
   location: { directory },
   agent: "general",
@@ -42,10 +42,10 @@ const shellData = {
   command: "bun test provider",
   cwd: directory,
   shell: "bash",
-  file: `/tmp/${shellID}`,
-  pid: 105,
+  file: "~/.ycoding/shell/sh_0f21.log",
+  pid: 48_213,
   metadata: { sessionID },
-  time: { started: now - 10_000 },
+  time: { started: now - 67_000 },
 }
 
 test("shell-output route renders identity header, stream, metadata, and footer", async () => {
@@ -63,21 +63,25 @@ test("shell-output route renders identity header, stream, metadata, and footer",
       expect(text).toContain("y. ycoding")
       expect(text).toContain("bun test provider")
       expect(text).toContain("Main chat")
-      expect(text).toContain("pid 105")
+      expect(text).toContain("pid 48213")
       expect(text).toContain("running")
       expect(text).toContain("records cache read counters")
       expect(text).toContain("returns 0 ratio when nothing read")
-      expect(text).toContain("Owner:")
-      expect(text).toContain("Status:")
-      expect(text).toContain("Started:")
-      expect(text).toContain("Capture:")
+      // Board 18 records metadata as four labelled columns, so the label is a bare "Owner" heading
+      // above its value rather than the pre-redesign inline "Owner:" prefix.
+      expect(text).toContain("Owner")
+      expect(text).toContain("Status")
+      expect(text).toContain("Started")
+      expect(text).toContain("Capture")
       expect(text).toContain(shellID)
       expect(text).toContain("kill")
       expect(text).toContain("back")
       expect(text).not.toContain("Message YCoding")
       expect(text).not.toContain("SHELLS")
-      expect(rows[6]).toContain("bun test v1.3.14")
-      expect(rows.slice(55, 66).join("\n")).toContain("Capture:")
+      expect(rows[9]).toContain("bun test v1.3.14")
+      expect(rows[23]).toContain("14 pass · 2 fail · 1 skip")
+      expect(rows[25]).toContain("…streaming")
+      expect(rows.slice(55, 66).join("\n")).toContain("Capture")
       await mkdir(renders, { recursive: true })
       await Bun.write(path.join(renders, `shell-output-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
     } finally {
@@ -93,12 +97,12 @@ test("shell-output route renders an exited shell without a kill action", async (
       ...DESIGN_VIEWPORT,
       route: terminalRoute,
       settle: "No captured output",
-      stable: ["exited", "No captured output", "Capture:"],
+      stable: ["exited", "No captured output", "Capture"],
     })
     const text = rows.join("\n")
     expect(text).toContain("exited")
     expect(text).toContain("No captured output")
-    expect(text).toContain("Capture:")
+    expect(text).toContain("Capture")
     expect(text).not.toContain("kill")
   } finally {
     delete process.env.YCODING_ROUTE
@@ -120,7 +124,7 @@ const route: FetchHandler = (url) => {
   if (url.pathname === "/api/agent") return json({ location, data: [{ id: "general", name: "General", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }] })
   if (["/api/integration", "/api/command", "/api/skill", "/api/reference", "/api/mcp", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
   if (url.pathname === "/api/shell") return json({ location, data: [shellData] })
-  if (url.pathname === `/api/shell/${shellID}/output`) return json({ location, data: { output: "bun test v1.3.14\n✓ records cache read counters   [2.11ms]\n✓ records cache write counters  [0.94ms]\n✗ returns 0 ratio when nothing read  [1.02ms]\n    expected: 0   received: undefined\n14 pass · 2 fail · 1 skip", cursor: 999, size: 200, truncated: false } })
+  if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}/output`) return json({ location, data: { output: "$ bun test provider\n\n\nbun test v1.3.14\n\npackages/core/test/usage.test.ts:\n\n✓ records cache read counters   [2.11ms]\n\n✓ records cache write counters  [0.94ms]\n\n✗ returns 0 ratio when nothing read  [1.02ms]\n\n    expected: 0   received: undefined\n\n\n\n14 pass · 2 fail · 1 skip\n\n…streaming", cursor: 999, size: 200, truncated: false } })
   if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
   if (url.pathname === "/path") return json({ home: process.env.HOME, state: "", config: "", worktree: directory, directory })
   if (url.pathname === "/api/session/active") return json({ data: {} })
@@ -133,7 +137,7 @@ const terminalRoute: FetchHandler = (url, request) => {
       location,
       data: [{ ...shellData, status: "exited", time: { started: now - 10_000, completed: now }, exit: 1 }],
     })
-  if (url.pathname === `/api/shell/${shellID}/output`)
+  if (decodeURIComponent(url.pathname) === `/api/shell/${shellID}/output`)
     return json({ location, data: { output: "", cursor: 0, size: 0, truncated: false } })
   return route(url, request)
 }

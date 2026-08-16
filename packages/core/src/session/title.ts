@@ -63,7 +63,7 @@ const make = (dependencies: Dependencies) => {
     }
     const agent = yield* dependencies.agents.get(AgentV2.ID.make("title"))
     if (!agent) return
-    const resolved = yield* dependencies.helpers.resolveModel(session, agent)
+    const resolved = yield* dependencies.helpers.resolveModel(session, "title", agent)
     if (!resolved) return
     const baseRequest = LLM.request({
       model: resolved.model,

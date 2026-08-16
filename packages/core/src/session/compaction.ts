@@ -230,20 +230,53 @@ export const buildPrompt = (input: { readonly previousSummary?: string; readonly
     ...input.context,
   ].join("\n\n")
 
-const planContent = (messages: readonly SessionMessage.Info[], tokens: number) => {
+const planContent = (messages: readonly SessionMessage.Info[], tokens: number, fits?: (prompt: string) => boolean) => {
   const selected = select(messages, tokens)
   if (!selected) return undefined
   const previousSummary = messages.findLast((message) => message.type === "compaction" && message.status === "completed")
   const previousRecent = previousSummary?.type === "compaction" ? previousSummary.recent : ""
   const summarizeRecent = !previousRecent && !selected.head
-  return {
-    prompt: buildPrompt({
+  const source = summarizeRecent ? selected.recent : [previousRecent, selected.head].filter(Boolean).join("\n\n")
+  const recent = summarizeRecent ? "" : selected.recent
+  const prompt = (context: string) =>
+    buildPrompt({
       previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
-      context: summarizeRecent ? [selected.recent] : [previousRecent, selected.head].filter(Boolean),
-    }),
-    recent: summarizeRecent ? "" : selected.recent,
-    messages: summarizeRecent ? selected.recentMessages : selected.headMessages,
+      context: context ? [context] : [],
+    })
+  // The folded message count belongs to this branch's compaction event; the budget search below is
+  // from main. They are independent: the count reflects which messages were selected, not how much
+  // of the source text fits the prompt.
+  const folded = summarizeRecent ? selected.recentMessages : selected.headMessages
+  if (!fits || fits(prompt(source))) return { prompt: prompt(source), recent, messages: folded }
+
+  let lower = 0
+  let upper = source.length
+  while (lower < upper) {
+    const middle = Math.ceil((lower + upper) / 2)
+    if (fits(prompt(source.slice(0, middle)))) lower = middle
+    else upper = middle - 1
   }
+  return {
+    prompt: prompt(source.slice(0, lower)),
+    recent: [source.slice(lower), recent].filter(Boolean).join("\n\n"),
+    messages: folded,
+  }
+}
+
+const promptFits = (model: Model, system: readonly SystemPart[], buffer: number) => {
+  const context = model.route.defaults.limits?.context
+  if (context === undefined || context <= 0) return
+  const output = Math.min(model.route.defaults.limits?.output ?? 0, OUTPUT_TOKEN_MAX)
+  const threshold = context - (output || buffer)
+  return (prompt: string) =>
+    estimateRequestTokens(
+      LLM.request({
+        model,
+        system,
+        messages: [Message.user(prompt)],
+        tools: [],
+      }),
+    ) <= threshold
 }
 
 const make = (dependencies: Dependencies) => {
@@ -274,6 +307,7 @@ const make = (dependencies: Dependencies) => {
       tools: [],
     })
     const namespaceInput = {
+      scope: "compaction" as const,
       projectID: plan.session.projectID,
       directory: plan.session.location.directory,
       workspaceID: plan.session.location.workspaceID,
@@ -418,25 +452,27 @@ const make = (dependencies: Dependencies) => {
     return { status: "completed" as const }
   })
   const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput) {
-    const content = planContent(input.messages, config.tokens)
-    if (content) {
+    if (available(input.messages)) {
       const agent = yield* dependencies.agents.get(AgentV2.ID.make("compaction"))
-      const resolved = yield* dependencies.helpers.resolveModel(input.session, agent)
+      const resolved = yield* dependencies.helpers.resolveModel(input.session, "compaction", agent)
       if (!resolved)
         return yield* failed({
           sessionID: input.session.id,
           reason: "auto",
           error: { type: "compaction.failed", message: "No model is available for compaction" },
         })
-      return yield* execute({
-        session: input.session,
-        model: resolved.model,
-        modelRef: resolved.ref,
-        cost: resolved.cost,
-        reason: "auto",
-        system: assembleCompactionConstraints(input.system.map((part) => part.text)).map(SystemPart.make),
-        ...content,
-      })
+      const system = assembleCompactionConstraints(input.system.map((part) => part.text)).map(SystemPart.make)
+      const content = planContent(input.messages, config.tokens, promptFits(resolved.model, system, config.buffer))
+      if (content)
+        return yield* execute({
+          session: input.session,
+          model: resolved.model,
+          modelRef: resolved.ref,
+          cost: resolved.cost,
+          reason: "auto",
+          system,
+          ...content,
+        })
     }
     const error = { type: "compaction.unavailable" as const, message: "Nothing to compact yet" }
     return yield* failed({
@@ -462,8 +498,7 @@ const make = (dependencies: Dependencies) => {
     return used >= threshold || (request !== undefined && estimateRequestTokens(request) >= threshold)
   }
   const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: ManualInput) {
-    const content = planContent(input.messages, config.tokens)
-    if (!content)
+    if (!available(input.messages))
       return yield* failed({
         sessionID: input.session.id,
         reason: "manual",
@@ -471,12 +506,21 @@ const make = (dependencies: Dependencies) => {
         inputID: input.inputID,
       })
     const agent = yield* dependencies.agents.get(AgentV2.ID.make("compaction"))
-    const resolved = yield* dependencies.helpers.resolveModel(input.session, agent)
+    const resolved = yield* dependencies.helpers.resolveModel(input.session, "compaction", agent)
     if (!resolved)
       return yield* failed({
         sessionID: input.session.id,
         reason: "manual",
         error: { type: "compaction.failed", message: "No model is available for compaction" },
+        inputID: input.inputID,
+      })
+    const system = assembleCompactionConstraints((input.system ?? []).map((part) => part.text)).map(SystemPart.make)
+    const content = planContent(input.messages, config.tokens, promptFits(resolved.model, system, config.buffer))
+    if (!content)
+      return yield* failed({
+        sessionID: input.session.id,
+        reason: "manual",
+        error: { type: "compaction.unavailable", message: "Nothing to compact yet" },
         inputID: input.inputID,
       })
     return yield* execute({
@@ -486,7 +530,7 @@ const make = (dependencies: Dependencies) => {
       cost: resolved.cost,
       reason: "manual",
       inputID: input.inputID,
-      system: assembleCompactionConstraints((input.system ?? []).map((part) => part.text)).map(SystemPart.make),
+      system,
       ...content,
     })
   })

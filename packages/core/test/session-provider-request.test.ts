@@ -236,3 +236,53 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
     })
   }),
 )
+
+it.effect("prioritizes compaction and model cache reset diagnostics while normalizing legacy default variants", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionV2.ID.make("ses_provider_request_resets")
+    yield* insertSession(sessionID)
+    const service = yield* SessionProviderRequest.Service
+    const model = (id: string, variant?: string) =>
+      ModelV2.Ref.make({
+        id: ModelV2.ID.make(id),
+        providerID: ProviderV2.ID.make("openai"),
+        ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
+      })
+    const record = Effect.fnUntraced(function* (
+      source: "step" | "compaction",
+      selected: ModelV2.Ref,
+      promptCacheKey: string,
+    ) {
+      const tracker = yield* service.next({
+        sessionID,
+        source,
+        agent: AgentV2.ID.make("build"),
+        model: selected,
+        routeID: "openai-responses",
+        promptCacheKey,
+        systemDigest: "system",
+        toolDigest: "tools",
+      })
+      yield* tracker.complete({
+        continuation: "full",
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    yield* record("step", model("gpt-5.6"), "normal-default")
+    yield* record("step", model("gpt-5.6", "default"), "normal-default")
+    yield* record("compaction", model("summary-model"), "compaction")
+    yield* record("step", model("gpt-5.7"), "after-compaction")
+    yield* record("step", model("gpt-5.8"), "model-switch")
+    yield* record("step", model("gpt-5.8", "high"), "variant-switch")
+
+    expect((yield* service.list(sessionID)).map((item) => item.invalidation)).toEqual([
+      "first-request",
+      "provider-not-reported",
+      "model-switched",
+      "compaction-reset",
+      "model-switched",
+      "model-variant-switched",
+    ])
+  }),
+)

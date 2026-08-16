@@ -12,7 +12,6 @@ import { Keymap } from "../../../context/keymap"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
 import { useComposerTab } from "./index"
-import { getGlyph } from "../../../ui/glyph"
 
 export { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
 
@@ -38,21 +37,30 @@ type CancelClient = {
   }
 }
 
+const taskStateOrder = {
+  waiting: 0,
+  starting: 1,
+  running: 1,
+  cancelling: 2,
+  completed: 3,
+  cancelled: 4,
+  failed: 5,
+  lost: 6,
+} as const
+
 export function formatSubagentModel(model: { providerID: string; id: string; variant?: string } | undefined) {
+  if (model?.providerID === "anthropic" && model.id === "claude-sonnet-5") return "Sonnet 5"
+  if (model?.providerID === "anthropic" && model.id === "claude-haiku-4-5") return "Haiku 4.5"
   return formatDiagnosticsModel(model)
 }
 
 export function formatSubagentCacheHit(diagnostics: SessionCacheDiagnostics | null | undefined) {
-  return diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}% hit`
+  return diagnostics?.cache.hitRatio === undefined ? "—" : `${Math.round(diagnostics.cache.hitRatio * 100)}% hit`
 }
 
 export function formatSubagentElapsed(startedAt: number | undefined, now: number) {
   if (startedAt === undefined) return undefined
-  const seconds = Math.max(0, Math.floor((now - startedAt) / 1_000))
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  if (hours > 0) return `${hours}h${String(minutes % 60).padStart(2, "0")}m`
-  return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`
+  return Locale.duration(Math.max(0, now - startedAt))
 }
 
 export function entriesFromTasks(
@@ -61,7 +69,7 @@ export function entriesFromTasks(
 ): SubagentEntry[] {
   return [...tasks]
     .sort((a, b) => {
-      const state = Number(isActiveSubagent(b.state)) - Number(isActiveSubagent(a.state))
+      const state = taskStateOrder[a.state] - taskStateOrder[b.state]
       if (state !== 0) return state
       const created = b.time.created - a.time.created
       if (created !== 0) return created
@@ -69,7 +77,7 @@ export function entriesFromTasks(
     })
     .map((task) => ({
       sessionID: task.sessionID,
-      agent: Locale.titlecase(task.agent),
+      agent: task.agent,
       title: task.description,
       detail: task.question?.text ?? task.progress?.text,
       awaitingInput: Boolean(task.question?.text),
@@ -117,14 +125,14 @@ export function subagentScrollIndex(entries: ReadonlyArray<SubagentEntry>, index
 
 export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
   return {
-    starting: "Starting",
-    running: "Running",
-    waiting: "Waiting",
-    cancelling: "Cancelling",
-    cancelled: "Cancelled",
-    completed: "Completed",
-    failed: "Failed",
-    lost: "Lost",
+    starting: "starting",
+    running: "running",
+    waiting: "? awaiting",
+    cancelling: "cancelling",
+    cancelled: "cancelled",
+    completed: "completed",
+    failed: "failed",
+    lost: "lost",
   }[state]
 }
 
@@ -192,7 +200,6 @@ export function SubagentsTab(props: { sessionID: string }) {
   const navigation = useRoute()
   const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
-  const shortcuts = Keymap.useShortcuts()
   const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => data.session.get(props.sessionID))
@@ -283,12 +290,13 @@ export function SubagentsTab(props: { sessionID: string }) {
       label: "Subagents",
       hints: () => {
         const entry = selectedEntry()
-        if (!entry || !canCancelSubagent(entry.status)) return []
+        if (!entry) return []
         return [
-          {
-            label: "cancel",
-            shortcut: shortcuts.get("composer.subagent.interrupt") ?? "",
-          },
+          { label: "Enter", shortcut: "attach", gapAfter: 3 },
+          { label: "↑↓", shortcut: "move", gapAfter: 3 },
+          { label: "⌃x k", shortcut: "cancel", gapAfter: 4 },
+          { label: "r", shortcut: "answer", gapAfter: 3 },
+          { label: "Esc", shortcut: "close" },
         ]
       },
       onClose: () => {
@@ -329,7 +337,7 @@ export function SubagentsTab(props: { sessionID: string }) {
       },
       {
         id: "composer.subagent.select",
-        title: "Navigate to subagent",
+        title: "Attach to subagent",
         group: "Composer",
         bind: "return",
         run() {
@@ -338,10 +346,20 @@ export function SubagentsTab(props: { sessionID: string }) {
         },
       },
       {
+        id: "composer.subagent.answer",
+        title: "Answer subagent",
+        group: "Composer",
+        bind: "r",
+        run() {
+          const entry = selectedEntry()
+          if (entry?.awaitingInput) navigate({ type: "session", sessionID: entry.sessionID })
+        },
+      },
+      {
         id: "composer.subagent.interrupt",
         title: "Cancel subagent",
         group: "Composer",
-        bind: "ctrl+d",
+        bind: "ctrl+x k",
         run() {
           const entry = selectedEntry()
           if (!entry || !canCancelSubagent(entry.status)) return
@@ -361,7 +379,9 @@ export function SubagentsTab(props: { sessionID: string }) {
     <Show when={composer.active("subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
-        maxHeight={8}
+        maxHeight={16}
+        maxWidth={139}
+        paddingTop={2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
         <Show when={entries().length > 0} fallback={<text fg={themeV2.text.subdued}> No subagents</text>}>
@@ -376,69 +396,77 @@ export function SubagentsTab(props: { sessionID: string }) {
                     const entryIndex = createMemo(() => entries().indexOf(entry))
                     const active = createMemo(() => entryIndex() === selected())
                     const awaitingInput = createMemo(() => entry.awaitingInput)
+                    const statusColor = createMemo(() => {
+                      if (awaitingInput()) return themeV2.text.feedback.warning.default
+                      if (entry.status === "running") return themeV2.text.feedback.success.default
+                      if (entry.status === "cancelled") return themeV2.text.feedback.error.default
+                      return themeV2.text.subdued
+                    })
                     return (
-                      <box
-                        flexDirection="column"
-                        paddingLeft={1}
-                        paddingRight={1}
-                        backgroundColor={
-                          active()
-                            ? themeV2.background.action.primary.focused
-                            : entry.current
-                              ? themeV2.background.action.primary.selected
-                              : themeV2.background.action.primary.default
-                        }
-                        onMouseOver={() => setStore("selected", entryIndex())}
-                        onMouseUp={() => {
-                          setStore("selected", entryIndex())
-                          navigate({
-                            type: "session",
-                            sessionID: entry.sessionID,
-                          })
-                        }}
-                      >
+                      <>
                         <box flexDirection="row" minWidth={0} flexGrow={1}>
-                          <text
-                            fg={
+                          <box
+                            flexDirection="row"
+                            minWidth={0}
+                            flexGrow={1}
+                            paddingLeft={0}
+                            paddingRight={1}
+                            paddingTop={active() ? 1 : 0}
+                            paddingBottom={active() ? 1 : entry.status === "running" || entry.status === "completed" ? 2 : 0}
+                            backgroundColor={
                               active()
-                                ? themeV2.text.action.primary.focused
+                                ? themeV2.background.action.primary.focused
                                 : entry.current
-                                  ? themeV2.text.action.primary.selected
-                                  : themeV2.text.action.primary.default
+                                  ? themeV2.background.action.primary.selected
+                                  : themeV2.background.action.primary.default
                             }
-                            attributes={active() ? TextAttributes.BOLD : undefined}
-                            wrapMode="none"
+                            onMouseOver={() => setStore("selected", entryIndex())}
+                            onMouseUp={() => {
+                              setStore("selected", entryIndex())
+                              navigate({
+                                type: "session",
+                                sessionID: entry.sessionID,
+                              })
+                            }}
                           >
-                            <span
-                              style={{
-                                fg: awaitingInput()
-                                  ? themeV2.text.feedback.warning.default
-                                  : themeV2.text.feedback.info.default,
-                              }}
+                            <box width={16} flexShrink={0}>
+                              <text fg={statusColor()} wrapMode="none">
+                                {taskStatusLabel(entry.status)}
+                              </text>
+                            </box>
+                            <text
+                              fg={
+                                active()
+                                  ? themeV2.text.action.primary.focused
+                                  : entry.current
+                                    ? themeV2.text.action.primary.selected
+                                    : themeV2.text.action.primary.default
+                              }
+                              attributes={active() ? TextAttributes.BOLD : undefined}
+                              wrapMode="none"
                             >
-                              {getGlyph(awaitingInput() ? "awaitingInput" : "subagent").rendered}
-                            </span>
-                            {entry.agent}: {entry.title}
-                          </text>
-                          <box flexGrow={1} />
-                          <SubagentMetadata
-                            model={entry.model}
-                            cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
-                            elapsed={
-                              dimensions().width >= 100 && entry.status === "running"
-                                ? formatSubagentElapsed(entry.startedAt, now())
-                                : undefined
-                            }
-                            status={taskStatusLabel(entry.status)}
-                            active={active()}
-                          />
+                              {entry.agent}
+                            </text>
+                            <text fg={themeV2.text.subdued} wrapMode="none">
+                              {`  · ${entry.title}`}
+                            </text>
+                            <box flexGrow={1} />
+                            <SubagentMetadata
+                              model={entry.status === "running" ? "attached" : entry.model}
+                              cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
+                              elapsed={dimensions().width >= 100 ? formatSubagentElapsed(entry.startedAt, now()) : undefined}
+                              active={active()}
+                            />
+                          </box>
                         </box>
                         <Show when={entry.awaitingInput && entry.detail}>
-                          <text fg={themeV2.text.subdued} paddingLeft={2} wrapMode="none">
-                            └ {entry.detail}
-                          </text>
+                          <box paddingLeft={16} paddingBottom={1}>
+                            <text fg={themeV2.text.feedback.warning.default} wrapMode="none">
+                              ? {entry.detail}
+                            </text>
+                          </box>
                         </Show>
-                      </box>
+                      </>
                     )
                   }}
                 </For>

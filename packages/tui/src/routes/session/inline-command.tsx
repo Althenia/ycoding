@@ -25,6 +25,7 @@ export function InlineCommand(props: {
   errors?: number
   failed?: boolean
   complete?: boolean
+  paddingLeft?: number
 }) {
   const { themeV2 } = useTheme()
 
@@ -41,10 +42,10 @@ export function InlineCommand(props: {
   })
 
   return (
-    <box width="100%" paddingLeft={3} flexDirection="row">
+    <box width="100%" paddingLeft={props.paddingLeft ?? 3} marginBottom={1} flexDirection="row">
       <text flexShrink={1} wrapMode="word" fg={props.failed ? themeV2.text.feedback.error.default : props.color}>
-        <Show when={props.complete ?? true} fallback={<span style={{ fg: themeV2.text.subdued }}>… </span>}>
-          <span style={{ fg: props.iconColor ?? props.color }}>{props.icon} </span>
+        <Show when={props.complete ?? true} fallback={<span style={{ fg: themeV2.text.subdued }}>{"…".padEnd(7)}</span>}>
+          <span style={{ fg: props.iconColor ?? props.color }}>{props.icon.padEnd(7)}</span>
         </Show>
         {props.command}
       </text>

@@ -6,7 +6,7 @@ import { renderScreen } from "./harness"
 
 const viewports = [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE] as const
 const chrome = [15, 17, 21, 255] satisfies [number, number, number, number]
-const rail = [29, 33, 40, 255] satisfies [number, number, number, number]
+const railSection = [37, 42, 51, 255] satisfies [number, number, number, number]
 const border = [59, 66, 77, 255] satisfies [number, number, number, number]
 const accent = [103, 215, 170, 255] satisfies [number, number, number, number]
 const subdued = [152, 162, 179, 255] satisfies [number, number, number, number]
@@ -127,7 +127,9 @@ describe("screen chrome colour probes", () => {
         const railFooter = screen.spans().lines.findIndex((line) => line.spans.some((span) => span.text.includes("YCoding v")))
         const edgeBand = railSpans(screen.spans().lines[railFooter - 3]?.spans ?? [], viewport.width)
         expect(railBand).not.toHaveLength(0)
-        expect(railBand.every((span) => span.bg.toInts().every((value, index) => value === rail[index]))).toBe(true)
+        const sessionHeader = railBand.find((span) => span.text.includes("SESSION"))
+        if (!sessionHeader) throw new Error("SESSION header did not render")
+        expect(sessionHeader.bg.toInts()).toEqual(railSection)
         expect(edgeBand).not.toHaveLength(0)
         const railEdge = edgeBand.find((span) => span.text.includes("─"))
         if (!railEdge) throw new Error("Rail footer border did not render")

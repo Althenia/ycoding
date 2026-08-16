@@ -20,7 +20,7 @@ import { createEventStream, createFetch, json } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
 
 const renders = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
-const parentID = "ses_0085fc701"
+const parentID = "ses_0085fc701a"
 const sessionID = parentID
 const childID = "ses_docs_sync"
 const directory = `${process.env.HOME}/Workspace/Personal/YCoding`
@@ -47,28 +47,74 @@ const shells = [
   shell("sh_docs_diff", childID, "git diff --check", "running", now - 3_000, 48_307, `${directory}/docs`),
   shell("sh_orphan", undefined, "bench cache-warm", "timeout", now - 300_000, undefined),
 ]
-const tasks: [] = []
+const tasks = [
+  {
+    sessionID: childID,
+    parentID,
+    description: "Sync provider docs",
+    agent: "docs-sync",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    background: true,
+    state: "running" as const,
+    revision: 1,
+    time: { created: 1, updated: 4 },
+  },
+  {
+    sessionID: "ses_cache_review",
+    parentID,
+    description: "Review provider cache",
+    agent: "docs-sync",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    background: true,
+    state: "running" as const,
+    revision: 1,
+    time: { created: 2, updated: 4 },
+  },
+]
 
 test("captures populated shell ownership and rail states at reference dimensions", async () => {
   for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
     const capture = await boot(viewport)
     try {
-      await waitFor(capture.frame, "Claude Opus 5")
+      await waitFor(capture.frame, "y. ycoding")
       await waitFor(capture.frame, "Message YCoding")
+      await waitFor(capture.frame, "3 shells running")
       capture.input.pressKey("ARROW_DOWN")
-      await waitFor(capture.frame, "tabs")
+      await waitFor(capture.frame, "Prompt")
+      const composerRow = capture.rows().findIndex((row) => row.includes("Prompt") && row.includes("Shell"))
+      expect(composerRow).toBeGreaterThanOrEqual(0)
+      await capture.mouse.click(capture.rows()[composerRow].indexOf("Shell"), composerRow)
+      await waitFor(capture.frame, "MAIN CHAT · THIS SESSION")
       expect(capture.frame()).toContain("Shell")
 
       const rows = capture.rows()
       expect(rows).toHaveLength(viewport.height)
       expect(rows.join("\n")).toContain("SHELLS")
-      expect(rows.join("\n")).toContain("3 running, 1 terminal")
-      expect(rows.join("\n")).toContain("Subagents  Shell")
+      expect(rows.filter((row) => row.includes("SHELLS"))).toHaveLength(1)
+      expect(rows.join("\n")).toMatch(/−\s+SHELLS\s+3 running/)
+      const tabRow = rows.find((row) => row.includes("Prompt") && row.includes("Shell")) ?? ""
+      expect(tabRow).toContain("Prompt")
+      expect(tabRow.indexOf("Shell")).toBeGreaterThan(tabRow.indexOf("Prompt"))
+      expect(tabRow.indexOf("Subagents")).toBeGreaterThan(tabRow.indexOf("Shell"))
+      expect(tabRow).toContain("Shell 3")
       expect(rows.findIndex((row) => row.includes("Shell"))).toBeLessThan(Math.ceil(viewport.height / 2))
       expect(rows.findIndex((row) => row.includes("SHELLS"))).toBeLessThan(rows.findIndex((row) => row.includes("SESSION")))
-      expect(rows.join("\n")).toContain("Main chat")
-      expect(rows.join("\n")).toContain("docs-sync")
-      expect(rows.join("\n")).toContain("Unknown session 1")
+      expect(rows.join("\n")).toContain("MAIN CHAT · THIS SESSION")
+      expect(rows.join("\n")).toContain("SUBAGENT · DOCS-SYNC · SYNC PROVIDER DOCS")
+      expect(rows.join("\n")).toContain("UNKNOWN SESSION")
+      expect(rows.join("\n")).toContain("exit — · 5m00s")
+      expect(rows[1]).toContain("3 shells running")
+      if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
+        expectAt(rows, 34, 3, "Prompt")
+        expectAt(rows, 34, 14, "Shell")
+        expectAt(rows, 34, 20, "3")
+        expectAt(rows, 34, 25, "Subagents")
+        expectAt(rows, 34, 36, "2")
+        expectAt(rows, 53, 3, "Enter view output")
+        expectAt(rows, 53, 23, "↑↓ move")
+        expectAt(rows, 53, 34, "⌃x k kill")
+        expectAt(rows, 53, 46, "Esc close")
+      }
 
       await mkdir(renders, { recursive: true })
       await Bun.write(path.join(renders, `shells-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
@@ -119,6 +165,7 @@ test("captures the Shell tab owner rows with populated groups", async () => {
                   now={now}
                   selected="sh_main_test"
                   onSelect={(shell) => (selected = shell.id)}
+                  designLabels
                 />
               </Keymap.Provider>
             </ThemeProvider>
@@ -128,15 +175,15 @@ test("captures the Shell tab owner rows with populated groups", async () => {
       viewport,
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("Unknown session"))
+    await app.waitForFrame((frame) => frame.includes("UNKNOWN SESSION"))
 
     try {
       const frame = app.captureCharFrame()
-      expect(frame).toContain("Main chat")
-      expect(frame).toContain("docs-sync · Sync provider docs")
-      expect(frame).toContain("Unknown session")
-      if (viewport.width === NARROW_VIEWPORT.width) expect(frame).toContain("bun test provider running")
-      await app.mockMouse.moveTo(3, 2)
+      expect(frame).toContain("MAIN CHAT · THIS SESSION")
+      expect(frame).toContain("SUBAGENT · DOCS-SYNC · SYNC PROVIDER DOCS")
+      expect(frame).toContain("UNKNOWN SESSION")
+      if (viewport.width === NARROW_VIEWPORT.width) expect(frame).toContain("running         bun test provider")
+      await app.mockMouse.moveTo(3, 4)
       expect(selected).toBe("sh_main_dev")
       await Bun.write(path.join(renders, `shells-tab-${viewport.width}x${viewport.height}.txt`), frame)
     } finally {
@@ -197,6 +244,10 @@ async function waitFor(frame: () => string, text: string) {
   throw new Error(`screen did not settle on ${text}`)
 }
 
+function expectAt(lines: string[], row: number, column: number, text: string) {
+  expect(lines[row]?.slice(column, column + text.length)).toBe(text)
+}
+
 function route(url: URL) {
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
@@ -222,7 +273,7 @@ function route(url: URL) {
 }
 
 function session(id: string, title: string, agent: string) {
-  return { id, title, projectID: "project", location: { directory }, agent, model: { providerID: "anthropic", id: "claude-opus-5" }, cost: 0, tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 4_096 } }, time: { created: 1, updated: 4 } }
+  return { id, title, projectID: "project", location: { directory }, agent, model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" }, cost: 0, tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 4_096 } }, time: { created: 1, updated: 4 } }
 }
 
 function shell(id: string, sessionID: string | undefined, command: string, status: ShellInfo["status"], started: number, pid?: number, cwd = directory) {

@@ -16,7 +16,7 @@ export function parseInlineDiff(diff: string) {
       let newLine = hunk.newStart
       hunk.lines.forEach((line) => {
         if (line.startsWith("+")) {
-          lines.push({ kind: "added", line: line.slice(1), lineNum: `    ${newLine++}` })
+          lines.push({ kind: "added", line: line.slice(1), lineNum: `${newLine++}    ` })
           return
         }
         if (line.startsWith("-")) {
@@ -24,7 +24,8 @@ export function parseInlineDiff(diff: string) {
           return
         }
         if (!line.startsWith(" ")) return
-        lines.push({ kind: "context", line: line.slice(1), lineNum: `${oldLine++}    ${newLine++}` })
+        lines.push({ kind: "context", line: line.slice(1), lineNum: `${newLine++}    ` })
+        oldLine++
       })
     })
     return { patch, lines }
@@ -36,6 +37,8 @@ export function parseInlineDiff(diff: string) {
 export function InlineDiff(props: {
   path?: string
   diff: string
+  additions?: number
+  deletions?: number
 }) {
   const { themeV2 } = useTheme()
 
@@ -50,22 +53,21 @@ export function InlineDiff(props: {
   )
   const hunkLines = createMemo(() => parsed()?.lines ?? [])
 
-  const additions = createMemo(() => hunkLines().filter((l) => l.kind === "added").length)
-  const deletions = createMemo(() => hunkLines().filter((l) => l.kind === "removed").length)
+  const additions = createMemo(() => props.additions ?? hunkLines().filter((l) => l.kind === "added").length)
+  const deletions = createMemo(() => props.deletions ?? hunkLines().filter((l) => l.kind === "removed").length)
 
   return (
-    <box flexDirection="column" paddingLeft={3} flexShrink={0}>
+    <box flexDirection="column" paddingLeft={1} paddingTop={2} paddingBottom={3} gap={1} flexShrink={0}>
       <text wrapMode="none" fg={themeV2.text.default}>
-        <span style={{ fg: themeV2.text.subdued }}>─ </span>
         <span style={{ fg: themeV2.text.default }}>{path()}</span>
         <Show when={additions() > 0}>
           <span style={{ fg: themeV2.diff.text.added, attributes: TextAttributes.BOLD }}>
-            {" "}+{additions()}
+            {"                    "}+{additions()}
           </span>
         </Show>
         <Show when={deletions() > 0}>
           <span style={{ fg: themeV2.diff.text.removed, attributes: TextAttributes.BOLD }}>
-            {" "}−{deletions()}
+            {"   "}−{deletions()}
           </span>
         </Show>
       </text>
@@ -85,9 +87,8 @@ export function InlineDiff(props: {
             }}>
               {item.lineNum.slice(0, 6)}
             </span>
-            {" │"}
-            {item.kind === "added" ? "+" : item.kind === "removed" ? "-" : " "}
-            {item.line}
+            {"  "}
+            {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
           </text>
         )}
       </For>

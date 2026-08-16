@@ -60,7 +60,7 @@ test("renders owner groups, supported statuses, and derived elapsed durations", 
     "reviewer · Check shell ownership",
     "Unknown session",
   ])
-  expect(formatShellElapsed(main, 75_000)).toBe("1m 5s")
+  expect(formatShellElapsed(main, 75_000)).toBe("1m05s")
   expect(formatShellElapsed(child, 75_000)).toBe("20s")
 
   const app = await testRender(
@@ -98,7 +98,7 @@ test("renders owner groups, supported statuses, and derived elapsed durations", 
     expect(frame).toContain("killed")
     expect(frame).toContain("/workspace")
     expect(frame).toContain("pid 104")
-    expect(frame).toContain("1m 5s")
+    expect(frame).toContain("1m05s")
     expect(frame).toContain("20s")
   } finally {
     app.renderer.destroy()

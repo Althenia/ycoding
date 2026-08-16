@@ -131,17 +131,28 @@ async function expectRailDesign(viewport: typeof DESIGN_VIEWPORT) {
     const lines = screen.lines()
     const railStart = viewport.width - 50
 
-    expect(lines[4]?.indexOf("−")).toBe(railStart + 3)
-    expect(lines[4]?.indexOf("SESSION")).toBe(railStart + 5)
-    // The design's 22px line advance is the mock's legibility spacing, not a row rhythm: at the
-    // measured 7.2px character advance a 22px row is cell aspect 3.06, which is no terminal cell.
-    // So only the ORDER of the CONTEXT value rows is design-governed, and they render dense.
+    expect(lines[4]?.indexOf("−")).toBe(railStart + 7)
+    expect(lines[4]?.indexOf("SESSION")).toBe(railStart + 10)
     const rowOf = (label: string) => lines.findIndex((line) => line.includes(label))
+    expect(rowOf("Provider cache audit")).toBe(7)
+    expect(rowOf("ses_rail_desi…")).toBe(9)
+    expect(rowOf("CONTEXT")).toBe(12)
     const input = rowOf("Input")
-    expect(input).toBeGreaterThan(4)
-    expect(rowOf("Output")).toBe(input + 1)
-    expect(rowOf("Used")).toBe(input + 2)
-    expect(rowOf("Spent")).toBe(input + 3)
+    expect(input).toBe(15)
+    expect(rowOf("Output")).toBe(17)
+    expect(rowOf("Used")).toBe(19)
+    expect(rowOf("Spent")).toBe(21)
+    expect(rowOf("CACHE")).toBe(25)
+    expect(rowOf("Hit ratio")).toBe(27)
+    expect(rowOf("Prefix")).toBe(28)
+    expect(rowOf("Reads")).toBe(30)
+    expect(rowOf("Writes")).toBe(32)
+    expect(rowOf("TODO LIST")).toBe(-1)
+    expect(rowOf("SUBAGENTS")).toBe(-1)
+    expect(rowOf("SHELLS")).toBe(-1)
+    expect(rowOf("SKILLS")).toBe(-1)
+    expect(rowOf("MCP")).toBe(-1)
+    expect(rowOf("PLUGINS")).toBe(-1)
     const inputEnd = (lines[input]?.indexOf("1,411") ?? -Infinity) + "1,411".length
     expect(inputEnd).toBeGreaterThanOrEqual(viewport.width - 4)
     expect(inputEnd).toBeLessThanOrEqual(viewport.width - 3)

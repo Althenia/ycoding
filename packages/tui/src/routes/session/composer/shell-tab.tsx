@@ -1,14 +1,16 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import type { ShellInfo } from "@ycoding-ai/client"
+import type { SessionInfo, ShellInfo } from "@ycoding-ai/client"
 import { useClient } from "../../../context/client"
 import { useData } from "../../../context/data"
 import { Keymap } from "../../../context/keymap"
 import { useLocation } from "../../../context/location"
 import { useTheme } from "../../../context/theme"
 import { useRoute } from "../../../context/route"
-import { groupSessionShells, type SessionShellGroup } from "../../../util/session"
+import type { SessionShellGroup } from "../../../util/session"
+import { formatDuration } from "../../../util/format"
+import { abbreviateHome } from "../../../util/path-format"
 import { useComposerTab } from "./index"
 
 type ShellEntry = {
@@ -19,12 +21,7 @@ type ShellEntry = {
 export function formatShellElapsed(shell: ShellInfo, now: number) {
   const completed = shell.status === "running" ? undefined : shell.time.completed
   const duration = Math.max(0, (completed ?? now) - shell.time.started)
-  const seconds = Math.floor(duration / 1_000)
-  const minutes = Math.floor(seconds / 60)
-  const hours = Math.floor(minutes / 60)
-  if (hours > 0) return `${hours}h ${minutes % 60}m`
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-  return `${seconds}s`
+  return formatDuration(duration / 1_000)
 }
 
 export function ShellRows(props: {
@@ -32,63 +29,69 @@ export function ShellRows(props: {
   now: number
   selected: string | undefined
   onSelect: (shell: ShellInfo) => void
+  designLabels?: boolean
 }) {
   const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
 
   return (
     <For each={props.groups}>
-      {(group) => (
-        <box flexDirection="column">
-          <text
-            fg={group.owner.label === "Unknown session" ? themeV2.text.feedback.warning.default : themeV2.text.subdued}
-            attributes={TextAttributes.BOLD}
-          >
-            {group.owner.label}
-          </text>
-          <For each={group.shells}>
-            {(shell) => {
-              const active = createMemo(() => props.selected === shell.id)
-              return (
-                <box
-                  flexDirection="row"
-                  gap={1}
-                  paddingLeft={1}
-                  paddingRight={1}
-                  backgroundColor={
-                    active() ? themeV2.background.action.primary.focused : themeV2.background.action.primary.default
-                  }
-                  onMouseOver={() => props.onSelect(shell)}
-                >
-                  <text
-                    fg={active() ? themeV2.text.action.primary.focused : themeV2.text.action.primary.default}
-                    attributes={active() ? TextAttributes.BOLD : undefined}
-                    wrapMode="none"
-                  >
-                    {shell.command}
-                  </text>
-                  <Show when={dimensions().width >= 100}>
-                    <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
-                      {shell.cwd}
-                    </text>
-                    <Show when={shell.pid !== undefined}>
-                      <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
-                        pid {shell.pid}
+      {(group, groupIndex) => {
+        const unknown = group.owner.label === "Unknown session"
+        return (
+          <box flexDirection="column">
+            <text fg={unknown ? themeV2.text.feedback.warning.default : themeV2.text.subdued} attributes={TextAttributes.BOLD}>
+              {props.designLabels ? shellOwnerLabel(group.owner.label) : group.owner.label}
+            </text>
+            <Show when={!unknown}>
+              <box height={1} />
+            </Show>
+            <For each={group.shells}>
+              {(shell, shellIndex) => {
+                const active = createMemo(() => props.selected === shell.id)
+                const color = () => (active() ? themeV2.text.action.primary.focused : themeV2.text.action.primary.default)
+                return (
+                  <>
+                    <box
+                      flexDirection="row"
+                      minWidth={0}
+                      backgroundColor={active() ? themeV2.background.action.primary.focused : themeV2.background.action.primary.default}
+                      onMouseOver={() => props.onSelect(shell)}
+                    >
+                      <box width={16} flexShrink={0}>
+                        <text fg={active() ? themeV2.text.action.primary.focused : statusColor(shell.status, themeV2)} wrapMode="none">
+                          {shell.status}
+                        </text>
+                      </box>
+                      <text fg={color()} attributes={active() ? TextAttributes.BOLD : undefined} wrapMode="none">
+                        {shell.command}
                       </text>
+                      <Show when={dimensions().width >= 100}>
+                        <box width={2} flexShrink={0} />
+                        <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
+                          · {abbreviateHome(shell.cwd, process.env.HOME ?? "")}
+                        </text>
+                        <box flexGrow={1} />
+                        <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
+                          {shell.status === "running" && shell.pid !== undefined
+                            ? `pid ${shell.pid} · ${formatShellElapsed(shell, props.now)}`
+                            : `exit — · ${formatShellElapsed(shell, props.now)}`}
+                        </text>
+                      </Show>
+                    </box>
+                    <Show when={shellIndex() < group.shells.length - 1}>
+                      <box height={1} />
                     </Show>
-                    <text fg={active() ? themeV2.text.action.primary.focused : themeV2.text.subdued} wrapMode="none">
-                      {formatShellElapsed(shell, props.now)}
-                    </text>
-                  </Show>
-                  <text fg={active() ? themeV2.text.action.primary.focused : statusColor(shell.status, themeV2)} wrapMode="none">
-                    {shell.status}
-                  </text>
-                </box>
-              )
-            }}
-          </For>
-        </box>
-      )}
+                  </>
+                )
+              }}
+            </For>
+            <Show when={groupIndex() < props.groups.length - 1}>
+              <box height={2} />
+            </Show>
+          </box>
+        )
+      }}
     </For>
   )
 }
@@ -100,15 +103,21 @@ export function ShellTab(props: { sessionID: string }) {
   const route = useRoute()
   const { themeV2 } = useTheme()
   const composer = useComposerTab()
-  const shortcuts = Keymap.useShortcuts()
 
-  const groups = createMemo(() => groupSessionShells(data.shell.list(), data.session.list(), props.sessionID))
+  const session = createMemo(() => data.session.get(props.sessionID))
+  const shells = createMemo(() => data.shell.list(session()?.location))
+  const groups = createMemo(() => pickerShellGroups(shells(), data.session.list(), props.sessionID))
   const entries = createMemo(() => groups().flatMap((group) => group.shells.map((shell) => ({ shell, owner: group.owner }))))
   const [now, setNow] = createSignal(Date.now())
   const [selected, setSelected] = createSignal(0)
   let scroll: ScrollBoxRenderable | undefined
 
   const selectedEntry = createMemo(() => entries()[selected()])
+
+  createEffect(() => {
+    if (!composer.active("shell")) return
+    void data.shell.sync(session()?.location).catch((error) => console.error("Failed to load shell commands", error))
+  })
 
   createEffect(() => {
     if (!entries().some((entry) => entry.shell.status === "running")) return
@@ -142,13 +151,15 @@ export function ShellTab(props: { sessionID: string }) {
     const cleanup = composer.register({
       id: "shell",
       label: "Shell",
-      hints: () => {
-        if (!selectedEntry()) return []
-        return [
-          { label: "output", shortcut: shortcuts.get("composer.shell.output") ?? "" },
-          { label: "kill", shortcut: shortcuts.get("composer.shell.kill") ?? "" },
-        ]
-      },
+      hints: () =>
+        selectedEntry()
+          ? [
+              { label: "Enter", shortcut: "view output", gapAfter: 3 },
+              { label: "↑↓", shortcut: "move", gapAfter: 4 },
+              { label: "⌃x k", shortcut: "kill", gapAfter: 3 },
+              { label: "Esc", shortcut: "close" },
+            ]
+          : [],
     })
     onCleanup(cleanup)
   })
@@ -195,7 +206,7 @@ export function ShellTab(props: { sessionID: string }) {
         id: "composer.shell.kill",
         title: "Kill shell command",
         group: "Composer",
-        bind: "ctrl+d",
+        bind: "ctrl+x k",
         run() {
           const entry = selectedEntry()
           if (!entry) return
@@ -211,18 +222,58 @@ export function ShellTab(props: { sessionID: string }) {
 
   return (
     <Show when={composer.active("shell")}>
-      <scrollbox scrollbarOptions={{ visible: false }} maxHeight={8} ref={(value: ScrollBoxRenderable) => (scroll = value)}>
+      <scrollbox
+        scrollbarOptions={{ visible: false }}
+        maxHeight={16}
+        paddingTop={2}
+        ref={(value: ScrollBoxRenderable) => (scroll = value)}
+      >
         <Show when={groups().length > 0} fallback={<text fg={themeV2.text.subdued}> No shell commands</text>}>
           <ShellRows
             groups={groups()}
             now={now()}
             selected={selectedEntry()?.shell.id}
             onSelect={(shell) => setSelected(entries().findIndex((entry) => entry.shell.id === shell.id))}
+            designLabels
           />
         </Show>
       </scrollbox>
     </Show>
   )
+}
+
+function pickerShellGroups(shells: readonly ShellInfo[], sessions: readonly SessionInfo[], currentSessionID: string): SessionShellGroup[] {
+  const descendants = descendantSessionIDs(sessions, currentSessionID)
+  const owners = [currentSessionID, ...descendants]
+  const groups = owners.flatMap((sessionID) => {
+    const owned = shells.filter((shell) => shell.metadata.sessionID === sessionID)
+    if (owned.length === 0) return []
+    const owner = sessions.find((session) => session.id === sessionID)
+    return [
+      {
+        owner: { label: sessionID === currentSessionID ? "Main chat" : `${owner?.agent ?? "Subagent"} · ${owner?.title ?? ""}` },
+        shells: owned,
+      },
+    ]
+  })
+  const unknown = shells.filter((shell) => {
+    const sessionID = shell.metadata.sessionID
+    return typeof sessionID !== "string" || !sessions.some((session) => session.id === sessionID)
+  })
+  if (unknown.length === 0) return groups
+  return [...groups, { owner: { label: "Unknown session" }, shells: unknown }]
+}
+
+function descendantSessionIDs(sessions: readonly SessionInfo[], parentID: string): string[] {
+  return sessions
+    .filter((session) => session.parentID === parentID)
+    .flatMap((session) => [session.id, ...descendantSessionIDs(sessions, session.id)])
+}
+
+function shellOwnerLabel(label: string) {
+  if (label === "Main chat") return "MAIN CHAT · THIS SESSION"
+  if (label === "Unknown session") return "UNKNOWN SESSION"
+  return `SUBAGENT · ${label.toUpperCase()}`
 }
 
 function statusColor(status: ShellInfo["status"], themeV2: ReturnType<typeof useTheme>["themeV2"]) {

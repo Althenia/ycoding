@@ -10,8 +10,8 @@ test("binds supported maintainer shortcuts without leader collisions", () => {
   const definitions = TuiKeybind.Definitions as Record<string, { default: unknown }>
 
   expect(TuiKeybind.Definitions.variant_list.default).toBe("<leader>v")
-  expect(definitions.session_autonomy_normal?.default).toBe("<leader>d")
-  expect(TuiKeybind.Definitions.messages_copy.default).toBe("<leader>y")
+  expect(definitions.session_autonomy_normal?.default).toBe("<leader>y")
+  expect(TuiKeybind.Definitions.messages_copy.default).toBe("<leader>o")
 
   const leaderBindings = Object.entries(definitions).flatMap(([name, definition]) =>
     typeof definition.default === "string" && definition.default.startsWith("<leader>") ? [[name, definition.default]] : [],
@@ -21,10 +21,13 @@ test("binds supported maintainer shortcuts without leader collisions", () => {
   )
 
   expect(duplicates).toEqual([])
-  expect(leaderBindings).toEqual(expect.arrayContaining([
-    ["variant_list", "<leader>v"],
-    ["session_autonomy_normal", "<leader>d"],
-  ]))
+  expect(leaderBindings).toEqual(
+    expect.arrayContaining([
+      ["variant_list", "<leader>v"],
+      ["session_autonomy_normal", "<leader>y"],
+      ["messages_copy", "<leader>o"],
+    ]),
+  )
 })
 
 test("new supported shortcuts remain configurable and appear in help", async () => {

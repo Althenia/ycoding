@@ -38,13 +38,15 @@ The default efficiency policy is:
 | --- | --- | --- |
 | `title` | `local` | Generates deterministic Session titles without a provider request. |
 | `goal_synthesis` | `local` | Normalizes the requested goal without a provider request. |
-| `helper_model` | unset | Model-based title, goal, and compaction helpers fall back to the Session model unless their hidden agent selects a model. |
+| `helper_models.title`, `.goal`, `.compaction` | `session` | Selects each helper independently; a hidden agent's explicit model still takes precedence. |
 | `prompt_cache.anthropic_ttl` | `adaptive` | Starts at five minutes and promotes a stable namespace to one hour after two reusable provider reports within five minutes. |
 | `prompt_cache.openai_mode` | `auto` | Combines explicit stable-prefix breakpoints with OpenAI's managed latest-message breakpoint on supported direct GPT-5.6-and-later routes. |
 | `prompt_cache.openai_extended_retention` | `false` | Does not request pre-GPT-5.6 `24h` retention unless explicitly enabled. |
 | `openai_responses_continuation` | `auto` | Reuses compatible stored Responses state only when storage is already enabled by provider/model configuration. |
 
 Set `title` or `goal_synthesis` to `model` when model-generated behavior is required. Compaction remains model-based.
+
+Compaction sizes its summary input against the selected compaction model rather than the Session model. Any source history beyond that input budget remains in the checkpoint's recent-context suffix, preserving it for the next Session step while keeping the helper request below its declared limit.
 
 ## Stable provider prefix
 
@@ -57,7 +59,7 @@ The prompt-cache namespace is derived from the model-visible prefix and sharing 
 - final hooked system content;
 - final provider-visible tool definitions.
 
-The namespace does not include the Session ID or ordinary message history. Equivalent Sessions can therefore share a provider prefix while retaining separate provider-session identities.
+The namespace does not include the Session ID or ordinary message history. Equivalent Sessions can therefore share a provider prefix while retaining separate provider-session identities. Compaction helpers add an internal `compaction` scope, so they cannot share an ordinary Session-step cache key and cannot influence its adaptive TTL observations; ordinary-step namespace bytes remain stable.
 
 CodeMode keeps its single provider-visible `execute` definition fixed. MCP tools and resources remain dynamically discoverable at runtime, but an MCP catalog change does not rewrite the `execute` schema or description and therefore does not invalidate the stable tool prefix.
 
@@ -160,6 +162,9 @@ OpenAI ChatGPT/Codex and Anthropic Claude Code connections retain the selected m
 | Value | Interpretation |
 | --- | --- |
 | `first-request` | No preceding request exists for comparison. |
+| `compaction-reset` | The preceding provider request was a compaction helper, so normal-step cache reuse restarts. |
+| `model-switched` | The provider or catalog model changed since the preceding request. |
+| `model-variant-switched` | The normalized model variant changed since the preceding request. |
 | `stable-hit` | The provider reported cached input reuse. |
 | `prefix-changed` | More than one stable-prefix component changed. |
 | `system-prefix-changed` | Only the model-visible system prefix changed. |
@@ -168,6 +173,8 @@ OpenAI ChatGPT/Codex and Anthropic Claude Code connections retain the selected m
 | `provider-not-reported` | The route can cache, but the provider did not report read or write categories. |
 | `cache-disabled` | The selected route or policy has no active cache mechanism. |
 | `retry-fallback` | A physical retry or stored-continuation fallback occurred. |
+
+Historical provider-request records without a variant decode as the `default` variant. Provider-reported reuse, disabled, below-minimum, and unreported-cache conditions take precedence over inferred reset reasons. Otherwise, `compaction-reset` precedes `model-switched`, which precedes `model-variant-switched`.
 
 ## Privacy and persistence
 

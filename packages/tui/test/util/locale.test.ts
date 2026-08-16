@@ -13,3 +13,9 @@ test("formats compact numbers with lowercase magnitude suffixes", () => {
   expect(Locale.number(999)).toBe("999")
   expect(Locale.number(1_000_000)).toBe("1.0m")
 })
+
+test("formats elapsed durations with compact whole-second tokens", () => {
+  expect(Locale.duration(48_000)).toBe("48s")
+  expect(Locale.duration(68_000)).toBe("1m08s")
+  expect(Locale.duration(134_000)).toBe("2m14s")
+})

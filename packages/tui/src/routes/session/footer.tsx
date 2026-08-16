@@ -1,104 +1,56 @@
-import { createMemo, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createMemo, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useData } from "../../context/data"
-import { useDirectory } from "../../context/directory"
-import { useConnected } from "../../component/use-connected"
-import { createStore } from "solid-js/store"
-import { useRoute } from "../../context/route"
-import { mcpSummary } from "../../mcp-presentation"
-import { FilledWarningChip } from "../../component/prompt/mode-chips"
+import { PromptFooterIdentity } from "../../component/prompt"
+import { ModeChips } from "../../component/prompt/mode-chips"
+import { Keymap } from "../../context/keymap"
+import { groupSessionShells } from "../../util/session"
+import { activeSubagentCount } from "../../util/subagent"
+import type { SessionAutonomyState } from "@ycoding-ai/client"
 
-export function Footer() {
+export function Footer(props: { branch?: string; sessionID: string; autonomy: SessionAutonomyState; subagent?: boolean }) {
   const { themeV2 } = useTheme()
   const data = useData()
-  const route = useRoute()
-  const mcp = createMemo(() => mcpSummary(data.location.mcp.server.list() ?? []))
-  const permissions = createMemo(() => {
-    if (route.data.type !== "session") return []
-    return data.session.permission.list(route.data.sessionID) ?? []
-  })
-  const awaiting = createMemo(() => {
-    if (route.data.type !== "session") return 0
-    return data.session.subagent.list(route.data.sessionID).filter((task) => task.state === "waiting").length
-  })
-  const directory = useDirectory()
-  const connected = useConnected()
-
-  const [store, setStore] = createStore({
-    welcome: false,
-  })
-
-  onMount(() => {
-    // Track all timeouts to ensure proper cleanup
-    const timeouts: ReturnType<typeof setTimeout>[] = []
-
-    function tick() {
-      if (connected()) return
-      if (!store.welcome) {
-        setStore("welcome", true)
-        timeouts.push(setTimeout(() => tick(), 5000))
-        return
-      }
-
-      if (store.welcome) {
-        setStore("welcome", false)
-        timeouts.push(setTimeout(() => tick(), 10_000))
-        return
-      }
-    }
-    timeouts.push(setTimeout(() => tick(), 10_000))
-
-    onCleanup(() => {
-      timeouts.forEach(clearTimeout)
-    })
+  const paletteShortcut = Keymap.useShortcut("command.palette.show")
+  const subagents = createMemo(() => activeSubagentCount(data.session.subagent.list(props.sessionID)))
+  const shells = createMemo(() => {
+    const session = data.session.get(props.sessionID)
+    if (!session) return 0
+    return groupSessionShells(data.shell.list(session.location), data.session.list(), session.id).reduce(
+      (count, group) => count + group.shells.length,
+      0,
+    )
   })
 
   return (
-    <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0}>
-      <text fg={themeV2.text.subdued}>{directory()}</text>
-      <box gap={2} flexDirection="row" flexShrink={0}>
-        <Show when={awaiting() > 0}>
-          <FilledWarningChip label={`${awaiting()} awaiting`} />
-        </Show>
-        <Switch>
-          <Match when={store.welcome}>
-            <text fg={themeV2.text.default}>
-              Get started <span style={{ fg: themeV2.text.subdued }}>/connect</span>
-            </text>
-          </Match>
-          <Match when={connected()}>
-            <Show when={permissions().length > 0}>
-              <text fg={themeV2.text.feedback.warning.default}>
-                <span style={{ fg: themeV2.text.feedback.warning.default }}>△</span> {permissions().length} Permission
-                {permissions().length > 1 ? "s" : ""}
-              </text>
-            </Show>
-            <Show when={mcp().configured > 0}>
-              <text fg={themeV2.text.default}>
-                <Switch>
-                  <Match when={mcp().attention > 0}>
-                    <span style={{ fg: themeV2.text.feedback.error.default }}>⊙ </span>
-                  </Match>
-                  <Match when={mcp().pending > 0}>
-                    <span style={{ fg: themeV2.text.feedback.warning.default }}>⊙ </span>
-                  </Match>
-                  <Match when={true}>
-                    <span
-                      style={{
-                        fg: mcp().connected > 0 ? themeV2.text.feedback.success.default : themeV2.text.subdued,
-                      }}
-                    >
-                      ⊙{" "}
-                    </span>
-                  </Match>
-                </Switch>
-                {mcp().label}
-              </text>
-            </Show>
-            <text fg={themeV2.text.subdued}>/status</text>
-          </Match>
-        </Switch>
+    <box
+      width="100%"
+      height={props.subagent ? 1 : 3}
+      flexShrink={0}
+      flexDirection="row"
+      justifyContent="space-between"
+      alignItems="center"
+      paddingLeft={3}
+      paddingRight={3}
+      backgroundColor={themeV2.background.chrome}
+    >
+      <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
+        <PromptFooterIdentity branch={props.branch} sessionID={props.sessionID} />
+        <ModeChips autonomy={props.autonomy} />
+        <text fg={themeV2.text.subdued} wrapMode="none" flexShrink={0}>
+          subagents {subagents()}
+        </text>
+        <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
+          shells {shells()}
+        </text>
       </box>
+      <Show when={paletteShortcut()}>
+        {(shortcut) => (
+          <text fg={themeV2.text.default} wrapMode="none" flexShrink={0}>
+            {shortcut().replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span>
+          </text>
+        )}
+      </Show>
     </box>
   )
 }

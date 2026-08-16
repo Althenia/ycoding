@@ -18,8 +18,8 @@ export async function captureRoute(input: {
       await Bun.sleep(20)
     }
     const frame = screen.frame()
-    if (input.stable && !input.stable.every((text) => frame.includes(text)))
-      throw new Error(`screen did not stabilize: ${input.stable.join(", ")}`)
+    const missing = input.stable?.filter((text) => !frame.includes(text)) ?? []
+    if (missing.length > 0) throw new Error(`screen did not stabilize, absent: ${missing.join(", ")}`)
     return (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n")
   } finally {
     await screen.dispose()

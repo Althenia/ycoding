@@ -3,7 +3,7 @@ export * from "./session/schema"
 
 import { Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
-import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -223,6 +223,13 @@ export interface Interface {
       direction: "previous" | "next"
     }
   }) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
+  // Counts the messages a `next` cursor still has behind it without decoding their payloads, so a
+  // client can describe the size of unloaded history instead of walking every page to discover it.
+  readonly messageRemainder: (input: {
+    sessionID: SessionSchema.ID
+    afterID: SessionMessage.ID
+    order: "asc" | "desc"
+  }) => Effect.Effect<number, NotFoundError>
   readonly message: (input: {
     sessionID: SessionSchema.ID
     messageID: SessionMessage.ID
@@ -308,7 +315,11 @@ export interface Interface {
     command: string
   }) => Effect.Effect<
     void,
-    NotFoundError | ShellSandbox.Unavailable | Shell.SpawnError | SessionGuardrail.AssertError
+    | NotFoundError
+    | ShellSandbox.Unavailable
+    | Shell.MemoryLimitUnavailable
+    | Shell.SpawnError
+    | SessionGuardrail.AssertError
   >
   readonly skill: (input: {
     id?: SessionMessage.ID
@@ -599,6 +610,30 @@ const layer = Layer.effect(
           Effect.orDie,
         )
         return yield* Effect.forEach(direction === "previous" ? rows.toReversed() : rows, decode)
+      }),
+      messageRemainder: Effect.fn("V2Session.messageRemainder")(function* (input) {
+        yield* result.get(input.sessionID)
+        const anchor = yield* db
+          .select({ seq: SessionMessageTable.seq })
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.afterID)))
+          .get()
+          .pipe(Effect.orDie)
+        if (!anchor) return 0
+        // Mirrors the boundary a `next` cursor applies, so the count always describes exactly the
+        // rows that continuing to page would return.
+        const remaining = yield* db
+          .select({ total: count() })
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.session_id, input.sessionID),
+              input.order === "asc" ? gt(SessionMessageTable.seq, anchor.seq) : lt(SessionMessageTable.seq, anchor.seq),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        return remaining?.total ?? 0
       }),
       message: Effect.fn("V2Session.message")(function* (input) {
         const stored = yield* store.message(input.messageID)

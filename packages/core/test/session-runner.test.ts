@@ -17,6 +17,7 @@ import {
 import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
+import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Database } from "@ycoding-ai/core/database/database"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -4857,6 +4858,35 @@ describe("SessionRunnerLLM", () => {
       ])
       yield* replaySessionProjection(sessionID)
       expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("retries a plain-text OpenAI server_error before observable output", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Retry OpenAI server error")
+      responseStream = Stream.fail(
+        new LLMError({
+          module: "OpenAIResponses",
+          method: "stream",
+          reason: classifyProviderFailure({
+            message: "server_error: An error occurred while processing your request. You can retry your request.",
+          }),
+        }),
+      )
+      response = reply.text("Recovered", "server-error-retry-success")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      expect(yield* recordedEventTypes(sessionID)).toContain("session.retry.scheduled.1")
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user" },
+        { type: "assistant", finish: "stop", content: [{ type: "text", text: "Recovered" }] },
+      ])
     }),
   )
 

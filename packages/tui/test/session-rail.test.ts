@@ -3,7 +3,6 @@ import {
   collapseSection,
   defaultExpanded,
   expandSection,
-  MAX_EXPANDED,
   railPlacement,
   railWidth,
   resolveExpanded,
@@ -16,18 +15,18 @@ describe("rail default expansion", () => {
   })
 
   test("adds goal and autonomy while they are active", () => {
-    expect(defaultExpanded({ goal: true, autonomy: true })).toEqual(["context", "goal", "autonomy", "todo"])
+    expect(defaultExpanded({ goal: true, autonomy: true })).toEqual(["session", "context", "goal", "autonomy", "todo"])
   })
 
-  test("never exceeds the expansion cap", () => {
-    expect(defaultExpanded({ goal: true, autonomy: true }).length).toBeLessThanOrEqual(MAX_EXPANDED)
+  test("keeps every default section expanded", () => {
+    expect(defaultExpanded({ goal: true, autonomy: true })).toHaveLength(5)
   })
 })
 
 describe("rail expansion capacity", () => {
-  test("collapses the least recently expanded section when a fifth opens", () => {
+  test("keeps every expanded section open", () => {
     const order: RailSectionKey[] = ["session", "context", "todo", "goal"]
-    expect(expandSection(order, "mcp")).toEqual(["context", "todo", "goal", "mcp"])
+    expect(expandSection(order, "mcp")).toEqual(["session", "context", "todo", "goal", "mcp"])
   })
 
   test("re-expanding a section refreshes its recency instead of duplicating it", () => {
@@ -47,9 +46,10 @@ describe("rail expansion capacity", () => {
 })
 
 describe("rail attention", () => {
-  test("forces an attention section open within the cap", () => {
+  test("opens an attention section without collapsing CONTEXT", () => {
     const order: RailSectionKey[] = ["session", "context", "todo", "goal"]
     expect(resolveExpanded({ order, attention: ["subagents"] })).toEqual([
+      "session",
       "context",
       "todo",
       "goal",

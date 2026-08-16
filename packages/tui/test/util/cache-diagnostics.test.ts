@@ -4,6 +4,7 @@ import {
   formatCacheDiagnostics,
   formatDiagnosticsModel,
   formatProviderRequestDiagnostics,
+  type ProviderRequestDiagnostics,
 } from "../../src/util/cache-diagnostics"
 
 const diagnostics: SessionCacheDiagnostics = {
@@ -110,6 +111,27 @@ test("keeps unavailable request pricing distinct from a confirmed free request",
   }
   expect(formatProviderRequestDiagnostics(base as never).estimatedCost).toBe("unavailable")
   expect(formatProviderRequestDiagnostics({ ...base, cost: 0 } as never).estimatedCost).toBe("$0.0000")
+})
+
+test("labels cache reset diagnostics", () => {
+  const base: ProviderRequestDiagnostics = {
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  }
+
+  expect(formatProviderRequestDiagnostics({ ...base, latestInvalidation: "compaction-reset" }).latestInvalidation).toBe(
+    "Compaction reset",
+  )
+  expect(formatProviderRequestDiagnostics({ ...base, latestInvalidation: "model-switched" }).latestInvalidation).toBe(
+    "Model switched",
+  )
+  expect(
+    formatProviderRequestDiagnostics({ ...base, latestInvalidation: "model-variant-switched" }).latestInvalidation,
+  ).toBe("Model variant switched")
 })
 
 test("omits an unavailable diagnostics model without inventing a variant", () => {

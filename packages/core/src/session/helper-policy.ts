@@ -3,6 +3,7 @@ export * as SessionHelperPolicy from "./helper-policy"
 import { Context, Effect, Layer } from "effect"
 import { AgentV2 } from "../agent"
 import { Config } from "../config"
+import { ConfigEfficiency } from "../config/efficiency"
 import { makeLocationNode } from "../effect/app-node"
 import { ModelV2 } from "../model"
 import { ProviderV2 } from "../provider"
@@ -11,16 +12,18 @@ import { SessionSchema } from "./schema"
 
 export type TitleMode = "local" | "model" | "off"
 export type GoalMode = "local" | "model"
+export type Role = "title" | "goal" | "compaction"
+export type ModelSelection = ModelV2.Ref | "session"
 
 export interface Settings {
   readonly titleMode: TitleMode
   readonly goalMode: GoalMode
-  readonly helperModel?: ModelV2.Ref
+  readonly models: Partial<Record<Role, ModelSelection>>
 }
 
 export interface SelectHelperModelInput {
   readonly agentModel?: ModelV2.Ref
-  readonly helperModel?: ModelV2.Ref
+  readonly roleModel?: ModelSelection
   readonly sessionModel?: ModelV2.Ref
 }
 
@@ -51,11 +54,10 @@ export const localTitle = (input: string) => {
 export const localGoal = (input: string) => collapse(stripControls(input))
 
 export const selectHelperModel = (input: SelectHelperModelInput) =>
-  input.agentModel ?? input.helperModel ?? input.sessionModel
+  input.agentModel ?? (input.roleModel === "session" ? input.sessionModel : input.roleModel) ?? input.sessionModel
 
-const configuredModel = (entries: readonly Config.Entry[]): ModelV2.Ref | undefined => {
-  const selected = Config.latest(entries, "efficiency")?.helper_model
-  if (!selected) return
+const configuredModel = (selected: NonNullable<ConfigEfficiency.Info["helper_models"]>[Role] | undefined) => {
+  if (!selected || selected === "session") return selected
   return ModelV2.Ref.make({
     providerID: ProviderV2.ID.make(selected.providerID),
     id: ModelV2.ID.make(selected.model),
@@ -65,10 +67,17 @@ const configuredModel = (entries: readonly Config.Entry[]): ModelV2.Ref | undefi
 
 export const settings = (entries: readonly Config.Entry[]): Settings => {
   const efficiency = Config.latest(entries, "efficiency")
+  const title = configuredModel(efficiency?.helper_models?.title)
+  const goal = configuredModel(efficiency?.helper_models?.goal)
+  const compaction = configuredModel(efficiency?.helper_models?.compaction)
   return {
     titleMode: efficiency?.title ?? "local",
     goalMode: efficiency?.goal_synthesis ?? "local",
-    ...(configuredModel(entries) === undefined ? {} : { helperModel: configuredModel(entries) }),
+    models: {
+      ...(title === undefined ? {} : { title }),
+      ...(goal === undefined ? {} : { goal }),
+      ...(compaction === undefined ? {} : { compaction }),
+    },
   }
 }
 
@@ -78,6 +87,7 @@ export interface Interface {
   readonly localGoal: (input: string) => string
   readonly resolveModel: (
     session: SessionSchema.Info,
+    role: Role,
     agent?: AgentV2.Info,
   ) => Effect.Effect<SessionRunnerModel.Resolved | undefined>
 }
@@ -88,10 +98,10 @@ export const make = (policy: Settings, models: SessionRunnerModel.Interface): In
   settings: policy,
   localTitle,
   localGoal,
-  resolveModel: (session, agent) => {
+  resolveModel: (session, role, agent) => {
     const selected = selectHelperModel({
       agentModel: agent?.model,
-      helperModel: policy.helperModel,
+      roleModel: policy.models[role],
       sessionModel: session.model,
     })
     return models.resolve(selected === undefined ? session : { ...session, model: selected }).pipe(

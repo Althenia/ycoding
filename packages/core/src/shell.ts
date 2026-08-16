@@ -8,6 +8,7 @@ import { Shell } from "@ycoding-ai/schema/shell"
 import { makeLocationNode } from "./effect/app-node"
 import { AppProcess } from "./process"
 import { Config } from "./config"
+import { ConfigShell } from "./config/shell"
 import { EventV2 } from "./event"
 import { Location } from "./location"
 import { Global } from "./global"
@@ -28,14 +29,22 @@ export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()("Shell.Spa
   }
 }
 
+export class MemoryLimitUnavailable extends Schema.TaggedErrorClass<MemoryLimitUnavailable>()(
+  "Shell.MemoryLimitUnavailable",
+  { message: Schema.String },
+) {}
+
 // Exited processes stay observable (status, exit code, retained output) until removed explicitly.
 // Cap retention so abandoned commands do not accumulate unbounded state and output files.
 const EXITED_LIMIT = 25
+const MEMORY_CHECK_INTERVAL_MS = 250
+const PROCESS_LIST_MAX_BYTES = 4 * 1024 * 1024
 
 type Info = Shell.Info
 
 export interface Prepared {
   readonly warnings: readonly string[]
+  readonly memoryLimitMb?: number
 }
 
 type PreparedState = {
@@ -43,6 +52,7 @@ type PreparedState = {
   readonly command: string
   readonly cwd: string
   readonly timeout: number
+  readonly memoryLimitMb?: number
   readonly metadata?: Shell.Metadata
   readonly shell: string
 }
@@ -56,6 +66,7 @@ type Active = {
   // started after termination resolves immediately from the already-completed deferred.
   done: Deferred.Deferred<Info, NotFoundError>
   timeoutFiber?: Fiber.Fiber<void>
+  memoryFiber?: Fiber.Fiber<void>
   timeout?: (duration: number) => Effect.Effect<void>
 }
 
@@ -68,7 +79,9 @@ type Active = {
  * here; callers (e.g. `ShellTool`) own that association and store the shell ID.
  */
 export interface Interface {
-  readonly prepare: (input: Shell.CreateInput) => Effect.Effect<Prepared, ShellSandbox.Unavailable>
+  readonly prepare: (
+    input: Shell.CreateInput,
+  ) => Effect.Effect<Prepared, ShellSandbox.Unavailable | MemoryLimitUnavailable>
   readonly create: (prepared: Prepared) => Effect.Effect<Shell.Info, SpawnError>
   // Currently running commands only; exited shells are retained for get/output but excluded here.
   readonly list: () => Effect.Effect<Shell.Info[]>
@@ -108,6 +121,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
       Effect.gen(function* () {
         for (const session of sessions.values()) {
           if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
+          if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
           // Unblock waiters still pending at teardown; succeed is a no-op once already resolved.
           yield* Deferred.fail(session.done, new NotFoundError({ id: Shell.ID.make(session.info.id) }))
         }
@@ -129,6 +143,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
       const index = exitOrder.indexOf(id)
       if (index !== -1) exitOrder.splice(index, 1)
       if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
+      if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
       // Unblock any wait still pending when the command is removed before it terminated.
       yield* Deferred.fail(session.done, new NotFoundError({ id }))
       yield* Effect.promise(() => unlink(session.file).catch(() => {}))
@@ -192,19 +207,70 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
     })
 
     const capability = (state: PreparedState, warnings: readonly string[]): Prepared => {
-      const prepared = Object.freeze({ warnings: Object.freeze([...warnings]) })
+      const prepared = Object.freeze({
+        warnings: Object.freeze([...warnings]),
+        ...(state.memoryLimitMb === undefined ? {} : { memoryLimitMb: state.memoryLimitMb }),
+      })
       preparations.set(prepared, state)
       return prepared
     }
+
+    const processGroupMemory = (pid: number) =>
+      appProcess
+        .run(
+          ChildProcess.make("ps", ["-axo", "pid=,pgid=,rss=,lstart="], {
+            stdin: "ignore",
+          }),
+          { maxOutputBytes: PROCESS_LIST_MAX_BYTES, maxErrorBytes: 1024 },
+        )
+        .pipe(
+          Effect.flatMap(AppProcess.requireSuccess),
+          Effect.map((result) => {
+            const processes = result.stdout
+              .toString("utf8")
+              .split("\n")
+              .flatMap((line) => {
+                const fields = line.trim().split(/\s+/)
+                const processID = Number(fields[0])
+                const groupID = Number(fields[1])
+                const residentKiB = Number(fields[2])
+                if (![processID, groupID, residentKiB].every(Number.isFinite)) return []
+                return [{ processID, groupID, residentKiB, identity: fields.slice(3).join(" ") }]
+              })
+            const root = processes.find((process) => process.processID === pid && process.groupID === pid)
+            if (!root) return
+            return {
+              identity: root.identity,
+              residentKiB: processes
+                .filter((process) => process.groupID === pid)
+                .reduce((total, process) => total + process.residentKiB, 0),
+            }
+          }),
+        )
 
     const prepare = Effect.fn("Shell.prepare")(function* (input: Shell.CreateInput) {
       const cwd = input.cwd ?? location.directory
       const entries = yield* config.entries()
       const shell = ShellSelect.preferred(Config.latest(entries, "shell"), options)
+      const configuredMemoryLimitMb = Config.latest(entries, "shell_memory_limit_mb")
+      const selectedMemoryLimitMb = input.memoryLimitMb ?? configuredMemoryLimitMb
+      const memoryLimitMb = selectedMemoryLimitMb === 0 ? undefined : selectedMemoryLimitMb
+      if (memoryLimitMb !== undefined && process.platform === "win32")
+        return yield* new MemoryLimitUnavailable({
+          message: "Shell process-tree memory limits are unavailable on Windows",
+        })
       const raw = ChildProcess.make(shell, ShellSelect.args(shell, input.command), {
         cwd,
         env: {
           ...process.env,
+          ...(memoryLimitMb === undefined
+            ? {}
+            : {
+                GOMEMLIMIT: `${memoryLimitMb}MiB`,
+                NODE_OPTIONS: [process.env.NODE_OPTIONS, `--max-old-space-size=${memoryLimitMb}`]
+                  .filter((value): value is string => Boolean(value))
+                  .join(" "),
+              }),
           TERM: "xterm-256color",
           YCODING_TERMINAL: "1",
         } as Record<string, string>,
@@ -217,6 +283,7 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
         command: input.command,
         cwd,
         timeout: input.timeout,
+        memoryLimitMb,
         metadata: input.metadata,
         shell,
       }
@@ -331,7 +398,33 @@ export const layer = (options?: ShellSelect.Options) => Layer.effect(
                 // Cancel a pending timeout once the command exits on its own. Interrupting last avoids
                 // aborting finish when finish itself runs on the timeout fiber.
                 if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
+                if (session.memoryFiber) yield* Fiber.interrupt(session.memoryFiber)
               })
+
+            if (state.memoryLimitMb !== undefined) {
+              const limitKiB = state.memoryLimitMb * 1024
+              const initial = yield* processGroupMemory(Number(handle.pid)).pipe(
+                Effect.mapError((cause) => new SpawnError({ command: state.command, cause })),
+              )
+              if (initial)
+                session.memoryFiber = runFork(
+                  Effect.gen(function* () {
+                    while (session.info.status === "running") {
+                      yield* Effect.sleep(Duration.millis(MEMORY_CHECK_INTERVAL_MS))
+                      if (session.info.status !== "running") return
+                      const sample = yield* processGroupMemory(Number(handle.pid))
+                      if (!sample || sample.identity !== initial.identity) return
+                      if (sample.residentKiB <= limitKiB) continue
+                      yield* finish("memory-limit", undefined, handle.kill().pipe(Effect.catch(() => Effect.void)))
+                      return
+                    }
+                  }).pipe(
+                    Effect.catch(() =>
+                      finish("memory-limit", undefined, handle.kill().pipe(Effect.catch(() => Effect.void))),
+                    ),
+                  ),
+                )
+            }
 
             session.timeout = (duration) =>
               Effect.gen(function* () {

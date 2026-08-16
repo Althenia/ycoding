@@ -15,6 +15,7 @@ import { FrecencyProvider } from "../../src/prompt/frecency"
 import { DialogProvider, useDialog } from "../../src/ui/dialog"
 import { DialogSelect } from "../../src/ui/dialog-select"
 import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
+import { RouteProvider } from "../../src/context/route"
 import { createApi, createEventStream, createFetch, directory } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
@@ -94,11 +95,11 @@ async function probeDialog(viewport: (typeof viewports)[number]) {
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ToastProvider>
+              <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
                 <DialogProvider>
                   <DialogFixture />
                 </DialogProvider>
-              </ToastProvider>
+              </ToastProvider></RouteProvider>
             </ThemeProvider>
           </Keymap.Provider>
         </ConfigProvider>
@@ -134,9 +135,9 @@ async function probeToast(viewport: (typeof viewports)[number]) {
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ToastProvider>
+            <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
               <ToastFixture />
-            </ToastProvider>
+            </ToastProvider></RouteProvider>
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>

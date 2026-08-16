@@ -19,6 +19,7 @@ import { DialogConfirm } from "../../src/ui/dialog-confirm"
 import { DialogPrompt } from "../../src/ui/dialog-prompt"
 import { DialogSelect } from "../../src/ui/dialog-select"
 import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
+import { RouteProvider } from "../../src/context/route"
 import { createApi, createEventStream, createFetch, directory } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
@@ -109,11 +110,11 @@ async function captureDialog(
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ToastProvider>
+              <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
                 <DialogProvider>
                   <DialogFixture />
                 </DialogProvider>
-              </ToastProvider>
+              </ToastProvider></RouteProvider>
             </ThemeProvider>
           </Keymap.Provider>
         </ConfigProvider>
@@ -143,9 +144,9 @@ async function captureToast(toast: (typeof toasts)[number], viewport: (typeof vi
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ToastProvider>
+            <RouteProvider initialRoute={{ type: "home" }}><ToastProvider>
               <ToastFixture />
-            </ToastProvider>
+            </ToastProvider></RouteProvider>
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>

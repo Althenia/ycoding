@@ -9,7 +9,7 @@ import type { SessionSkill } from "../src/util/session-skills"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-async function mount(body: () => JSX.Element) {
+async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 20 }) {
   const config = createTuiResolvedConfig()
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../src/config"),
@@ -25,7 +25,7 @@ async function mount(body: () => JSX.Element) {
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 40, height: 20, useMouse: true },
+    { ...dimensions, useMouse: true },
   )
   app.renderer.start()
   return app
@@ -51,6 +51,23 @@ test("expands the default sections and collapses the summarised ones", async () 
   expect(frame).toContain("3 connected")
   expect(frame).not.toContain("mcp body")
   app.renderer.destroy()
+})
+
+test("registers sidebar content in the rail design order", async () => {
+  const { builtins } = await import("../src/plugin/builtins")
+
+  expect(
+    builtins
+      .map((plugin) => plugin.id)
+      .filter((id) => id.startsWith("internal:sidebar-")),
+  ).toEqual([
+    "internal:sidebar-context",
+    "internal:sidebar-todo",
+    "internal:sidebar-subagents",
+    "internal:sidebar-shells",
+    "internal:sidebar-skills",
+    "internal:sidebar-mcp",
+  ])
 })
 
 test("renders expanded when no rail provider is mounted", async () => {
@@ -101,7 +118,7 @@ test("renders aggregate context rows when diagnostics are unavailable", async ()
     expect(frame).toContain("53")
     expect(frame).toContain("Spent")
     expect(frame).toContain("$9.08")
-    expect(frame).toContain("CACHE")
+    expect(frame).not.toContain("CACHE")
     expect(frame).not.toContain("Used")
     expect(frame).not.toContain("Hit ratio")
   } finally {
@@ -180,14 +197,17 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
       latestInvalidation: "stable-hit",
     },
   }
-  const app = await mount(() => {
-    setThemeV2(useTheme().themeV2)
-    return (
-      <RailProvider>
-        <SidebarCacheContent diagnostics={() => diagnostics} cost={() => 9.08} subagentCost={() => 1.24} />
-      </RailProvider>
-    )
-  })
+  const app = await mount(
+    () => {
+      setThemeV2(useTheme().themeV2)
+      return (
+        <RailProvider>
+          <SidebarCacheContent diagnostics={() => diagnostics} cost={() => 9.08} subagentCost={() => 1.24} />
+        </RailProvider>
+      )
+    },
+    { width: 40, height: 32 },
+  )
   await app.waitForFrame((frame) => frame.includes("220,672"))
 
   try {
@@ -261,19 +281,22 @@ test("renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT s
     )
     const heading = rendered.find((item) => item.plainText === "CONTEXT")
     const subheading = rendered.find((item) => item.plainText === "CACHE")
+    const lines = app.captureCharFrame().split("\n")
+    const headingRow = lines.findIndex((line) => line.includes("CONTEXT"))
+    const subheadingRow = lines.findIndex((line) => line.includes("CACHE"))
 
     expect(heading?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
     expect(subheading?.fg.toInts()).toEqual(themeV2()!.text.label.toInts())
-    expect(app.captureCharFrame().split("\n").find((line) => line.includes("CACHE"))?.trim()).toBe("CACHE")
+    expect(lines[subheadingRow]?.trim()).toBe("CACHE")
 
-    await app.mockMouse.click(1, 1)
+    await app.mockMouse.click(1, subheadingRow)
     await app.waitForFrame((frame) => frame.includes("cache body"))
 
-    await app.mockMouse.click(2, 0)
+    await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("cache body"))
     expect(heading?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
 
-    await app.mockMouse.click(2, 0)
+    await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => frame.includes("cache body"))
   } finally {
     app.renderer.destroy()
@@ -386,13 +409,13 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
       <>
         <SessionRailContent sessionID="ses_0085fc701234567" title="Provider cache audit" />
         <AutonomyRailContent autonomy={autonomy} />
+        <TodoRailContent list={todos} />
         <SubagentRailContent tasks={[{ sessionID: "ses_docs", description: "docs-sync", elapsed: "2m14s" }]} />
         <ShellRailContent groups={[{ owner: { label: "docs-sync" }, shells: [{ id: "running" }] }]} terminalCount={0} />
         <SkillsRailContent skills={skills} />
-        <TodoRailContent list={todos} />
       </>
     )
-  })
+  }, { width: 40, height: 40 })
   await app.waitForFrame((frame) => frame.includes("Fix provider cache accounting"))
 
   try {
@@ -404,10 +427,10 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
       "SESSION",
       "GOAL",
       "AUTONOMY",
+      "TODO LIST",
       "SUBAGENTS",
       "SHELLS",
       "SKILLS",
-      "TODO LIST",
     ]
     const indexes = sectionHeaders.map((label) => frame.indexOf(label))
     expect(indexes.every((index) => index >= 0)).toBe(true)
@@ -419,15 +442,25 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
     expect(frame).toContain("active")
     expect(frame).toContain("Approvals")
     expect(frame).toContain("auto")
-    expect(frame).not.toContain("Guardrails")
+    expect(frame).toContain("Guardrails")
+    expect(frame).toContain("enforced")
     expect(frame).toContain("ses_0085fc701…")
     expect(frame).not.toContain("workspace")
     expect(frame).toContain("docs-sync")
-    expect(frame).toContain("1 active")
+    expect(frame).not.toContain("1 active")
+    const subagentHeader = frame.split("\n").find((line) => line.includes("SUBAGENTS"))
+    expect(subagentHeader).toContain("1")
+    expect(subagentHeader).not.toContain("subagents")
     expect(rendered.find((item) => item.plainText === "2m14s")?.fg.toInts()).toEqual(
       themeV2()!.text.feedback.info.default.toInts(),
     )
-    expect(rendered.find((item) => item.plainText === "1")?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
+    expect(
+      rendered.some(
+        (item) =>
+          item.plainText === "1" &&
+          item.fg.toInts().every((value, index) => value === themeV2()!.text.feedback.info.default.toInts()[index]),
+      ),
+    ).toBe(true)
   } finally {
     app.renderer.destroy()
   }
@@ -486,38 +519,41 @@ test("renders a five-segment meter in the GOAL section with correct filled/empty
   }
 })
 
-test("an attention event past the cap collapses the least recently expanded section", async () => {
+test("an attention event preserves every expanded section", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
   const [waiting, setWaiting] = createSignal(false)
-  const app = await mount(() => (
-    <RailProvider goal autonomy>
-      <RailSection section="context" title="CONTEXT">
-        <text>context body</text>
-      </RailSection>
-      <RailSection section="goal" title="GOAL">
-        <text>goal body</text>
-      </RailSection>
-      <RailSection section="autonomy" title="AUTONOMY">
-        <text>autonomy body</text>
-      </RailSection>
-      <RailSection section="todo" title="TODO">
-        <text>todo body</text>
-      </RailSection>
-      <RailSection section="subagents" title="SUBAGENTS" summary="1 waiting" attention={waiting()}>
-        <text>subagent body</text>
-      </RailSection>
-    </RailProvider>
-  ))
+  const app = await mount(
+    () => (
+      <RailProvider goal autonomy>
+        <RailSection section="context" title="CONTEXT">
+          <text>context body</text>
+        </RailSection>
+        <RailSection section="goal" title="GOAL">
+          <text>goal body</text>
+        </RailSection>
+        <RailSection section="autonomy" title="AUTONOMY">
+          <text>autonomy body</text>
+        </RailSection>
+        <RailSection section="todo" title="TODO">
+          <text>todo body</text>
+        </RailSection>
+        <RailSection section="subagents" title="SUBAGENTS" summary="1 waiting" attention={waiting()}>
+          <text>subagent body</text>
+        </RailSection>
+      </RailProvider>
+    ),
+    { width: 40, height: 60 },
+  )
   await app.waitForFrame((frame) => frame.includes("context body"))
 
   setWaiting(true)
   await app.waitForFrame((frame) => frame.includes("subagent body"))
 
   const frame = app.captureCharFrame()
-  // CONTEXT was the least recently expanded of the four defaults, so it yields its slot.
-  expect(frame).not.toContain("context body")
+  expect(frame).toContain("context body")
   expect(frame).toContain("goal body")
   expect(frame).toContain("todo body")
+  expect(frame).toContain("subagent body")
   app.renderer.destroy()
 })
 
@@ -534,9 +570,10 @@ test("a user can toggle a collapsed section from its header", async () => {
 
   try {
     expect(app.captureCharFrame()).not.toContain("mcp body")
-    await app.mockMouse.click(2, 0)
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
+    await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => frame.includes("mcp body"))
-    await app.mockMouse.click(2, 0)
+    await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("mcp body"))
   } finally {
     app.renderer.destroy()
@@ -582,8 +619,9 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
 
   try {
     let frame = app.captureCharFrame()
-    expect(frame).toContain("1 running, 1 terminal")
-    expect(frame).toContain("1 active")
+    expect(frame).toContain("1 running")
+    expect(frame).not.toContain("1 running, 1 terminal")
+    expect(frame).not.toContain("1 active")
 
     setOrphaned(true)
     await app.waitForFrame((value) => value.includes("Unknown session 1"))
@@ -591,7 +629,8 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
     setOrphaned(false)
     await app.waitForFrame((value) => !value.includes("Unknown session 1"))
     frame = app.captureCharFrame()
-    expect(frame).toContain("1 running, 1 terminal")
+    expect(frame).toContain("1 running")
+    expect(frame).not.toContain("1 running, 1 terminal")
   } finally {
     app.renderer.destroy()
   }

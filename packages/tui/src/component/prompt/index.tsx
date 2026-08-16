@@ -7,7 +7,7 @@ import {
   decodePasteBytes,
   type KeyEvent,
 } from "@opentui/core"
-import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
+import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show } from "solid-js"
 import { registerYCodingSpinner } from "../register-spinner"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -16,7 +16,6 @@ import { useTheme } from "../../context/theme"
 import { tint } from "../../theme/color"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
-import { Spinner } from "../spinner"
 import { useClient } from "../../context/client"
 import { useRoute } from "../../context/route"
 import { useEvent } from "../../context/event"
@@ -38,7 +37,6 @@ import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
-import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogIntegration } from "../dialog-integration"
 import { DialogModel } from "../dialog-model"
@@ -62,9 +60,8 @@ import {
   submitSessionPrompt,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
-import { groupSessionShells, openBtwSession, steerBtwConclusion } from "../../util/session"
+import { openBtwSession, steerBtwConclusion } from "../../util/session"
 import { DialogSessionGoal } from "../dialog-session-goal"
-import { ModeChips } from "./mode-chips"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
@@ -106,6 +103,22 @@ export function PromptFooterIdentity(props: { branch?: string; sessionID?: strin
             {sessionID().length > 13 ? `${sessionID().slice(0, 13)}…` : sessionID()}
           </text>
         )}
+      </Show>
+    </>
+  )
+}
+
+export function PromptYoloHint() {
+  const { themeV2 } = useTheme()
+  const interruptShortcut = Keymap.useShortcut("session.interrupt")
+  const disableYoloShortcut = Keymap.useShortcut("session.autonomy.normal")
+  return (
+    <>
+      <Show when={interruptShortcut()}>
+        {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} interrupt</text>}
+      </Show>
+      <Show when={disableYoloShortcut()}>
+        {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} disable YOLO</text>}
       </Show>
     </>
   )
@@ -162,7 +175,12 @@ function randomIndex(count: number) {
 }
 
 function formatShortcut(value: string) {
-  return value.replaceAll("ctrl+", "⌃").replaceAll("shift+", "Shift+").replaceAll("return", "Enter").replaceAll("enter", "Enter")
+  return value
+    .replaceAll("ctrl+", "⌃")
+    .replaceAll("shift+", "Shift+")
+    .replaceAll("return", "Enter")
+    .replaceAll("enter", "Enter")
+    .replaceAll("escape", "Esc")
 }
 
 function fadeColor(color: RGBA, alpha: number) {
@@ -236,11 +254,6 @@ export function Prompt(props: PromptProps) {
     if (!sessionID) return
     return data.session.get(sessionID)?.parentID ?? sessionID
   })
-  const subagents = createMemo(() => {
-    const parentID = parentSessionID()
-    if (!parentID) return 0
-    return data.session.subagent.list(parentID).length
-  })
   createEffect(() => {
     const parentID = parentSessionID()
     if (!parentID || !connected()) return
@@ -248,22 +261,16 @@ export function Prompt(props: PromptProps) {
       .sync(parentID)
       .catch((error) => console.error("Failed to load durable subagent tasks", error))
   })
-  const runningShells = createMemo(() => {
-    const session = data.session.get(props.sessionID ?? "")
-    if (!session) return 0
-    return groupSessionShells(data.shell.list(session.location), data.session.list(), session.id).reduce(
-      (count, group) => count + group.shells.length,
-      0,
-    )
-  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = Keymap.use()
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
   const submitShortcut = Keymap.useShortcut("input.submit")
-  const newlineShortcut = Keymap.useShortcut("input.newline")
   const subagentShortcut = Keymap.useShortcut("session.child.first")
   const sidebarShortcut = Keymap.useShortcut("session.sidebar.toggle")
+  const interruptShortcut = Keymap.useShortcut("session.interrupt")
+  const parentShortcut = Keymap.useShortcut("session.parent")
+  const yoloGoalActive = createMemo(() => props.autonomy?.mode === "yolo" && props.autonomy.goal?.status === "active")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -278,31 +285,6 @@ export function Prompt(props: PromptProps) {
     if (!selection) return
     return editorSelectionKey(selection) === dismissedEditorSelectionKey() ? undefined : selection
   })
-  const editorPath = createMemo(() => editorContext()?.filePath)
-  const editorSelectionLabel = createMemo(() => {
-    const ranges = editorContext()?.ranges
-    if (!ranges) return
-    const first = ranges.find(hasEditorRangeSelection) ?? ranges[0]
-    if (!first) return
-    return [getEditorRangeLabel(first), ranges.length > 1 ? `+${ranges.length - 1}` : undefined]
-      .filter(Boolean)
-      .join(" ")
-  })
-  const editorFileLabel = createMemo(() => {
-    const value = editorPath()
-    if (!value) return
-    const filename = path.basename(value)
-    const file = /^index\.[^./]+$/.test(filename)
-      ? [path.basename(path.dirname(value)), filename].filter(Boolean).join("/")
-      : filename
-    return `${file.split(path.sep).join("/")}${editorSelectionLabel() ?? ""}`
-  })
-  const editorFileLabelDisplay = createMemo(() => {
-    const file = editorFileLabel()
-    if (!file) return
-    return Locale.truncateMiddle(file, Math.max(12, Math.min(48, Math.floor(dimensions().width / 3))))
-  })
-  const editorContextLabelState = createMemo(() => editor.labelState())
   const [auto, setAuto] = createSignal<AutocompleteRef>()
   const [retry, setRetry] = createSignal<SessionSubmissionRetry<PromptSubmissionPayload>>()
   const [retryRestored, setRetryRestored] = createSignal(false)
@@ -384,7 +366,6 @@ export function Prompt(props: PromptProps) {
     if (!props.disabled) input.cursorColor = themeV2.text.default
   })
 
-  const shellFooterLabel = createMemo(() => `shells ${runningShells()}`)
   const [store, setStore] = createStore<{
     prompt: PromptInfo
     mode: "normal" | "shell"
@@ -494,7 +475,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         palette: undefined,
-        enabled: status() === "running",
+        enabled: status() === "running" || yoloGoalActive(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -1675,26 +1656,6 @@ export function Prompt(props: PromptProps) {
     // `Ask anything... "Message YCoding…"` on the landing screen.
     return list()[store.placeholder % list().length]
   })
-  const spinnerDef = createMemo(() => {
-    const agent = status() === "running" ? local.agent.current() : local.agent.current()
-    const color = agent ? local.agent.color(agent.id) : themeV2.border.default
-    return {
-      frames: createFrames({
-        color,
-        style: "blocks",
-        inactiveFactor: 0.6,
-        // enableFading: false,
-        minAlpha: 0.3,
-      }),
-      color: createColors({
-        color,
-        style: "blocks",
-        inactiveFactor: 0.6,
-        // enableFading: false,
-        minAlpha: 0.3,
-      }),
-    }
-  })
   const maxHeight = createMemo(() => Math.max(6, Math.floor(dimensions().height / 3)))
 
   const promptBg = createMemo(() => (props.landing ? themeV2.background.default : themeV2.raise(themeV2.background.surface.offset)))
@@ -1714,7 +1675,7 @@ export function Prompt(props: PromptProps) {
           }
         >
           <box
-            paddingLeft={3}
+            paddingLeft={props.landing ? 3 : 1}
             paddingRight={2}
             paddingTop={1}
             flexShrink={0}
@@ -1801,9 +1762,7 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? themeV2.background.surface.offset : themeV2.text.default}
               syntaxStyle={syntax()}
             />
-            {/* Penpot 01 Landing runs the placeholder straight into the hint row, so the
-                agent and model metadata belongs to the session composer only. */}
-            <Show when={!props.landing || hasRightContent()}>
+            <Show when={props.landing && hasRightContent()}>
             <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
               <box flexDirection="row" gap={1}>
                 <Show when={!props.landing && local.agent.current()} fallback={<box height={1} />}>
@@ -1853,129 +1812,66 @@ export function Prompt(props: PromptProps) {
           </box>
         </box>
         <Show when={!props.landing}>
-          <box width="100%" flexDirection="row" gap={2} paddingLeft={2} paddingRight={2}>
+          <box width="100%" flexDirection="row" gap={2} paddingTop={1} paddingLeft={1} paddingRight={2}>
             <Show when={submitShortcut()}>{(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} send</text>}</Show>
-            <Show when={subagentShortcut()}>
-              {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} subagents</text>}
-            </Show>
-            <Show when={sidebarShortcut()}>
-              {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} sidebar</text>}
-            </Show>
-            <Show when={paletteShortcut()}>
-              {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} commands</text>}
+            <Show
+              when={yoloGoalActive()}
+              fallback={
+                <>
+                  <Show when={subagentShortcut()}>
+                    {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} subagents</text>}
+                  </Show>
+                  <Show when={sidebarShortcut()}>
+                    {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} sidebar</text>}
+                  </Show>
+                  <Show when={paletteShortcut()}>
+                    {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} commands</text>}
+                  </Show>
+                </>
+              }
+            >
+              <PromptYoloHint />
             </Show>
           </box>
         </Show>
         <Show when={props.landing}>
           <box height={1} flexShrink={0} />
         </Show>
-        <Show
-          when={props.landing}
-          fallback={
-            <box width="100%" flexDirection="row" justifyContent="space-between" gap={2}>
-          <box flexDirection="row" gap={2} flexGrow={1} flexShrink={1} minWidth={0}>
-            <PromptFooterIdentity branch={props.branch} sessionID={props.sessionID} />
-            <box flexGrow={1} flexShrink={1} minWidth={0}>
-              <Switch>
-                <Match when={status() === "running"}>
-                  <box flexDirection="row" gap={1} flexGrow={1} justifyContent="flex-start">
-                    <box marginLeft={1}>
-                      <Show when={config.animations ?? true} fallback={<text fg={themeV2.text.subdued}>[⋯]</text>}>
-                        <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
-                      </Show>
-                    </box>
-                    <text
-                      fg={store.interrupt > 0 ? themeV2.background.action.primary.default : themeV2.text.default}
-                      wrapMode="none"
-                      truncate
-                      flexShrink={1}
-                    >
-                      esc{" "}
-                      <span
-                        style={{
-                          fg: store.interrupt > 0 ? themeV2.background.action.primary.default : themeV2.text.subdued,
-                        }}
-                      >
-                        {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                      </span>
-                    </text>
-                  </box>
-                </Match>
-                <Match when={move.progress()}>
-                  {(progress) => (
-                    <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
-                      <Spinner color={themeV2.hue.accent[500]}>
-                        {progress()}
-                        <span style={{ fg: themeV2.text.subdued }}>{".".repeat(move.creatingDots())}</span>
-                      </Spinner>
+        <Show when={props.landing}>
+          {/* Every hint in the reference frame is muted; none is emphasised. */}
+          <Show
+            when={props.hint}
+            fallback={
+              <box width="100%" flexDirection="row" gap={3} paddingLeft={3} paddingRight={3}>
+                <Show when={submitShortcut()}>{(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} send</text>}</Show>
+                <Show when={subagentShortcut()}>
+                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} subagents</text>}
+                </Show>
+                <Show when={!subagentShortcut()}>
+                  <text fg={themeV2.text.subdued}>↓ subagents</text>
+                </Show>
+                <Show when={sidebarShortcut()} fallback={<text fg={themeV2.text.subdued}>⌃x b sidebar</text>}>
+                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} sidebar</text>}</Show>
+                <Show when={paletteShortcut()}>
+                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} commands</text>}</Show>
+              </box>
+            }
+          >
+            {(hint) => (
+              <box width="100%" flexDirection="row" gap={3} paddingLeft={1} paddingRight={3}>
+                {hint()}
+                <Show when={interruptShortcut()}>
+                  {(shortcut) => (
+                    <box paddingRight={1}>
+                      <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} leave blocked</text>
                     </box>
                   )}
-                </Match>
-                <Match when={move.pendingNew()}>
-                  <box paddingLeft={3} height={1} minHeight={0} flexShrink={1}>
-                    <text fg={themeV2.hue.accent[500]} wrapMode="none" truncate>
-                      (new working copy)
-                    </text>
-                  </box>
-                </Match>
-                <Match when={true}>
-                  {props.hint ?? <text />}
-                </Match>
-              </Switch>
-            </box>
-          </box>
-          <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
-            {(file) => (
-              <text
-                wrapMode="none"
-                truncate
-                flexShrink={1}
-                fg={editorContextLabelState() === "pending" ? themeV2.hue.accent[500] : themeV2.text.subdued}
-              >
-                {file()}
-              </text>
+                </Show>
+                <Show when={parentShortcut()}>
+                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} parent</text>}</Show>
+              </box>
             )}
           </Show>
-          <Switch>
-            <Match when={store.mode === "normal"}>
-              <ModeChips
-                autonomy={props.autonomy}
-                guardrailPending={Boolean(props.sessionID && data.session.guardrail.list(props.sessionID).length)}
-              />
-              <Switch>
-                <Match when={true}>
-                  <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>
-                    <span style={{ fg: themeV2.text.subdued }}>subagents {subagents()}</span>
-                    <span style={{ fg: themeV2.text.subdued }}> · {shellFooterLabel()}</span>
-                  </text>
-                </Match>
-              </Switch>
-              <text fg={themeV2.text.default} flexShrink={0}>
-                {paletteShortcut()?.replaceAll("ctrl+", "⌃")} <span style={{ fg: themeV2.text.subdued }}>commands</span>
-              </text>
-            </Match>
-            <Match when={store.mode === "shell"}>
-              <text fg={themeV2.text.default} flexShrink={0}>
-                esc <span style={{ fg: themeV2.text.subdued }}>exit shell mode</span>
-              </text>
-            </Match>
-          </Switch>
-        </box>
-          }
-        >
-          {/* Every hint in the reference frame is muted; none is emphasised. */}
-          <box width="100%" flexDirection="row" gap={3} paddingLeft={3} paddingRight={3}>
-            <Show when={submitShortcut()}>{(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} send</text>}</Show>
-            <Show when={newlineShortcut()}>
-              {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} newline</text>}
-            </Show>
-            <Show when={subagentShortcut()}>
-              {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} subagents</text>}
-            </Show>
-            <Show when={paletteShortcut()}>
-              {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} commands</text>}
-            </Show>
-          </box>
         </Show>
         <Show when={props.landing}>
           <box height={1} flexShrink={0} />

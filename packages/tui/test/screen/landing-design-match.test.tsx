@@ -64,10 +64,10 @@ async function expectLandingDesign(viewport: typeof DESIGN_VIEWPORT) {
       expect(lines.findIndex((line) => line.includes("Enter send"))).toBe(61)
       expect(placeholder?.indexOf("Message YCoding…")).toBe(3)
       expect(hints?.indexOf("Enter send")).toBe(3)
-      expect(hints?.indexOf("Shift+Enter newline")).toBe(16)
-      // Accepted deviation: board 10 draws this, but Home does not register session.child.first, making it a dead shortcut.
-      expect(hints?.includes("↓ subagents")).toBe(false)
-      expect(hints?.indexOf("⌃p commands")).toBe(38)
+      expect(hints?.indexOf("↓ subagents")).toBe(16)
+      // String indexes count ↓ as one code point; it occupies two terminal columns.
+      expect(hints?.indexOf("⌃x b sidebar")).toBe(30)
+      expect(hints?.indexOf("⌃p commands")).toBe(45)
       expect(header).toContain("Ling-3.0-flash · max")
       expect(screen.colorOf("max")).toEqual([103, 215, 170, 255])
     } finally {

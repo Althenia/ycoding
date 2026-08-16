@@ -122,6 +122,7 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 | `$schema`               | string                                | Optional editor metadata only.                                                              |
 | `shell`                 | string                                | Preferred shell for terminal and shell execution.                                           |
 | `shell_sandbox`         | `disabled`, `optional`, or `required` | Shell isolation policy.                                                                     |
+| `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.           |
 | `model`                 | model selector                        | Default model.                                                                              |
 | `default_agent`         | string                                | Default selectable primary agent.                                                           |
 | `autoupdate`            | boolean or `notify`                   | Update automatically or only notify.                                                        |
@@ -148,6 +149,14 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 | `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
 | `experimental`          | object                                | Subagent depth and resource policies.                                                       |
 
+### Shell memory limits
+
+`shell_memory_limit_mb` sets the Location-wide default for non-interactive shell commands. The shell tool's `memory_limit_mb` input overrides it for one command; zero explicitly selects unlimited memory. Omission uses the configured default, and omission with no default remains unlimited.
+
+A finite limit supplies `GOMEMLIMIT=<limit>MiB` to Go runtimes, including compatible `tsgo` builds, and appends `--max-old-space-size=<limit>` to `NODE_OPTIONS` for Node processes. Bun does not expose an inherited heap-size option equivalent to Node's, so Bun itself is governed by the sampled process-tree ceiling while child Go or Node runtimes receive their soft hints.
+
+On macOS and Linux, YCoding samples aggregate resident memory for the detached shell process group every 250 milliseconds and terminates the group with status `memory-limit` after a sample exceeds the limit. Sampling can overshoot between checks, shared pages can be counted more than once, and a command that deliberately creates a new process group can escape aggregate accounting. This is resource control, not a security boundary or a kernel hard limit. Windows rejects a finite shell memory limit because the current process abstraction cannot assign the command to a Job Object before it starts.
+
 ### Field defaults and nested Schema contract
 
 The preceding overview is completed by this field-level ledger. `unset` means the field is optional in Schema and no consumer default is asserted here. This prevents an omitted field from being mistaken for a documented product default.
@@ -157,6 +166,7 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `$schema` | string | unset | Editor metadata only. |
 | `shell` | string | unset | Shell executable or command selector. |
 | `shell_sandbox` | `disabled` \| `optional` \| `required` | unset | Shell isolation policy. |
+| `shell_memory_limit_mb` | non-negative integer `<= 1048576` | unset | Default sampled resident-memory limit in MiB; zero means unlimited. |
 | `model` | model selector | unset | Session/agent model fallback. |
 | `default_agent`, `username` | string | unset | Primary agent ID and display identity. |
 | `autoupdate` | boolean \| `notify` | unset | Update policy. |
@@ -232,7 +242,7 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `provider_usage.codex_app_server.timeout_ms` | positive integer `<= 30000` | unset | App-server timeout. |
 | `efficiency.title` | `local` \| `model` \| `off` | `local` | Title policy. |
 | `efficiency.goal_synthesis` | `local` \| `model` | `local` | Goal synthesis policy. |
-| `efficiency.helper_model` | model selector | unset | Model-helper fallback. |
+| `efficiency.helper_models.title`, `.goal`, `.compaction` | model selector \| `session` | `session` | Independent model selection for each helper role. |
 | `efficiency.prompt_cache.anthropic_ttl` | `adaptive` \| `5m` \| `1h` | `adaptive` | Cache lifetime policy. |
 | `efficiency.prompt_cache.openai_mode` | `auto` \| `implicit` \| `explicit` | `auto` | OpenAI cache lowering. |
 | `efficiency.prompt_cache.openai_extended_retention` | boolean | `false` | Pre-GPT-5.6 `24h` retention request. |
@@ -269,7 +279,11 @@ The optional `efficiency` block controls provider-request amplification and prom
   "efficiency": {
     "title": "local",
     "goal_synthesis": "local",
-    "helper_model": "openai/gpt-5-mini#low",
+    "helper_models": {
+      "title": "openai/gpt-5-mini#low",
+      "goal": "openai/gpt-5-mini#low",
+      "compaction": "session",
+    },
     "prompt_cache": {
       "anthropic_ttl": "adaptive",
       "openai_mode": "auto",
@@ -284,7 +298,9 @@ The optional `efficiency` block controls provider-request amplification and prom
 | ---------------------------------------- | ------------------------------ | ---------- | ---------------------------------------------------------------------------------------- |
 | `title`                                  | `local`, `model`, `off`        | `local`    | Generate Session titles locally, with a model, or not at all.                            |
 | `goal_synthesis`                         | `local`, `model`               | `local`    | Normalize goals locally or use the hidden goal agent.                                    |
-| `helper_model`                           | model selector                 | unset      | Fallback model for model-based title, goal, and compaction helpers.                      |
+| `helper_models.title`                    | model selector, `session`      | `session`  | Model for model-generated Session titles.                                               |
+| `helper_models.goal`                     | model selector, `session`      | `session`  | Model for model-based goal synthesis.                                                    |
+| `helper_models.compaction`               | model selector, `session`      | `session`  | Model for manual and automatic compaction.                                               |
 | `prompt_cache.anthropic_ttl`             | `adaptive`, `5m`, `1h`         | `adaptive` | Choose Anthropic-compatible cache lifetime behavior.                                     |
 | `prompt_cache.openai_mode`               | `auto`, `implicit`, `explicit` | `auto`     | Select OpenAI prompt-cache behavior according to model and route capabilities.           |
 | `prompt_cache.openai_extended_retention` | boolean                        | `false`    | Request pre-GPT-5.6 `24h` OpenAI cache retention only on supported routes.                |
@@ -304,7 +320,7 @@ When `openai_extended_retention` is true, supported pre-GPT-5.6 direct OpenAI re
 
 The default `local` title and goal modes do not make provider requests. Set `title` or `goal_synthesis` to `model` to restore model-generated behavior. `title: "off"` leaves the initial generated Session title unchanged.
 
-For model-based helpers, an explicit model on the hidden `title`, `goal`, or `compaction` agent takes precedence over `efficiency.helper_model`; the current Session model is the final fallback. Compaction always remains model-based and follows this precedence. Model-based helper requests use the same prompt-cache policy and feed their provider-reported cache usage into the adaptive runtime.
+For each model-based helper, an explicit model on the matching hidden `title`, `goal`, or `compaction` agent takes precedence over `efficiency.helper_models.<role>`. A missing role or the explicit value `session` uses the current Session model. Compaction always remains model-based. Model-based helper requests use the same prompt-cache policy and feed their provider-reported cache usage into the adaptive runtime.
 
 ## Permissions
 

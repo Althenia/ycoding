@@ -85,7 +85,13 @@ The full transcript remains durable. Active model history after the compaction b
 
 Implemented: a completed `session.compaction.ended.1` event and its completed compaction projection may carry `messages`, the count folded into that summary operation, and structured `tokens` containing normalized provider-reported input, output, reasoning, cache-read, and cache-write usage. Both fields are optional for compatibility with persisted events and unreported provider usage. A missing token value is absent, not zero.
 
+Compaction helper requests use an internal cache namespace scope and never share a provider cache key with ordinary Session steps. Existing ordinary-step namespace bytes remain stable. Parent and child Sessions may reuse a provider prefix only when every model-visible namespace input is equal, including provider, model, variant, policy revision, permissions, system, and tool definitions.
+
 If the provider reports context overflow before durable assistant output or tool execution, the runner may perform one overflow-triggered compaction and rebuild the same logical Step. A second overflow or any overflow after durable output is terminal.
+
+## Cache reset diagnostics
+
+The bounded Session diagnostics response includes the latest provider-request invalidation reason without exposing prompt content, full cache keys, system digests, or tool digests. Compatibility reads treat a missing historical model variant as `default`. For a newly admitted request, a prior compaction produces `compaction-reset`; otherwise a changed provider or model produces `model-switched`, and a changed normalized variant produces `model-variant-switched`. These reasons take precedence over system, tool, and generic prefix-change reasons.
 
 ## Durable Events Are Session-Scoped
 

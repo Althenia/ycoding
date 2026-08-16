@@ -7,6 +7,7 @@ import type { PermissionV2 } from "../../permission"
 import { Hash } from "../../util/hash"
 
 export interface PromptCacheNamespaceInput {
+  readonly scope?: "compaction"
   readonly projectID: string
   readonly directory: string
   readonly workspaceID?: string
@@ -48,6 +49,7 @@ export const promptCacheNamespace = (input: PromptCacheNamespaceInput): string =
   Hash.sha256(
     canonicalJson({
       namespace: "session-prompt-cache/v2",
+      ...(input.scope === undefined ? {} : { scope: input.scope }),
       projectID: input.projectID,
       directory: input.directory,
       workspaceID: input.workspaceID,

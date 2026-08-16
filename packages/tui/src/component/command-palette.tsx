@@ -1,6 +1,7 @@
-import { createMemo } from "solid-js"
+import { useRenderer } from "@opentui/solid"
+import { createMemo, onCleanup } from "solid-js"
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
-import { type DialogContext } from "../ui/dialog"
+import { useDialog, type DialogContext } from "../ui/dialog"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "../context/keymap"
 
 function isSuggestedPaletteCommand(command: KeymapCommand) {
@@ -11,8 +12,26 @@ function isSuggestedPaletteCommand(command: KeymapCommand) {
 }
 
 export function CommandPaletteDialog() {
+  const dialog = useDialog()
+  const renderer = useRenderer()
+  const keymap = Keymap.use()
   const commands = Keymap.useCommands()
   const shortcuts = Keymap.useShortcuts()
+
+  // Close before the app-level selection handler consumes Escape to clear selected text.
+  const offEscape = keymap.intercept(
+    "key",
+    ({ event }) => {
+      if (event.name !== "escape" || !renderer.getSelection()?.getSelectedText()) return
+      renderer.clearSelection()
+      dialog.clear()
+      event.preventDefault()
+      event.stopPropagation()
+    },
+    { priority: 2 },
+  )
+  onCleanup(offEscape)
+
   const options = createMemo(() =>
     commands().flatMap((command) => {
       if (!command.id || !command.palette || command.id === COMMAND_PALETTE_COMMAND) return []

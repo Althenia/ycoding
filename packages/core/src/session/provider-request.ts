@@ -3,10 +3,11 @@ export * as SessionProviderRequest from "./provider-request"
 import { randomUUID } from "node:crypto"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Money } from "@ycoding-ai/schema/money"
+import { Model } from "@ycoding-ai/schema/model"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { TransportAttempt } from "@ycoding-ai/ai/route"
 import { asc, desc, eq } from "drizzle-orm"
-import { Cause, Context, DateTime, Effect, Layer, Semaphore } from "effect"
+import { Cause, Context, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
@@ -58,6 +59,17 @@ type Pending = {
   completed: boolean
 }
 
+type PreviousRequest = {
+  readonly request: number
+  readonly source: ProviderRequest.Source
+  readonly model?: ProviderRequest.Record["model"]
+  readonly promptCacheKey: string
+  readonly systemDigest: string
+  readonly toolDigest: string
+}
+
+const decodeModel = Schema.decodeUnknownOption(Model.Ref)
+
 const zeroTokens = (): TokenUsage.Info => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
 const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.Info => ({
   input: left.input + right.input,
@@ -65,6 +77,41 @@ const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.In
   reasoning: left.reasoning + right.reasoning,
   cache: { read: left.cache.read + right.cache.read, write: left.cache.write + right.cache.write },
 })
+
+function readPreviousRequest(
+  row:
+    | {
+        readonly request: number
+        readonly source: ProviderRequest.Source
+        readonly model: unknown
+        readonly promptCacheKey: string
+        readonly systemDigest: string
+        readonly toolDigest: string
+      }
+    | undefined,
+): PreviousRequest | undefined {
+  if (!row) return
+  return {
+    ...row,
+    model: Option.getOrUndefined(decodeModel(row.model)),
+  }
+}
+
+function defaultInvalidation(previous: PreviousRequest | undefined, input: BeginInput): ProviderRequest.Invalidation {
+  if (!previous) return "first-request"
+  if (previous.source === "compaction") return "compaction-reset"
+  if (
+    previous.model &&
+    (previous.model.providerID !== input.model.providerID || previous.model.id !== input.model.id)
+  )
+    return "model-switched"
+  if (previous.model && (previous.model.variant ?? "default") !== (input.model.variant ?? "default"))
+    return "model-variant-switched"
+  if (previous.promptCacheKey === input.promptCacheKey) return "provider-not-reported"
+  if (previous.systemDigest !== input.systemDigest) return "system-prefix-changed"
+  if (previous.toolDigest !== input.toolDigest) return "tool-prefix-changed"
+  return "prefix-changed"
+}
 
 const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): ProviderRequest.Record => ({
   id: row.id,
@@ -146,6 +193,8 @@ const layer = Layer.effect(
           const last = yield* db
             .select({
               request: SessionProviderRequestTable.request,
+              source: SessionProviderRequestTable.source,
+              model: SessionProviderRequestTable.model,
               promptCacheKey: SessionProviderRequestTable.prompt_cache_key,
               systemDigest: SessionProviderRequestTable.system_digest,
               toolDigest: SessionProviderRequestTable.tool_digest,
@@ -156,20 +205,12 @@ const layer = Layer.effect(
             .limit(1)
             .get()
             .pipe(Effect.orDie)
+          const previous = readPreviousRequest(last)
           const requestID = ProviderRequest.ID.make(`prq_${randomUUID().replaceAll("-", "")}`)
           const state: Pending = {
             input,
-            request: (last?.request ?? 0) + 1,
-            defaultInvalidation:
-              last === undefined
-                ? "first-request"
-                : last.promptCacheKey === input.promptCacheKey
-                  ? "provider-not-reported"
-                  : last.systemDigest !== input.systemDigest
-                    ? "system-prefix-changed"
-                    : last.toolDigest !== input.toolDigest
-                      ? "tool-prefix-changed"
-                      : "prefix-changed",
+            request: (previous?.request ?? 0) + 1,
+            defaultInvalidation: defaultInvalidation(previous, input),
             attempts: 0,
             completed: false,
           }

@@ -231,6 +231,8 @@ export function classifyProviderFailure(
   const body = input.http?.body ?? "";
   const codes = [
     input.code,
+    ...prefixedProviderCodes(body),
+    ...prefixedProviderCodes(input.message),
     ...providerCodes(body),
     ...providerCodes(input.message),
   ]
@@ -327,6 +329,11 @@ function providerCodes(value: string) {
   return [decoded.code, error?.code, error?.type].filter(
     (value): value is string => typeof value === "string",
   );
+}
+
+function prefixedProviderCodes(value: string) {
+  const code = /^\s*([a-z][a-z0-9_-]*)\s*:/i.exec(value)?.[1]
+  return code === undefined ? [] : [code]
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

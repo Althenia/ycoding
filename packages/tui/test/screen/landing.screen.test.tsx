@@ -86,12 +86,9 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     expect(frame).toContain("Message YCoding…")
     expect(frame).not.toContain("Ask anything")
 
-    for (const hint of ["Enter send", "Shift+Enter newline", "⌃p commands"]) {
+    for (const hint of ["Enter send", "↓ subagents", "⌃x b sidebar", "⌃p commands"]) {
       expect(frame).toContain(hint)
     }
-    // The Home route does not register session.child.first, so advertising its
-    // configured but inactive binding would create a dead shortcut.
-    expect(frame).not.toContain("↓ subagents")
 
     for (const footer of ["main", "goal off", "YOLO off", "subagents 0"]) {
       expect(frame).toContain(footer)
@@ -138,7 +135,9 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
       expect(lines[footer]?.indexOf("goal off")! - (lines[footer]?.indexOf("main")! + "main".length)).toBe(3)
       expect(lines[footer]?.indexOf("YOLO off")! - (lines[footer]?.indexOf("goal off")! + "goal off".length)).toBe(3)
       expect(lines[footer]?.indexOf("subagents 0")! - (lines[footer]?.indexOf("YOLO off")! + "YOLO off".length)).toBe(3)
-      expect(lines[hints]?.indexOf("Shift+Enter newline")! - (lines[hints]?.indexOf("Enter send")! + "Enter send".length)).toBe(3)
+      expect(lines[hints]?.indexOf("↓ subagents")! - (lines[hints]?.indexOf("Enter send")! + "Enter send".length)).toBe(3)
+      expect(lines[hints]?.indexOf("⌃x b sidebar")! - (lines[hints]?.indexOf("↓ subagents")! + "↓ subagents".length)).toBe(3)
+      expect(lines[hints]?.indexOf("⌃p commands")! - (lines[hints]?.indexOf("⌃x b sidebar")! + "⌃x b sidebar".length)).toBe(3)
     }
 
     // The reference places no agent or model row between the placeholder and the hints.

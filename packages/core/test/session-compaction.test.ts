@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { LLMClient, LLMEvent, Model, SystemPart, type LLMRequest } from "@ycoding-ai/ai"
+import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
@@ -16,6 +17,7 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
@@ -25,6 +27,7 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { Token } from "@ycoding-ai/core/util/token"
 import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
 import { asc, eq } from "drizzle-orm"
@@ -110,7 +113,7 @@ let helperCalls = 0
 const helperPolicy = Layer.succeed(
   SessionHelperPolicy.Service,
   SessionHelperPolicy.Service.of({
-    settings: { titleMode: "local", goalMode: "local" },
+    settings: { titleMode: "local", goalMode: "local", models: {} },
     localTitle,
     localGoal,
     resolveModel: () => {
@@ -183,6 +186,73 @@ test("compaction prompt requires the checkpoint headings in order", () => {
   expect(prompt).toContain("next action if known")
   expect(prompt).toContain("Keep every section, even when empty.")
 })
+
+it.effect("keeps the compaction request within the helper model input budget", () =>
+  Effect.gen(function* () {
+    requests = []
+    const db = (yield* Database.Service).db
+    const compaction = yield* SessionCompaction.Service
+    const store = yield* SessionStore.Service
+    const sessionID = SessionV2.ID.make("ses_bounded_compaction")
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: sessionID,
+        project_id: Project.ID.global,
+        directory: "/project",
+        title: "Bounded compaction",
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((value) => (value ? Effect.succeed(value) : Effect.die("test session missing"))))
+    const text = `BEGIN-CONTEXT\n${"history ".repeat(8_000)}\nEND-CONTEXT`
+
+    expect(
+      yield* compaction.compactManual({
+        session,
+        messages: [
+          {
+            id: SessionMessage.ID.create(),
+            type: "user",
+            text,
+            time: { created: DateTime.makeUnsafe(0) },
+          },
+        ],
+        inputID: SessionMessage.ID.make("msg_bounded_compaction"),
+      }),
+    ).toEqual({ status: "completed" })
+
+    expect(requests).toHaveLength(1)
+    expect(
+      Token.estimate(
+        JSON.stringify({
+          system: requests[0]?.system,
+          messages: requests[0]?.messages,
+          tools: requests[0]?.tools,
+          toolChoice: requests[0]?.toolChoice,
+          responseFormat: requests[0]?.responseFormat,
+        }),
+      ),
+    ).toBeLessThanOrEqual(9_000)
+    expect(JSON.stringify(requests[0]?.messages)).toContain("BEGIN-CONTEXT")
+    expect(JSON.stringify(requests[0]?.messages)).not.toContain("END-CONTEXT")
+    expect(yield* store.context(sessionID)).toContainEqual(
+      expect.objectContaining({
+        type: "compaction",
+        status: "completed",
+        recent: expect.stringContaining("END-CONTEXT"),
+      }),
+    )
+  }),
+)
 
 it.effect("manual compaction summarizes short context instead of no-op", () =>
   Effect.gen(function* () {
@@ -289,6 +359,20 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       modelID: "helper-summary-model",
       configured: "1h",
     })
+    expect(cachePolicies[0]?.namespace).not.toBe(
+      SessionRunnerCache.promptCacheNamespace({
+        projectID: session.projectID,
+        directory: session.location.directory,
+        workspaceID: session.location.workspaceID,
+        providerID: "test",
+        modelID: "helper-summary-model",
+        variant: "default",
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: [],
+        system: requests[0]?.system ?? [],
+        tools: requests[0]?.tools ?? [],
+      }),
+    )
     expect(requests[0]?.providerOptions?.openai?.promptCacheKey).toBe(cachePolicies[0]?.namespace)
     expect(cacheObservations).toEqual([
       {

@@ -165,7 +165,7 @@ The TUI waits 500 ms after a pending guardrail checkpoint. If the review is stil
 
 The provider-usage service is read-only and best effort. A refresh failure never blocks Session startup or model execution. The TUI keeps a previous valid snapshot as `stale` when a later refresh fails.
 
-The `Provider Usage` command appears in the Session command palette only when at least one currently running root or subagent Session uses a provider with a supported usage path. Opening it renders one section per unique active provider; parallel Sessions using the same provider share one section and do not combine percentages.
+The `Provider Usage` command appears in the Session command palette when a provider selected by any Session in the current root family has visible quota data, including idle family members, or when local request diagnostics exist. Opening it renders one section per unique selected provider with visible quota data; parallel Sessions using the same provider share one section and do not combine percentages.
 
 ```text
 Provider Usage

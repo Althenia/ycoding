@@ -110,7 +110,11 @@ describe("Config", () => {
         efficiency: {
           title: "local",
           goal_synthesis: "model",
-          helper_model: "openai/gpt-5-mini#low",
+          helper_models: {
+            title: "openai/gpt-5-mini#low",
+            goal: "session",
+            compaction: "session",
+          },
           prompt_cache: {
             anthropic_ttl: "adaptive",
             openai_mode: "explicit",
@@ -122,7 +126,11 @@ describe("Config", () => {
       expect(decoded.efficiency).toEqual({
         title: "local",
         goal_synthesis: "model",
-        helper_model: selection("openai/gpt-5-mini#low"),
+        helper_models: {
+          title: selection("openai/gpt-5-mini#low"),
+          goal: "session",
+          compaction: "session",
+        },
         prompt_cache: {
           anthropic_ttl: "adaptive",
           openai_mode: "explicit",
@@ -420,13 +428,18 @@ describe("Config", () => {
     ),
   )
 
-  it.effect("bounds current instruction and shell sandbox settings", () =>
+  it.effect("bounds current instruction and shell resource settings", () =>
     Effect.sync(() => {
       const decode = Schema.decodeUnknownSync(Config.Info)
       expect(decode({ instruction_max_bytes: 1 }).instruction_max_bytes).toBe(1)
       expect(decode({ instruction_max_bytes: 1_048_576 }).instruction_max_bytes).toBe(1_048_576)
       expect(() => decode({ instruction_max_bytes: 0 })).toThrow()
       expect(() => decode({ instruction_max_bytes: 1_048_577 })).toThrow()
+      expect(decode({ shell_memory_limit_mb: 0 }).shell_memory_limit_mb).toBe(0)
+      expect(decode({ shell_memory_limit_mb: 1_048_576 }).shell_memory_limit_mb).toBe(1_048_576)
+      expect(() => decode({ shell_memory_limit_mb: -1 })).toThrow()
+      expect(() => decode({ shell_memory_limit_mb: 1.5 })).toThrow()
+      expect(() => decode({ shell_memory_limit_mb: 1_048_577 })).toThrow()
       for (const mode of ["disabled", "optional", "required"] as const) {
         expect(decode({ shell_sandbox: mode }).shell_sandbox).toBe(mode)
       }

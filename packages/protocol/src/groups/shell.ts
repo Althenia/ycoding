@@ -38,7 +38,7 @@ export const ShellGroup = HttpApiGroup.make("server.shell")
           identifier: "v2.shell.create",
           summary: "Run shell command",
           description:
-            "Spawn one non-interactive shell command for a location. Combined stdout/stderr is captured to a file pageable via output.",
+            "Spawn one non-interactive shell command for a location. An optional memory limit supplies runtime hints and enforces a sampled process-tree ceiling. Combined stdout/stderr is captured to a file pageable via output.",
         }),
       ),
   )

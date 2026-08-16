@@ -42,9 +42,16 @@ type SubagentFooterUsage = {
   cost?: string
 }
 
-type SubagentEconomics = {
+export type SubagentEconomics = {
   summary?: string
   strip: readonly string[]
+  context?: string
+  cacheHit?: string
+  prefix?: string
+  reads?: string
+  writes?: string
+  spent?: string
+  rollsUpTo?: string
 }
 
 function totalTokens(session: Pick<SessionInfo, "tokens">) {
@@ -58,27 +65,51 @@ export function subagentEconomics(
 ): SubagentEconomics | undefined {
   if (!session) return undefined
   const tokens = totalTokens(session)
-  const hit = diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}% hit`
+  const cacheHit = diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}%`
+  const hit = cacheHit === undefined ? undefined : `${cacheHit} hit`
+  const context = diagnostics
+    ? `${compactNumber(diagnostics.context.total)} / ${diagnostics.context.limit === undefined ? "unreported" : compactNumber(diagnostics.context.limit)}${diagnostics.context.percent === undefined ? "" : ` · ${diagnostics.context.percent}%`}`
+    : undefined
+  const prefix = diagnostics?.requests?.latestInvalidation === "stable-hit" ? "stable" : undefined
+  const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
+  const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
+  const spent = session.cost > 0 ? money.format(session.cost) : undefined
   const summary = [
     tokens > 0 ? `${Locale.number(tokens)}${diagnostics?.context.percent === undefined ? "" : ` (${diagnostics.context.percent}%)`}` : undefined,
     hit,
-    session.cost > 0 ? money.format(session.cost) : undefined,
+    spent,
   ]
     .filter(Boolean)
     .join(" · ")
   const strip = [
-    diagnostics
-      ? `Context ${Locale.number(diagnostics.context.total)}${diagnostics.context.limit === undefined ? "" : `/${Locale.number(diagnostics.context.limit)}`}`
-      : undefined,
+    context ? `Context ${context}` : undefined,
     diagnostics && !hit ? "hit unreported" : undefined,
-    diagnostics?.cache.minimumTokens === undefined ? undefined : `prefix ${Locale.number(diagnostics.cache.minimumTokens)}`,
-    diagnostics ? (diagnostics.cache.readReported ? `${Locale.number(diagnostics.tokens.cacheRead)} read` : "read unreported") : undefined,
-    diagnostics ? (diagnostics.cache.writeReported ? `${Locale.number(diagnostics.tokens.cacheWrite)} write` : "write unreported") : undefined,
-    session.cost > 0 ? money.format(session.cost) : undefined,
+    prefix ? `prefix ${prefix}` : undefined,
+    diagnostics ? (reads ? `${reads} read` : "read unreported") : undefined,
+    diagnostics ? (writes ? `${writes} write` : "write unreported") : undefined,
+    spent,
     parentTitle ? `rolls up to ${parentTitle}` : undefined,
   ].filter((value): value is string => Boolean(value))
   if (!summary && strip.length === 0) return undefined
-  return { summary: summary || undefined, strip }
+  return {
+    summary: summary || undefined,
+    strip,
+    context,
+    cacheHit,
+    prefix,
+    reads,
+    writes,
+    spent,
+    rollsUpTo: parentTitle,
+  }
+}
+
+function compactNumber(value: number) {
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value)
+}
+
+function number(value: number) {
+  return new Intl.NumberFormat("en-US").format(value)
 }
 
 export function subagentSiblingEconomics(session: Pick<SessionInfo, "cost" | "tokens"> | undefined) {
@@ -260,52 +291,6 @@ export function SubagentFooterContent(props: {
   )
 }
 
-export function SubagentDurableChip() {
-  const { themeV2 } = useTheme().contextual("elevated")
-  return (
-    <box
-      paddingLeft={1}
-      paddingRight={1}
-      backgroundColor={themeV2.hue.blue[600]}
-      flexShrink={0}
-    >
-      <text fg={themeV2.hue.gray[900]} wrapMode="none">
-        durable
-      </text>
-    </box>
-  )
-}
-
-export function SubagentEconomicsSurface(props: {
-  economics?: SubagentEconomics
-  blocked?: boolean
-}) {
-  const { themeV2 } = useTheme().contextual("elevated")
-
-  return (
-    <Show when={props.economics?.strip.length}>
-      <box
-        flexShrink={0}
-        paddingLeft={2}
-        paddingRight={1}
-        paddingTop={1}
-        paddingBottom={1}
-        flexDirection="row"
-        flexWrap="wrap"
-        gap={1}
-      >
-        <For each={props.economics?.strip}>
-          {(item) => (
-            <text fg={props.blocked ? themeV2.text.feedback.warning.default : themeV2.text.subdued} wrapMode="none">
-              {item}
-            </text>
-          )}
-        </For>
-      </box>
-    </Show>
-  )
-}
-
 export function SubagentFooter() {
   const route = useRouteData("session")
   const navigation = useRoute()
@@ -338,22 +323,62 @@ export function SubagentFooter() {
     })
   })
 
-  const footer = createMemo(() => subagentFooterData(session(), data.session.diagnostics.get(route.sessionID)))
   const economics = createMemo(() => subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title))
-  const siblingEconomics = createMemo(() =>
-    Object.fromEntries(siblings().map((task) => [task.sessionID, subagentSiblingEconomics(data.session.get(task.sessionID))])),
-  )
+  const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
+  const current = createMemo(() => siblings().findIndex((task) => task.sessionID === route.sessionID) + 1)
+  const agent = createMemo(() => currentTask()?.agent ?? "subagent")
+  const context = createMemo(() => {
+    const [total, percent] = economics()?.context?.split(" · ") ?? []
+    if (!total || !percent) return undefined
+    return `${total.split(" / ")[0]} (${percent})`
+  })
+  const blocked = createMemo(() => currentTask()?.state === "waiting" && Boolean(currentTask()?.question))
+  const { themeV2 } = useTheme().contextual("elevated")
 
   return (
-    <SubagentFooterContent
-      title={footer().title}
-      usage={() => footer().usage}
-      parentTitle={parent()?.title}
-      siblings={siblings()}
-      currentSessionID={route.sessionID}
-      onNavigate={(sessionID) => navigation.navigate({ type: "session", sessionID })}
-      economics={economics()}
-      siblingEconomics={siblingEconomics()}
-    />
+    <box height={2} paddingLeft={3} paddingRight={3} alignItems="flex-start" flexDirection="row" flexShrink={0}>
+      <Show
+        when={blocked()}
+        fallback={
+          <>
+            <box width={21} flexShrink={0}>
+              <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {siblings().length})</text>
+            </box>
+            <box width={13} flexShrink={0}>
+              <text fg={themeV2.text.subdued} wrapMode="none">{context()}</text>
+            </box>
+            <box width={10} flexShrink={0}>
+              <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
+            </box>
+            <box flexShrink={0}>
+              <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
+            </box>
+            <box flexGrow={1} />
+            <text fg={themeV2.text.action.primary.default} wrapMode="none" onMouseUp={() => {
+              const sibling = subagentSiblingSessionID(siblings(), route.sessionID, 1)
+              if (sibling) navigation.navigate({ type: "session", sessionID: sibling })
+            }}>→ next</text>
+          </>
+        }
+      >
+        <>
+          <box width={23} flexShrink={0}>
+            <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {siblings().length})</text>
+          </box>
+          <box width={14} flexShrink={0}>
+            <text fg={themeV2.text.subdued} wrapMode="none">{context()}</text>
+          </box>
+          <box width={10} flexShrink={0}>
+            <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.cacheHit} hit</text>
+          </box>
+          <box width={8} flexShrink={0}>
+            <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.spent}</text>
+          </box>
+          <text fg={themeV2.text.feedback.warning.default} wrapMode="none">awaiting input</text>
+          <box flexGrow={1} />
+          <text fg={themeV2.text.action.primary.default} wrapMode="none">Enter answer</text>
+        </>
+      </Show>
+    </box>
   )
 }

@@ -4,7 +4,7 @@ import { useTheme } from "../../context/theme"
 export function ShellOutputStream(props: { text: string; loading: boolean }) {
   const { themeV2 } = useTheme()
   return (
-    <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }} paddingLeft={2} paddingRight={2} paddingTop={3}>
+    <scrollbox flexGrow={1} scrollbarOptions={{ visible: false }} paddingLeft={3} paddingRight={3} paddingTop={3}>
       <Show
         when={props.text}
         fallback={

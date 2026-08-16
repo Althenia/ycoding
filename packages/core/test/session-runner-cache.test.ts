@@ -48,6 +48,14 @@ test("pins the canonical prompt-cache namespace digest", () => {
   )
 })
 
+test("keeps ordinary keys stable while isolating compaction cache scope", () => {
+  const normal = SessionRunnerCache.promptCacheNamespace(base)
+  const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })
+
+  expect(normal).toBe("6e41470c1087dc6e2208831a8e3f954750ca0f56b6152934e3637c7751a10853")
+  expect(compaction).not.toBe(normal)
+})
+
 test("canonicalizes object order and preserves JSON array positions", () => {
   const sparse = Array<string | undefined>(2)
   sparse[1] = "tail"
@@ -130,10 +138,25 @@ test("keeps the CodeMode execute namespace stable across dynamic catalogs", () =
   ).not.toBe(SessionRunnerCache.promptCacheNamespace({ ...base, tools: [first] }))
 })
 
-test("shares equivalent parent and routed-subagent request prefixes", () => {
-  const parent = { ...base, agentID: "build" }
-  const routedSubagent = { ...base, agentID: "reviewer" }
-  expect(SessionRunnerCache.promptCacheNamespace(routedSubagent)).toBe(SessionRunnerCache.promptCacheNamespace(parent))
+test("shares subagent prefixes only when every model-visible dimension is equal", () => {
+  const parent = SessionRunnerCache.promptCacheNamespace(base)
+  expect(SessionRunnerCache.promptCacheNamespace({ ...base })).toBe(parent)
+
+  const mismatches = [
+    { providerID: "other-provider" },
+    { modelID: "other-model" },
+    { variant: "high" },
+    { projectID: "other-project" },
+    { directory: "/other" },
+    { workspaceID: "other-workspace" },
+    { policyRevision: `${CACHE_POLICY_REVISION}-other` },
+    { permissions: [{ action: "read", resource: "**", effect: "deny" }] },
+    { system: [SystemPart.make("Subagent system")] },
+    { tools: [] },
+  ] satisfies ReadonlyArray<Partial<SessionRunnerCache.PromptCacheNamespaceInput>>
+
+  for (const mismatch of mismatches)
+    expect(SessionRunnerCache.promptCacheNamespace({ ...base, ...mismatch })).not.toBe(parent)
 })
 
 test("separates provider session namespace from the shared prefix key", () => {

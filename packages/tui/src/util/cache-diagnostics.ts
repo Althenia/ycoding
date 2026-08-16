@@ -35,6 +35,9 @@ export interface ProviderRequestDiagnostics {
   }
   readonly latestInvalidation?:
     | "first-request"
+    | "compaction-reset"
+    | "model-switched"
+    | "model-variant-switched"
     | "stable-hit"
     | "prefix-changed"
     | "system-prefix-changed"
@@ -75,6 +78,12 @@ const invalidationLabel = (value: ProviderRequestDiagnostics["latestInvalidation
   switch (value) {
     case "first-request":
       return "First request"
+    case "compaction-reset":
+      return "Compaction reset"
+    case "model-switched":
+      return "Model switched"
+    case "model-variant-switched":
+      return "Model variant switched"
     case "stable-hit":
       return "Stable cache hit"
     case "prefix-changed":

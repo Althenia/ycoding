@@ -62,8 +62,9 @@ import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
 import { Footer } from "./footer"
 import { ProviderUsageCommand } from "./provider-usage"
-import { subagentEconomics, subagentSiblingEconomics, subagentSiblingSessionID, subagentSiblingSessionIDs, SubagentDurableChip, SubagentEconomicsSurface } from "./subagent-footer"
+import { subagentEconomics, subagentSiblingEconomics, subagentSiblingSessionID, subagentSiblingSessionIDs, SubagentFooter } from "./subagent-footer"
 import { SubagentSiblingSwitcher } from "./subagent-sibling-switcher"
+import { SubagentEconomicsSurface } from "./subagent-economics"
 import { SubagentAnswerComposer, SubagentBlockedSurface } from "./subagent-blocked"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
@@ -116,6 +117,7 @@ import { Header } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, parseInlineDiff } from "./inline-diff"
 import { InlineCommand, parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
+import { SessionActivityRow, SessionToolActivityRow } from "./activity-row"
 
 addDefaultParsers(parsers.parsers)
 
@@ -183,6 +185,11 @@ export function Session() {
     if (session()?.parentID) return []
     return data.session.guardrail.list(route.sessionID)
   })
+  const [guardrailReview, setGuardrailReview] = createSignal<string>()
+  const reviewingGuardrail = createMemo(() => guardrails().find((request) => request.id === guardrailReview()))
+  createEffect(() => {
+    if (guardrailReview() && !reviewingGuardrail()) setGuardrailReview(undefined)
+  })
   const forms = createMemo(() => {
     const global = data.session.form.list("global", location()) ?? []
     if (session()?.parentID) return global
@@ -194,7 +201,7 @@ export function Session() {
     open: false,
     tab: undefined as string | undefined,
   })
-  const disabled = createMemo(() => guardrails().length > 0 || permissions().length > 0 || forms().length > 0)
+  const disabled = createMemo(() => permissions().length > 0 || forms().length > 0)
 
   const pending = createMemo(() => {
     const completed = messages().findLast((x) => x.type === "assistant" && x.time.completed)?.id
@@ -304,7 +311,12 @@ export function Session() {
     const child = parentID
       ? data.session.subagent.list(parentID).find((task) => task.sessionID === route.sessionID)
       : undefined
-    if (child?.state === "waiting" && child.question) return { type: "awaiting-input", count: 1 } as const
+    if (child?.state === "waiting" && child.question)
+      return {
+        type: "awaiting-input",
+        count: 1,
+        elapsed: session() ? (Date.now() - session()!.time.created) / 1000 : undefined,
+      } as const
     const message = messages().findLast((item) => item.type === "assistant" && !item.time.completed)
     if (message?.type === "assistant")
       return { type: "working", elapsed: (Date.now() - message.time.created) / 1000 } as const
@@ -337,6 +349,13 @@ export function Session() {
     return subagentSiblingSessionIDs(tasks).flatMap((id) => tasks.find((task) => task.sessionID === id) ?? [])
   })
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
+  const assistantIdentity = createMemo(() => {
+    if (!session()?.parentID) return { label: "YCODING", subagent: false }
+    return {
+      label: `${(currentTask()?.agent ?? session()?.title ?? "Subagent").toUpperCase()} SUBAGENT`,
+      subagent: true,
+    }
+  })
   const economics = createMemo(() => subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title))
   const blockedQuestion = createMemo(() => currentTask()?.state === "waiting" ? currentTask()?.question?.text : undefined)
   const blockedBody = createMemo(() => {
@@ -363,7 +382,30 @@ export function Session() {
     })
   })
   const editor = useEditorContext()
-  const rows = createSessionRows(() => route.sessionID)
+  const rows = createSessionRows(
+    () => route.sessionID,
+    () => !session()?.parentID && autonomy().mode !== "yolo",
+  )
+  const toggleHistory = (row: SessionHistoryRow) => {
+    const placeholder = historyTogglePlaceholder(row)
+    if (!placeholder || placeholder.state === "loading") return
+    if (placeholder.state === "expanded") {
+      data.session.message.collapse(route.sessionID)
+      return
+    }
+    void data.session.message.expand(route.sessionID, placeholder.cursor).catch((error) => toast.error(error))
+  }
+  const keyboardHistoryRow = () => {
+    const history = rows.flatMap((row, index) => (row.type === "history" ? [{ row, index }] : []))
+    const expanded = history.find((item) => item.row.placeholders.some((placeholder) => placeholder.state === "expanded"))
+    return (
+      history.find(
+        (item) =>
+          item.index > (expanded?.index ?? -1) &&
+          item.row.placeholders.some((placeholder) => placeholder.state === "collapsed" || placeholder.state === "error"),
+      )?.row ?? expanded?.row
+    )
+  }
   const boundaries = createMemo(() => messageBoundaryIDs(rows, messages()))
   const [navigationMessage, setNavigationMessage] = createSignal<string>()
   const [navigationSlack, setNavigationSlack] = createSignal(0)
@@ -522,6 +564,12 @@ export function Session() {
       palette: undefined,
       run: () => {
         clearMessageNavigation()
+        const history = keyboardHistoryRow()
+        if (scroll.scrollTop === 0 && history) {
+          toggleHistory(history)
+          dialog.clear()
+          return
+        }
         scroll.scrollBy(-scroll.height / 2)
         dialog.clear()
       },
@@ -1159,6 +1207,7 @@ export function Session() {
               }}
               stickyScroll={!navigationMessage()}
               stickyStart="bottom"
+              marginTop={session()?.parentID ? 1 : 0}
               flexGrow={1}
               scrollAcceleration={scrollAcceleration()}
             >
@@ -1168,6 +1217,7 @@ export function Session() {
                     title={session()?.title ?? "Subagent"}
                     body={blockedBody()}
                     activity={blockedActivity()}
+                    blockedAt={currentTask()?.question?.time}
                     question={question()}
                   />
                 )}
@@ -1177,22 +1227,19 @@ export function Session() {
                   <SessionRowView
                     row={row}
                     message={(messageID) => data.session.message.get(route.sessionID, messageID)}
+                    assistantIdentity={assistantIdentity()}
                     boundaryID={boundaries()[index()]}
-                    history={(row) => {
-                      const placeholder = historyTogglePlaceholder(row)
-                      if (!placeholder) return
-                      if (placeholder.state === "loading") return
-                      if (placeholder.state === "expanded") {
-                        data.session.message.collapse(route.sessionID)
-                        return
-                      }
-                      void data.session.message
-                        .expand(route.sessionID, placeholder.cursor)
-                        .catch((error) => toast.error(error))
-                    }}
+                    width={contentWidth()}
+                    hidden={!!blockedQuestion()}
+                    guardrail={(requestID) => setGuardrailReview(requestID)}
+                    subagent={(sessionID) => navigate({ type: "session", sessionID })}
+                    history={toggleHistory}
                   />
                 )}
               </For>
+              <Show when={autonomy().mode === "yolo" && autonomy().goal}>
+                <SessionTodoBlock sessionID={route.sessionID} />
+              </Show>
               <BackgroundToolHint messages={messages()} />
               <Show when={session()?.revert?.messageID}>
                 <RevertMessage
@@ -1215,19 +1262,14 @@ export function Session() {
                 open={composer.open}
                 defaultTab={composer.tab}
                 onClose={() => setComposer("open", false)}
+                prompt={composer.open && !disabled() ? sessionPrompt() : undefined}
               />
               <Switch>
-                <Match when={composer.open}>{null}</Match>
                 <Match when={blockedQuestion()}>
                   <SubagentAnswerComposer sessionID={route.sessionID} branch={branch()} />
                 </Match>
-                <Match when={guardrails().length > 0}>
-                  <Show when={guardrails()[0]?.id} keyed>
-                    {(_) => {
-                      const request = guardrails()[0]
-                      return request ? <GuardrailPrompt request={request} /> : null
-                    }}
-                  </Show>
+                <Match when={reviewingGuardrail()}>
+                  {(request) => <GuardrailPrompt request={request()} />}
                 </Match>
                 <Match when={permissions().length > 0}>
                   <Show when={permissions()[0]?.id} keyed>
@@ -1248,38 +1290,10 @@ export function Session() {
                   </Show>
                 </Match>
                 <Match when={session()?.parentID}>{null}</Match>
-                <Match when={!disabled()}>
-                  <pluginRuntime.Slot
-                    name="session_prompt"
-                    mode="replace"
-                    session_id={route.sessionID}
-                    visible={true}
-                    disabled={false}
-                    on_submit={toBottom}
-                    ref={bind}
-                  >
-                    <Prompt
-                      visible={true}
-                      ref={bind}
-                      disabled={false}
-                      onSubmit={() => {
-                        toBottom()
-                      }}
-                      sessionID={route.sessionID}
-                      branch={branch()}
-                      autonomy={autonomy()}
-                      onAutonomyUpdated={acceptAutonomy}
-                      right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
-                    />
-                  </pluginRuntime.Slot>
-                </Match>
+                <Match when={!disabled() && !composer.open}>{sessionPrompt()}</Match>
               </Switch>
-              <Show when={session()?.parentID}>
-                <SubagentEconomicsSurface
-                  economics={economics()}
-                  blocked={!!currentTask()?.question}
-                />
-                <SubagentDurableChip />
+              <Show when={session()?.parentID && !blockedQuestion()}>
+                <SubagentEconomicsSurface economics={economics()} />
               </Show>
             </box>
           </Show>
@@ -1305,8 +1319,70 @@ export function Session() {
           </Switch>
         </Show>
       </box>
-      <Footer />
+      <Show when={session()?.parentID} fallback={<Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} />}>
+        <SubagentFooter />
+      </Show>
     </context.Provider>
+  )
+
+  function sessionPrompt() {
+    return (
+      <pluginRuntime.Slot
+        name="session_prompt"
+        mode="replace"
+        session_id={route.sessionID}
+        visible={true}
+        disabled={false}
+        on_submit={toBottom}
+        ref={bind}
+      >
+        <Prompt
+          visible={true}
+          ref={bind}
+          disabled={false}
+          onSubmit={toBottom}
+          sessionID={route.sessionID}
+          branch={branch()}
+          autonomy={autonomy()}
+          onAutonomyUpdated={acceptAutonomy}
+          right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+        />
+      </pluginRuntime.Slot>
+    )
+  }
+}
+
+function SessionTodoBlock(props: { sessionID: string }) {
+  const data = useData()
+  const { themeV2 } = useTheme()
+  const todos = createMemo(() => data.session.todo.get(props.sessionID))
+
+  return (
+    <Show when={todos().length > 0}>
+      <box flexDirection="column" gap={2} width="100%" marginTop={4}>
+        <For each={todos()}>
+          {(todo) => {
+            const active = () => todo.status === "in_progress"
+            const marker = () => (todo.status === "completed" ? "ok" : active() ? ".." : "--")
+            const status = () => (todo.status === "completed" ? "done" : active() ? "active" : "pending")
+            return (
+              <box width="100%" flexDirection="row">
+                <text flexShrink={0} fg={active() ? themeV2.text.feedback.warning.default : themeV2.text.subdued}>
+                  {marker()}
+                </text>
+                <box width={5} flexShrink={0} />
+                <text flexGrow={1} wrapMode="none" overflow="hidden" fg={themeV2.text.default}>
+                  {todo.content}
+                </text>
+                <text flexShrink={0} fg={active() ? themeV2.text.feedback.warning.default : themeV2.text.feedback.success.default}>
+                  {status()}
+                </text>
+              </box>
+            )
+          }}
+        </For>
+      </box>
+    </Show>
   )
 }
 
@@ -1402,6 +1478,9 @@ function SessionHistoryRow(props: {
   return (
     <box
       height={1}
+      marginTop={2}
+      marginBottom={1}
+      paddingLeft={18}
       flexDirection="row"
       alignItems="center"
       flexShrink={0}
@@ -1422,7 +1501,12 @@ function SessionHistoryRow(props: {
 export function SessionRowView(props: {
   row: SessionRow
   message: (messageID: string) => SessionMessageInfo | undefined
+  assistantIdentity?: { label: string; subagent: boolean }
   boundaryID?: string
+  width?: number
+  hidden?: boolean
+  guardrail?: (requestID: string) => void
+  subagent?: (sessionID: string) => void
   history: (row: SessionHistoryRow) => void
 }) {
   // Rows can outlive an evicted archive page for one reactive frame. Resolve every
@@ -1449,7 +1533,13 @@ export function SessionRowView(props: {
   })
   return (
     <Show when={visible()}>
-      <box id={props.boundaryID} marginTop={props.row.type === "history" ? 0 : 1} flexShrink={0}>
+      <box
+        id={props.boundaryID}
+        width="100%"
+        marginTop={props.row.type === "history" ? 0 : 1}
+        flexShrink={0}
+        visible={!props.hidden}
+      >
         <Switch>
         <Match when={props.row.type === "history" ? props.row : undefined}>
           {(row) => <SessionHistoryRow row={row()} onToggle={props.history} />}
@@ -1462,11 +1552,40 @@ export function SessionRowView(props: {
         <Match when={props.row.type === "compaction-queued"}>
           <CompactionQueued />
         </Match>
+        <Match
+          when={
+            props.row.type === "guardrail" || props.row.type === "subagent" || props.row.type === "task"
+              ? props.row
+              : undefined
+          }
+        >
+          {(row) => (
+            <SessionActivityRow
+              row={row()}
+              width={props.width}
+              onGuardrail={(requestID) => props.guardrail?.(requestID)}
+              onSubagent={(sessionID) => props.subagent?.(sessionID)}
+            />
+          )}
+        </Match>
         <Match when={props.row.type === "part" ? props.row : undefined}>
-          {(row) => <SessionPartView partRef={row().ref} message={props.message} />}
+          {(row) => (
+            <SessionPartView
+              partRef={row().ref}
+              message={props.message}
+              assistantIdentity={props.assistantIdentity}
+            />
+          )}
         </Match>
         <Match when={props.row.type === "group" && props.row.kind === "reasoning" ? props.row : undefined}>
-          {(row) => <SessionReasoningGroupView refs={row().refs} completed={row().completed} message={props.message} />}
+          {(row) => (
+            <SessionReasoningGroupView
+              refs={row().refs}
+              completed={row().completed}
+              message={props.message}
+              subagent={props.assistantIdentity?.subagent}
+            />
+          )}
         </Match>
         <Match when={props.row.type === "group" && props.row.kind === "exploration" ? props.row : undefined}>
           {(row) => (
@@ -1549,7 +1668,11 @@ function SessionMessageView(props: { message: SessionMessageInfo }) {
   )
 }
 
-function SessionPartView(props: { partRef: PartRef; message: (messageID: string) => SessionMessageInfo | undefined }) {
+function SessionPartView(props: {
+  partRef: PartRef
+  message: (messageID: string) => SessionMessageInfo | undefined
+  assistantIdentity?: { label: string; subagent: boolean }
+}) {
   const message = createMemo(() => props.message(props.partRef.messageID))
   const part = createMemo(() => {
     const item = message()
@@ -1561,13 +1684,20 @@ function SessionPartView(props: { partRef: PartRef; message: (messageID: string)
       {(item) => (
         <Switch>
           <Match when={item().type === "text"}>
-            <TextPart part={item() as SessionMessageAssistantText} last={false} />
+            <TextPart
+              part={item() as SessionMessageAssistantText}
+              last={false}
+              identity={props.partRef.partID === "text:0" ? props.assistantIdentity : undefined}
+              subagent={props.assistantIdentity?.subagent}
+              index={Number(props.partRef.partID.split(":")[1])}
+            />
           </Match>
           <Match when={item().type === "reasoning"}>
             <ReasoningPart
               part={item() as SessionMessageAssistantReasoning}
               message={message() as SessionMessageAssistant}
               last={false}
+              subagent={props.assistantIdentity?.subagent}
             />
           </Match>
           <Match when={item().type === "tool"}>
@@ -1583,6 +1713,7 @@ function SessionReasoningGroupView(props: {
   refs: PartRef[]
   completed: boolean
   message: (messageID: string) => SessionMessageInfo | undefined
+  subagent?: boolean
 }) {
   const ctx = use()
   const { themeV2, syntax } = useTheme()
@@ -1606,6 +1737,10 @@ function SessionReasoningGroupView(props: {
     if (item.part.time?.completed !== undefined || item.message.time.completed !== undefined) return null
     return previous
   }, null)
+  const thought = createMemo(() => {
+    if (props.subagent) return parts().map((item) => reasoningContent(item.part)).join(" ")
+    return latest()
+  })
   const duration = createMemo(() =>
     parts().reduce((total, item) => {
       const start = item.part.time?.created
@@ -1622,7 +1757,9 @@ function SessionReasoningGroupView(props: {
       >
         <box flexDirection="column" flexShrink={0}>
           <InlineToolRow
-            icon={expanded() ? "-" : "+"}
+            icon={props.subagent ? "" : expanded() ? "-" : "+"}
+            iconWidth={props.subagent ? 0 : undefined}
+            paddingLeft={props.subagent ? 0 : undefined}
             color={
               !props.completed
                 ? themeV2.text.default
@@ -1646,7 +1783,7 @@ function SessionReasoningGroupView(props: {
             }}
           >
             {props.completed ? "Thought" : latest() ? `Thinking: ${latest()}` : "Thinking"}
-            <Show when={props.completed && !expanded() && latest()}>: {latest()}</Show>
+            <Show when={props.completed && !expanded() && thought()}>: {thought()}</Show>
             <Show when={props.completed && parts().length > 1}> · {parts().length} steps</Show>
             <Show when={props.completed && duration()}> · {Locale.duration(duration())}</Show>
           </InlineToolRow>
@@ -1721,6 +1858,15 @@ function SessionGroupView(props: {
     })
   const grouped = createMemo(() => parts(props.refs))
   const pending = createMemo(() => parts(props.pending))
+  const singleGrep = createMemo(() => {
+    const part = grouped().length === 1 && pending().length === 0 && props.completed ? grouped()[0] : undefined
+    if (part?.name.toLowerCase() !== "grep" || part.state.status !== "completed") return undefined
+    const input = typeof part.state.input === "string" ? {} : part.state.input
+    const pattern = stringValue(input.pattern)
+    const matches = finiteNumber(toolDisplayMetadata(part.state).matches)
+    if (!pattern || matches === undefined) return undefined
+    return { pattern, matches }
+  })
   const label = createMemo(() => {
     const counts = grouped().reduce<Record<string, number>>((result, part) => {
       const tool = toolDisplay(part.name)
@@ -1736,30 +1882,44 @@ function SessionGroupView(props: {
   return (
     <Show when={grouped().length > 0 || pending().length > 0}>
       <Show
-        when={ctx.groupExploration()}
-        fallback={<For each={[...grouped(), ...pending()]}>{(part) => <ToolPart part={part} />}</For>}
-      >
-        <Show when={grouped().length > 0}>
-          <InlineToolRow
-            icon={props.completed ? "→" : "✱"}
-            color={hover() ? themeV2.text.default : themeV2.text.subdued}
-            complete={props.completed}
-            pending={label()}
-            spinner={!props.completed}
-            onMouseOver={() => setHover(true)}
-            onMouseOut={() => setHover(false)}
-            onMouseUp={() => {
-              if (renderer.getSelection()?.getSelectedText()) return
-              setExpanded((value) => !value)
-            }}
+        when={singleGrep()}
+        fallback={
+          <Show
+            when={ctx.groupExploration()}
+            fallback={<For each={[...grouped(), ...pending()]}>{(part) => <ToolPart part={part} />}</For>}
           >
-            {label()}
-          </InlineToolRow>
-        </Show>
-        <Show when={expanded() && grouped().length > 0}>
-          <For each={grouped()}>{(part) => <ToolPart part={part} />}</For>
-        </Show>
-        <For each={pending()}>{(part) => <ToolPart part={part} />}</For>
+            <Show when={grouped().length > 0}>
+              <InlineToolRow
+                icon={props.completed ? "→" : "✱"}
+                color={hover() ? themeV2.text.default : themeV2.text.subdued}
+                complete={props.completed}
+                pending={label()}
+                spinner={!props.completed}
+                onMouseOver={() => setHover(true)}
+                onMouseOut={() => setHover(false)}
+                onMouseUp={() => {
+                  if (renderer.getSelection()?.getSelectedText()) return
+                  setExpanded((value) => !value)
+                }}
+              >
+                {label()}
+              </InlineToolRow>
+            </Show>
+            <Show when={expanded() && grouped().length > 0}>
+              <For each={grouped()}>{(part) => <ToolPart part={part} />}</For>
+            </Show>
+            <For each={pending()}>{(part) => <ToolPart part={part} />}</For>
+          </Show>
+        }
+      >
+        {(grep) => (
+          <SessionToolActivityRow
+            tool="grep"
+            detail={`"${grep().pattern}"`}
+            status={`${grep().matches} ${grep().matches === 1 ? "match" : "matches"}`}
+            width={ctx.width}
+          />
+        )}
       </Show>
     </Show>
   )
@@ -1925,7 +2085,7 @@ function CompactionMarker(props: {
   const color = () =>
     props.message.status === "failed" && !props.cancelled ? themeV2.text.feedback.error.default : themeV2.text.hint
   return (
-    <box>
+    <box paddingRight={6}>
       <box flexDirection="row" alignItems="center">
         <box border={["top"]} borderColor={color()} flexGrow={1} />
         <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1}>
@@ -2114,7 +2274,9 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
 
 function UserMessage(props: { message: SessionMessageUser }) {
   const ctx = use()
+  const data = useData()
   const files = createMemo(() => props.message.files ?? [])
+  const subagent = createMemo(() => Boolean(data.session.get(ctx.sessionID)?.parentID))
   const { themeV2, mode } = useTheme().contextual("elevated")
   const [hover, setHover] = createSignal(false)
   const dialog = useDialog()
@@ -2125,7 +2287,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
 
   return (
     <Show when={props.message.text.trim() || files().length}>
-      <box width="100%" alignItems="flex-end">
+      <box width="100%" alignItems="flex-end" marginBottom={subagent() ? 0 : 2}>
         <box
           onMouseOver={() => {
             setHover(true)
@@ -2147,7 +2309,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           paddingBottom={1}
           paddingLeft={2}
           paddingRight={2}
-          maxWidth="62%"
+          width="51.5%"
           backgroundColor={
             hover() ? themeV2.raise(themeV2.background.surface.offset) : themeV2.background.surface.offset
           }
@@ -2388,6 +2550,7 @@ function ReasoningPart(props: {
   last: boolean
   part: SessionMessageAssistantReasoning
   message: SessionMessageAssistant
+  subagent?: boolean
 }) {
   const { themeV2, syntax } = useTheme()
   const ctx = use()
@@ -2413,7 +2576,7 @@ function ReasoningPart(props: {
 
   return (
     <Show when={content()}>
-      <box paddingLeft={3} flexDirection="column" flexShrink={0}>
+      <box paddingLeft={props.subagent ? 0 : 3} flexDirection="column" flexShrink={0}>
         <box
           border={!inMinimal() || expanded() ? ["left"] : undefined}
           customBorderChars={SplitBorder.customBorderChars}
@@ -2509,14 +2672,46 @@ function ReasoningHeader(props: {
   )
 }
 
-function TextPart(props: { last: boolean; part: SessionMessageAssistantText }) {
+function TextPart(props: {
+  last: boolean
+  part: SessionMessageAssistantText
+  identity?: { label: string; subagent: boolean }
+  subagent?: boolean
+  index?: number
+}) {
   const ctx = use()
   const { themeV2, syntax } = useTheme()
   // The goal-mode completion marker is a control token for the autonomy loop, not prose.
   const text = createMemo(() => stripGoalCompletionMarker(props.part.text))
   return (
     <Show when={text()}>
-      <box paddingLeft={3} flexShrink={0}>
+      <box
+        paddingLeft={props.subagent ? (text().startsWith("$") ? 4 : 1) : 1}
+        paddingTop={props.identity?.subagent ? 1 : 0}
+        marginTop={
+          props.subagent && text().startsWith("$")
+            ? 2
+            : props.subagent && props.index === 2
+              ? 4
+              : 0
+        }
+        flexDirection="column"
+        gap={props.identity?.subagent ? 2 : props.identity ? 1 : 0}
+        flexShrink={0}
+      >
+        <Show when={props.identity}>
+          {(identity) => (
+            <text
+              fg={
+                identity().subagent
+                  ? themeV2.text.feedback.info.default
+                  : themeV2.text.feedback.success.default
+              }
+            >
+              <b>{identity().label}</b>
+            </text>
+          )}
+        </Show>
         <markdown
           syntaxStyle={syntax()}
           streaming={true}
@@ -2553,19 +2748,24 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
     get tool() {
       return props.part.name
     },
+    get structured() {
+      if (props.part.state.status === "streaming") return undefined
+      return props.part.state.structured
+    },
     get part() {
       return props.part
     },
   }
 
   const rawOutput = createMemo(
-    () => !["shell", "write", "edit", "patch", "question", "subagent", "skill"].includes(display()),
+    () => !["shell", "write", "edit", "patch", "question", "subagent", "skill", "todowrite"].includes(display()),
   )
   const presentation = createMemo(() =>
     transcriptToolPresentation({
       tool: props.part.name,
       input: props.part.state.input,
       output: toolprops.output,
+      structured: toolprops.structured,
     }),
   )
   const diffPresentation = createMemo(() => {
@@ -2581,16 +2781,24 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
     <>
       <Switch>
       <Match when={diffPresentation()}>
-        {(item) => <InlineDiff diff={item().diff} />}
+        {(item) => (
+          <InlineDiff
+            diff={item().diff}
+            path={item().path}
+            additions={item().additions}
+            deletions={item().deletions}
+          />
+        )}
       </Match>
       <Match when={commandPresentation()}>
         {(item) => {
           const result = item().result
           return (
             <InlineCommand
-              icon={"errors" in result ? "!" : "✓"}
+              icon={"errors" in result ? "!" : "ok"}
               failed={"errors" in result ? true : result.fail > 0}
               command={item().command}
+              paddingLeft={1}
               {...result}
             />
           )
@@ -2632,6 +2840,9 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
       <Match when={display() === "question"}>
         <Question {...toolprops} />
       </Match>
+      <Match when={display() === "todowrite"}>
+        <TodoWrite input={toolprops.input} />
+      </Match>
       <Match when={display() === "skill"}>
         <Skill {...toolprops} />
       </Match>
@@ -2649,6 +2860,21 @@ function ToolPart(props: { part: SessionMessageAssistantTool }) {
   )
 }
 
+function TodoWrite(props: { input: Record<string, unknown> }) {
+  const ctx = use()
+  const tasks = createMemo(() => {
+    const todos = props.input.todos
+    if (!Array.isArray(todos)) return []
+    return todos.flatMap((item) => {
+      const todo = recordValue(item)
+      const content = stringValue(todo?.content)
+      if (!content || todo?.status !== "completed") return []
+      return [{ content, status: "completed" as const }]
+    })
+  })
+  return <For each={tasks()}>{(task) => <SessionActivityRow row={{ type: "task", ...task }} width={ctx.width} />}</For>
+}
+
 type ToolProps = {
   input: Record<string, unknown>
   metadata: Record<string, unknown>
@@ -2658,14 +2884,26 @@ type ToolProps = {
 }
 
 type TranscriptToolPresentation =
-  | { type: "diff"; diff: string }
+  | { type: "diff"; diff: string; path?: string; additions?: number; deletions?: number }
   | { type: "command"; command: string; result: InlineCommandResult }
 
 export function transcriptToolPresentation(input: {
   tool: string
   input: unknown
   output?: string
+  structured?: unknown
 }): TranscriptToolPresentation | undefined {
+  const files = recordValue(input.structured)?.files
+  const file = Array.isArray(files) ? files.find((item): item is Record<string, unknown> => Boolean(recordValue(item))) : undefined
+  const patch = stringValue(file?.patch)
+  if (patch && parseInlineDiff(patch))
+    return {
+      type: "diff",
+      diff: patch,
+      path: stringValue(file?.file),
+      additions: finiteNumber(file?.additions),
+      deletions: finiteNumber(file?.deletions),
+    }
   if (input.output && parseInlineDiff(input.output)) return { type: "diff", diff: input.output }
   if (toolDisplay(input.tool) !== "shell") return undefined
   const command = stringValue(recordValue(input.input)?.command)
@@ -2798,6 +3036,7 @@ function SkillContent(props: { content: unknown }) {
 
 function InlineTool(props: {
   icon: string
+  iconWidth?: number
   iconColor?: RGBA
   color?: RGBA
   completeColor?: RGBA
@@ -2876,6 +3115,8 @@ function InlineTool(props: {
 
 export function InlineToolRow(props: {
   icon: string
+  // Subagent rows suppress the icon column entirely, so the width must be overridable to 0.
+  iconWidth?: number
   iconColor?: RGBA
   color?: RGBA
   errorColor?: RGBA
@@ -2892,9 +3133,10 @@ export function InlineToolRow(props: {
   onMouseOver?: () => void
   onMouseOut?: () => void
   onMouseUp?: () => void
+  paddingLeft?: number
 }) {
   return (
-    <box paddingLeft={3} onMouseOver={props.onMouseOver} onMouseOut={props.onMouseOut} onMouseUp={props.onMouseUp}>
+    <box paddingLeft={props.paddingLeft ?? 3} onMouseOver={props.onMouseOver} onMouseOut={props.onMouseOut} onMouseUp={props.onMouseUp}>
       <Switch>
         <Match when={props.spinner}>
           <Show when={props.status} fallback={<Spinner color={props.color} children={props.children} />}>
@@ -2912,7 +3154,7 @@ export function InlineToolRow(props: {
           <Show fallback={<Spinner color={props.color}>{props.pending}</Spinner>} when={props.complete || props.failed}>
             <box flexDirection="row">
               <text
-                width={INLINE_TOOL_ICON_WIDTH}
+                width={props.iconWidth ?? INLINE_TOOL_ICON_WIDTH}
                 fg={props.failed ? props.errorColor : (props.iconColor ?? props.color)}
                 attributes={props.denied ? TextAttributes.STRIKETHROUGH : undefined}
               >
@@ -3641,6 +3883,7 @@ const toolDisplays = new Set([
   "execute",
   "patch",
   "question",
+  "todowrite",
   "skill",
 ])
 

@@ -4,6 +4,10 @@ export function isActiveSubagent(state: SessionOrchestrationTask["state"]) {
   return state === "starting" || state === "running" || state === "waiting" || state === "cancelling"
 }
 
+export function activeSubagentCount(tasks: ReadonlyArray<Pick<SessionOrchestrationTask, "state">>) {
+  return tasks.filter((task) => isActiveSubagent(task.state)).length
+}
+
 export function activeSubagentSessionIDs(
   tasks: ReadonlyArray<Pick<SessionOrchestrationTask, "sessionID" | "state">>,
   family: ReadonlyArray<string>,

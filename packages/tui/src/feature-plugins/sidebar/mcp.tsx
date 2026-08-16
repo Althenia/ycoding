@@ -9,16 +9,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
   const on = createMemo(() => list().filter((item) => item.status.status === "connected").length)
-  const bad = createMemo(
-    () =>
-      list().filter(
-        (item) =>
-          item.status.status === "failed" ||
-          item.status.status === "needs_auth" ||
-          item.status.status === "needs_client_registration",
-      ).length,
-  )
-  const summary = createMemo(() => `${on()} active${bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""}`)
+  const summary = createMemo(() => String(on()))
 
   const color = (tone: McpTone) => {
     if (tone === "success") return themeV2.text.feedback.success.default

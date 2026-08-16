@@ -20,6 +20,9 @@ export type Source = typeof Source.Type
 
 export const Invalidation = Schema.Literals([
   "first-request",
+  "compaction-reset",
+  "model-switched",
+  "model-variant-switched",
   "stable-hit",
   "prefix-changed",
   "system-prefix-changed",

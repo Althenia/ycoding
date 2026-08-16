@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test"
+import { Config } from "@ycoding-ai/core/config"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { localGoal, localTitle, selectHelperModel } from "@ycoding-ai/core/session/helper-policy"
+import { localGoal, localTitle, selectHelperModel, settings } from "@ycoding-ai/core/session/helper-policy"
+import { Schema } from "effect"
 
 const ref = (providerID: string, id: string, variant?: string) =>
   ModelV2.Ref.make({
@@ -23,13 +25,32 @@ test("local goal preserves meaning while normalizing whitespace", () => {
   expect(localGoal("   ")).toBe("")
 })
 
-test("helper model precedence is agent override, configured helper, then session model", () => {
+test("helper model precedence is agent override, role model, then session model", () => {
   const agent = ref("anthropic", "claude-sonnet", "high")
   const helper = ref("openai", "gpt-5-mini", "low")
   const session = ref("openrouter", "openai/gpt-5.6", "medium")
 
-  expect(selectHelperModel({ helperModel: helper, sessionModel: session, agentModel: agent })).toEqual(agent)
-  expect(selectHelperModel({ helperModel: helper, sessionModel: session })).toEqual(helper)
+  expect(selectHelperModel({ roleModel: helper, sessionModel: session, agentModel: agent })).toEqual(agent)
+  expect(selectHelperModel({ roleModel: helper, sessionModel: session })).toEqual(helper)
+  expect(selectHelperModel({ roleModel: "session", sessionModel: session })).toEqual(session)
   expect(selectHelperModel({ sessionModel: session })).toEqual(session)
   expect(selectHelperModel({})).toBeUndefined()
+})
+
+test("helper policy reads independent role models", () => {
+  const info = Schema.decodeUnknownSync(Config.Info)({
+    efficiency: {
+      helper_models: {
+        title: "openai/gpt-5-mini#low",
+        goal: "session",
+        compaction: "anthropic/claude-opus-5",
+      },
+    },
+  })
+
+  expect(settings([new Config.Document({ type: "document", info })]).models).toEqual({
+    title: ref("openai", "gpt-5-mini", "low"),
+    goal: "session",
+    compaction: ref("anthropic", "claude-opus-5"),
+  })
 })

@@ -47,18 +47,42 @@ export function SidebarCacheContent(props: {
   })
   const subagentCost = createMemo(() => {
     const value = props.subagentCost?.()
-    return value === undefined ? undefined : { value }
+    return value === undefined || value === 0 ? undefined : { value }
+  })
+  const hasCacheDetails = createMemo(() => {
+    const value = diagnostics()
+    if (!value) return false
+    return Boolean(
+      cachePrefixLabel(value.requests?.latestInvalidation) || value.cache.readReported || value.cache.writeReported,
+    )
   })
 
   return (
     <RailSection section="context" title="CONTEXT" summary={summary()}>
-      <Show when={input()}>{(input) => <RailRow label="Input" value={input().value.toLocaleString()} />}</Show>
-      <Show when={output()}>{(output) => <RailRow label="Output" value={output().value.toLocaleString()} />}</Show>
+      <Show when={input()}>
+        {(input) => (
+          <>
+            <RailRow label="Input" value={input().value.toLocaleString()} />
+            <box height={1} flexShrink={0} />
+          </>
+        )}
+      </Show>
+      <Show when={output()}>
+        {(output) => (
+          <>
+            <RailRow label="Output" value={output().value.toLocaleString()} />
+            <box height={1} flexShrink={0} />
+          </>
+        )}
+      </Show>
       <Show when={diagnostics()}>
         {(value) => (
           <>
             <Show when={value().context.percent !== undefined}>
               <RailRow label="Used" value={`${value().context.percent}%`} />
+            </Show>
+            <Show when={input() || output()}>
+              <box height={1} flexShrink={0} />
             </Show>
           </>
         )}
@@ -67,10 +91,19 @@ export function SidebarCacheContent(props: {
       <Show when={subagentCost()}>
         {(subagentCost) => <RailRow label="· subagents" value={money.format(subagentCost().value)} />}
       </Show>
-      <RailSubheading>CACHE</RailSubheading>
+      <Show when={hasCacheDetails()}>
+        <>
+          <box height={3} flexShrink={0} />
+          <RailSubheading>CACHE</RailSubheading>
+          <box height={1} flexShrink={0} />
+        </>
+      </Show>
       <Show when={diagnostics()}>
         {(value) => (
           <>
+            <Show when={!hasCacheDetails()}>
+              <box height={1} flexShrink={0} />
+            </Show>
             <Show when={cacheHitPercent(value().cache.hitRatio) !== undefined}>
               <RailRow
                 label="Hit ratio"
@@ -80,11 +113,17 @@ export function SidebarCacheContent(props: {
             </Show>
             <Show when={cachePrefixLabel(value().requests?.latestInvalidation)}>
               {(prefix) => (
-                <RailRow label="Prefix" value={prefix()} valueColor={themeV2.text.feedback.success.default} />
+                <>
+                  <RailRow label="Prefix" value={prefix()} valueColor={themeV2.text.feedback.success.default} />
+                  <box height={1} flexShrink={0} />
+                </>
               )}
             </Show>
             <Show when={value().cache.readReported}>
-              <RailRow label="Reads" value={value().tokens.cacheRead.toLocaleString()} />
+              <>
+                <RailRow label="Reads" value={value().tokens.cacheRead.toLocaleString()} />
+                <box height={1} flexShrink={0} />
+              </>
             </Show>
             <Show when={value().cache.writeReported}>
               <RailRow label="Writes" value={value().tokens.cacheWrite.toLocaleString()} />
@@ -92,6 +131,7 @@ export function SidebarCacheContent(props: {
           </>
         )}
       </Show>
+      <box height={2} flexShrink={0} />
     </RailSection>
   )
 }

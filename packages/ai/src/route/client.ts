@@ -252,6 +252,165 @@ const requireTerminalEvent = (route: string) => (events: Stream.Stream<LLMEvent,
     )
   })
 
+const TEXTUAL_TOOL_CALLS_BEGIN = "<｜ tool▁calls▁begin｜ >"
+const TEXTUAL_TOOL_CALLS_END = "<｜ tool▁calls▁end｜ >"
+const TEXTUAL_TOOL_CALL_BEGIN = "<｜ tool▁call▁begin｜ >"
+const TEXTUAL_TOOL_CALL_END = "<｜ tool▁call▁end｜ >"
+const TEXTUAL_TOOL_SEPARATOR = "<｜ tool▁sep｜ >"
+
+interface TextualToolCall {
+  readonly name: string
+  readonly input: string
+}
+
+type TextualToolSegment =
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "tool"; readonly id: string; readonly name: string; readonly input: string }
+  | { readonly type: "invalid" }
+
+interface TextualToolState {
+  readonly buffer: string
+  readonly call?: string
+  readonly nextID: number
+}
+
+const textualToolCallPrefix = (text: string) => {
+  for (let length = Math.min(text.length, TEXTUAL_TOOL_CALLS_BEGIN.length - 1); length > 0; length--) {
+    const suffix = text.slice(-length)
+    if (TEXTUAL_TOOL_CALLS_BEGIN.startsWith(suffix)) return suffix
+  }
+  return ""
+}
+
+const textualToolCalls = (text: string): ReadonlyArray<TextualToolCall> | undefined => {
+  const calls: TextualToolCall[] = []
+  let remaining = text
+  while (remaining.trim().length > 0) {
+    remaining = remaining.trimStart()
+    if (!remaining.startsWith(TEXTUAL_TOOL_CALL_BEGIN)) return
+    const end = remaining.indexOf(TEXTUAL_TOOL_CALL_END)
+    if (end < 0) return
+    const call = remaining.slice(TEXTUAL_TOOL_CALL_BEGIN.length, end)
+    const separator = call.indexOf(TEXTUAL_TOOL_SEPARATOR)
+    if (separator < 0 || call.slice(0, separator).trim() !== "function") return
+    const body = call.slice(separator + TEXTUAL_TOOL_SEPARATOR.length).trim()
+    const newline = body.indexOf("\n")
+    if (newline < 0) return
+    const name = body.slice(0, newline).trim()
+    if (!name) return
+    calls.push({
+      name,
+      input: body
+        .slice(newline + 1)
+        .trim()
+        .replace(/(?:\r?\n)?```(?:json)?\s*$/i, "")
+        .trim(),
+    })
+    remaining = remaining.slice(end + TEXTUAL_TOOL_CALL_END.length)
+  }
+  return calls.length > 0 ? calls : undefined
+}
+
+const consumeTextualToolCalls = (state: TextualToolState, text: string) => {
+  const segments: TextualToolSegment[] = []
+  let buffer = state.buffer + text
+  let call = state.call
+  let nextID = state.nextID
+  while (buffer.length > 0) {
+    if (call !== undefined) {
+      const end = buffer.indexOf(TEXTUAL_TOOL_CALLS_END)
+      if (end < 0)
+        return {
+          state: { buffer: "", call: call + buffer, nextID },
+          segments,
+        }
+      const parsed = textualToolCalls(call + buffer.slice(0, end))
+      if (parsed === undefined) segments.push({ type: "invalid" })
+      else
+        segments.push(
+          ...parsed.map((item) => ({ type: "tool" as const, id: `textual-tool-${nextID++}`, ...item })),
+        )
+      call = undefined
+      buffer = buffer.slice(end + TEXTUAL_TOOL_CALLS_END.length)
+      continue
+    }
+
+    const start = buffer.indexOf(TEXTUAL_TOOL_CALLS_BEGIN)
+    if (start < 0) {
+      const prefix = textualToolCallPrefix(buffer)
+      const visible = buffer.slice(0, buffer.length - prefix.length)
+      if (visible) segments.push({ type: "text", text: visible })
+      return {
+        state: { buffer: prefix, call, nextID },
+        segments,
+      }
+    }
+    const visible = buffer.slice(0, start)
+    if (visible) segments.push({ type: "text", text: visible })
+    call = ""
+    buffer = buffer.slice(start + TEXTUAL_TOOL_CALLS_BEGIN.length)
+  }
+  return { state: { buffer, call, nextID }, segments }
+}
+
+const textualToolEvents = (
+  route: string,
+  event: Extract<LLMEvent, { readonly type: "text-delta" }>,
+  segments: TextualToolSegment[],
+): Effect.Effect<ReadonlyArray<LLMEvent>, LLMError> =>
+  Effect.forEach(segments, (segment): Effect.Effect<LLMEvent, LLMError> => {
+    if (segment.type === "text")
+      return Effect.succeed(
+        LLMEvent.textDelta({ id: event.id, text: segment.text, providerMetadata: event.providerMetadata }),
+      )
+    if (segment.type === "invalid")
+      return Effect.fail(ProviderShared.eventError(route, "Provider emitted a malformed textual tool call"))
+    return ProviderShared.parseToolInput("textual tool call", segment.name, segment.input).pipe(
+      Effect.mapError(() =>
+        ProviderShared.eventError(route, `Provider emitted invalid JSON for textual tool call ${segment.name}`),
+      ),
+      Effect.map((input) =>
+        LLMEvent.toolCall({
+          id: segment.id,
+          name: segment.name,
+          input,
+          providerMetadata: event.providerMetadata,
+        }),
+      ),
+    )
+  })
+
+const normalizeTextualToolCalls = (route: string) => (events: Stream.Stream<LLMEvent, LLMError>) =>
+  Stream.suspend(() =>
+    events.pipe(
+      Stream.mapAccumEffect((): TextualToolState => ({ buffer: "", call: undefined, nextID: 0 }), (state, event) => {
+        if (LLMEvent.is.textDelta(event)) {
+          const consumed = consumeTextualToolCalls(state, event.text)
+          return textualToolEvents(route, event, consumed.segments).pipe(
+            Effect.map((segments) => [consumed.state, segments] as const),
+          )
+        }
+        if (LLMEvent.is.textEnd(event)) {
+          if (state.call !== undefined)
+            return Effect.fail(ProviderShared.eventError(route, "Provider ended a textual tool call without closing it"))
+          const buffered = state.buffer
+          return Effect.succeed([
+            { ...state, buffer: "" },
+            [
+              ...(buffered
+                ? [LLMEvent.textDelta({ id: event.id, text: buffered, providerMetadata: event.providerMetadata })]
+                : []),
+              event,
+            ],
+          ] as const)
+        }
+        if (LLMEvent.is.finish(event) && state.call !== undefined)
+          return Effect.fail(ProviderShared.eventError(route, "Provider ended a textual tool call without closing it"))
+        return Effect.succeed([state, [event]] as const)
+      }),
+    ),
+  )
+
 function makeFromTransport<Body, Prepared, Frame, Event, State>(
   input: MakeTransportInput<Body, Prepared, Frame, Event, State>,
 ): Route<Body, Prepared> {
@@ -407,7 +566,9 @@ const streamRequestWith = (runtime: TransportRuntime) => (request: LLMRequest) =
   Stream.unwrap(
     Effect.gen(function* () {
       const compiled = yield* compile(request)
-      return compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime)
+      return normalizeTextualToolCalls(compiled.route.id)(
+        compiled.route.streamPrepared(compiled.prepared, compiled.request, runtime),
+      )
     }),
   )
 

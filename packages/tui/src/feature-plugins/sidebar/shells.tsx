@@ -1,13 +1,18 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { createEffect, createMemo, For, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { RailRow, RailSection } from "../../routes/session/rail-section"
+import { RailRow, RailSection, useRail } from "../../routes/session/rail-section"
 import { groupSessionShells, type SessionShellGroup } from "../../util/session"
 
 type ShellRailGroup = Pick<SessionShellGroup, "owner"> & { shells: ReadonlyArray<{ id?: string; status?: string }> }
 
-export function ShellRailContent(props: { groups: ReadonlyArray<ShellRailGroup>; terminalCount: number }) {
+export function ShellRailContent(props: {
+  groups: ReadonlyArray<ShellRailGroup>
+  terminalCount: number
+  shellSurface?: () => boolean
+}) {
   const { themeV2 } = useTheme()
+  const rail = useRail()
   const running = createMemo(() =>
     props.groups.reduce(
       (total, group) => total + group.shells.filter((shell) => shell.status === undefined || shell.status === "running").length,
@@ -20,40 +25,46 @@ export function ShellRailContent(props: { groups: ReadonlyArray<ShellRailGroup>;
       .reduce((total, group) => total + group.shells.length, 0),
   )
   const summary = createMemo(() =>
-    [
-      `${running()} running`,
-      ...(props.terminalCount > 0 ? [`${props.terminalCount} terminal`] : []),
-    ].join(", "),
+    rail?.expanded("shells") && !props.shellSurface?.() ? String(running()) : `${running()} running`,
   )
+  const label = (value: string) => (rail?.allExpanded() ? value.split(" · ")[0] ?? value : value)
 
   return (
     <Show when={running() > 0 || props.terminalCount > 0}>
       <RailSection section="shells" title="SHELLS" summary={summary()} attention={orphaned() > 0}>
         <For each={props.groups}>
-          {(group) => (
-            <RailRow
-              label={
-                group.owner.label === "Unknown session"
-                  ? `${group.owner.label} ${group.shells.length}`
-                  : group.owner.label
-              }
-              value={group.owner.label === "Unknown session" ? "orphaned" : String(group.shells.length)}
-              valueColor={
-                group.owner.label === "Unknown session"
-                  ? themeV2.text.feedback.warning.default
-                  : group.owner.label === "Main chat"
-                    ? themeV2.text.default
-                    : themeV2.text.feedback.info.default
-              }
-            />
+          {(group, index) => (
+            <>
+              <RailRow
+                label={
+                  group.owner.label === "Unknown session"
+                    ? `${group.owner.label} ${group.shells.length}`
+                    : label(group.owner.label)
+                }
+                value={group.owner.label === "Unknown session" ? "orphaned" : String(group.shells.length)}
+                valueColor={
+                  group.owner.label === "Unknown session"
+                    ? themeV2.text.feedback.warning.default
+                    : group.owner.label === "Main chat"
+                      ? themeV2.text.default
+                      : themeV2.text.feedback.info.default
+                }
+              />
+              <Show when={rail?.allExpanded() && index() < props.groups.length - 1}>
+                <box height={1} flexShrink={0} />
+              </Show>
+            </>
           )}
         </For>
+        <Show when={rail?.allExpanded()}>
+          <box height={1} flexShrink={0} />
+        </Show>
       </RailSection>
     </Show>
   )
 }
 
-function View(props: { context: Plugin.Context; sessionID: string }) {
+function View(props: { context: Plugin.Context; sessionID: string; shellSurface?: () => boolean }) {
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const shells = createMemo(() => props.context.data.shell.list(session()?.location))
   const groups = createMemo(() => {
@@ -76,20 +87,20 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
 
   createEffect(() => void props.context.data.shell.sync(session()?.location))
 
-  return <ShellRailContent groups={groups()} terminalCount={terminalCount()} />
+  return <ShellRailContent groups={groups()} terminalCount={terminalCount()} shellSurface={props.shellSurface} />
 }
 
 export default Plugin.define({
   id: "internal:sidebar-shells",
   setup(context) {
     context.ui.slot("sidebar.content", (props) => (
-      <Show when={!props.shellSurface}>
-        <View context={context} sessionID={props.sessionID} />
+      <Show when={!props.shellSurface?.()}>
+        <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />
       </Show>
     ))
     context.ui.slot("sidebar.shells", (props) => (
-      <Show when={props.shellSurface}>
-        <View context={context} sessionID={props.sessionID} />
+      <Show when={props.shellSurface?.()}>
+        <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />
       </Show>
     ))
   },

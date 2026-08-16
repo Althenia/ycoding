@@ -28,12 +28,13 @@ export async function renderScreen(input: {
   const setup = await createTestRenderer({ width: input.width, height: input.height, useThread: false })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
-  if (input.pluginStatus) {
-    const runtime = await import("../../src/plugin/runtime")
-    const pluginRuntime = runtime.createPluginRuntime()
-    pluginRuntime.update({ status: input.pluginStatus })
-    mock.module("../../src/plugin/runtime", () => ({ ...runtime, createPluginRuntime: () => pluginRuntime }))
-  }
+  // A module mock persists for the whole Bun process, so installing it only when a caller asks for
+  // plugin status leaks that status into every file loaded afterwards and makes optional rail
+  // sections appear where later tests assert their absence. Always install a freshly seeded runtime.
+  const runtime = await import("../../src/plugin/runtime")
+  const pluginRuntime = runtime.createPluginRuntime()
+  pluginRuntime.update({ status: input.pluginStatus ?? [] })
+  mock.module("../../src/plugin/runtime", () => ({ ...runtime, createPluginRuntime: () => pluginRuntime }))
 
   const events = createEventStream()
   const calls = createFetch(input.route, events)
