@@ -15,24 +15,22 @@ export const profile = OpenAICompatibleProfiles.profiles.openrouter
 export const id = ProviderID.make(profile.provider)
 const ADAPTER = "openrouter-responses"
 
-export interface OpenRouterOptions {
+export interface OpenRouterResponsesOptions {
   readonly [key: string]: unknown
   readonly usage?: boolean | Record<string, unknown>
   readonly reasoning?: Record<string, unknown>
   readonly promptCacheKey?: string
   readonly sessionID?: string
-  readonly prompt_cache_key?: string
-  readonly session_id?: string
 }
 
-export type OpenRouterProviderOptionsInput = ProviderOptions & {
-  readonly openrouter?: OpenRouterOptions
+export type OpenRouterResponsesProviderOptionsInput = ProviderOptions & {
+  readonly openrouter?: OpenRouterResponsesOptions
 }
 
 export type ModelOptions = Omit<RouteDefaultsInput, "providerOptions"> &
   ProviderAuthOption<"optional"> & {
     readonly baseURL?: string
-    readonly providerOptions?: OpenRouterProviderOptionsInput
+    readonly providerOptions?: OpenRouterResponsesProviderOptionsInput
   }
 
 const OpenRouterResponsesBodyBase = Schema.Struct({
@@ -62,7 +60,7 @@ const OpenRouterResponsesBodyBase = Schema.Struct({
 const OpenRouterResponsesBody = Schema.StructWithRest(OpenRouterResponsesBodyBase, [
   Schema.Record(Schema.String, Schema.Any),
 ])
-export type OpenRouterBody = Schema.Schema.Type<typeof OpenRouterResponsesBody>
+export type OpenRouterResponsesBody = Schema.Schema.Type<typeof OpenRouterResponsesBody>
 
 const bodyOptions = (input: unknown) => {
   const openrouter = isRecord(input) ? input : {}
@@ -91,7 +89,7 @@ const bodyOptions = (input: unknown) => {
 }
 
 export const protocol: any = Protocol.make({
-  id: ADAPTER,
+  id: "openrouter-responses",
   body: {
     schema: OpenRouterResponsesBody as any,
     from: (request: LLMRequest) =>
@@ -108,8 +106,10 @@ export const protocol: any = Protocol.make({
           (typeof (rawOpenai as Record<string, unknown>).previous_response_id === "string" ? ((rawOpenai as Record<string, unknown>).previous_response_id as string) : undefined) ??
           (typeof rawOpenrouter.previousResponseId === "string" ? (rawOpenrouter.previousResponseId as string) : undefined) ??
           (typeof (rawOpenrouter as Record<string, unknown>).previous_response_id === "string" ? ((rawOpenrouter as Record<string, unknown>).previous_response_id as string) : undefined)
+
         if (store === true) return yield* ProviderShared.invalidRequest("OpenRouter Responses is stateless: store:true is not supported")
         if (previousResponseId !== undefined) return yield* ProviderShared.invalidRequest("OpenRouter Responses is stateless: previous_response_id is not supported")
+
         const promptCacheKey =
           typeof rawOpenrouter.promptCacheKey === "string"
             ? (rawOpenrouter.promptCacheKey as string)
@@ -130,6 +130,7 @@ export const protocol: any = Protocol.make({
                 : typeof (rawOpenai as Record<string, unknown>).session_id === "string"
                   ? ((rawOpenai as Record<string, unknown>).session_id as string)
                   : undefined
+
         const sanitizedProviderOptions: Record<string, unknown> = {
           ...request.providerOptions,
           openai: {
@@ -149,9 +150,11 @@ export const protocol: any = Protocol.make({
             previous_response_id: undefined,
           },
         }
+
         const sanitized = LLMRequest.update(request, {
           providerOptions: sanitizedProviderOptions as typeof request.providerOptions,
         })
+
         const body = (yield* OpenAIResponses.protocol.body.from(sanitized)) as unknown as Record<string, unknown>
         const extras = bodyOptions(request.providerOptions?.openrouter)
         const promptExtra = promptCacheKey && !body.prompt_cache_key ? { prompt_cache_key: promptCacheKey } : {}
@@ -164,7 +167,7 @@ export const protocol: any = Protocol.make({
           ...extras,
           store: undefined,
           previous_response_id: undefined,
-        } as unknown as OpenRouterBody
+        } as unknown as OpenRouterResponsesBody
       }),
   },
   stream: OpenAIResponses.protocol.stream as any,
@@ -190,13 +193,15 @@ const configuredRoute = (input: ModelOptions) => {
 }
 
 export const configure = (input: ModelOptions = {}) => {
-  const route = configuredRoute(input)
+  const r = configuredRoute(input)
   return {
     id,
-    model: (modelID: string | ModelID) => route.model({ id: modelID }),
+    model: (modelID: string | ModelID) => r.model({ id: modelID }),
+    responses: (modelID: string | ModelID) => r.model({ id: modelID }),
     configure,
   }
 }
 
 export const provider = configure()
 export const model = provider.model
+export const responses = provider.responses

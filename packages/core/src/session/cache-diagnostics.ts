@@ -29,6 +29,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "ai-sdk:@ai-sdk/anthropic": "anthropic-cache-control",
   "ai-sdk:@ai-sdk/google-vertex/anthropic": "anthropic-cache-control",
   openrouter: "openrouter-cache-control",
+  "openrouter-responses": "openrouter-cache-control",
   "ai-sdk:@openrouter/ai-sdk-provider": "openrouter-cache-control",
   "bedrock-converse": "bedrock-cache-point",
   "ai-sdk:@ai-sdk/amazon-bedrock": "bedrock-cache-point",

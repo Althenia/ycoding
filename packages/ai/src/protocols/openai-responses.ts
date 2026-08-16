@@ -755,9 +755,15 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
   // With store:false, OpenAI only accepts previous reasoning items when the
   // complete item has encrypted state. Summary blocks for one item may carry
   // that state only on the last block, so filter after they have been joined.
+  // Keep any reasoning that carries visible text even when encrypted state is
+  // absent so the thought detail remains replayable for the next turn.
   return store === false
     ? input.filter(
-        (item) => !("type" in item) || item.type !== "reasoning" || typeof item.encrypted_content === "string",
+        (item) =>
+          !("type" in item) ||
+          item.type !== "reasoning" ||
+          typeof item.encrypted_content === "string" ||
+          (Array.isArray(item.summary) && item.summary.some((part) => part.text.trim().length > 0)),
       )
     : input
 })
@@ -1126,7 +1132,7 @@ const onReasoningSummaryPartAdded = (state: ParserState, event: OpenAIResponsesE
 
   const events: LLMEvent[] = []
   const closed = Object.entries(item.summaryParts)
-    .filter((entry) => entry[1] === "can-conclude")
+    .filter((entry) => entry[1] === "active" || entry[1] === "can-conclude")
     .reduce(
       (lifecycle, entry) =>
         Lifecycle.reasoningEnd(
@@ -1153,7 +1159,9 @@ const onReasoningSummaryPartAdded = (state: ParserState, event: OpenAIResponsesE
           summaryParts: {
             ...Object.fromEntries(
               Object.entries(item.summaryParts).map((entry) =>
-                entry[1] === "can-conclude" ? [entry[0], "concluded" as const] : entry,
+                entry[1] === "active" || entry[1] === "can-conclude"
+                  ? [entry[0], "concluded" as const]
+                  : entry,
               ),
             ),
             [event.summary_index]: "active",
@@ -1173,22 +1181,19 @@ const onReasoningSummaryPartDone = (state: ParserState, event: OpenAIResponsesEv
   return [
     {
       ...state,
-      lifecycle:
-        state.store !== false
-          ? Lifecycle.reasoningEnd(
-              state.lifecycle,
-              events,
-              `${event.item_id}:${event.summary_index}`,
-              openaiMetadata({ itemId: event.item_id }),
-            )
-          : state.lifecycle,
+      lifecycle: Lifecycle.reasoningEnd(
+        state.lifecycle,
+        events,
+        `${event.item_id}:${event.summary_index}`,
+        openaiMetadata({ itemId: event.item_id }),
+      ),
       reasoningItems: {
         ...state.reasoningItems,
         [event.item_id]: {
           ...item,
           summaryParts: {
             ...item.summaryParts,
-            [event.summary_index]: state.store !== false ? "concluded" : "can-conclude",
+            [event.summary_index]: "concluded",
           },
         },
       },

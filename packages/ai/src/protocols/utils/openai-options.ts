@@ -262,16 +262,24 @@ export const supportsExtendedPromptCacheRetention = (modelID: string): boolean =
 
 export type PublicOpenAIPromptCacheCapability = "key-only" | "legacy" | "gpt-5.6"
 
-const PUBLIC_OPENAI_CACHE_ROUTES = new Set(["openai-chat", "openai-responses", "openai-responses-websocket"])
+const PUBLIC_OPENAI_CACHE_ROUTES = new Set([
+  "openai-chat",
+  "openai-responses",
+  "openai-responses-websocket",
+  "openrouter",
+  "openrouter-responses",
+  "openai-compatible-chat",
+  "openai-compatible-responses",
+])
 
 export const supportsPromptCacheBreakpoints = (routeID: string, modelID: string): boolean =>
-  PUBLIC_OPENAI_CACHE_ROUTES.has(routeID) && isGpt56OrLater(modelID)
+  (PUBLIC_OPENAI_CACHE_ROUTES.has(routeID) || routeID.includes("openrouter")) && isGpt56OrLater(modelID)
 
 export const publicPromptCacheCapability = (
   routeID: string,
   modelID: string,
 ): PublicOpenAIPromptCacheCapability => {
-  if (!PUBLIC_OPENAI_CACHE_ROUTES.has(routeID)) return "key-only"
+  if (!PUBLIC_OPENAI_CACHE_ROUTES.has(routeID) && !routeID.includes("openrouter")) return "key-only"
   return isGpt56OrLater(modelID) ? "gpt-5.6" : "legacy"
 }
 

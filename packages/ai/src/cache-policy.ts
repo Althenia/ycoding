@@ -53,6 +53,8 @@ const INLINE_HINT_ROUTES = new Set([
   "ai-sdk:@ai-sdk/google-vertex/anthropic",
   "ai-sdk:@openrouter/ai-sdk-provider",
   "ai-sdk:@ai-sdk/amazon-bedrock",
+  "openrouter-responses",
+  "ai-sdk:@openrouter/ai-sdk-provider:responses",
 ])
 const INLINE_HINT_CAP = 4
 const EXTENDED_TTL_SECONDS = 3600

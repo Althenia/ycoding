@@ -66,6 +66,7 @@ const PROMPT_CACHE_KEY_ROUTES = new Set([
   "openai-compatible-responses",
   "ai-sdk:@openrouter/ai-sdk-provider",
   "openrouter",
+  "openrouter-responses",
 ])
 
 const supportsPromptCacheKey = (routeID: string | undefined): boolean => {
@@ -182,10 +183,18 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
     sessionID: input.sessionID,
     providerID: input.providerID,
   })
-  const openrouter =
-    input.routeID === "ai-sdk:@openrouter/ai-sdk-provider"
-      ? { prompt_cache_key: promptCacheKey, session_id: providerSessionID }
-      : { promptCacheKey, sessionID: providerSessionID }
+  const isOpenRouter =
+    input.routeID === "ai-sdk:@openrouter/ai-sdk-provider" ||
+    input.routeID === "openrouter-responses" ||
+    input.routeID === "openrouter"
+  const openrouter = isOpenRouter
+    ? {
+        prompt_cache_key: promptCacheKey,
+        session_id: providerSessionID,
+        promptCacheKey,
+        sessionID: providerSessionID,
+      }
+    : { promptCacheKey, sessionID: providerSessionID }
   const openaiCacheCapability = OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID)
   const breakpointOpenAI =
     OpenAIOptions.supportsPromptCacheBreakpoints(input.routeID, input.apiModelID) &&

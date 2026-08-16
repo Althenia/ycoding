@@ -270,8 +270,14 @@ const lowerMedia = Effect.fn("OpenAIChat.lowerMedia")(function* (part: MediaPart
   return { type: "image_url" as const, image_url: { url: media.dataUrl } }
 })
 
-const openAICompatibleReasoningContent = (native: unknown) =>
-  isRecord(native) && typeof native.reasoning_content === "string" ? native.reasoning_content : undefined
+const openAICompatibleReasoningContent = (native: unknown) => {
+  if (!isRecord(native)) return undefined
+  if (typeof native.reasoning_content === "string") return native.reasoning_content
+  if (typeof native.reasoning === "string") return native.reasoning
+  if (typeof native.thought === "string") return native.thought
+  if (typeof native.thinking === "string") return native.thinking
+  return undefined
+}
 
 const reasoningField = (part: ReasoningPart) => {
   const field = part.providerMetadata?.openai?.reasoningField
@@ -586,9 +592,10 @@ const reasoningDelta = (delta: Schema.Schema.Type<typeof OpenAIChatDelta> | null
 const detailText = (details: ReadonlyArray<unknown>) => {
   const text = details.flatMap((detail) => {
     if (!isRecord(detail)) return []
-    if (detail.type === "reasoning.text" && typeof detail.text === "string" && detail.text) return [detail.text]
-    if (detail.type === "reasoning.summary" && typeof detail.summary === "string" && detail.summary)
-      return [detail.summary]
+    if (typeof detail.text === "string" && detail.text) return [detail.text]
+    if (typeof detail.summary === "string" && detail.summary) return [detail.summary]
+    if (typeof detail.thought === "string" && detail.thought) return [detail.thought]
+    if (typeof detail.thinking === "string" && detail.thinking) return [detail.thinking]
     return []
   })
   if (text.length > 0) return text.join("")
