@@ -3,16 +3,22 @@ import { createEffect, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useData, type DataMessageHistoryPlaceholder } from "../../context/data"
 import { useClient } from "../../context/client"
+import { isActiveSubagent } from "../../util/subagent"
 
 export type PartRef = {
   messageID: string
   partID: string
 }
 
+export type SessionHistoryRow = { type: "history"; placeholders: DataMessageHistoryPlaceholder[] }
+
 export type SessionRow =
-  | { type: "history"; placeholder: DataMessageHistoryPlaceholder }
+  | SessionHistoryRow
   | { type: "message"; messageID: string }
   | { type: "compaction-queued"; inputID: string }
+  | { type: "guardrail"; requestID: string; reason: string }
+  | { type: "subagent"; sessionID: string; agent: string; created: number }
+  | { type: "task"; content: string; status: "completed" | "in_progress" }
   | { type: "part"; ref: PartRef }
   | {
       type: "group"
@@ -28,6 +34,22 @@ export type SessionRow =
       completed: boolean
     }
   | { type: "assistant-footer"; messageID: string }
+
+export function groupHistoryRows(placeholders: DataMessageHistoryPlaceholder[]) {
+  return placeholders.reduce<SessionHistoryRow[]>((rows, placeholder) => {
+    const previous = rows.at(-1)
+    if (placeholder.state === "collapsed" && previous?.placeholders.every((item) => item.state === "collapsed")) {
+      previous.placeholders.push(placeholder)
+      return rows
+    }
+    rows.push({ type: "history", placeholders: [placeholder] })
+    return rows
+  }, [])
+}
+
+export function historyTogglePlaceholder(row: SessionHistoryRow) {
+  return row.placeholders.find((placeholder) => placeholder.state !== "loading")
+}
 
 export async function resolveMessageJump(input: {
   resident: () => boolean
@@ -46,7 +68,7 @@ export async function resolveMessageJump(input: {
   return "loaded" as const
 }
 
-export function createSessionRows(sessionID: Accessor<string>) {
+export function createSessionRows(sessionID: Accessor<string>, activity = () => true) {
   const data = useData()
   const client = useClient()
   const [rows, setRows] = createStore<SessionRow[]>([])
@@ -57,11 +79,14 @@ export function createSessionRows(sessionID: Accessor<string>) {
     const inputs = new Set(data.session.input.list(sessionID()))
     const boundary = revertBoundary()
     const rows = [
-      ...data.session.message
-        .history(sessionID())
-        .map((placeholder): SessionRow => ({ type: "history", placeholder })),
+      ...groupHistoryRows(data.session.message.history(sessionID())),
       ...reduceSessionRows(boundary ? messages.filter((message) => message.id < boundary) : messages, inputs),
     ]
+    const activityBoundary = rows.findLastIndex((row) => {
+      if (row.type !== "message") return false
+      return data.session.message.get(sessionID(), row.messageID)?.type === "compaction"
+    })
+    if (activity() && activityBoundary !== -1) rows.splice(activityBoundary, 0, ...activityRows(messages))
     partitionPending(rows, pendingPermissions())
     const position = rows.findIndex((row) => row.type === "message" && inputs.has(row.messageID))
     rows.splice(
@@ -81,6 +106,32 @@ export function createSessionRows(sessionID: Accessor<string>) {
         request.source?.type === "tool" ? [request.source.callID] : [],
       ),
     )
+  }
+
+  function activityRows(messages: SessionMessageInfo[]): SessionRow[] {
+    const transcriptTasks = activeTranscriptTasks(messages)
+    return [
+      ...data.session.guardrail
+        .list(sessionID())
+        .map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason })),
+      ...data.session.subagent
+        .list(sessionID())
+        .filter((task) => isActiveSubagent(task.state))
+        .map(
+          (task): SessionRow => ({
+            type: "subagent",
+            sessionID: task.sessionID,
+            agent: task.agent,
+            created: task.time.created,
+          }),
+        ),
+      ...(transcriptTasks.length > 0
+        ? transcriptTasks
+        : data.session.todo
+            .get(sessionID())
+            .filter((task) => task.status === "in_progress")
+            .map((task): SessionRow => ({ type: "task", content: task.content, status: "in_progress" }))),
+    ]
   }
 
   createEffect(() => {
@@ -123,6 +174,20 @@ export function createSessionRows(sessionID: Accessor<string>) {
           .history(sessionID())
           .map((item) => `${item.cursor}:${item.state}:${item.count}:${item.oldestID}:${item.newestID}`),
         ...data.session.message.page(sessionID()).map((item) => item.id),
+      ],
+      () => setRows(reconcile(reduce())),
+    ),
+  )
+
+  createEffect(
+    on(
+      () => [
+        activity(),
+        ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
+        ...data.session.subagent
+          .list(sessionID())
+          .map((task) => `${task.sessionID}:${task.agent}:${task.state}:${task.time.created}`),
+        ...data.session.todo.get(sessionID()).map((task) => `${task.content}:${task.status}`),
       ],
       () => setRows(reconcile(reduce())),
     ),
@@ -329,6 +394,22 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
     }
     return rows
   }, [])
+}
+
+function activeTranscriptTasks(messages: SessionMessageInfo[]): SessionRow[] {
+  const tool = messages
+    .toReversed()
+    .flatMap((message) => (message.type === "assistant" ? message.content.toReversed() : []))
+    .find((part) => part.type === "tool" && part.name.toLowerCase() === "todowrite")
+  if (tool?.type !== "tool" || typeof tool.state.input === "string") return []
+  const todos = tool.state.input.todos
+  if (!Array.isArray(todos)) return []
+  return todos.flatMap((todo): SessionRow[] => {
+    if (typeof todo !== "object" || todo === null || Array.isArray(todo)) return []
+    if (!("status" in todo) || todo.status !== "in_progress") return []
+    if (!("content" in todo) || typeof todo.content !== "string") return []
+    return [{ type: "task", content: todo.content, status: "in_progress" }]
+  })
 }
 
 export function messageBoundaryIDs(rows: SessionRow[], messages: SessionMessageInfo[]) {

@@ -234,3 +234,87 @@ describe("SessionV2.skill", () => {
     }).pipe(Effect.ensuring(Effect.sync(() => (instructionValue = "active")))),
   )
 })
+
+describe("SessionV2.resolveSkillConflict", () => {
+  it.effect("durably deactivates the chosen loser through the real skill-status derivation", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const session = yield* sessions.create({ location })
+      const winner = SkillV2.ID.make("winner")
+      const loser = SkillV2.ID.make("loser")
+
+      yield* events.publish(SessionEvent.Skill.Activated, {
+        sessionID: session.id,
+        id: winner,
+        name: SkillV2.Name.make("Winner"),
+        text: "Winner instructions",
+        conflicts: { skills: [loser], instructions: [] },
+      })
+      yield* events.publish(SessionEvent.Skill.Activated, {
+        sessionID: session.id,
+        id: loser,
+        name: SkillV2.Name.make("Loser"),
+        text: "Loser instructions",
+        conflicts: { skills: [], instructions: [] },
+      })
+
+      yield* sessions.resolveSkillConflict({ sessionID: session.id, winner, loser })
+
+      expect(yield* sessions.skills(session.id)).toEqual([
+        expect.objectContaining({
+          id: winner,
+          state: "active",
+          content: "Winner instructions",
+          conflicts: [],
+        }),
+        expect.objectContaining({
+          id: loser,
+          state: "inactive",
+          inactiveReason: "conflict_resolved",
+          conflicts: [],
+        }),
+      ])
+      expect(yield* sessions.messages({ sessionID: session.id, order: "asc" })).toContainEqual(
+        expect.objectContaining({
+          type: "skill",
+          skill: loser,
+          skillDeactivations: [{ skill: loser, reason: "conflict_resolved" }],
+        }),
+      )
+    }),
+  )
+
+  it.effect("does not change a conflict-free session", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const session = yield* sessions.create({ location })
+      const winner = SkillV2.ID.make("independent-winner")
+      const loser = SkillV2.ID.make("independent-loser")
+
+      yield* events.publish(SessionEvent.Skill.Activated, {
+        sessionID: session.id,
+        id: winner,
+        name: SkillV2.Name.make("Independent winner"),
+        text: "Winner instructions",
+        conflicts: { skills: [], instructions: [] },
+      })
+      yield* events.publish(SessionEvent.Skill.Activated, {
+        sessionID: session.id,
+        id: loser,
+        name: SkillV2.Name.make("Independent loser"),
+        text: "Loser instructions",
+        conflicts: { skills: [], instructions: [] },
+      })
+      const beforeMessages = yield* sessions.messages({ sessionID: session.id, order: "asc" })
+      const beforeStatuses = yield* sessions.skills(session.id)
+
+      const error = yield* sessions.resolveSkillConflict({ sessionID: session.id, winner, loser }).pipe(Effect.flip)
+
+      expect(error).toEqual(expect.objectContaining({ _tag: "Session.SkillConflictNotFoundError", winner, loser }))
+      expect(yield* sessions.messages({ sessionID: session.id, order: "asc" })).toEqual(beforeMessages)
+      expect(yield* sessions.skills(session.id)).toEqual(beforeStatuses)
+    }),
+  )
+})

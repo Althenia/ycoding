@@ -5,6 +5,7 @@ import { GenerateGroup } from "./groups/generate.js"
 import { MessageGroup } from "./groups/message.js"
 import { ModelGroup } from "./groups/model.js"
 import { ProviderGroup } from "./groups/provider.js"
+import { ProviderUsageGroup } from "./groups/provider-usage.js"
 import { makeSessionGroup } from "./groups/session.js"
 import { makePermissionGroup } from "./groups/permission.js"
 import { FileSystemGroup } from "./groups/fs.js"
@@ -40,6 +41,7 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof ModelGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof GenerateGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof ProviderGroup, LocationId>
+  | HttpApiGroup.AddMiddleware<typeof ProviderUsageGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof IntegrationGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof McpGroup, LocationId>
   | HttpApiGroup.AddMiddleware<typeof CredentialGroup, LocationId>
@@ -157,6 +159,7 @@ const makeApiFromGroup = <
     .add(ModelGroup.middleware(locationMiddleware))
     .add(GenerateGroup.middleware(locationMiddleware))
     .add(ProviderGroup.middleware(locationMiddleware))
+    .add(ProviderUsageGroup.middleware(locationMiddleware))
     .add(IntegrationGroup.middleware(locationMiddleware))
     .add(McpGroup.middleware(locationMiddleware))
     .add(CredentialGroup.middleware(locationMiddleware))

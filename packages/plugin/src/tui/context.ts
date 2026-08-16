@@ -118,6 +118,7 @@ export type Route =
       readonly name: string
       readonly data?: Record<string, any>
     }
+  | { readonly type: "shell-output"; readonly sessionID: string; readonly shellID: string }
 
 export type Destination = Route | Omit<Extract<Route, { readonly type: "plugin" }>, "id">
 

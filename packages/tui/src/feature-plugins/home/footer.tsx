@@ -7,6 +7,7 @@ import { useTheme } from "../../context/theme"
 import { abbreviateHome } from "../../runtime"
 import { FilePath } from "../../ui/file-path"
 import { stringWidth } from "../../util/string-width"
+import { mcpSummary } from "../../mcp-presentation"
 
 function Directory(props: { context: Plugin.Context; maxWidth: number }) {
   const { themeV2 } = useTheme()
@@ -25,22 +26,30 @@ function Directory(props: { context: Plugin.Context; maxWidth: number }) {
 function Mcp(props: { context: Plugin.Context }) {
   const { themeV2 } = useTheme()
   const list = createMemo(() => props.context.data.location.mcp.server.list(props.context.location) ?? [])
-  const failed = createMemo(() => list().some((item) => item.status.status === "failed"))
-  const count = createMemo(() => list().filter((item) => item.status.status === "connected").length)
+  const summary = createMemo(() => mcpSummary(list()))
 
   return (
     <Show when={list().length}>
       <box gap={1} flexDirection="row" flexShrink={0}>
         <text fg={themeV2.text.default}>
           <Switch>
-            <Match when={failed()}>
+            <Match when={summary().attention > 0}>
               <span style={{ fg: themeV2.text.feedback.error.default }}>⊙ </span>
             </Match>
+            <Match when={summary().pending > 0}>
+              <span style={{ fg: themeV2.text.feedback.warning.default }}>⊙ </span>
+            </Match>
             <Match when={true}>
-              <span style={{ fg: count() > 0 ? themeV2.text.feedback.success.default : themeV2.text.subdued }}>⊙ </span>
+              <span
+                style={{
+                  fg: summary().connected > 0 ? themeV2.text.feedback.success.default : themeV2.text.subdued,
+                }}
+              >
+                ⊙{" "}
+              </span>
             </Match>
           </Switch>
-          {count()} MCP
+          {summary().label}
         </text>
         <text fg={themeV2.text.subdued}>/status</text>
       </box>
@@ -54,8 +63,7 @@ function View(props: { context: Plugin.Context }) {
   const mcpWidth = createMemo(() => {
     const list = props.context.data.location.mcp.server.list(props.context.location) ?? []
     if (list.length === 0) return 0
-    const count = list.filter((item) => item.status.status === "connected").length
-    return stringWidth(`⊙ ${count} MCP /status`) + 2
+    return stringWidth(`⊙ ${mcpSummary(list).label} /status`) + 2
   })
 
   return (

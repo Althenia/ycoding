@@ -46,6 +46,52 @@ describe("toLLMMessages", () => {
     expect(messages.map((message) => message.id)).toEqual([id("text"), id("reasoning")])
   })
 
+  test("rehydrates opaque OpenAI compaction state only for its source model", () => {
+    const openaiModel = ModelV2.Ref.make({
+      id: ModelV2.ID.make("gpt-5.6"),
+      providerID: ProviderV2.ID.make("openai"),
+    })
+    const history = [
+      SessionMessage.Assistant.make({
+        id: id("openai-compaction"),
+        type: "assistant",
+        agent: build,
+        model: openaiModel,
+        content: [
+          SessionMessage.AssistantReasoning.make({
+            type: "reasoning",
+            text: "",
+            state: { itemId: "cmp_1", compactionEncryptedContent: "opaque-compaction-state" },
+          }),
+        ],
+        time: { created, completed: created },
+      }),
+    ]
+
+    expect(toLLMMessages(history, openaiModel, "openai")).toMatchObject([
+      {
+        id: id("openai-compaction"),
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            text: "",
+            providerMetadata: {
+              openai: { itemId: "cmp_1", compactionEncryptedContent: "opaque-compaction-state" },
+            },
+          },
+        ],
+      },
+    ])
+    expect(
+      toLLMMessages(
+        history,
+        ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.5"), providerID: ProviderV2.ID.make("openai") }),
+        "openai",
+      ),
+    ).toEqual([])
+  })
+
   test("places an agent switch boundary after prior skill instructions", () => {
     const messages = toLLMMessages(
       [

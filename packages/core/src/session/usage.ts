@@ -23,13 +23,13 @@ export const providerCache = (usage: Usage | undefined) => ({
 })
 
 // TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.
-export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info) {
+export function estimatedCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info): Money.USD | undefined {
   const context = usage.input + usage.cache.read + usage.cache.write
   const tier = costs
     .filter((cost) => cost.tier?.type === "context" && context > cost.tier.size)
     .toSorted((a, b) => (b.tier?.size ?? 0) - (a.tier?.size ?? 0))[0]
   const cost = tier ?? costs.find((cost) => cost.tier === undefined)
-  if (!cost) return Money.USD.zero
+  if (!cost) return undefined
   return Money.USD.make(
     (usage.input * cost.input +
       (usage.output + usage.reasoning) * cost.output +
@@ -37,6 +37,10 @@ export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Inf
       usage.cache.write * cost.cache.write) /
       1_000_000,
   )
+}
+
+export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info) {
+  return estimatedCost(costs, usage) ?? Money.USD.zero
 }
 
 export type Recorded = { readonly tokens: TokenUsage.Info; readonly cost: Money.USD }

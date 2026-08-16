@@ -12,7 +12,6 @@ import * as Selection from "./util/selection"
 import {
   CliRenderEvents,
   createCliRenderer,
-  MouseButton,
   type CliRenderer,
   type CliRendererConfig,
   type ThemeMode,
@@ -66,6 +65,7 @@ import { DialogSessionList } from "./component/dialog-session-list"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { ShellOutput } from "./routes/shell-output"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -447,12 +447,11 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
     }
   })
 
-  // Let selection copy/dismiss win ahead of normal bindings when explicit copy is required.
+  // Let explicit selection copy/dismiss win ahead of normal bindings.
   const offSelectionKeys = keymap.intercept(
     "key",
     ({ event }) => {
-      if (config.data.terminal?.copy_on_select ?? process.platform !== "win32") return
-      Selection.handleSelectionKey(renderer, toast, event, clipboard)
+      Selection.handleSelectionKey(renderer, toast, event, clipboard, process.platform)
     },
     { priority: 1 },
   )
@@ -472,7 +471,6 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
     renderer.clearSelection()
   }
   const terminalTitleEnabled = () => config.data.terminal?.title ?? true
-  const copyOnSelectEnabled = () => config.data.terminal?.copy_on_select ?? process.platform !== "win32"
   const pasteSummaryEnabled = () => config.data.prompt?.paste !== "full"
 
   createEffect(() => {
@@ -1067,19 +1065,6 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       height={dimensions().height}
       flexDirection="column"
       backgroundColor={themeV2.background.default}
-      onMouseDown={(evt) => {
-        if (copyOnSelectEnabled()) return
-        if (evt.button !== MouseButton.RIGHT) return
-
-        if (!Selection.copy(renderer, toast, clipboard)) return
-        evt.preventDefault()
-        evt.stopPropagation()
-      }}
-      onMouseUp={
-        copyOnSelectEnabled()
-          ? () => Selection.copy(renderer, toast, clipboard)
-          : undefined
-      }
     >
       <Show when={config.data.debug?.timing}>
         <TimeToFirstDraw />
@@ -1103,6 +1088,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                       <PluginRouteMissing id={id} name={name} onHome={() => route.navigate({ type: "home" })} />
                     )}
                   />
+                </Match>
+                <Match when={route.data.type === "shell-output"}>
+                  <ShellOutput />
                 </Match>
               </Switch>
             </box>

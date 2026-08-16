@@ -1,4 +1,5 @@
 import { TextAttributes } from "@opentui/core"
+import { For } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { useDialog } from "./dialog"
@@ -7,6 +8,10 @@ export function DialogHelp() {
   const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
   const shortcuts = Keymap.useShortcuts()
+  const keybindings = [
+    [shortcuts.get("variant.list"), "List model variants"],
+    [shortcuts.get("session.autonomy.normal"), "Disable YOLO"],
+  ] as const
 
   Keymap.createLayer(() => ({
     mode: "modal",
@@ -30,6 +35,16 @@ export function DialogHelp() {
         <text fg={themeV2.text.subdued}>
           Press {shortcuts.get("command.palette.show")} to see all available actions and commands in any context.
         </text>
+      </box>
+      <box paddingBottom={1} gap={1}>
+        <For each={keybindings}>
+          {([shortcut, label]) => (
+            <box flexDirection="row" gap={1}>
+              <text fg={themeV2.text.subdued}>{shortcut}</text>
+              <text fg={themeV2.text.default}>{label}</text>
+            </box>
+          )}
+        </For>
       </box>
       <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
         <box

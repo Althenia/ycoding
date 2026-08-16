@@ -1,11 +1,13 @@
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import { Global } from "@ycoding-ai/core/global"
 import { createMemo, createResource, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
 import { useClient } from "../context/client"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useTheme } from "../context/theme"
 import { useConfig } from "../config"
+import { useTuiPaths } from "../context/runtime"
 import { errorMessage } from "../util/error"
 import { getScrollAcceleration } from "../util/scroll"
 import {
@@ -13,17 +15,20 @@ import {
   groupSessionSkills,
   sessionSkillContent,
   sessionSkillLabel,
+  sessionSkillScope,
   type SessionSkill,
 } from "../util/session-skills"
 
 export type DialogSessionSkillsProps = {
   sessionID: string
+  location?: { directory: string; workspaceID?: string }
 }
 
 export function DialogSessionSkills(props: DialogSessionSkillsProps) {
   const client = useClient()
   const dialog = useDialog()
   const { themeV2 } = useTheme()
+  const paths = useTuiPaths()
   const [filter, setFilter] = createSignal("")
   const [selected, setSelected] = createSignal<SessionSkill>()
   const [loadError, setLoadError] = createSignal<unknown>()
@@ -39,13 +44,53 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
       return []
     }
   })
+  const [skillInfo, { refetch: refetchSkillInfo }] = createResource(async () => {
+    try {
+      return await client.api.skill.list({ location: props.location })
+    } catch {
+      return undefined
+    }
+  })
 
-  const grouped = createMemo(() => groupSessionSkills(filterSessionSkills(skills() ?? [], filter())))
+  const scoped = createMemo(() => {
+    const locations = new Map((skillInfo()?.data ?? []).map((skill) => [skill.id, skill.location]))
+    const projectDirectory = skillInfo()?.location.project.directory
+    const globalConfigDirectory = process.env.YCODING_CONFIG_DIR ?? Global.Path.config
+    return (skills() ?? []).map((skill) => ({
+      ...skill,
+      scope: sessionSkillScope({
+        location: locations.get(skill.id),
+        projectDirectory,
+        home: paths.home,
+        globalConfigDirectory,
+      }),
+    }))
+  })
+  const grouped = createMemo(() => groupSessionSkills(filterSessionSkills(scoped(), filter())))
   const options = createMemo<DialogSelectOption<SessionSkill>[]>(() =>
-    [...grouped().active, ...grouped().inactive].map((skill) => ({
+    [
+      ...grouped().active.filter((skill) => !skill.conflicts.length),
+      ...grouped().active.filter((skill) => skill.conflicts.length),
+      ...grouped().inactive,
+    ].map((skill) => ({
       title: skill.name,
-      description: `${sessionSkillLabel(skill)} · ${skill.id}`,
-      category: skill.state === "active" ? "Active" : "Inactive",
+      titleView:
+        skill.conflicts.length ? (
+          <span style={{ fg: themeV2.text.feedback.warning.default }}>{skill.name}</span>
+        ) : skill.state === "inactive" ? (
+          <span style={{ fg: themeV2.text.subdued }}>{skill.name}</span>
+        ) : undefined,
+      description: skill.scope,
+      footer:
+        skill.conflicts.length ? (
+          <span style={{ fg: themeV2.text.feedback.warning.default }}>Needs choice</span>
+        ) : skill.state === "active" ? (
+          <span style={{ fg: themeV2.text.action.primary.focused }}>Active</span>
+        ) : (
+          <span style={{ fg: themeV2.text.subdued }}>Inactive</span>
+        ),
+      category: skill.conflicts.length ? "Conflict" : skill.state === "active" ? "Active" : "Available",
+      state: skill.conflicts.length ? "failed" : skill.state === "active" ? "connected" : "disabled",
       value: skill,
       onSelect: () => setSelected(skill),
     })),
@@ -61,6 +106,7 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
           renderFilter={!skills.loading && !loadError()}
           locked={skills.loading || Boolean(loadError())}
           onFilter={setFilter}
+          footer={<text fg={themeV2.text.hint}>space toggle</text>}
           bindings={[
             {
               bind: "r",
@@ -69,6 +115,7 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
               run: () => {
                 if (!loadError()) return
                 void refetch()
+                void refetchSkillInfo()
               },
             },
           ]}

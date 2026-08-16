@@ -31,6 +31,12 @@ export const MessageGroup = HttpApiGroup.make("server.message")
         cursor: Schema.Struct({
           previous: Schema.String.pipe(Schema.optional),
           next: Schema.String.pipe(Schema.optional),
+          // Opaque cursors alone cannot describe how much history exists, so a client had to walk
+          // every archive page to learn its size. This is how many messages the `next` cursor still
+          // has behind it, which sizes unloaded history without transferring it. Page counts stay
+          // with the client, which alone knows the page size it will request. Absent when there is
+          // no `next` cursor; a reported 0 means history is exhausted rather than unreported.
+          messages: Schema.Number.pipe(Schema.optional),
         }),
       }).annotate({ identifier: "SessionMessagesResponse" }),
       error: [InvalidCursorError, SessionNotFoundError, UnknownError],

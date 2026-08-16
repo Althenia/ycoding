@@ -1,4 +1,6 @@
 import { readFile } from "node:fs/promises"
+import { readFileSync, rmSync } from "node:fs"
+import { randomUUID } from "node:crypto"
 import { spawn, type ChildProcess } from "node:child_process"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -16,6 +18,7 @@ export * from "../service.js"
 type Contender = {
   readonly child: ChildProcess
   readonly error: () => Error | undefined
+  readonly startupErrorFile?: string
 }
 
 /** Discover a healthy, compatible local service without starting one. */
@@ -48,68 +51,98 @@ export async function ensure(options: EnsureOptions = {}): Promise<Endpoint> {
   const spawnContender = () => {
     const [command, ...args] = options.command ?? ["ycoding", "serve", "--service"]
     if (command === undefined) throw new Error("Missing service command")
+    const startupErrorFile = options.startupErrorFile ? `${options.startupErrorFile}.${randomUUID()}` : undefined
     try {
-      const child = spawn(command, args, { detached: true, stdio: "ignore" })
+      const child = spawn(command, args, {
+        detached: true,
+        stdio: "ignore",
+        env:
+          startupErrorFile === undefined
+            ? process.env
+            : { ...process.env, YCODING_SERVICE_STARTUP_ERROR_FILE: startupErrorFile },
+      })
       let error: Error | undefined
       child.once("error", (cause) => {
         error = new Error("Failed to start server", { cause })
       })
       child.unref()
-      return { child, error: () => error }
+      return { child, error: () => error, startupErrorFile }
     } catch (cause) {
       throw new Error("Failed to start server", { cause })
     }
   }
 
-  while (true) {
-    if (Date.now() >= deadline) throw new Error("Timed out waiting for the background service to start")
-    const registration = await registered(options.file, true)
+  try {
+    while (true) {
+      if (Date.now() >= deadline) throw new Error("Timed out waiting for the background service to start")
+      const registration = await registered(options.file, true)
 
-    if (registration.service !== undefined) {
-      ownerHeld = false
-      spawnDelay = 5_000
-      const service = registration.service
-      const compatible = !service.legacy && (options.version === undefined || service.version === options.version)
-      if (compatible && service.state === "ready") return service.endpoint
-      if (compatible && service.state === "failed") {
-        if (failedReplacement) throw new Error("Background service failed to start")
-        failedReplacement = true
-        await kill(service, options).catch(() => undefined)
-        lastSpawn = Date.now() - spawnDelay
-      } else if (!compatible) {
-        announce("version-mismatch", service.version)
-        await kill(service, options).catch(() => undefined)
-        lastSpawn = 0
+      if (registration.service !== undefined) {
+        ownerHeld = false
+        spawnDelay = 5_000
+        const service = registration.service
+        const compatible = !service.legacy && (options.version === undefined || service.version === options.version)
+        if (compatible && service.state === "ready") return service.endpoint
+        if (compatible && service.state === "failed") {
+          if (failedReplacement) throw new Error("Background service failed to start")
+          failedReplacement = true
+          await kill(service, options).catch(() => undefined)
+          lastSpawn = Date.now() - spawnDelay
+        } else if (!compatible) {
+          announce("version-mismatch", service.version)
+          await kill(service, options).catch(() => undefined)
+          lastSpawn = 0
+        }
+      } else {
+        if (lastSpawn === 0 && registration.info !== undefined) lastSpawn = Date.now()
+        const failure = [...contenders].map(contenderFailure).find((error) => error !== undefined)
+        if (failure !== undefined) throw failure
+        const finished = [...contenders].filter(contenderFinished)
+        if (finished.some((item) => item.child.exitCode === 0)) {
+          ownerHeld = true
+          spawnDelay = Math.min(spawnDelay * 2, 30_000)
+        }
+        finished.forEach((item) => {
+          cleanupContender(item)
+          contenders.delete(item)
+        })
+        // Keep one candidate plus one lock probe so a pre-lock stall cannot block recovery.
+        if (contenders.size < 2 && Date.now() - lastSpawn >= spawnDelay) {
+          announce("missing")
+          contenders.add(spawnContender())
+          lastSpawn = Date.now()
+        }
       }
-    } else {
-      if (lastSpawn === 0 && registration.info !== undefined) lastSpawn = Date.now()
-      const failure = [...contenders].map(contenderFailure).find((error) => error !== undefined)
-      if (failure !== undefined) throw failure
-      const finished = [...contenders].filter(contenderFinished)
-      if (finished.some((item) => item.child.exitCode === 0)) {
-        ownerHeld = true
-        spawnDelay = Math.min(spawnDelay * 2, 30_000)
-      }
-      finished.forEach((item) => contenders.delete(item))
-      // Keep one candidate plus one lock probe so a pre-lock stall cannot block recovery.
-      if (contenders.size < 2 && Date.now() - lastSpawn >= spawnDelay) {
-        announce("missing")
-        contenders.add(spawnContender())
-        lastSpawn = Date.now()
-      }
+      await delay(1_000)
     }
-    await delay(1_000)
+  } finally {
+    contenders.forEach(cleanupContender)
   }
 }
 
 function contenderFailure(contender: Contender) {
   const error = contender.error()
   if (error !== undefined) return error
+  const detail = readStartupError(contender.startupErrorFile)
   if (contender.child.exitCode !== null && contender.child.exitCode !== 0)
-    return new Error(`Server process exited with code ${contender.child.exitCode}`)
+    return new Error(detail ?? `Server process exited with code ${contender.child.exitCode}`)
   if (contender.child.signalCode !== null)
-    return new Error(`Server process terminated by ${contender.child.signalCode}`)
+    return new Error(detail ?? `Server process terminated by ${contender.child.signalCode}`)
   return undefined
+}
+
+function readStartupError(file?: string) {
+  if (file === undefined) return undefined
+  try {
+    return readFileSync(file, "utf8").trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function cleanupContender(contender: Contender) {
+  if (contender.startupErrorFile === undefined) return
+  rmSync(contender.startupErrorFile, { force: true })
 }
 
 function contenderFinished(contender: Contender) {

@@ -27,6 +27,8 @@ const migrations = [
   { id: "20260726182810_retire-self-improvement" },
   { id: "20260727000736_observation-session-identity" },
   { id: "20260727001011_observation-sessionless-identity" },
+  { id: "20260728025034_dusty_havok" },
+  { id: "20260728084114_provider-request-optional-cost" },
 ]
 const projectArtifactTables = [
   "project_artifact",

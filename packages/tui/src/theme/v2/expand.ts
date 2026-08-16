@@ -67,6 +67,7 @@ function expandBackground(definition: BackgroundDefinition | undefined): Backgro
   if (!definition) return
   return {
     ...definition,
+    chrome: definition.chrome ?? (definition.default ? "$background.default" : undefined),
     action: expandActions(definition.action, "background.action"),
     formfield: expandFormfield(definition.formfield, "background.formfield"),
   }

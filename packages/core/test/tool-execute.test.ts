@@ -47,6 +47,56 @@ test("execute preserves successful results with visible unhandled rejections", a
   ])
 })
 
+test("execute provider definition stays stable while runtime search follows the current catalog", async () => {
+  const github = Tool.make({
+    description: "Find a GitHub issue",
+    input: Schema.Struct({ query: Schema.String }),
+    output: Schema.String,
+    execute: ({ query }) => Effect.succeed(query),
+  })
+  const slack = Tool.make({
+    description: "Find a Slack channel",
+    input: Schema.Struct({ query: Schema.String }),
+    output: Schema.String,
+    execute: ({ query }) => Effect.succeed(query),
+  })
+  const githubExecute = ExecuteTool.create(
+    new Map([["github_issue", { tool: github, name: "issue", namespace: "github" }]]),
+  )
+  const slackExecute = ExecuteTool.create(
+    new Map([["slack_channel", { tool: slack, name: "channel", namespace: "slack" }]]),
+  )
+
+  expect(Tool.definition("execute", githubExecute)).toEqual(Tool.definition("execute", slackExecute))
+
+  const context = {
+    sessionID: Session.ID.make("ses_execute_catalog"),
+    agent: Agent.ID.make("build"),
+    messageID: SessionMessage.ID.make("msg_execute_catalog"),
+    callID: "call_execute_catalog",
+    progress: () => Effect.void,
+  }
+  const search = async (tool: Tool.AnyTool) => {
+    const settled = await Effect.runPromise(
+      Tool.settle(
+        tool,
+        {
+          type: "tool-call",
+          id: "call_execute_catalog",
+          name: "execute",
+          input: { code: 'return search({ query: "" })' },
+        },
+        context,
+      ),
+    )
+    const text = settled.content.find((part) => part.type === "text")?.text
+    return text === undefined ? undefined : JSON.parse(text)
+  }
+
+  expect((await search(githubExecute))?.items[0]?.path).toBe("tools.github.issue")
+  expect((await search(slackExecute))?.items[0]?.path).toBe("tools.slack.channel")
+})
+
 test("execute supports callable namespace tools", async () => {
   const callable = Tool.make({
     description: "Administer Slack",

@@ -16,6 +16,7 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
   const forms = new Map<string, ReturnType<typeof form>>()
   const questions = new Map<string, ReturnType<typeof question>>()
   const permissions = new Map<string, ReturnType<typeof permission>>()
+  const guardrails = new Map<string, ReturnType<typeof guardrail>>()
   const autonomy = new Map<string, SessionAutonomyState>()
   const waits = new Map<string, PromiseWithResolvers<void>>()
   let notificationAttempts = 0
@@ -73,6 +74,12 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
         permission: {
           list: async ({ sessionID }: { sessionID: string }) =>
             Array.from(permissions.values()).filter((item) => item.sessionID === sessionID),
+        },
+        guardrail: {
+          request: {
+            list: async ({ sessionID }: { sessionID: string }) =>
+              Array.from(guardrails.values()).filter((item) => item.rootSessionID === sessionID),
+          },
         },
         session: {
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
@@ -132,6 +139,8 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
         questions.delete(event.data.requestID)
       if (event.type === "permission.v2.asked") permissions.set(event.data.id, event.data)
       if (event.type === "permission.v2.replied") permissions.delete(event.data.requestID)
+      if (event.type === "guardrail.asked") guardrails.set(event.data.id, event.data)
+      if (event.type === "guardrail.replied") guardrails.delete(event.data.requestID)
       for (const handler of handlers.get(event.type) ?? []) handler(event)
     },
   }
@@ -164,6 +173,23 @@ function permission(
     action: "edit",
     resources: [],
     metadata: {},
+  }
+}
+
+function guardrail(
+  id: string,
+  sessionID = "session",
+  rootSessionID = sessionID,
+): Extract<YCodingEvent, { type: "guardrail.asked" }>["data"] {
+  return {
+    id,
+    sessionID,
+    rootSessionID,
+    action: "shell",
+    resources: [],
+    ruleIDs: [],
+    reason: "Guardrail review",
+    standard: true,
   }
 }
 
@@ -253,6 +279,13 @@ const permissionNotification: TuiAttentionNotifyInput = {
   sound: { name: "permission", when: "always" },
 }
 
+const guardrailNotification: TuiAttentionNotifyInput = {
+  title: "Demo session",
+  message: "Guardrail approval needed",
+  notification: { when: "blurred" },
+  sound: { name: "permission", when: "always" },
+}
+
 describe("internal notifications TUI plugin", () => {
   test("uses only the V2 plugin runtime", () => {
     expect("setup" in Notifications).toBe(true)
@@ -290,6 +323,37 @@ describe("internal notifications TUI plugin", () => {
       created: 0,
       type: "permission.v2.replied",
       data: { sessionID: "session", requestID: "permission-1", reply: "once" },
+    })
+    await harness.flush()
+
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("alerts the root family after a guardrail request remains pending", async () => {
+    const harness = await setup()
+
+    harness.emit({
+      id: "event-1",
+      created: 0,
+      type: "guardrail.asked",
+      data: guardrail("guardrail-1", "subagent", "session"),
+    })
+
+    expect(harness.scheduled.map((item) => item.delay)).toEqual([500])
+    await harness.flush()
+
+    expect(harness.notifications).toEqual([guardrailNotification])
+  })
+
+  test("suppresses a guardrail reply received before the checkpoint", async () => {
+    const harness = await setup()
+
+    harness.emit({ id: "event-1", created: 0, type: "guardrail.asked", data: guardrail("guardrail-1") })
+    harness.emit({
+      id: "event-2",
+      created: 0,
+      type: "guardrail.replied",
+      data: { rootSessionID: "session", sessionID: "session", requestID: "guardrail-1", reply: "once" },
     })
     await harness.flush()
 

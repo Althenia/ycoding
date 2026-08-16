@@ -81,7 +81,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
               }}
             >
               <text fg={key === store.active ? themeV2.text.action.primary.focused : themeV2.text.subdued}>
-                {Locale.titlecase(key === "cancel" ? (props.label ?? key) : key)}
+                {Locale.titlecase(key === "confirm" ? (props.label ?? key) : key)}
               </text>
             </box>
           )}

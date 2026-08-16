@@ -3,6 +3,13 @@ import { appendFile, rename, writeFile } from "node:fs/promises"
 const [registration, mode, delay] = process.argv.slice(2)
 if (registration === undefined || mode === undefined) throw new Error("Missing service fixture arguments")
 if (mode === "failed") process.exit(1)
+if (mode === "failed-with-message") {
+  const message = "Managed service port is already in use by another process"
+  const file = process.env.YCODING_SERVICE_STARTUP_ERROR_FILE
+  if (file) await writeFile(file, message)
+  console.error(message)
+  process.exit(1)
+}
 if (mode === "record-start") {
   await writeFile(registration + ".started", "")
   process.exit(1)
@@ -49,8 +56,7 @@ const server = Bun.serve({
     if (mode === "legacy") return Response.json({ healthy: true })
     if (mode === "starting" && !(await Bun.file(registration + ".release").exists()))
       return Response.json({ healthy: true, version, pid: process.pid }, { status: 503 })
-    if (mode === "failed-owner")
-      return Response.json({ healthy: true, version, pid: process.pid }, { status: 500 })
+    if (mode === "failed-owner") return Response.json({ healthy: true, version, pid: process.pid }, { status: 500 })
     if (mode === "starting" || mode === "graceful" || mode === "reject-stop")
       return Response.json({ healthy: true, version, pid: process.pid })
     return Response.json({ healthy: true, version, pid: process.pid })

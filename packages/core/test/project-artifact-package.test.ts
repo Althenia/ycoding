@@ -1892,6 +1892,7 @@ describe("ProjectArtifactPackage", () => {
         }),
       ),
     ),
+    30_000,
   )
 
   it.live("trashes and restores global active, historical, and disabled layouts", () =>

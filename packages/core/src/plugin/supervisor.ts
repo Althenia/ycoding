@@ -35,6 +35,7 @@ import { LocationMutation } from "../location-mutation";
 import { ModelsDev } from "../models-dev";
 import { Npm } from "../npm";
 import { PermissionV2 } from "../permission";
+import { ProviderUsageV2 } from "../provider-usage";
 import { PluginV2 } from "../plugin";
 import { PluginPromise } from "../plugin/promise";
 import { Reference } from "../reference";
@@ -383,6 +384,7 @@ export const node = makeLocationNode({
     ModelsDev.node,
     Npm.node,
     PermissionV2.node,
+    ProviderUsageV2.node,
     SessionGuardrail.node,
     PluginRuntime.node,
     Form.node,

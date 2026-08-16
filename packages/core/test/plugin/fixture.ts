@@ -15,6 +15,7 @@ import { Npm } from "@ycoding-ai/core/npm"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
+import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
 import { Reference } from "@ycoding-ai/core/reference"
 import { SkillV2 } from "@ycoding-ai/core/skill"
 import { ToolHooks } from "@ycoding-ai/core/tool/hooks"
@@ -28,6 +29,14 @@ const npmLayer = Layer.succeed(
     add: () => Effect.succeed({ directory: "", entrypoint: undefined }),
     install: () => Effect.void,
     which: () => Effect.succeed(undefined),
+  }),
+)
+
+const providerUsageLayer = Layer.succeed(
+  ProviderUsageV2.Service,
+  ProviderUsageV2.make({
+    credentials: { all: () => Effect.succeed([]) },
+    adapters: {},
   }),
 )
 
@@ -47,6 +56,7 @@ export const PluginTestLayer = AppNodeBuilder.build(
     CommandV2.node,
     Integration.node,
     PluginRuntime.node,
+    ProviderUsageV2.node,
     PluginHooks.node,
     Reference.node,
     SkillV2.node,
@@ -56,5 +66,6 @@ export const PluginTestLayer = AppNodeBuilder.build(
   [
     [Location.node, tempLocationLayer],
     [Npm.node, npmLayer],
+    [ProviderUsageV2.node, providerUsageLayer],
   ],
 ) as unknown as Layer.Layer<unknown, never>

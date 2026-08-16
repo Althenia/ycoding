@@ -24,9 +24,8 @@ export function ShellRailContent(props: {
       .filter((group) => group.owner.label === "Unknown session")
       .reduce((total, group) => total + group.shells.length, 0),
   )
-  const summary = createMemo(
-    () =>
-      `${running()}/${running() + props.terminalCount} running${orphaned() ? ` · ${orphaned()} orphaned` : ""}`,
+  const summary = createMemo(() =>
+    rail?.expanded("shells") && !props.shellSurface?.() ? String(running()) : `${running()} running`,
   )
   const label = (value: string) => (rail?.allExpanded() ? value.split(" · ")[0] ?? value : value)
 
@@ -57,6 +56,9 @@ export function ShellRailContent(props: {
             </>
           )}
         </For>
+        <Show when={rail?.allExpanded()}>
+          <box height={1} flexShrink={0} />
+        </Show>
       </RailSection>
     </Show>
   )
@@ -91,6 +93,15 @@ function View(props: { context: Plugin.Context; sessionID: string; shellSurface?
 export default Plugin.define({
   id: "internal:sidebar-shells",
   setup(context) {
-    context.ui.slot("sidebar.content", (props) => <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />)
+    context.ui.slot("sidebar.content", (props) => (
+      <Show when={!props.shellSurface?.()}>
+        <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />
+      </Show>
+    ))
+    context.ui.slot("sidebar.shells", (props) => (
+      <Show when={props.shellSurface?.()}>
+        <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />
+      </Show>
+    ))
   },
 })

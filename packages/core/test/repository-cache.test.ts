@@ -91,7 +91,10 @@ describe("RepositoryCache", () => {
 
 function cacheLayer(root: string) {
   return AppNodeBuilder.build(RepositoryCache.node, [
-    [Global.node, Global.layerWith({ state: path.join(root, "state"), repos: path.join(root, "repos") })],
+    [
+      Global.node,
+      Global.layerWith({ data: path.join(root, "data"), state: path.join(root, "state"), repos: path.join(root, "repos") }),
+    ],
   ])
 }
 

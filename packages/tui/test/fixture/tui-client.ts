@@ -94,6 +94,11 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     if (url.pathname === "/experimental/capabilities") return json({ backgroundSubagents: true })
     if (url.pathname === "/path") return json({ home: "", state: "", config: "", worktree, directory })
     if (url.pathname === "/api/location") return json({ directory, project: { id: "proj_test", directory: worktree } })
+    if (url.pathname === "/api/vcs/branch")
+      return json({
+        location: { directory, project: { id: "proj_test", directory: worktree } },
+        data: { current: "main", default: "main" },
+      })
     if (url.pathname === "/api/fs/list")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/project/current") return json({ id: "proj_test", directory: worktree })
@@ -113,7 +118,11 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
     if (url.pathname === "/api/form/request")
       return json({ location: { directory, project: { id: "proj_test", directory: worktree } }, data: [] })
+    if (/^\/api\/session\/[^/]+\/guardrail\/request$/.test(url.pathname)) return json({ data: [] })
     if (/^\/api\/session\/[^/]+\/diagnostics$/.test(url.pathname)) return json({ data: null })
+    // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the
+    // fixture returns no payload rather than zeroed quota values.
+    if (/^\/api\/provider\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
     if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname)) return json({ data: { mode: "normal" } })
     if (/^\/api\/session\/[^/]+\/form$/.test(url.pathname)) return json({ data: [] })
     if (

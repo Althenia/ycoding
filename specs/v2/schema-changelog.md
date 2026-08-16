@@ -2,6 +2,27 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-07-31: Report Remaining Message Pages On The Message List
+
+- Add optional `messages` to the `SessionMessagesResponse` cursor, reporting how many messages the returned `next` cursor still has behind it so a client can size unloaded history without transferring it. Page counts stay with the client, which alone knows the page size it will request.
+- Add `SessionV2.messageRemainder`, which counts the remaining rows with a SQL `COUNT` bounded by the same rule the `next` cursor applies, so the reported size always matches what continuing to page returns. No archived payload is read or decoded.
+
+Compatibility:
+
+- The field is additive and optional. It is absent when the response carries no `next` cursor, and is never coerced to zero; a reported `0` means the client has reached the end of history.
+- Promise and Effect clients are regenerated for the additive cursor field.
+
+## 2026-07-30: Add Shell Process-Tree Memory Limits
+
+- Add optional `memoryLimitMb` to public `Shell.CreateInput` and `memory-limit` to `Shell.Status`.
+- Add the `shell_memory_limit_mb` configuration default and `memory_limit_mb` model-tool override. Zero means unlimited, and the per-command value takes precedence.
+- Supply matching Go and Node runtime hints for finite limits. On POSIX, terminate the detached process group after sampled aggregate resident memory exceeds the limit and report the distinct terminal status.
+
+Compatibility:
+
+- Promise and Effect clients are regenerated for the additive create payload and status value.
+- The POSIX sampled ceiling is resource control rather than hard isolation. Windows rejects finite limits until process creation supports race-free Job Object assignment.
+
 ## 2026-07-10: Replace Instruction Checkpoints With Value Deltas
 
 - Replace rendered `session.instructions.updated.1` prose with `session.instructions.updated.2 { delta }`, where values are SHA-256 hashes and the literal `"removed"` means removal.

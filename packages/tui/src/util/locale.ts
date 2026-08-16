@@ -31,9 +31,9 @@ export function todayTimeOrDateTime(input: number): string {
 
 export function number(num: number): string {
   if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + "M"
+    return (num / 1000000).toFixed(1) + "m"
   } else if (num >= 1000) {
-    return (num / 1000).toFixed(1) + "K"
+    return (num / 1000).toFixed(1) + "k"
   }
   return num.toString()
 }
@@ -43,12 +43,12 @@ export function duration(input: number) {
     return `${input}ms`
   }
   if (input < 60000) {
-    return `${(input / 1000).toFixed(1)}s`
+    return `${Math.floor(input / 1000)}s`
   }
   if (input < 3600000) {
     const minutes = Math.floor(input / 60000)
     const seconds = Math.floor((input % 60000) / 1000)
-    return `${minutes}m ${seconds}s`
+    return `${minutes}m${String(seconds).padStart(2, "0")}s`
   }
   if (input < 86400000) {
     const hours = Math.floor(input / 3600000)

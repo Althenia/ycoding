@@ -126,7 +126,7 @@ const selected = model("gpt-5", {
 })
 ```
 
-Keep semantic APIs as separate entrypoints, such as OpenAI `chat` and `responses`. Keep transport choices inside the semantic entrypoint settings, so OpenAI Responses HTTP and WebSocket share one entrypoint. Provider facades may still expose named selectors such as `responsesWebSocket` for direct typed call sites; the package-like contract maps its settings to those selectors before returning an executable `Model`.
+Direct OpenAI is Responses-only: use `OpenAI.responses(...)` or `OpenAI.responsesWebSocket(...)`, and load `@ycoding-ai/ai/providers/openai/responses` for catalog-selected native OpenAI. Keep transport choices inside that entrypoint's settings. `OpenAIChat.protocol` remains the shared implementation for OpenAI-compatible and other explicitly configured third-party Chat deployments; do not restore the removed direct Chat facade or entrypoint.
 
 Do not expose `Route` in provider package settings. Route composition stays an implementation detail behind `model(...)`.
 
@@ -268,9 +268,9 @@ Provider-defined / hosted tools (Anthropic `web_search` / `code_execution` / `we
 
 - Routes surface the model's call as a `tool-call` event with `providerExecuted: true`, and the provider's result as a matching `tool-result` event with `providerExecuted: true`.
 - Callers detect `providerExecuted` on `tool-call` and **skip local dispatch** — no handler is invoked and no `tool-error` is raised for "unknown tool". The provider already executed it.
-- Callers that continue should retain both events in explicit history when the protocol requires it. Anthropic encodes them back as `server_tool_use` + `web_search_tool_result` (or `code_execution_tool_result` / `web_fetch_tool_result`) blocks; OpenAI Responses callers typically use `previous_response_id` instead of resending hosted-tool items.
+- Callers that continue should retain both events in explicit history when the protocol requires it. Anthropic encodes them back as `server_tool_use` + `web_search_tool_result` (or `code_execution_tool_result` / `web_fetch_tool_result`) blocks. Stored OpenAI Responses calls may use `previous_response_id`; stateless direct OpenAI calls replay the provider-executed item.
 
-Add provider-defined tools to `request.tools` (no runtime entry needed). The matching route must know how to lower the tool definition into the provider-native shape; right now Anthropic accepts `web_search` / `code_execution` / `web_fetch` and OpenAI Responses accepts the hosted tool names listed above.
+Add provider-defined tools to `request.tools` (no runtime entry needed). The matching route must know how to lower the tool definition into the provider-native shape; right now Anthropic accepts `web_search` / `code_execution` / `web_fetch` and direct OpenAI Responses accepts the hosted tool names listed above. `OpenAI.webSearch(...)` is an OpenAI-hosted Responses tool: it is provider-executed and distinct from Core's provider-independent local `websearch` tool.
 
 ## Protocol File Style
 

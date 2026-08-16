@@ -55,16 +55,7 @@ const fixtureSnapshot = [
         capabilities: { tools: true, input: [], output: [] },
         variants: [],
         time: { released: Date.parse("2026-01-01") },
-        cost: [
-          {
-            input: Money.USDPerMillionTokens.zero,
-            output: Money.USDPerMillionTokens.zero,
-            cache: {
-              read: Money.USDPerMillionTokens.zero,
-              write: Money.USDPerMillionTokens.zero,
-            },
-          },
-        ],
+        cost: [],
         status: "active",
         enabled: true,
         limit: { context: 128000, input: undefined, output: 8192 },
@@ -116,16 +107,7 @@ const fixture2Snapshot = [
         capabilities: { tools: false, input: [], output: [] },
         variants: [],
         time: { released: Date.parse("2026-02-01") },
-        cost: [
-          {
-            input: Money.USDPerMillionTokens.zero,
-            output: Money.USDPerMillionTokens.zero,
-            cache: {
-              read: Money.USDPerMillionTokens.zero,
-              write: Money.USDPerMillionTokens.zero,
-            },
-          },
-        ],
+        cost: [],
         status: "active",
         enabled: true,
         limit: { context: 64000, input: undefined, output: 4096 },
@@ -207,6 +189,74 @@ describe("ModelsDev Service", () => {
       expect(result).toEqual(fixtureSnapshot)
       const final = yield* Ref.get(state)
       expect(final.calls).toEqual([])
+    }),
+  )
+
+  it.live("keeps missing prices unavailable and prefers explicit context tiers over the legacy field", () =>
+    Effect.gen(function* () {
+      yield* writeCache({
+        openai: {
+          id: "openai",
+          name: "OpenAI",
+          env: ["OPENAI_API_KEY"],
+          npm: "@ai-sdk/openai",
+          models: {
+            "gpt-priced": {
+              id: "gpt-priced",
+              name: "GPT Priced",
+              release_date: "2026-01-01",
+              attachment: false,
+              reasoning: true,
+              temperature: false,
+              tool_call: true,
+              limit: { context: 1_000_000, output: 128_000 },
+              cost: {
+                input: 5,
+                output: 30,
+                cache_read: 0.5,
+                cache_write: 6.25,
+                tiers: [
+                  {
+                    input: 10,
+                    output: 45,
+                    cache_read: 1,
+                    cache_write: 12.5,
+                    tier: { type: "context", size: 272_000 },
+                  },
+                ],
+                context_over_200k: {
+                  input: 10,
+                  output: 45,
+                  cache_read: 1,
+                  cache_write: 12.5,
+                },
+              },
+            },
+          },
+        },
+      })
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(state, ModelsDev.Service.use((service) => service.get()))
+
+      expect(result[0]?.models[0]?.cost).toEqual([
+        {
+          input: Money.USDPerMillionTokens.make(5),
+          output: Money.USDPerMillionTokens.make(30),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.5),
+            write: Money.USDPerMillionTokens.make(6.25),
+          },
+        },
+        {
+          tier: { type: "context", size: 272_000 },
+          input: Money.USDPerMillionTokens.make(10),
+          output: Money.USDPerMillionTokens.make(45),
+          cache: {
+            read: Money.USDPerMillionTokens.make(1),
+            write: Money.USDPerMillionTokens.make(12.5),
+          },
+        },
+      ])
     }),
   )
 

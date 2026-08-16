@@ -75,7 +75,7 @@ test("renders subagent diagnostics with model variant, context, and provider cac
   const app = await renderFooter({
     usage: {
       model: "openai/gpt-5.6-terra#high",
-      context: "Context 1.0K/2.0K (52%; includes cached)",
+      context: "Context 1.0k/2.0k (52%; includes cached)",
       cache: "Prompt 90% · 900 read · 12 write · 100 uncached",
     },
   })
@@ -84,7 +84,7 @@ test("renders subagent diagnostics with model variant, context, and provider cac
     const frame = app.captureCharFrame()
     expect(frame).toContain("Reviewer")
     expect(frame).toContain("openai/gpt-5.6-terra#high")
-    expect(frame).toContain("Context 1.0K/2.0K (52%; includes cached)")
+    expect(frame).toContain("Context 1.0k/2.0k (52%; includes cached)")
     expect(frame).toContain("Prompt 90% · 900 read · 12 write · 100 uncached")
     expect(frame).not.toContain("App reuse")
     expect(frame).not.toContain("Replay success")

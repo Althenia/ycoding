@@ -16,6 +16,8 @@ import type { Schema } from "effect"
 import type { State as SessionAutonomyState } from "./autonomy"
 import type { Model } from "@ycoding-ai/schema/model"
 import type { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 
 type SessionMessageData = Omit<(typeof SessionMessage.Info)["Encoded"], "type" | "id">
 
@@ -61,6 +63,36 @@ export const SessionTable = sqliteTable(
     index("session_time_suspended_idx")
       .on(table.time_suspended)
       .where(sql`${table.time_suspended} is not null`),
+  ],
+)
+
+export const SessionProviderRequestTable = sqliteTable(
+  "session_provider_request",
+  {
+    id: text().$type<ProviderRequest.ID>().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    input_id: text().$type<SessionMessage.ID>(),
+    source: text().$type<ProviderRequest.Source>().notNull(),
+    agent: text().$type<ProviderRequest.Record["agent"]>().notNull(),
+    model: text({ mode: "json" }).$type<Model.Ref>().notNull(),
+    route_id: text().notNull(),
+    prompt_cache_key: text().notNull(),
+    system_digest: text().notNull(),
+    tool_digest: text().notNull(),
+    request: integer().notNull(),
+    attempts: integer().notNull(),
+    invalidation: text().$type<ProviderRequest.Invalidation>().notNull(),
+    continuation: text().$type<ProviderRequest.Continuation>().notNull(),
+    cost: real(),
+    tokens: text({ mode: "json" }).$type<TokenUsage.Info>().notNull(),
+    time_created: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_provider_request_session_request_idx").on(table.session_id, table.request),
+    index("session_provider_request_session_source_idx").on(table.session_id, table.source),
   ],
 )
 

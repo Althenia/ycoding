@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -12,8 +12,13 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { ModelV2 } from "@ycoding-ai/core/model"
+import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Money } from "@ycoding-ai/schema/money"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { testEffect } from "./lib/effect"
 
 const projects = Layer.succeed(
@@ -42,12 +47,34 @@ describe("SessionV2.log", () => {
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       const created = yield* session.create({ location })
+      yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+        id: ProviderRequest.ID.make("prq_hidden_log_record"),
+        sessionID: created.id,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model: ModelV2.Ref.make({
+          providerID: ProviderV2.ID.make("openai"),
+          id: ModelV2.ID.make("gpt-5.6"),
+        }),
+        routeID: "openai-responses",
+        promptCacheKey: "prompt-cache-secret-that-must-not-reach-the-public-log",
+        systemDigest: "system-secret",
+        toolDigest: "tool-secret",
+        request: 1,
+        attempts: 1,
+        invalidation: "first-request",
+        continuation: "full",
+        cost: Money.USD.zero,
+        tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: yield* DateTime.now,
+      })
       yield* session.rename({ sessionID: created.id, title: "session.renamed" })
 
       const items = Array.from(yield* Stream.runCollect(session.log({ sessionID: created.id })))
       const watermark = (yield* events.sequences([created.id])).get(created.id)
 
       expect(items.map((item) => item.type)).toEqual(["session.created", "session.renamed", "log.synced"])
+      expect(JSON.stringify(items)).not.toContain("prompt-cache-secret")
       expect(items.at(-1)).toEqual({ type: "log.synced", aggregateID: created.id, seq: watermark })
     }),
   )

@@ -4,10 +4,15 @@ import { Headers, HttpClientRequest } from "effect/unstable/http"
 import { CacheHint, LLM, LLMError, LLMEvent, Message, Model, ToolCallPart, ToolResultPart, Usage } from "../../src"
 import { Auth, LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import * as Azure from "../../src/providers/azure"
+import * as GitHubCopilot from "../../src/providers/github-copilot"
 import * as OpenAI from "../../src/providers/openai"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
 import * as ProviderShared from "../../src/protocols/shared"
-import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
+import {
+  continuationRequest,
+  continuationTool,
+  nativeOpenAIResponsesContinuation,
+} from "../continuation-scenarios"
 import { it } from "../lib/effect"
 import { dynamicResponse, fixedResponse } from "../lib/http"
 import { sseEvents } from "../lib/sse"
@@ -58,6 +63,47 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("lowers a stored continuation to the prior response and new message suffix", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          system: "Use the current tool contract.",
+          messages: [
+            Message.user("Check Paris."),
+            Message.assistant([ToolCallPart.make({ id: "call_weather_1", name: "get_weather", input: { city: "Paris" } })]),
+            Message.tool(
+              ToolResultPart.make({ id: "call_weather_1", name: "get_weather", result: { temperature: 22 } }),
+            ),
+          ],
+          tools: [continuationTool],
+          providerOptions: {
+            openai: {
+              store: true,
+              previousResponseId: "resp_previous_1",
+              continuationInputStart: 2,
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.previous_response_id).toBe("resp_previous_1")
+      expect(prepared.body.input).toEqual([
+        { role: "system", content: "Use the current tool contract." },
+        { type: "function_call_output", call_id: "call_weather_1", output: "{\"temperature\":22}" },
+      ])
+      expect(prepared.body.tools).toHaveLength(1)
+      expect(prepared.body.tools?.[0]).toMatchObject({ type: "function", name: "get_weather" })
+    }),
+  )
+
+  it.effect("omits continuation fields when they are absent", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(request)
+      expect(prepared.body).not.toHaveProperty("previous_response_id")
+    }),
+  )
+
   it.effect("lowers the hosted OpenAI image generation tool", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -73,6 +119,51 @@ describe("OpenAI Responses route", () => {
         { type: "image_generation", action: "generate", quality: "high", size: "1024x1024" },
       ])
       expect(prepared.body.tool_choice).toEqual({ type: "image_generation" })
+    }),
+  )
+
+  it.effect("lowers the hosted OpenAI web search tool", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "Find the latest Effect release notes.",
+          tools: [
+            OpenAI.webSearch({
+              allowedDomains: ["effect.website"],
+              blockedDomains: ["example.com"],
+              searchContextSize: "high",
+              externalWebAccess: false,
+              returnTokenBudget: "unlimited",
+              userLocation: {
+                country: "US",
+                city: "New York",
+                region: "New York",
+                timezone: "America/New_York",
+              },
+            }),
+          ],
+          toolChoice: "web_search",
+        }),
+      )
+
+      expect(prepared.body.tools).toEqual([
+        {
+          type: "web_search",
+          filters: { allowed_domains: ["effect.website"], blocked_domains: ["example.com"] },
+          search_context_size: "high",
+          external_web_access: false,
+          return_token_budget: "unlimited",
+          user_location: {
+            type: "approximate",
+            country: "US",
+            city: "New York",
+            region: "New York",
+            timezone: "America/New_York",
+          },
+        },
+      ])
+      expect(prepared.body.tool_choice).toEqual({ type: "web_search" })
     }),
   )
 
@@ -218,6 +309,66 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("enables GPT-5.6 cache options and breakpoints on direct Responses WebSocket", () =>
+    Effect.gen(function* () {
+      const cache = new CacheHint({ type: "ephemeral" })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
+            "gpt-5.6",
+          ),
+          system: { type: "text", text: "stable", cache },
+          messages: [Message.user([{ type: "text", text: "hi", cache }])],
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+        }),
+      )
+
+      expect(prepared.route).toBe("openai-responses-websocket")
+      expect(prepared.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
+      expect(prepared.body.input).toEqual([
+        {
+          role: "system",
+          content: [{ type: "input_text", text: "stable", prompt_cache_breakpoint: { mode: "explicit" } }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "hi", prompt_cache_breakpoint: { mode: "explicit" } }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("keeps GitHub Copilot cache controls key-only without direct compaction", () =>
+    Effect.gen(function* () {
+      const cache = new CacheHint({ type: "ephemeral" })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: GitHubCopilot.configure({
+            baseURL: "https://copilot.example.test",
+            apiKey: "fixture",
+          }).responses("gpt-5.6"),
+          system: { type: "text", text: "stable", cache },
+          messages: [Message.user([{ type: "text", text: "hi", cache }])],
+          providerOptions: {
+            openai: {
+              promptCacheKey: "copilot-key",
+              promptCacheOptions: { mode: "explicit", ttl: "30m" },
+            },
+          },
+        }),
+      )
+
+      expect(prepared.route).toBe("github-copilot-responses")
+      expect(prepared.body.prompt_cache_key).toBe("copilot-key")
+      expect(prepared.body.prompt_cache_options).toBeUndefined()
+      expect(prepared.body.context_management).toBeUndefined()
+      expect(prepared.body.input).toEqual([
+        { role: "system", content: "stable" },
+        { role: "user", content: [{ type: "input_text", text: "hi" }] },
+      ])
+    }),
+  )
+
   it.effect("streams OpenAI Responses over WebSocket", () =>
     Effect.gen(function* () {
       const sent: string[] = []
@@ -256,7 +407,14 @@ describe("OpenAI Responses route", () => {
           model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
             "gpt-4.1-mini",
           ),
-          prompt: "Say hello.",
+          messages: [Message.user("Earlier."), Message.user("Say hello.")],
+          providerOptions: {
+            openai: {
+              store: true,
+              previousResponseId: "resp_ws_previous",
+              continuationInputStart: 1,
+            },
+          },
         }),
       ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
 
@@ -268,7 +426,8 @@ describe("OpenAI Responses route", () => {
         type: "response.create",
         model: "gpt-4.1-mini",
         input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
-        store: false,
+        previous_response_id: "resp_ws_previous",
+        store: true,
       })
     }),
   )
@@ -615,13 +774,14 @@ describe("OpenAI Responses route", () => {
   )
 
   describe("prompt_cache_retention / prompt_cache_options family gating", () => {
-    // gpt-5.6 vs gpt-5.5 vs gpt-5 vs gpt-4.1 boundary: retention is pre-5.6
-    // only, cache_options is 5.6+ only. Sending either to the wrong family
-    // returns a 400 upstream, so both must be mutually exclusive on the wire.
+    // GPT-5.6+ uses cache_options. Earlier models only receive retention when
+    // OpenAI lists that exact family as supporting it; unsupported fields return
+    // a 400 upstream, so both controls are gated independently.
     const table = [
       { id: "gpt-5.5", retentionSent: true, optionsSent: false },
       { id: "gpt-5", retentionSent: true, optionsSent: false },
       { id: "gpt-4.1", retentionSent: true, optionsSent: false },
+      { id: "gpt-4o-mini", retentionSent: false, optionsSent: false },
       { id: "gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "gpt-5.6-mini", retentionSent: false, optionsSent: true },
       { id: "gpt-6", retentionSent: false, optionsSent: true },
@@ -655,6 +815,46 @@ describe("OpenAI Responses route", () => {
     }
   })
 
+  it.effect("keeps compatible GPT-5.6 routes key-only when route defaults contain public cache controls", () =>
+    Effect.gen(function* () {
+      const publicModel = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6")
+      const compatibleModel = Model.update(publicModel, {
+        route: publicModel.route.with({
+          id: "openai-compatible-responses",
+          defaults: {
+            providerOptions: {
+              openai: {
+                promptCacheKey: "route-key",
+                promptCacheRetention: "24h",
+                promptCacheOptions: { mode: "explicit", ttl: "30m" },
+              },
+            },
+          },
+        }),
+      })
+      const cache = new CacheHint({ type: "ephemeral" })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: compatibleModel,
+          system: { type: "text", text: "stable", cache },
+          messages: [Message.user([{ type: "text", text: "hi", cache }])],
+          providerOptions: {
+            openai: {
+              promptCacheKey: "request-key",
+              promptCacheRetention: "24h",
+              promptCacheOptions: { mode: "explicit", ttl: "30m" },
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.prompt_cache_key).toBe("request-key")
+      expect(prepared.body.prompt_cache_retention).toBeUndefined()
+      expect(prepared.body.prompt_cache_options).toBeUndefined()
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
+    }),
+  )
+
   it.effect("marks an explicit prompt_cache_breakpoint on cached system/user content for gpt-5.6+ only", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
@@ -686,7 +886,39 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("caps explicit prompt_cache_breakpoint markers at 3 in implicit mode", () =>
+  it.effect("marks cached assistant text only on direct GPT-5.6 Responses routes", () =>
+    Effect.gen(function* () {
+      const cache = new CacheHint({ type: "ephemeral" })
+      const direct = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6")
+      const compatible = Model.update(direct, { route: direct.route.with({ id: "openai-compatible-responses" }) })
+      const models = [
+        { model: direct, marked: true },
+        { model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.5"), marked: false },
+        { model: compatible, marked: false },
+      ] as const
+
+      for (const entry of models) {
+        const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+          LLM.request({
+            model: entry.model,
+            messages: [Message.assistant({ type: "text", text: "cached assistant", cache })],
+          }),
+        )
+        const input = prepared.body.input[0]
+        if (entry.marked) {
+          expect(input).toEqual({
+            role: "assistant",
+            content: [{ type: "input_text", text: "cached assistant", prompt_cache_breakpoint: { mode: "explicit" } }],
+          })
+          continue
+        }
+        expect(input).toEqual({ role: "assistant", content: [{ type: "output_text", text: "cached assistant" }] })
+        expect(JSON.stringify(input)).not.toContain("prompt_cache_breakpoint")
+      }
+    }),
+  )
+
+  it.effect("preserves every explicit prompt_cache_breakpoint beyond OpenAI's implicit write capacity", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -699,6 +931,8 @@ describe("OpenAI Responses route", () => {
             Message.user([{ type: "text", text: "b", cache }]),
             Message.assistant({ type: "text", text: "ok" }),
             Message.user([{ type: "text", text: "c", cache }]),
+            Message.assistant({ type: "text", text: "ok" }),
+            Message.user([{ type: "text", text: "d", cache }]),
           ],
         }),
       )
@@ -711,7 +945,7 @@ describe("OpenAI Responses route", () => {
             )
           : [],
       )
-      expect(marked).toHaveLength(3)
+      expect(marked.map((part) => part.text)).toEqual(["s", "a", "b", "c", "d"])
     }),
   )
 
@@ -800,6 +1034,44 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.store).toBe(false)
       expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
       expect(prepared.body.reasoning).toEqual({ effort: "medium", summary: "auto" })
+    }),
+  )
+
+  it.effect("enables server-side compaction for direct GPT-5.6 Responses models", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.6"),
+          prompt: "Keep this task state across a long session.",
+        }),
+      )
+
+      expect(prepared.body.context_management).toEqual([{ type: "compaction", compact_threshold: 200_000 }])
+    }),
+  )
+
+  it.effect("honors direct OpenAI compaction overrides", () =>
+    Effect.gen(function* () {
+      const model = OpenAI.configure({
+        baseURL: "https://api.openai.test/v1/",
+        apiKey: "test",
+        providerOptions: {
+          openai: { contextManagement: [{ type: "compaction", compactThreshold: 400_000 }] },
+        },
+      }).responses("gpt-5.6")
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model, prompt: "Use a custom compaction threshold." }),
+      )
+      const disabled = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          prompt: "Do not use provider compaction.",
+          providerOptions: { openai: { contextManagement: [] } },
+        }),
+      )
+
+      expect(prepared.body.context_management).toEqual([{ type: "compaction", compact_threshold: 400_000 }])
+      expect(disabled.body.context_management).toBeUndefined()
     }),
   )
 
@@ -899,6 +1171,38 @@ describe("OpenAI Responses route", () => {
           reason: "stop",
           providerMetadata: { openai: { responseId: "resp_1", serviceTier: "default" } },
           usage,
+        },
+      ])
+    }),
+  )
+
+  it.effect("appends URL citations to canonical assistant text", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_text.delta", item_id: "msg_1", delta: "Read the documentation." },
+              {
+                type: "response.output_text.annotation.added",
+                item_id: "msg_1",
+                annotation: {
+                  type: "url_citation",
+                  title: "Effect Documentation",
+                  url: "https://effect.website/docs",
+                },
+              },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ),
+          ),
+        ),
+      )
+
+      expect(response.text).toBe("Read the documentation.\n\nSource: Effect Documentation\nhttps://effect.website/docs")
+      expect(response.message.content).toEqual([
+        {
+          type: "text",
+          text: "Read the documentation.\n\nSource: Effect Documentation\nhttps://effect.website/docs",
         },
       ])
     }),
@@ -1147,6 +1451,52 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("replays a server compaction item and drops prior stateless history", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(
+        LLM.request({
+          model,
+          prompt: "Before compaction.",
+          providerOptions: { openai: { store: false } },
+        }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              {
+                type: "response.output_item.done",
+                item: { type: "compaction", id: "cmp_1", encrypted_content: "encrypted-compaction-state" },
+              },
+              { type: "response.completed", response: { id: "resp_1" } },
+            ),
+          ),
+        ),
+      )
+
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [Message.user("Before compaction."), response.message, Message.user("After compaction.")],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(response.message.content).toEqual([
+        {
+          type: "reasoning",
+          text: "",
+          providerMetadata: {
+            openai: { itemId: "cmp_1", compactionEncryptedContent: "encrypted-compaction-state" },
+          },
+        },
+      ])
+      expect(prepared.body.input).toEqual([
+        { type: "compaction", id: "cmp_1", encrypted_content: "encrypted-compaction-state" },
+        { role: "user", content: [{ type: "input_text", text: "After compaction." }] },
+      ])
+    }),
+  )
+
   it.effect("preserves assistant content order around reasoning items", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -1239,6 +1589,49 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.input).toEqual([
         { type: "item_reference", id: "ws_1" },
         { role: "user", content: [{ type: "input_text", text: "Continue." }] },
+      ])
+    }),
+  )
+
+  it.effect("replays stateless hosted web search results", () =>
+    Effect.gen(function* () {
+      const item = {
+        type: "web_search_call",
+        id: "ws_1",
+        status: "completed",
+        action: { type: "search", query: "Effect release notes" },
+      }
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.user("Find the latest Effect release notes."),
+            Message.assistant([
+              ToolCallPart.make({
+                id: "ws_1",
+                name: "web_search",
+                input: item.action,
+                providerExecuted: true,
+                providerMetadata: { openai: { itemId: "ws_1" } },
+              }),
+              ToolResultPart.make({
+                id: "ws_1",
+                name: "web_search",
+                result: item,
+                providerExecuted: true,
+                providerMetadata: { openai: { itemId: "ws_1" } },
+              }),
+            ]),
+            Message.user("Summarize the relevant change."),
+          ],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "Find the latest Effect release notes." }] },
+        item,
+        { role: "user", content: [{ type: "input_text", text: "Summarize the relevant change." }] },
       ])
     }),
   )

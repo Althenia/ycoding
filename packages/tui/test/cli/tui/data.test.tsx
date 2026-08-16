@@ -2059,6 +2059,83 @@ test("adds and dismisses permission requests from live events", async () => {
   }
 })
 
+test("hydrates and updates root-family guardrail reviews", async () => {
+  const events = createEventStream()
+  const initial = {
+    id: "grq_initial",
+    rootSessionID: "ses_root",
+    sessionID: "ses_child",
+    action: "shell",
+    resources: ["git reset --hard"],
+    ruleIDs: ["standard.review.git-destructive"],
+    reason: "Destructive Git operation",
+    standard: true,
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_root/guardrail/request") return json({ data: [initial] })
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+
+  function Probe() {
+    data = useData()
+    client = useClient()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => client.connection.status() === "connected")
+    await data.session.guardrail.sync("ses_root")
+    expect(data.session.guardrail.list("ses_root")).toEqual([initial])
+
+    emitEvent(events, {
+      id: "evt_guardrail_asked_1",
+      created: 0,
+      type: "guardrail.asked",
+      data: {
+        id: "grq_live",
+        rootSessionID: "ses_root",
+        sessionID: "ses_child_2",
+        action: "shell",
+        resources: ["npm publish"],
+        ruleIDs: ["standard.review.release"],
+        reason: "Package publishing",
+        standard: true,
+      },
+    })
+    await wait(() => data.session.guardrail.list("ses_root").length === 2)
+
+    emitEvent(events, {
+      id: "evt_guardrail_replied_1",
+      created: 0,
+      type: "guardrail.replied",
+      data: {
+        rootSessionID: "ses_root",
+        sessionID: "ses_child",
+        requestID: "grq_initial",
+        reply: "once",
+      },
+    })
+    await wait(() => data.session.guardrail.list("ses_root").length === 1)
+    expect(data.session.guardrail.list("ses_root")[0]?.id).toBe("grq_live")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("reconciles active session permissions when the event stream reconnects", async () => {
   const events = createEventStream()
   let requests = [
@@ -2820,6 +2897,78 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
     expect(sync.session.message.get(sessionID, messageID)).toBe(message)
     expect(sync.session.message.get(sessionID, "missing")).toBeUndefined()
     expect(received).toHaveLength(3)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("restores a pending steer after leaving and reopening a child session", async () => {
+  const events = createEventStream()
+  const childID = "session-child"
+  const messageID = "msg-child-steer"
+  const pending = {
+    id: messageID,
+    sessionID: childID,
+    admittedSeq: 0,
+    timeCreated: 100,
+    type: "user" as const,
+    data: { text: "Keep this steer visible" },
+    delivery: "steer" as const,
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${childID}/pending`) return json({ data: [pending] })
+    if (url.pathname === `/api/session/${childID}/message`) return json({ data: [], cursor: {} })
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    emitEvent(events, {
+      id: "evt-child-steer",
+      created: 100,
+      type: "session.input.admitted",
+      durable: durable(childID),
+      data: {
+        sessionID: childID,
+        inputID: messageID,
+        input: { type: "user", data: pending.data, delivery: "steer" },
+      },
+    })
+    await wait(() => sync.session.message.get(childID, messageID) !== undefined)
+    sync.session.message.evict(childID)
+    expect(sync.session.message.list(childID)).toEqual([])
+
+    sync.session.pending.invalidate(childID)
+    await Promise.all([sync.session.pending.sync(childID), sync.session.message.sync(childID)])
+
+    expect(sync.session.input.list(childID)).toEqual([messageID])
+    expect(sync.session.message.get(childID, messageID)).toMatchObject({
+      id: messageID,
+      type: "user",
+      text: "Keep this steer visible",
+    })
   } finally {
     app.renderer.destroy()
   }

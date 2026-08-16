@@ -24,21 +24,26 @@ const model = (packageName: string, settings: Record<string, unknown> = {}) =>
     limit: { context: 100, output: 20 },
   })
 
-const streamModel = (events: ReadonlyArray<LanguageModelV3StreamPart>): LanguageModelV3 => ({
+const streamModel = (
+  events: ReadonlyArray<LanguageModelV3StreamPart>,
+  onStream?: (options: LanguageModelV3CallOptions) => void,
+): LanguageModelV3 => ({
   specificationVersion: "v3",
   provider: "test",
   modelId: "test",
   supportedUrls: {},
   doGenerate: () => Promise.reject(new Error("Unexpected non-streaming request")),
-  doStream: () =>
-    Promise.resolve({
+  doStream: (options) => {
+    onStream?.(options)
+    return Promise.resolve({
       stream: new ReadableStream({
         start(controller) {
           events.forEach((event) => controller.enqueue(event))
           controller.close()
         },
       }),
-    }),
+    })
+  },
 })
 
 const usage = {
@@ -747,6 +752,63 @@ it.effect("preserves valid Claude 5 chronological system updates", () =>
         { role: "assistant", content: [{ type: "text", text: "answer" }] },
       ])
     }
+  }),
+)
+
+it.effect("converts DeepSeek textual tool controls into a local tool call", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    let options: LanguageModelV3CallOptions | undefined
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () =>
+          streamModel(
+            [
+              { type: "text-start", id: "text_1" },
+              { type: "text-delta", id: "text_1", delta: "I'll run the shell command for you.<｜ tool▁calls▁be" },
+              {
+                type: "text-delta",
+                id: "text_1",
+                delta:
+                  'gin｜ ><｜ tool▁call▁begin｜ >function<｜ tool▁sep｜ >shell\n{"command":"echo hello-from-capture"}\n```<｜ tool▁call▁end｜ ><｜ tool▁calls▁end｜ >',
+              },
+              { type: "text-end", id: "text_1" },
+              {
+                type: "finish",
+                finishReason: { unified: "stop", raw: "stop" },
+                usage,
+              },
+            ],
+            (value) => (options = value),
+          ),
+      }
+    })
+
+    const resolved = yield* aisdk.model({
+      ...model("@openrouter/ai-sdk-provider"),
+      modelID: ModelV2.ID.make("deepseek/deepseek-r1"),
+    })
+    const response = yield* LLMClient.generate(
+      LLM.request({
+        model: resolved,
+        prompt: "Run the shell command: echo hello-from-capture",
+        tools: [
+          {
+            name: "shell",
+            description: "Run a shell command.",
+            inputSchema: { type: "object", properties: { command: { type: "string" } } },
+          },
+        ],
+      }),
+    ).pipe(Effect.provide(client))
+
+    expect(options?.tools).toMatchObject([{ type: "function", name: "shell" }])
+    expect(response.text).toBe("I'll run the shell command for you.")
+    expect(response.text).not.toContain("tool▁calls")
+    expect(response.events.find(LLMEvent.is.toolCall)).toMatchObject({
+      name: "shell",
+      input: { command: "echo hello-from-capture" },
+    })
   }),
 )
 

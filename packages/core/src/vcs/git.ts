@@ -3,7 +3,7 @@ export * as VcsGit from "./git"
 import { Effect } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FileDiff } from "@ycoding-ai/schema/file-diff"
-import { FileStatus, Mode } from "@ycoding-ai/schema/vcs"
+import { Branch, FileStatus, Mode } from "@ycoding-ai/schema/vcs"
 import { AppProcess } from "../process"
 import type { DiffOptions, Interface } from "../vcs"
 import { chunksByFile, emptyPatch, MAX_PATCH_BYTES, MAX_TOTAL_PATCH_BYTES, PATCH_CONTEXT_LINES } from "./patch"
@@ -58,6 +58,16 @@ export function make(proc: AppProcess.Interface, input: { directory: string; wor
       const ref = yield* git.mergeBase(ctx.directory, root.ref)
       if (!ref) return []
       return yield* diffAgainstRef(ctx, ref, options)
+    }),
+    branch: Effect.fn("VcsGit.branchInfo")(function* () {
+      const [current, defaultBranch] = yield* Effect.all(
+        [ctx.git.branch(ctx.directory), ctx.git.defaultBranch(ctx.directory)],
+        { concurrency: 2 },
+      )
+      return {
+        ...(current ? { current } : {}),
+        ...(defaultBranch ? { default: defaultBranch.name } : {}),
+      } satisfies Branch
     }),
   }
 }

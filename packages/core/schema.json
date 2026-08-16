@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "353f00e5-deec-4d45-9fde-e1a2bccff0b2",
+  "id": "129738d8-afe3-4730-9f11-0a683a0ca724",
   "prevIds": [
-    "2350eff0-26ca-40e5-ba53-d1b28aaebaec"
+    "bda79be0-d6df-4c63-87db-81ea6bb6a434"
   ],
   "ddl": [
     {
@@ -124,6 +124,10 @@
     },
     {
       "name": "session_pending",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_provider_request",
       "entityType": "tables"
     },
     {
@@ -2670,6 +2674,176 @@
       "generated": null,
       "name": "id",
       "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "route_id",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_cache_key",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "system_digest",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tool_digest",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempts",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "invalidation",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tokens",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
       "table": "session"
     },
     {
@@ -3907,6 +4081,21 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_provider_request_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_provider_request"
+    },
+    {
+      "columns": [
         "project_id"
       ],
       "tableTo": "project",
@@ -4295,6 +4484,15 @@
       "nameExplicit": false,
       "name": "session_pending_pk",
       "table": "session_pending",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_provider_request_pk",
+      "table": "session_provider_request",
       "entityType": "pks"
     },
     {
@@ -5026,6 +5224,42 @@
       "name": "session_pending_session_admitted_seq_idx",
       "entityType": "indexes",
       "table": "session_pending"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "request",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_provider_request_session_request_idx",
+      "entityType": "indexes",
+      "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "source",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_provider_request_session_source_idx",
+      "entityType": "indexes",
+      "table": "session_provider_request"
     },
     {
       "columns": [

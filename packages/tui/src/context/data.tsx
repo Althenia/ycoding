@@ -7,6 +7,7 @@ import type {
   AgentInfo,
   CommandInfo,
   FormInfo,
+  GuardrailRequestListOutput,
   IntegrationInfo,
   LocationRef,
   LocationGetOutput,
@@ -48,6 +49,7 @@ export type DataMessageHistoryPlaceholder = {
   oldestID?: string
   newestID?: string
   count?: number
+  pages?: { start: number; end: number }
   state: "collapsed" | "loading" | "error" | "expanded"
 }
 
@@ -81,6 +83,22 @@ type MessagePage = {
   cursor: string
   messages: SessionMessageInfo[]
 }
+
+export function messageHistoryPlaceholders(placeholders: readonly DataMessageHistoryPlaceholder[]) {
+  return placeholders.map((placeholder, index) => {
+    const tracked = placeholders.slice(0, index + 1).every((item) =>
+      item.oldestID !== undefined && item.newestID !== undefined && item.count !== undefined,
+    )
+    if (!tracked) return placeholder
+    const page = index + 1
+    return { ...placeholder, pages: { start: page, end: page } }
+  })
+}
+
+// The generated client widens JSON numbers to include non-finite string sentinels. Only a real
+// number is a usable count; anything else is unreported rather than zero.
+const finiteCount = (value: number | "Infinity" | "-Infinity" | "NaN" | null | undefined) =>
+  typeof value === "number" ? value : undefined
 
 const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
 
@@ -124,6 +142,7 @@ type Store = {
     todo: Record<string, SessionTodoInfo[]>
     input: Record<string, string[]>
     permission: Record<string, PermissionV2Request[]>
+    guardrail: Record<string, GuardrailRequestListOutput>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
   }
@@ -496,6 +515,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         todo: {},
         input: {},
         permission: {},
+        guardrail: {},
         form: {},
       },
       project: {
@@ -581,12 +601,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       return bounded
     }
 
-    function resetMessageHistory(sessionID: string, cursor?: string) {
+    function resetMessageHistory(sessionID: string, cursor?: string, remaining?: number) {
       messageLoad.delete(sessionID)
       clearMessagePage(sessionID)
+      // The server reports how many messages sit behind the cursor, so a collapsed archive can state
+      // its size before any of it is fetched. The page range stays with the per-page metadata that
+      // tracks real loaded pages; a range derived from a nominal page size would not survive the
+      // server returning short pages.
+      const archived = remaining !== undefined && remaining > 0 ? { count: remaining } : undefined
       setStore("session", "messageHistory", sessionID, {
         stale: false,
-        placeholders: cursor ? [{ sessionID, cursor, state: "collapsed" }] : [],
+        placeholders: cursor ? [{ sessionID, cursor, state: "collapsed", ...archived }] : [],
       })
     }
 
@@ -659,6 +684,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         const seen = new Set(messages.map((message) => message.id))
         const cursors = new Set<string>()
         let cursor = first.cursor.next ?? undefined
+        let remaining = finiteCount(first.cursor.messages)
         let completed = messages.filter(isMessageComplete).length
         while (completed < MESSAGE_HOT_LIMIT && cursor) {
           if (messageSyncLoad.get(sessionID) !== token) return
@@ -680,6 +706,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             if (isMessageComplete(message)) completed++
           })
           cursor = response.cursor.next ?? undefined
+          remaining = finiteCount(response.cursor.messages)
         }
         if (messageSyncLoad.get(sessionID) !== token) return
         const active = new Set(store.session.input[sessionID] ?? [])
@@ -692,7 +719,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           sessionID,
           reconcileCanonicalMessages(messages.toReversed(), store.session.message[sessionID] ?? [], touched, active),
         )
-        resetMessageHistory(sessionID, cursor)
+        resetMessageHistory(sessionID, cursor, remaining)
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
       }
@@ -753,6 +780,29 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         sessionID,
         (store.session.pending[sessionID] ?? []).filter((item) => item.id !== inputID),
       )
+    }
+
+    function projectPending(item: SessionPendingInfo) {
+      if (item.type === "compaction") return
+      message.update(item.sessionID, (draft, index) => {
+        message.append(
+          draft,
+          index,
+          item.type === "user"
+            ? {
+                id: item.id,
+                type: "user",
+                ...item.data,
+                time: { created: item.timeCreated },
+              }
+            : {
+                id: item.id,
+                type: "synthetic",
+                ...item.data,
+                time: { created: item.timeCreated },
+              },
+        )
+      })
     }
 
     const message = {
@@ -894,6 +944,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.invalidate(`session.message:${sessionID}`)
       sync.invalidate(`session.diagnostics:${sessionID}`)
       sync.invalidate(`session.permission:${sessionID}`)
+      sync.invalidate(`session.guardrail:${sessionID}`)
       sync.invalidate(`session.form:${sessionID}:`)
       setStore(
         "session",
@@ -913,6 +964,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           }
           delete draft.input[sessionID]
           delete draft.permission[sessionID]
+          delete draft.guardrail[sessionID]
+          for (const [rootID, requests] of Object.entries(draft.guardrail)) {
+            const next = requests.filter((request) => request.sessionID !== sessionID)
+            if (next.length === 0) delete draft.guardrail[rootID]
+            else draft.guardrail[rootID] = next
+          }
           delete draft.form[sessionID]
           for (const [rootID, family] of Object.entries(draft.family)) {
             const next = family.filter((id) => id !== sessionID)
@@ -1075,39 +1132,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         }
-        case "session.input.admitted":
-          addPending({
+        case "session.input.admitted": {
+          const pending = {
             id: event.data.inputID,
             sessionID: event.data.sessionID,
             admittedSeq: event.durable.seq,
             timeCreated: event.created,
             ...event.data.input,
-          })
+          }
+          addPending(pending)
           if (!store.session.input[event.data.sessionID]?.includes(event.data.inputID))
             setStore("session", "input", event.data.sessionID, [
               ...(store.session.input[event.data.sessionID] ?? []),
               event.data.inputID,
             ])
-          message.update(event.data.sessionID, (draft, index) => {
-            message.append(
-              draft,
-              index,
-              event.data.input.type === "user"
-                ? {
-                    id: event.data.inputID,
-                    type: "user",
-                    ...event.data.input.data,
-                    time: { created: event.created },
-                  }
-                : {
-                    id: event.data.inputID,
-                    type: "synthetic",
-                    ...event.data.input.data,
-                    time: { created: event.created },
-                  },
-            )
-          })
+          projectPending(pending)
           break
+        }
         case "session.instructions.updated":
           const instructions = event.metadata?.instructions
           if (
@@ -1537,6 +1578,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ),
           )
           break
+        case "guardrail.asked":
+          if (store.session.guardrail[event.data.rootSessionID]?.some((request) => request.id === event.data.id)) break
+          setStore("session", "guardrail", event.data.rootSessionID, [
+            ...(store.session.guardrail[event.data.rootSessionID] ?? []),
+            event.data,
+          ])
+          break
+        case "guardrail.replied":
+          setStore(
+            "session",
+            "guardrail",
+            event.data.rootSessionID,
+            (store.session.guardrail[event.data.rootSessionID] ?? []).filter(
+              (request) => request.id !== event.data.requestID,
+            ),
+          )
+          break
         case "form.created":
           if (store.session.form[event.data.form.sessionID]?.some((form) => form.id === event.data.form.id)) break
           setStore("session", "form", event.data.form.sessionID, [
@@ -1654,6 +1712,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 sessionID,
                 reconcile(pending.filter((item) => item.type !== "compaction").map((item) => item.id)),
               )
+              pending.forEach(projectPending)
             })
           },
           invalidate(sessionID: string) {
@@ -1727,10 +1786,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           history(sessionID: string): DataMessageHistoryPlaceholder[] {
             const expanded = store.session.messagePage[sessionID]?.cursor
-            return (store.session.messageHistory[sessionID]?.placeholders ?? []).map((item) => ({
-              ...item,
-              state: expanded !== undefined && item.cursor === expanded ? "expanded" : item.state,
-            }))
+            return messageHistoryPlaceholders(
+              (store.session.messageHistory[sessionID]?.placeholders ?? []).map((item) => ({
+                ...item,
+                state: expanded !== undefined && item.cursor === expanded ? "expanded" : item.state,
+              })),
+            )
           },
           memory(sessionID: string) {
             const memory = process.memoryUsage()
@@ -1883,6 +1944,21 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.permission:${sessionID}`)
+          },
+        },
+        guardrail: {
+          list(sessionID: string) {
+            return store.session.guardrail[resolveRoot(sessionID)] ?? []
+          },
+          sync(sessionID: string) {
+            return sync.run(`session.guardrail:${sessionID}`, async () => {
+              const requests = await client.api.guardrail.request.list({ sessionID })
+              const rootID = requests[0]?.rootSessionID ?? resolveRoot(sessionID)
+              setStore("session", "guardrail", rootID, reconcile(requests))
+            })
+          },
+          invalidate(sessionID: string) {
+            sync.invalidate(`session.guardrail:${sessionID}`)
           },
         },
         form: {

@@ -19,7 +19,9 @@ const writePackage = (dir: string, pkg: Record<string, unknown>) =>
   )
 
 const npmLayer = (cache: string) =>
-  AppNodeBuilder.build(Npm.node, [[Global.node, Global.layerWith({ cache, state: path.join(cache, "state") })]])
+  AppNodeBuilder.build(Npm.node, [
+    [Global.node, Global.layerWith({ data: path.join(cache, "data"), cache, state: path.join(cache, "state") })],
+  ])
 
 describe("Npm.sanitize", () => {
   test("keeps normal scoped package specs unchanged", () => {

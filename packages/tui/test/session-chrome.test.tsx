@@ -1,14 +1,10 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import type { Renderable } from "@opentui/core"
 import { describe, expect, test } from "bun:test"
-import { createSignal } from "solid-js"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Keymap } from "../src/context/keymap"
 import { modeChips } from "../src/component/prompt/mode-chips"
 import {
   Header,
-  pendingModelVariant,
   headerSegments,
   headerStatusLabel,
   type SessionHeaderIdentity,
@@ -20,7 +16,6 @@ import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/v2/resolve"
-import { getGlyph } from "../src/ui/glyph"
 
 const identity = {
   path: "~/Workspace/Personal/YCoding",
@@ -69,16 +64,12 @@ describe("header truncation ladder", () => {
 describe("header status", () => {
   const cases: Array<[SessionHeaderState, number, string]> = [
     [{ type: "ready" }, 100, "ready"],
-    [{ type: "working", elapsed: 4.14 }, 120, "cooking 4.1s"],
-    [{ type: "thinking", elapsed: 4.14 }, 120, "thinking · 4.1s"],
-    [{ type: "tool-running", elapsed: 4.14 }, 120, "tool running · 4.1s"],
-    [{ type: "waiting", count: 1 }, 100, "waiting · 1 subagent"],
-    [{ type: "waiting", count: 2 }, 100, "waiting · 2 subagents"],
+    [{ type: "working", elapsed: 4.14 }, 120, "working 4.1s"],
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
-    [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
-    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO 2 \u00b7 auto-approve · ready"],
-    [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "Goal · autonomous · cooking 4.1s"],
+    [{ type: "provider-error", code: 429 }, 100, "provider error \u00b7 429"],
+    [{ type: "provider-error" }, 100, "provider error"],
+    [{ type: "yolo" }, 100, "YOLO \u00b7 auto-approve"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -94,48 +85,6 @@ describe("header status", () => {
   test("shows the active shell count instead of ready", () => {
     expect(headerStatusLabel({ type: "ready" }, 100, 3)).toBe("3 shells running")
   })
-
-  test("reports the retry attempt and countdown", () => {
-    expect(headerStatusLabel({ type: "retry-scheduled", attempt: 2, at: 15_000 }, 100, undefined, 10_000)).toBe(
-      "1 failed · retry 2 · in 5s",
-    )
-  })
-
-  test("reports retrying without countdown", () => {
-    expect(headerStatusLabel({ type: "retrying", attempt: 2 }, 100)).toBe("retrying · attempt 2")
-  })
-
-  test("keeps active autonomy and retry status visible together", () => {
-    expect(
-      headerStatusLabel(
-        { type: "autonomy", yolo: 0, goalActive: true, state: { type: "retry-scheduled", attempt: 2, at: 15_000 } },
-        100,
-        undefined,
-        10_000,
-      ),
-    ).toBe("Goal · autonomous · 1 failed · retry 2 · in 5s")
-  })
-
-  test("keeps active autonomy and retrying visible together", () => {
-    expect(
-      headerStatusLabel({ type: "autonomy", yolo: 0, goalActive: true, state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
-    ).toBe("Goal · autonomous · retrying · attempt 2")
-  })
-})
-
-test("shows the selected model and variant only while the session still uses a different next-prompt choice", () => {
-  expect(
-    pendingModelVariant(
-      { model: "GPT-5.6 Terra", variant: "high" },
-      { pendingModel: "GPT-5.6 Terra", pendingVariant: "xhigh" },
-    ),
-  ).toBe("→ GPT-5.6 Terra · xhigh")
-  expect(
-    pendingModelVariant(
-      { model: "GPT-5.6 Terra", variant: "high" },
-      { pendingModel: "GPT-5.6 Terra", pendingVariant: "high" },
-    ),
-  ).toBeUndefined()
 })
 
 function HeaderKeymap(props: Parameters<typeof Header>[0]) {
@@ -154,16 +103,6 @@ function HeaderKeymap(props: Parameters<typeof Header>[0]) {
       <text>{leaderActive() ? "leader pending" : ""}</text>
     </>
   )
-}
-
-function findSpinnerInterval(node: Renderable): number | undefined {
-  if ("interval" in node && "frames" in node && typeof node.interval === "number" && Array.isArray(node.frames)) {
-    return node.interval
-  }
-  return node
-    .getChildren()
-    .flatMap((child) => findSpinnerInterval(child) ?? [])
-    .at(0)
 }
 
 async function renderHeader(
@@ -199,7 +138,7 @@ async function renderHeader(
     { width, height: 6, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes(input.subagent ? "subagent" : `v${InstallationVersion}`))
+  await app.waitForFrame((frame) => frame.includes(input.subagent ? "subagent" : "ycoding"))
   if (input.leaderPending) {
     app.mockInput.pressKey("x", { ctrl: true })
     await app.waitForFrame((frame) => frame.includes("leader pending"))
@@ -209,32 +148,34 @@ async function renderHeader(
 
 describe("autonomy mode chips", () => {
   test("shows both modes off for a normal session", () => {
-    expect(modeChips({ autonomy: { mode: "normal", yolo: 0 } })).toEqual([
+    expect(modeChips({ autonomy: { mode: "normal" } })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
       { key: "yolo", label: "YOLO off", tone: "off" },
     ])
   })
 
   test("inverts YOLO because it auto-approves", () => {
-    expect(modeChips({ autonomy: { mode: "normal", yolo: 2 } })[1]).toEqual({
+    expect(modeChips({ autonomy: { mode: "yolo" } })[1]).toEqual({
       key: "yolo",
-      label: "YOLO 2",
+      label: "YOLO",
       tone: "danger",
     })
   })
 
-  test("shows only the goal label while goal mode is active", () => {
-    const autonomy = { mode: "normal", yolo: 0, goal: { runID: "run_session_chrome_fixture", text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
+  test("shows goal progress against the no-progress bound while active", () => {
+    const autonomy = {
+      mode: "goal",
+      goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
     } as const
-    const chip = modeChips({ autonomy })[0]
-    expect(chip).toEqual({ key: "goal", label: "goal", tone: "on" })
-    expect(chip?.label).not.toContain("/")
+    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal 3/5", tone: "on" })
   })
 
-  test("shows goal off after leaving goal mode with retained terminal state", () => {
-    const autonomy = { mode: "normal", yolo: 0, goal: { runID: "run_session_chrome_fixture", text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
+  test("keeps a terminal goal status visible after leaving goal mode", () => {
+    const autonomy = {
+      mode: "normal",
+      goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
     } as const
-    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
+    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal completed", tone: "off" })
   })
 
   test("renders the chips on the composer status row", async () => {
@@ -250,7 +191,7 @@ describe("autonomy mode chips", () => {
           <ConfigProvider config={config}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={{ mode: "normal", yolo: 2 }} />
+                <ModeChips autonomy={{ mode: "yolo" }} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -282,7 +223,7 @@ describe("header rendering", () => {
     )
     expect(spans.find((span) => span.text.includes("Build"))?.fg.toInts()).toEqual(theme.text.default.toInts())
     expect(spans.find((span) => span.text.includes("anthropic/claude-opus-5"))?.fg.toInts()).toEqual(
-      theme.text.subdued.toInts(),
+      theme.text.default.toInts(),
     )
     expect(spans.find((span) => span.text.includes("max"))?.fg.toInts()).toEqual(
       theme.text.feedback.success.default.toInts(),
@@ -312,16 +253,10 @@ describe("header rendering", () => {
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const cases: Array<[SessionHeaderState, string, { toInts(): readonly number[] }]> = [
       [{ type: "ready" }, "ready", theme.text.subdued],
-      [{ type: "working", elapsed: 4.1 }, "cooking 4.1s", theme.text.feedback.success.default],
-      [{ type: "thinking", elapsed: 4.1 }, "thinking · 4.1s", theme.text.feedback.success.default],
-      [{ type: "tool-running", elapsed: 4.1 }, "tool running · 4.1s", theme.text.feedback.info.default],
-      [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
+      [{ type: "working", elapsed: 4.1 }, "working 4.1s", theme.text.feedback.success.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
-      [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, "provider error", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "YOLO 2 · auto-approve · ready", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } }, "Goal · autonomous · ready", theme.text.feedback.success.default],
-      [{ type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
-      [{ type: "retrying", attempt: 2 }, "retrying · attempt 2", theme.text.feedback.warning.default],
+      [{ type: "provider-error" }, "provider error", theme.text.feedback.error.default],
+      [{ type: "yolo" }, "YOLO · auto-approve", theme.text.feedback.error.default],
     ]
 
     for (const [state, label, color] of cases) {
@@ -334,25 +269,15 @@ describe("header rendering", () => {
     }
   })
 
-  test("renders the generic provider failure label instead of the detailed message", async () => {
-    const app = await renderHeader(160, { type: "provider-error", message: "Provider overloaded; retry in 30 seconds." })
-    const frame = app.captureCharFrame()
-    expect(frame).toContain("provider error")
-    expect(frame).not.toContain("Provider overloaded; retry in 30 seconds.")
-    app.renderer.destroy()
-  })
-
-  test("shows the brand mark, mint dot trail, version, identity, and cooking status on the strip at 160 columns", async () => {
+  test("shows brand, identity, and status on the strip at 160 columns", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
     const frame = app.captureCharFrame()
     const lines = frame.split("\n")
-    expect(frame).toMatch(/\.\.●|\.●\.|●\.\./)
-    expect(frame).toContain(`v${InstallationVersion}`)
-    expect(frame).not.toContain("y. ycoding")
+    expect(frame).toContain("y. ycoding")
     expect(frame).toContain("~/Workspace/Personal/YCoding")
     expect(frame).toContain("main")
-    expect(frame).toContain("cooking 4.1s")
-    expect(lines.findIndex((line) => line.includes(`v${InstallationVersion}`))).toBe(1)
+    expect(frame).toContain("working 4.1s")
+    expect(lines.findIndex((line) => line.includes("y. ycoding"))).toBe(1)
     expect(lines[0]?.trim()).toBe("")
     expect(lines[2]?.trim()).toBe("")
     app.renderer.destroy()
@@ -361,8 +286,7 @@ describe("header rendering", () => {
   test("drops the path and branch at 80 columns instead of shrinking the state word", async () => {
     const app = await renderHeader(80, { type: "ready" })
     const frame = app.captureCharFrame()
-    expect(frame).toContain(`v${InstallationVersion}`)
-    expect(frame).not.toContain("y. ycoding")
+    expect(frame).toContain("y. ycoding")
     expect(frame).toContain("claude-opus-5")
     expect(frame).not.toContain("Workspace")
     expect(frame).toContain("ready")
@@ -370,59 +294,17 @@ describe("header rendering", () => {
   })
 
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
-    const app = await renderHeader(100, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } })
+    const app = await renderHeader(100, { type: "yolo" })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const spans = app.captureSpans().lines[3]?.spans ?? []
     const frame = app.captureCharFrame()
-    // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
-    // full-width destructive band under the header was an invention and read as a huge red bar.
-    expect(frame).toContain("YOLO 2 \u00b7 auto-approve")
-    expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
+    expect(frame).toContain("YOLO \u00b7 auto-approve")
+    expect(spans).not.toHaveLength(0)
     expect(
-      (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
+      spans.every((span) =>
         span.bg.toInts().every((value, index) => value === theme.background.action.destructive.default.toInts()[index]),
       ),
-    ).toBe(false)
-    app.renderer.destroy()
-  })
-
-  test("counts down the top-right retry indicator", async () => {
-    const app = await renderHeader(160, { type: "retry-scheduled", attempt: 2, at: Date.now() + 1_500 })
-    await app.waitForFrame((frame) => frame.includes("1 failed · retry 2 · in 2s"))
-    await Bun.sleep(600)
-    await app.waitForFrame((frame) => frame.includes("1 failed · retry 2 · in 1s"))
-    expect(app.captureCharFrame()).not.toMatch(/\.\.●|\.●\.|●\.\./)
-    app.renderer.destroy()
-  })
-
-  test("scheduled retry shows countdown without animation", async () => {
-    const app = await renderHeader(160, { type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 })
-    expect(app.captureCharFrame()).toContain("1 failed · retry 2 · in")
-    expect(app.captureCharFrame()).not.toMatch(/\.\.●|\.●\.|●\.\./)
-    app.renderer.destroy()
-  })
-
-  test("animates retrying with the warning dot trail without countdown", async () => {
-    const app = await renderHeader(160, { type: "retrying", attempt: 2 })
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const initial = app.captureCharFrame()
-    const initialTrail = initial.match(/\.\.●|\.●\.|●\.\./)?.[0]
-
-    expect(initialTrail).toBeDefined()
-    expect(initial).toContain("retrying · attempt 2")
-    expect(initial).not.toContain(" in ")
-    expect(initial).not.toContain(getGlyph("failed").glyph)
-    await app.waitForFrame((frame) => {
-      const trail = frame.match(/\.\.●|\.●\.|●\.\./)?.[0]
-      return !!trail && trail !== initialTrail && frame.includes("retrying · attempt 2")
-    })
-
-    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-    expect(spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))?.fg.toInts()).toEqual(
-      theme.text.feedback.warning.default.toInts(),
-    )
-    expect(spans.find((span) => span.text.includes("retrying · attempt 2"))?.fg.toInts()).toEqual(
-      theme.text.feedback.warning.default.toInts(),
-    )
+    ).toBe(true)
     app.renderer.destroy()
   })
 
@@ -467,14 +349,15 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("keeps a focused model subdued and uses the label token for its hint", async () => {
+  test("keeps a focused model at its role color and uses the label token for its hint", async () => {
     const app = await renderHeader(160, { type: "ready" }, { focused: "model" })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const model = spans.find((span) => span.text.includes("anthropic/claude-opus-5"))
     const hint = spans.find((span) => span.text.includes("\u2303x m change"))
 
-    expect(model?.fg.toInts()).toEqual(theme.text.subdued.toInts())
+    expect(model?.fg.toInts()).toEqual(theme.text.default.toInts())
+    expect(model?.fg.toInts()).not.toEqual(theme.text.feedback.info.default.toInts())
     expect(model?.bg.toInts()).toEqual(theme.background.surface.overlay.toInts())
     expect(hint?.fg.toInts()).toEqual(theme.text.label.toInts())
 
@@ -499,165 +382,27 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("renders subagent identity and cooking status in the info token", async () => {
+  test("renders subagent identity and working status in the info token", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 }, { subagent: true })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const brand = spans.find((span) => span.text.includes("◦ subagent"))
-    const status = spans.find((span) => span.text.includes("cooking 4.1s"))
+    const status = spans.find((span) => span.text.includes("working 4.1s"))
 
     expect(brand?.fg.toInts()).toEqual(theme.text.feedback.info.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.info.default.toInts())
     app.renderer.destroy()
   })
 
-  test("keeps main-session cooking status and dot trail in the accent token", async () => {
+  test("keeps main-session identity and working status in the accent token", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-    const status = spans.find((span) => span.text.includes("cooking 4.1s"))
+    const brand = spans.find((span) => span.text.includes("y. ycoding"))
+    const status = spans.find((span) => span.text.includes("working 4.1s"))
 
-    expect(spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
+    expect(brand?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
-    app.renderer.destroy()
-  })
-
-  test("uses the slower native spinner interval while preserving normal working success color", async () => {
-    const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-
-    expect(findSpinnerInterval(app.renderer.root)).toBe(160)
-    expect(spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))?.fg.toInts()).toEqual(
-      theme.text.feedback.success.default.toInts(),
-    )
-    app.renderer.destroy()
-  })
-
-  test("uses the YOLO error token for the dot trail and adjacent working status", async () => {
-    const app = await renderHeader(160, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "working", elapsed: 4.1 } })
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-    const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
-    const status = spans.find((span) => span.text.includes("YOLO 2 · auto-approve · cooking 4.1s"))
-
-    expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
-    expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
-    app.renderer.destroy()
-  })
-
-  test("keeps the animation-disabled normal working fallback static and success-colored", async () => {
-    const app = await renderHeader(
-      160,
-      { type: "working", elapsed: 4.1 },
-      { config: createTuiResolvedConfig({ animations: false }) },
-    )
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-    const fallback = spans.find((span) => span.text.includes("⋯"))
-
-    expect(app.captureCharFrame()).not.toMatch(/\.\.●|\.●\.|●\.\./)
-    expect(fallback?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
-    app.renderer.destroy()
-  })
-
-  test("renders next-prompt agent, model, and variant for a main Session but not a subagent", async () => {
-    const config = createTuiResolvedConfig()
-    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
-      import("../src/config"),
-      import("../src/context/theme"),
-    ])
-    let setPendingAgent!: (value: string | undefined) => void
-    let setPending!: (value: Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">) => void
-    let setSubagent!: (value: boolean) => void
-    function LiveHeader() {
-      const [pendingAgent, setAgent] = createSignal<string>()
-      const [pending, set] = createSignal<Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">>({})
-      const [subagent, setSubagentSignal] = createSignal(false)
-      setPendingAgent = setAgent
-      setPending = set
-      setSubagent = setSubagentSignal
-      return (
-        <Header
-          {...identity}
-          pendingAgent={pendingAgent()}
-          pendingModel={pending().pendingModel}
-          pendingVariant={pending().pendingVariant}
-          state={{ type: "ready" }}
-          subagent={subagent()}
-        />
-      )
-    }
-    const app = await testRender(
-      () => (
-        <TestTuiContexts>
-          <ConfigProvider config={config}>
-            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <Keymap.Provider config={config}>
-                <LiveHeader />
-              </Keymap.Provider>
-            </ThemeProvider>
-          </ConfigProvider>
-        </TestTuiContexts>
-      ),
-      { width: 160, height: 6, kittyKeyboard: true },
-    )
-    app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("anthropic/claude-opus-5"))
-    setPendingAgent("Zeus")
-    await app.waitForFrame((frame) => frame.includes("→ Zeus"))
-    setPending({ pendingModel: "GPT-5.6 Terra", pendingVariant: "high" })
-    await app.waitForFrame((frame) => frame.includes("→ GPT-5.6 Terra · high"))
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const highlight = app
-      .captureSpans()
-      .lines.flatMap((line) => line.spans)
-      .find((span) => span.text.includes("→ GPT-5.6 Terra · high"))
-
-    expect(highlight?.fg.toInts()).toEqual(theme.text.subdued.toInts())
-    setSubagent(true)
-    await app.waitForFrame((frame) => frame.includes("subagent"))
-    expect(app.captureCharFrame()).not.toContain("→ Zeus")
-    expect(app.captureCharFrame()).not.toContain("→ GPT-5.6 Terra · high")
-    app.renderer.destroy()
-  })
-
-  test("updates active elapsed time and stops after becoming ready", async () => {
-    const config = createTuiResolvedConfig()
-    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
-      import("../src/config"),
-      import("../src/context/theme"),
-    ])
-    let setState!: (state: SessionHeaderState) => void
-    function LiveHeader() {
-      const [state, set] = createSignal<SessionHeaderState>({ type: "thinking", startedAt: Date.now() - 1_000 })
-      setState = set
-      return <Header {...identity} state={state()} />
-    }
-    const app = await testRender(
-      () => (
-        <TestTuiContexts>
-          <ConfigProvider config={config}>
-            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <Keymap.Provider config={config}>
-                <LiveHeader />
-              </Keymap.Provider>
-            </ThemeProvider>
-          </ConfigProvider>
-        </TestTuiContexts>
-      ),
-      { width: 160, height: 6, kittyKeyboard: true },
-    )
-    app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("thinking · 1."))
-    const initial = app.captureCharFrame()
-    await Bun.sleep(200)
-    expect(app.captureCharFrame()).not.toBe(initial)
-    setState({ type: "ready" })
-    await app.waitForFrame((frame) => frame.includes("ready"))
-    const settled = app.captureCharFrame()
-    await Bun.sleep(200)
-    expect(app.captureCharFrame()).toBe(settled)
     app.renderer.destroy()
   })
 

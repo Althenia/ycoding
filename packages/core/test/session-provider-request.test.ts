@@ -1,7 +1,5 @@
 import { expect } from "bun:test"
-import { eq, sql } from "drizzle-orm"
-import { Cause, Clock, DateTime, Effect, Exit, Layer } from "effect"
-import { TestClock } from "effect/testing"
+import { Effect, Exit, Layer } from "effect"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -12,20 +10,11 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
 import { SessionV2 } from "@ycoding-ai/core/session"
-import {
-  CompactionManifestBlobTable,
-  SessionCompactionJobTable,
-  SessionMessageTable,
-  SessionTable,
-} from "@ycoding-ai/core/session/sql"
-import { Hash } from "@ycoding-ai/core/util/hash"
+import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { Money } from "@ycoding-ai/schema/money"
-import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
-import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { testEffect } from "./lib/effect"
 
@@ -61,38 +50,7 @@ const insertSession = (id: SessionV2.ID) =>
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
-    yield* SessionContextState.initialize(db, id, Date.now())
   })
-
-it.effect("rejects step ownership when the prepared context revision is stale", () =>
-  Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_stale_context")
-    yield* insertSession(sessionID)
-
-    const service = yield* SessionProviderRequest.Service
-    const exit = yield* Effect.exit(
-      service.next({
-        sessionID,
-        source: "step",
-        agent: AgentV2.ID.make("build"),
-        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
-        routeID: "openai-responses",
-        promptCacheKey: "cache-key",
-        systemDigest: "system-digest",
-        toolDigest: "tool-digest",
-        expectedContextRevision: 1,
-      }),
-    )
-
-    expect(exit._tag).toBe("Failure")
-    expect(exit._tag === "Failure" ? Cause.squash(exit.cause) : undefined).toMatchObject({
-      _tag: "SessionProviderRequest.StaleContextRevision",
-      expected: 1,
-      actual: 0,
-    })
-    expect(yield* service.list(sessionID)).toEqual([])
-  }),
-)
 
 itWithFailingLedger.effect("contains provider-request persistence defects", () =>
   Effect.gen(function* () {
@@ -166,13 +124,6 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
       helpers: 0,
       continued: 1,
       fallback: 0,
-      models: [
-        {
-          model,
-          requests: 2,
-          tokens: { input: 30, output: 5, reasoning: 1, cache: { read: 100, write: 5 } },
-        },
-      ],
       tokens: { input: 30, output: 5, reasoning: 1, cache: { read: 100, write: 5 } },
       latestInvalidation: "tool-prefix-changed",
       latestNamespace: "abcdef12",
@@ -228,7 +179,6 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
     yield* tracker.complete({
       invalidation: "first-request",
       continuation: "full",
-      cacheReadReported: true,
       cost: Money.USD.make(0.0123),
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
     })
@@ -256,7 +206,6 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
     expect(Object.keys(records[0] ?? {}).sort()).toEqual([
       "agent",
       "attempts",
-      "cacheReadReported",
       "continuation",
       "cost",
       "id",
@@ -281,262 +230,9 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       continued: 0,
       fallback: 0,
       cost: Money.USD.make(0.0123),
-      models: [
-        {
-          model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
-          requests: 1,
-          cost: Money.USD.make(0.0123),
-          costProvenance: "recorded",
-          tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
-        },
-      ],
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
       latestInvalidation: "first-request",
       latestNamespace: "cache-ke",
-    })
-  }),
-)
-
-it.effect("persists true, false, and absent cache-read telemetry", () =>
-  Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_cache_read_reported")
-    yield* insertSession(sessionID)
-    const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
-
-    for (const cacheReadReported of [true, false, undefined]) {
-      const tracker = yield* service.next({
-        sessionID,
-        source: "step",
-        agent: AgentV2.ID.make("build"),
-        model,
-        routeID: "openai-responses",
-        promptCacheKey: "cache-key",
-        systemDigest: "system",
-        toolDigest: "tools",
-      })
-      yield* tracker.complete({
-        continuation: "full",
-        ...(cacheReadReported === undefined ? {} : { cacheReadReported }),
-        tokens: { input: 2_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      })
-    }
-
-    expect((yield* service.list(sessionID)).map((record) => record.cacheReadReported)).toEqual([true, false, undefined])
-  }),
-)
-
-it.effect("maintains a token and known-cost aggregate separate from raw provider-request projections", () =>
-  Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_aggregate")
-    yield* insertSession(sessionID)
-    const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
-    const record = Effect.fnUntraced(function* (cost: number | undefined, tokens: { input: number; output: number }) {
-      const tracker = yield* service.next({
-        sessionID,
-        source: "step",
-        agent: AgentV2.ID.make("build"),
-        model,
-        routeID: "openai-responses",
-        promptCacheKey: "cache-key",
-        systemDigest: "system",
-        toolDigest: "tools",
-      })
-      yield* tracker.complete({
-        continuation: "full",
-        ...(cost === undefined ? {} : { cost: Money.USD.make(cost) }),
-        tokens: { ...tokens, reasoning: 3, cache: { read: 40, write: 5 } },
-      })
-    })
-
-    yield* record(0.02, { input: 100, output: 10 })
-    yield* record(undefined, { input: 20, output: 4 })
-
-    const { db } = yield* Database.Service
-    expect(
-      yield* db
-        .get<{
-          logical: number
-          input: number
-          output: number
-          reasoning: number
-          cache_read: number
-          cache_write: number
-          cost: number | null
-        }>(
-          sql`SELECT logical, input, output, reasoning, cache_read, cache_write, cost FROM session_usage WHERE session_id = ${sessionID}`,
-        )
-        .pipe(Effect.orDie),
-    ).toEqual({ logical: 2, input: 120, output: 14, reasoning: 6, cache_read: 80, cache_write: 10, cost: null })
-  }),
-)
-
-it.effect("retains durable request usage when transcript projections are compacted", () =>
-  Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_compacted")
-    yield* insertSession(sessionID)
-    const service = yield* SessionProviderRequest.Service
-    const tracker = yield* service.next({
-      sessionID,
-      source: "step",
-      agent: AgentV2.ID.make("build"),
-      model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
-      routeID: "openai-responses",
-      promptCacheKey: "cache-key",
-      systemDigest: "system",
-      toolDigest: "tools",
-    })
-    yield* tracker.complete({
-      continuation: "full",
-      cost: Money.USD.make(0.25),
-      tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 4 } },
-    })
-
-    const { db } = yield* Database.Service
-    yield* db.delete(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).run().pipe(Effect.orDie)
-
-    expect(yield* service.list(sessionID)).toHaveLength(1)
-    expect(yield* service.summary(sessionID)).toMatchObject({
-      logical: 1,
-      physical: 1,
-      cost: Money.USD.make(0.25),
-      tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 4 } },
-    })
-  }),
-)
-
-it.effect("groups summary spend by model with deterministic ordering and unreported group cost", () =>
-  Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_model_spend")
-    yield* insertSession(sessionID)
-    const service = yield* SessionProviderRequest.Service
-    const model = (providerID: string, id: string, variant?: string) =>
-      ModelV2.Ref.make({
-        id: ModelV2.ID.make(id),
-        providerID: ProviderV2.ID.make(providerID),
-        ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
-      })
-    const record = Effect.fnUntraced(function* (selected: ModelV2.Ref, cost?: number) {
-      const tracker = yield* service.next({
-        sessionID,
-        source: "step",
-        agent: AgentV2.ID.make("build"),
-        model: selected,
-        routeID: "openai-responses",
-        promptCacheKey: "cache-key",
-        systemDigest: "system",
-        toolDigest: "tools",
-      })
-      yield* tracker.complete({
-        continuation: "full",
-        ...(cost === undefined ? {} : { cost: Money.USD.make(cost) }),
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      })
-    })
-
-    yield* record(model("openai", "gpt-5.6"), 0.75)
-    yield* record(model("openai", "gpt-5.6", "high"), 0.25)
-    yield* record(model("openai", "gpt-5.6", "high"), 0.25)
-    yield* record(model("openai", "gpt-5.6", "low"), 0.5)
-    yield* record(model("openai", "aaa-model"), 0.5)
-    yield* record(model("zzz", "tie-model"), 0.5)
-    yield* record(model("anthropic", "claude-sonnet-4"), 0.125)
-    yield* record(model("anthropic", "claude-sonnet-4"))
-    yield* record(model("zzz", "free-model"), 0)
-
-    const summary = yield* service.summary(sessionID)
-    expect(summary.models).toEqual([
-      {
-        model: model("openai", "gpt-5.6"),
-        requests: 1,
-        cost: Money.USD.make(0.75),
-        costProvenance: "recorded",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-      {
-        model: model("openai", "aaa-model"),
-        requests: 1,
-        cost: Money.USD.make(0.5),
-        costProvenance: "recorded",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-      {
-        model: model("openai", "gpt-5.6", "high"),
-        requests: 2,
-        cost: Money.USD.make(0.5),
-        costProvenance: "recorded",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-      {
-        model: model("openai", "gpt-5.6", "low"),
-        requests: 1,
-        cost: Money.USD.make(0.5),
-        costProvenance: "recorded",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-      {
-        model: model("zzz", "tie-model"),
-        requests: 1,
-        cost: Money.USD.make(0.5),
-        costProvenance: "recorded",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-      {
-        model: model("zzz", "free-model"),
-        requests: 1,
-        cost: Money.USD.zero,
-        costProvenance: "recorded",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-      {
-        model: model("anthropic", "claude-sonnet-4"),
-        requests: 2,
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      },
-    ])
-    // One anthropic request never reported a cost, so neither its group nor the session total may claim one.
-    expect(summary).not.toHaveProperty("cost")
-  }),
-)
-
-it.effect("marks a grouped cost current-catalog when any request was derived", () =>
-  Effect.sync(() => {
-    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
-    const record = {
-      sessionID: SessionV2.ID.make("ses_provider_request_mixed"),
-      source: "step" as const,
-      agent: AgentV2.ID.make("build"),
-      model,
-      routeID: "openai-responses",
-      promptCacheKey: "cache-key",
-      systemDigest: "system",
-      toolDigest: "tools",
-      attempts: 1,
-      invalidation: "first-request" as const,
-      continuation: "full" as const,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      time: DateTime.makeUnsafe(1),
-    }
-    expect(
-      SessionProviderRequest.summarize([
-        {
-          ...record,
-          id: ProviderRequest.ID.make("prq_provider_request_recorded"),
-          request: 1,
-          cost: Money.USD.make(0.01),
-        },
-        {
-          ...record,
-          id: ProviderRequest.ID.make("prq_provider_request_catalog"),
-          request: 2,
-          cost: Money.USD.make(0.02),
-          costProvenance: "current_catalog",
-        },
-      ]),
-    ).toMatchObject({
-      cost: Money.USD.make(0.03),
-      models: [{ model, requests: 2, cost: Money.USD.make(0.03), costProvenance: "current_catalog" }],
     })
   }),
 )
@@ -587,73 +283,6 @@ it.effect("prioritizes compaction and model cache reset diagnostics while normal
       "compaction-reset",
       "model-switched",
       "model-variant-switched",
-    ])
-  }),
-)
-
-it.effect("records a parent cache reset after provider-isolated hidden compaction ends", () =>
-  Effect.gen(function* () {
-    const sessionID = SessionV2.ID.make("ses_provider_request_hidden_compaction")
-    yield* insertSession(sessionID)
-    const service = yield* SessionProviderRequest.Service
-    const model = ModelV2.Ref.make({
-      id: ModelV2.ID.make("gpt-5.6"),
-      providerID: ProviderV2.ID.make("openai"),
-    })
-    const record = Effect.fnUntraced(function* () {
-      const tracker = yield* service.next({
-        sessionID,
-        source: "step",
-        agent: AgentV2.ID.make("build"),
-        model,
-        routeID: "openai-responses",
-        promptCacheKey: "stable-cache-key",
-        systemDigest: "stable-system",
-        toolDigest: "stable-tools",
-      })
-      yield* tracker.complete({
-        continuation: "full",
-        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      })
-    })
-
-    yield* record()
-    yield* TestClock.adjust(1)
-    const db = (yield* Database.Service).db
-    const digest = Hash.sha256("hidden compaction manifest")
-    const ended = yield* Clock.currentTimeMillis
-    yield* db
-      .insert(CompactionManifestBlobTable)
-      .values({ digest, schema_version: 1, content: {}, input_tokens: 1, retained_tokens: 1, time_created: ended })
-      .run()
-      .pipe(Effect.orDie)
-    yield* db
-      .insert(SessionCompactionJobTable)
-      .values({
-        id: SessionCompaction.ID.make("cmp_provider_request_hidden_compaction"),
-        session_id: sessionID,
-        trigger: "mandatory",
-        requested_through_message_id: SessionMessage.ID.make("msg_provider_request_hidden_compaction"),
-        requested_through_seq: 1,
-        base_context_revision: 0,
-        target_max_input_tokens: 1,
-        config_digest: Hash.sha256("hidden compaction config"),
-        status: "ended",
-        attempts: 1,
-        manifest_digest: digest,
-        time_created: ended,
-        time_started: ended,
-        time_ended: ended,
-      })
-      .run()
-      .pipe(Effect.orDie)
-    yield* record()
-    yield* record()
-
-    expect((yield* service.list(sessionID)).map((item) => item.invalidation)).toEqual([
-      "first-request",
-      "compaction-reset",
-      "provider-not-reported",
     ])
   }),
 )

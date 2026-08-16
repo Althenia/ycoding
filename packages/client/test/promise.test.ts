@@ -16,6 +16,7 @@ test("exposes every standard HTTP API group", () => {
     "model",
     "generate",
     "provider",
+    "providerUsage",
     "integration",
     "mcp",
     "credential",
@@ -44,13 +45,102 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.integration.oauth)).toEqual(["connect", "status", "complete", "cancel"])
   expect(Object.keys(client.integration.command)).toEqual(["connect", "status", "cancel"])
   expect(Object.keys(client.file)).toEqual(["read", "list", "find"])
-  expect(Object.keys(client.vcs)).toEqual(["status", "diff"])
+  expect(Object.keys(client.vcs)).toEqual(["status", "branch", "diff"])
   expect(Object.keys(client.pty)).toEqual(["list", "create", "get", "update", "remove"])
   expect(Object.keys(client.shell)).toEqual(["list", "create", "get", "timeout", "output", "remove"])
   expect(Object.keys(client.project)).toEqual(["list", "current", "directories"])
   expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
+  expect(Object.keys(client.providerUsage)).toEqual(["list", "get"])
+})
+
+test("VCS branch uses the public HTTP contract", async () => {
+  let request: Request | undefined
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      request = input instanceof Request ? input : new Request(input, init)
+      return Response.json({
+        location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } },
+        data: { current: "feature", default: "main" },
+      })
+    },
+  })
+
+  expect(await client.vcs.branch()).toEqual(
+    expect.objectContaining({ data: { current: "feature", default: "main" } }),
+  )
+  expect(request && new URL(request.url).pathname).toBe("/api/vcs/branch")
+})
+
+test("provider usage methods use the public HTTP contract", async () => {
+  const requests: Request[] = []
+  const snapshot = {
+    providerID: "openai",
+    label: "Codex",
+    status: "available" as const,
+    source: "provider_internal_api" as const,
+    stability: "best_effort" as const,
+    updatedAt: 100,
+    windows: [{ id: "codex-primary", label: "5-hour", unit: "percent" as const, used: 25 }],
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json({ location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } }, data: request.url.includes("/openai/") ? snapshot : [snapshot] })
+    },
+  })
+
+  expect(await client.providerUsage.list({ refresh: true })).toEqual(expect.objectContaining({ data: [snapshot] }))
+  expect(await client.providerUsage.get({ providerID: "openai", refresh: false })).toEqual(
+    expect.objectContaining({ data: snapshot }),
+  )
+  expect(requests.map((request) => `${new URL(request.url).pathname}?${new URL(request.url).searchParams}`)).toEqual([
+    "/api/provider/usage?refresh=true",
+    "/api/provider/openai/usage?refresh=false",
+  ])
+})
+
+test("session diagnostics expose only bounded provider-request telemetry", async () => {
+  let request: Request | undefined
+  const diagnostics = {
+    model: { providerID: "openai", id: "gpt-5.6" },
+    context: { total: 32_600 },
+    tokens: { uncachedInput: 12_000, output: 900, reasoning: 300, cacheRead: 18_200, cacheWrite: 1_200 },
+    cache: {
+      eligible: 31_400,
+      mechanism: "openai-prefix-cache" as const,
+      readReported: true,
+      writeReported: true,
+    },
+    requests: {
+      logical: 6,
+      physical: 7,
+      helpers: 1,
+      continued: 3,
+      fallback: 1,
+      tokens: { input: 12_000, output: 900, reasoning: 300, cache: { read: 18_200, write: 1_200 } },
+      latestInvalidation: "tool-prefix-changed" as const,
+      latestNamespace: "a1b2c3d4",
+    },
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      request = input instanceof Request ? input : new Request(input, init)
+      return Response.json({ data: diagnostics })
+    },
+  })
+
+  const result = await client.session.diagnostics({ sessionID: "ses_test" })
+
+  expect(result).toEqual(diagnostics)
+  expect(result?.requests?.latestNamespace).toBe("a1b2c3d4")
+  expect(JSON.stringify(result)).not.toContain("promptCacheKey")
+  expect(request && new URL(request.url).pathname).toBe("/api/session/ses_test/diagnostics")
 })
 
 test("guardrail methods use the public HTTP contract", async () => {

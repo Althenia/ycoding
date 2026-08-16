@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test";
 import { LLM, Model } from "@ycoding-ai/ai";
+import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy";
 import { LLMClient } from "@ycoding-ai/ai/route";
 import { DateTime, Effect } from "effect";
 import { Money } from "@ycoding-ai/schema/money";
@@ -11,6 +12,7 @@ import { ProviderV2 } from "@ycoding-ai/core/provider";
 import { ProjectV2 } from "@ycoding-ai/core/project";
 import { claudeCodeMethodID } from "@ycoding-ai/core/plugin/provider/anthropic";
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model";
+import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache";
 import { SessionV2 } from "@ycoding-ai/core/session";
 import { AbsolutePath } from "@ycoding-ai/core/schema";
 import { it } from "./lib/effect";
@@ -595,11 +597,52 @@ describe("SessionRunnerModel", () => {
       });
 
       expect(resolved.route).toMatchObject({
-        id: "openai-responses",
+        id: "openai-codex-responses",
         endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
       });
       expect(headers.authorization).toBe("Bearer chatgpt-token");
       expect(headers["chatgpt-account-id"]).toBe("acct_123");
+    }),
+  );
+
+  it.effect("keeps GPT-5.6 ChatGPT Codex cache requests key-only", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai"), { modelID: "gpt-5.6-sol" }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "chatgpt-token",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        }),
+      );
+      const cache = SessionRunnerCache.providerOptions({
+        projectID: "project",
+        directory: "/repo",
+        providerID: "openai",
+        modelID: "gpt-5.6-sol",
+        variant: "default",
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: [],
+        system: [],
+        tools: [],
+        sessionID: "ses_codex_cache",
+        routeID: resolved.route.id,
+        openaiMode: "auto",
+      });
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: resolved,
+          prompt: "Hello",
+          providerOptions: cache.providerOptions,
+          cache: cache.cache,
+        }),
+      );
+
+      expect(prepared.body).toMatchObject({ prompt_cache_key: cache.promptCacheKey });
+      expect(prepared.body).not.toHaveProperty("prompt_cache_options");
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint");
     }),
   );
 

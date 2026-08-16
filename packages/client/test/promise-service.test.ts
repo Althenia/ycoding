@@ -64,6 +64,19 @@ test("replaces a failed registered service", async () => {
   }
 }, 15_000)
 
+test("promise ensure includes the child startup error", async () => {
+  const directory = await temp()
+  const registration = join(directory, "service.json")
+  await expect(
+    Service.ensure({
+      file: registration,
+      version: "test",
+      command: [process.execPath, fixture, registration, "failed-with-message"],
+      startupErrorFile: join(directory, "startup-error"),
+    }),
+  ).rejects.toThrow("Managed service port is already in use by another process")
+}, 10_000)
+
 test("requests graceful stop of the exact service instance", async () => {
   const registration = await setup("graceful")
   const info = await Bun.file(registration).json()

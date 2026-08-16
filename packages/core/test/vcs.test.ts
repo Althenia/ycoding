@@ -49,6 +49,35 @@ async function commitAll(directory: string, message: string) {
 }
 
 describe("Vcs", () => {
+  it.live("reports current and default git branches", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          await initRepo(directory)
+          await fs.writeFile(path.join(directory, "file.txt"), "one\n")
+          await commitAll(directory, "initial")
+        })
+        const vcs = yield* Vcs.Service
+        expect(yield* vcs.branch()).toEqual({ current: "main", default: "main" })
+      }).pipe(provide(directory, { git: true })),
+    ),
+  )
+
+  it.live("omits the current branch for detached git HEAD", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          await initRepo(directory)
+          await fs.writeFile(path.join(directory, "file.txt"), "one\n")
+          await commitAll(directory, "initial")
+          await $`git checkout --detach -q`.cwd(directory).quiet()
+        })
+        const vcs = yield* Vcs.Service
+        expect(yield* vcs.branch()).toEqual({ default: "main" })
+      }).pipe(provide(directory, { git: true })),
+    ),
+  )
+
   it.live("returns empty results outside version control", () =>
     withTmp((directory) =>
       Effect.gen(function* () {
@@ -56,6 +85,7 @@ describe("Vcs", () => {
         expect(yield* vcs.status()).toEqual([])
         expect(yield* vcs.diff("working")).toEqual([])
         expect(yield* vcs.diff("branch")).toEqual([])
+        expect(yield* vcs.branch()).toEqual({})
       }).pipe(provide(directory)),
     ),
   )

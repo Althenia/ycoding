@@ -14,6 +14,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useConfig } from "../config"
 import { getScrollAcceleration } from "../util/scroll"
 import { beginOAuth } from "./dialog-integration"
+import { mcpStatusPresentation, type McpTone } from "../mcp-presentation"
 
 function statusError(status: McpServer["status"]) {
   if (status.status === "failed" || status.status === "needs_client_registration") return status.error
@@ -23,13 +24,23 @@ function statusError(status: McpServer["status"]) {
 function Status(props: { status: McpServer["status"]["status"]; loading: boolean }) {
   const { themeV2 } = useTheme().contextual("elevated")
   if (props.loading) return <span style={{ fg: themeV2.text.subdued }}>⋯ Loading</span>
-  if (props.status === "connected") {
-    return <span style={{ fg: themeV2.text.feedback.success.default, attributes: TextAttributes.BOLD }}>✓ Enabled</span>
+  const presentation = () => mcpStatusPresentation(props.status)
+  const color = (tone: McpTone) => {
+    if (tone === "success") return themeV2.text.feedback.success.default
+    if (tone === "warning") return themeV2.text.feedback.warning.default
+    if (tone === "error") return themeV2.text.feedback.error.default
+    return themeV2.text.subdued
   }
-  if (props.status === "needs_auth") {
-    return <span style={{ fg: themeV2.text.feedback.warning.default, attributes: TextAttributes.BOLD }}>↗ Authorize</span>
-  }
-  return <span style={{ fg: themeV2.text.subdued }}>○ Disabled</span>
+  return (
+    <span
+      style={{
+        fg: color(presentation().tone),
+        attributes: presentation().tone === "subdued" ? undefined : TextAttributes.BOLD,
+      }}
+    >
+      {presentation().symbol} {presentation().label}
+    </span>
+  )
 }
 
 export function mcpDialogAction(status: McpServer["status"]["status"]) {

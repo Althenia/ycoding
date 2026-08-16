@@ -22,6 +22,7 @@ import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { useData } from "./data"
 import { usePermission } from "./permission"
+import { useLocation } from "./location"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -66,10 +67,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const args = useArgs()
     const event = useEvent()
     const permission = usePermission()
+    const location = useLocation()
+    const activeLocation = () => location.current ?? data.location.default()
 
     function isModelValid(model: ModelPreferenceModel) {
       return !!data.location.model
-        .list()
+        .list(activeLocation())
         ?.some((item) => item.providerID === model.providerID && item.id === model.modelID)
     }
 
@@ -83,9 +86,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     function createAgent() {
       const agents = createMemo(() =>
-        (data.location.agent.list() ?? []).filter((agent) => agent.mode !== "subagent" && !agent.hidden),
+        (data.location.agent.list(activeLocation()) ?? []).filter(
+          (agent) => agent.mode !== "subagent" && !agent.hidden,
+        ),
       )
-      const visibleAgents = createMemo(() => (data.location.agent.list() ?? []).filter((agent) => !agent.hidden))
+      const visibleAgents = createMemo(() =>
+        (data.location.agent.list(activeLocation()) ?? []).filter((agent) => !agent.hidden),
+      )
       const [agentStore, setAgentStore] = createStore({
         current: undefined as string | undefined,
       })
@@ -205,7 +212,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
         }
 
-        const model = data.location.model.list()?.[0]
+        const model = data.location.model.list(activeLocation())?.[0]
         if (!model) return undefined
         return {
           providerID: model.providerID,
@@ -244,9 +251,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               reasoning: false,
             }
           }
-          const provider = data.location.provider.list()?.find((item) => item.id === value.providerID)
+          const provider = data.location.provider.list(activeLocation())?.find((item) => item.id === value.providerID)
           const info = data.location.model
-            .list()
+            .list(activeLocation())
             ?.find((item) => item.providerID === value.providerID && item.id === value.modelID)
           return {
             provider: provider?.name ?? value.providerID,
@@ -356,7 +363,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             const m = currentModel()
             if (!m) return []
             const info = data.location.model
-              .list()
+              .list(activeLocation())
               ?.find((item) => item.providerID === m.providerID && item.id === m.modelID)
             return info?.variants?.map((variant) => variant.id) ?? []
           },

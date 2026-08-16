@@ -1,6 +1,6 @@
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@ycoding-ai/protocol/groups/session"
@@ -14,6 +14,7 @@ import {
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
+  SkillConflictNotFoundError,
   SkillNotFoundError,
   UnknownError,
   ForbiddenError,
@@ -23,8 +24,10 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { AgentV2 } from "@ycoding-ai/core/agent"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 
 const DefaultSessionsLimit = 50
+const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
@@ -541,6 +544,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.resolveSkillConflict",
+        Effect.fn(function* (ctx) {
+          yield* resolveSkillConflict(session, {
+            sessionID: ctx.params.sessionID,
+            winner: ctx.payload.winner,
+            loser: ctx.payload.loser,
+          })
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "session.synthetic",
         Effect.fn(function* (ctx) {
           const data = yield* session
@@ -591,6 +605,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag(
                 "ShellSandbox.Unavailable",
                 (error) => new ServiceUnavailableError({ message: error.message, service: "shell-sandbox" }),
+              ),
+              Effect.catchTag(
+                "Shell.MemoryLimitUnavailable",
+                (error) => new ServiceUnavailableError({ message: error.message, service: "shell-memory" }),
               ),
               Effect.catchTag("Shell.SpawnError", (error) => new InvalidRequestError({ message: error.message })),
               Effect.catchTag(
@@ -859,7 +877,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           Effect.succeed(
             session
               .log({ sessionID: ctx.params.sessionID, after: ctx.query.after, follow: ctx.query.follow })
-              .pipe(Stream.orDie),
+              .pipe(
+                Stream.filter((item) => item.type === "log.synced" || isPublicDurableSessionEvent(item)),
+                Stream.orDie,
+              ),
           ),
         ),
       )
@@ -903,6 +924,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
 
 const mapSessionNotFound = (error: SessionV2.NotFoundError) =>
   new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` })
+
+export const resolveSkillConflict = (
+  session: SessionV2.Interface,
+  input: Parameters<SessionV2.Interface["resolveSkillConflict"]>[0],
+) =>
+  session.resolveSkillConflict(input).pipe(
+    Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+    Effect.catchTag("Session.SkillConflictNotFoundError", () =>
+      Effect.fail(new SkillConflictNotFoundError({ message: "Skill conflict not found" })),
+    ),
+    Effect.catchTags({
+      "Session.AgentNotFoundError": Effect.die,
+      "Session.MessageDecodeError": Effect.die,
+    }),
+  )
 
 function mapOwnershipError(error: SessionOrchestration.OwnershipError) {
   if (error._tag === "Session.NotFoundError") return mapSessionNotFound(error)

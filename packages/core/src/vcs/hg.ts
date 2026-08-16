@@ -4,7 +4,7 @@ import path from "path"
 import { Effect } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FileDiff } from "@ycoding-ai/schema/file-diff"
-import { FileStatus, Mode } from "@ycoding-ai/schema/vcs"
+import { Branch, FileStatus, Mode } from "@ycoding-ai/schema/vcs"
 import { FSUtil } from "../fs-util"
 import { AppProcess } from "../process"
 import type { DiffOptions, Interface } from "../vcs"
@@ -104,6 +104,13 @@ export function make(
       if (!ancestor) return []
       return yield* diffAgainst(ancestor, options)
     }),
+    branch: Effect.fn("VcsHg.branchInfo")(function* () {
+      const [current, defaultBranch] = yield* Effect.all([hg.branch(), hg.defaultBranch()], { concurrency: 2 })
+      return {
+        ...(current ? { current } : {}),
+        ...(defaultBranch ? { default: defaultBranch } : {}),
+      } satisfies Branch
+    }),
   }
 }
 
@@ -176,6 +183,14 @@ function makeHg(proc: AppProcess.Interface, worktree: string) {
     return result.text().trim() || undefined
   })
 
+  const defaultBranch = Effect.fn("VcsHg.defaultBranch")(function* () {
+    const result = yield* run(["log", "-r", "max(branch(default))", "-T", "{branch}"])
+    if (result.exitCode !== 0) return undefined
+    const name = result.text().trim()
+    if (name !== "default") return undefined
+    return name
+  })
+
   const ancestor = Effect.fn("VcsHg.ancestor")(function* () {
     const result = yield* run(["log", "-r", "ancestor(., default)", "-T", "{node}"])
     if (result.exitCode !== 0) return undefined
@@ -188,5 +203,5 @@ function makeHg(proc: AppProcess.Interface, worktree: string) {
     return result.text()
   })
 
-  return { status, diff, branch, ancestor, cat }
+  return { status, diff, branch, defaultBranch, ancestor, cat }
 }

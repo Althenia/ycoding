@@ -21,6 +21,7 @@ import {
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
+  SkillConflictNotFoundError,
   SkillNotFoundError,
   UnknownError,
   ForbiddenError,
@@ -169,6 +170,11 @@ const SessionsQueryCursor = SessionsCursor.annotate({
   description: "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response.",
 })
 
+export const SessionSkillConflictResolve = Schema.Struct({
+  winner: Skill.ID,
+  loser: Skill.ID,
+})
+
 export const SessionsQuery = Schema.Struct({
   ...SessionsQueryFields,
   directory: AbsolutePath.pipe(Schema.optional),
@@ -257,7 +263,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.diagnostics",
             summary: "Get session cache diagnostics",
             description:
-              "Retrieve normalized context occupancy and provider cache usage for the latest assistant step after the last completed compaction.",
+              "Retrieve normalized context occupancy, provider cache usage, and the bounded latest cache invalidation reason for the latest assistant step after the last completed compaction.",
           }),
         ),
     )
@@ -563,6 +569,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.resolveSkillConflict", "/api/session/:sessionID/skill/resolve", {
+        params: { sessionID: Session.ID },
+        payload: SessionSkillConflictResolve,
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, SkillConflictNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.resolveSkillConflict",
+            summary: "Resolve skill conflict",
+            description: "Resolve an active skill conflict by keeping the winner and durably deactivating the loser.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.synthetic", "/api/session/:sessionID/synthetic", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
@@ -777,7 +799,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           follow: BooleanFromString.pipe(Schema.optional),
         },
         success: HttpApiSchema.StreamSse({
-          data: Schema.Union([SessionEvent.Durable, EventLog.Synced]).annotate({ identifier: "SessionLogItem" }),
+          data: Schema.Union([SessionEvent.PublicDurable, EventLog.Synced]).annotate({ identifier: "SessionLogItem" }),
         }),
         error: SessionNotFoundError,
       })

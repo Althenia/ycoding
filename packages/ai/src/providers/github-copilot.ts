@@ -24,10 +24,10 @@ export const shouldUseResponsesApi = (modelID: string | ModelID, endpoint?: Mode
   return Number(match[1]) >= 5 && !model.startsWith("gpt-5-mini")
 }
 
-export const routes = [OpenAIResponses.route, OpenAIChat.route]
+const chatRoute = OpenAIChat.route.with({ id: "github-copilot-chat", provider: id })
+const responsesRoute = OpenAIResponses.route.with({ id: "github-copilot-responses", provider: id })
 
-const chatRoute = OpenAIChat.route.with({ provider: id })
-const responsesRoute = OpenAIResponses.route.with({ provider: id })
+export const routes = [responsesRoute, chatRoute]
 
 const defaults = (options: ModelOptions) => {
   const { apiKey: _, auth: _auth, baseURL: _baseURL, endpoint: _endpoint, ...rest } = options

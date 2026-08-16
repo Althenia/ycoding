@@ -41,7 +41,7 @@ test("captures the product chrome variants at canonical terminal dimensions", as
       viewport,
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
+    await app.waitForFrame((frame) => frame.includes("goal 3/5 blocked"))
 
     try {
       const rows = rowsOf(app.captureCharFrame())
@@ -85,28 +85,28 @@ function ChromeFixture() {
       </For>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
-        <ModeChips autonomy={{ mode: "normal", yolo: false }} />
+        <ModeChips autonomy={{ mode: "normal" }} />
         <text flexGrow={1} />
         <text>⌃p commands</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
         <ModeChips
-          autonomy={{ mode: "normal", yolo: false, goal: { runID: "run_chrome_capture_fixture", text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
+          autonomy={{ mode: "goal", goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
         />
         <text flexGrow={1} />
         <text>⌃p commands</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
-        <ModeChips autonomy={{ mode: "normal", yolo: true }} />
+        <ModeChips autonomy={{ mode: "yolo" }} />
         <text flexGrow={1} />
         <text>⌃x y disable</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
         <ModeChips
-          autonomy={{ mode: "normal", yolo: true, goal: { runID: "run_chrome_capture_fixture", text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
+          autonomy={{ mode: "yolo", goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
           guardrailPending={true}
         />
         <text flexGrow={1} />

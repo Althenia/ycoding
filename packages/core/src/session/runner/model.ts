@@ -400,6 +400,7 @@ const codexModel = (
   const account = OpenAICodex.accountID(credential);
   return withDefaults(model, OpenAIResponses.route)
     .with({
+      id: OpenAICodex.routeID,
       endpoint: { baseURL: OpenAICodex.baseURL },
       auth: (key === undefined ? Auth.none : Auth.bearer(key)).andThen(
         account === undefined

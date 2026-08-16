@@ -42,7 +42,7 @@ export const GLYPHS: Readonly<Record<GlyphName, GlyphSlot>> = {
   guardrailBlocked: createGlyph("!!", "guardrail blocked", "warning", "warning"),
   awaitingInput: createGlyph("?", "subagent awaiting input", "warning", "warning"),
   subagent: createGlyph("◦", "subagent identity", "info", "info"),
-  compaction: createGlyph("~", "compaction checkpoint", "muted"),
+  compaction: createGlyph("~", "compaction / archive boundary", "muted"),
   connected: createGlyph("✓", "connected / enabled", "accent", "success"),
   disabled: createGlyph("○", "disabled / inactive", "muted"),
   connecting: createGlyph("⋯", "pending / connecting", "info", "info"),

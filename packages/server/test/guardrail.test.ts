@@ -12,7 +12,7 @@ import {
 const parentID = SessionV2.ID.make("ses_guardrail_parent")
 const childID = SessionV2.ID.make("ses_guardrail_child")
 const unrelatedID = SessionV2.ID.make("ses_guardrail_unrelated")
-const requestID = "grq_guardrail_test" as SessionGuardrail.ReplyInput["requestID"]
+const requestID = SessionGuardrail.RequestID.create("grq_guardrail_test")
 
 type GuardrailStatus = Effect.Success<ReturnType<SessionGuardrail.Interface["status"]>>
 type GuardrailRequest = Effect.Success<ReturnType<SessionGuardrail.Interface["forSession"]>>[number]
@@ -65,7 +65,7 @@ test("guardrail handlers preserve family ownership and normalized output", async
 
   expect(await Effect.runPromise(guardrailStatus(service, childID))).toEqual(status)
   expect(await Effect.runPromise(guardrailRequests(service, parentID))).toEqual([request])
-  await Effect.runPromise(replyGuardrail(service, { sessionID: parentID, requestID, reply: "once" }))
+  await Effect.runPromise(replyGuardrail(service, { sessionID: parentID, requestID, reply: "always" }))
 
   await expect(
     Effect.runPromise(replyGuardrail(service, { sessionID: unrelatedID, requestID, reply: "reject" })),
@@ -73,7 +73,7 @@ test("guardrail handlers preserve family ownership and normalized output", async
   expect(calls).toEqual([
     ["status", childID],
     ["list", parentID],
-    ["reply", { sessionID: parentID, requestID, reply: "once" }],
+    ["reply", { sessionID: parentID, requestID, reply: "always" }],
     ["reply", { sessionID: unrelatedID, requestID, reply: "reject" }],
   ])
   expect(GuardrailHandler).toBeDefined()

@@ -101,6 +101,8 @@ export type SessionMessageSystem = {
   text: string
 }
 
+export type SessionMessageSkillDeactivation = { skill: string; reason: "conflict_resolved" }
+
 export type SessionMessageShell = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -108,7 +110,7 @@ export type SessionMessageShell = {
   type: "shell"
   shellID: string
   command: string
-  status: "running" | "exited" | "timeout" | "killed"
+  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   exit?: number | "Infinity" | "-Infinity" | "NaN"
   output?: { output: string; cursor: number; size: number; truncated: boolean }
 }
@@ -136,17 +138,6 @@ export type SessionMessageCompactionRunning = {
   recent: string
 }
 
-export type SessionMessageCompactionCompleted = {
-  type: "compaction"
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  status: "completed"
-  reason: "auto" | "manual"
-  summary: string
-  recent: string
-}
-
 export type InstructionEntryKey = string
 
 export type SessionGenerateResponse = { data: { text: string } }
@@ -167,7 +158,7 @@ export type SessionOrchestrationAnswer = { questionID: string; text?: string; da
 
 export type ShellInfo = {
   id: string
-  status: "running" | "exited" | "timeout" | "killed"
+  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   command: string
   cwd: string
   shell: string
@@ -215,6 +206,19 @@ export type ProviderV2Info = {
   headers?: { [x: string]: string }
   body?: { [x: string]: JsonValue }
 }
+
+export type ProviderUsageStatus = "available" | "stale" | "unsupported" | "unauthorized" | "error"
+
+export type ProviderUsageSource =
+  | "provider_api"
+  | "local_client_rpc"
+  | "response_headers"
+  | "provider_internal_api"
+  | "local_session"
+
+export type ProviderUsageStability = "stable" | "client_contract" | "observed" | "best_effort"
+
+export type ProviderUsageUnit = "percent" | "usd" | "requests" | "tokens" | "count"
 
 export type IntegrationWhen = { key: string; op: "eq" | "neq"; value: string }
 
@@ -328,7 +332,7 @@ export type FileSystemEntry = { path: string; type: "file" | "directory" }
 
 export type PermissionV2Reply = "once" | "always" | "reject"
 
-export type GuardrailReply = "once" | "reject"
+export type GuardrailReply = "once" | "always" | "reject"
 
 export type GuardrailDecision = "allow" | "ask" | "deny" | "cap_exceeded"
 
@@ -366,7 +370,7 @@ export type SessionStatus =
 
 export type ShellInfo1 = {
   id: string
-  status: "running" | "exited" | "timeout" | "killed"
+  status: "running" | "exited" | "timeout" | "memory-limit" | "killed"
   command: string
   cwd: string
   shell: string
@@ -395,6 +399,8 @@ export type VcsFileStatus = {
   deletions: number
   status: "added" | "deleted" | "modified"
 }
+
+export type VcsBranch = { current?: string; default?: string }
 
 export type ProjectArtifactProjectScope = { type: "project"; id: string; projectID: string; storageID: string }
 
@@ -464,6 +470,43 @@ export type ProviderRequest = {
 }
 
 export type PermissionV2Rule = { action: string; resource: string; effect: PermissionV2Effect }
+
+export type ProviderRequestSummary = {
+  logical: number
+  physical: number
+  helpers: number
+  continued: number
+  fallback: number
+  cost?: MoneyUSD
+  tokens: TokenUsageInfo
+  latestInvalidation?:
+    | "first-request"
+    | "compaction-reset"
+    | "model-switched"
+    | "model-variant-switched"
+    | "stable-hit"
+    | "prefix-changed"
+    | "system-prefix-changed"
+    | "tool-prefix-changed"
+    | "below-minimum"
+    | "provider-not-reported"
+    | "cache-disabled"
+    | "retry-fallback"
+  latestNamespace?: string
+}
+
+export type SessionMessageCompactionCompleted = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  status: "completed"
+  reason: "auto" | "manual"
+  summary: string
+  recent: string
+  messages?: number
+  tokens?: TokenUsageInfo
+}
 
 export type SessionModelSelected = {
   id: string
@@ -585,6 +628,16 @@ export type SessionSynthetic = {
   data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
 }
 
+export type SessionSkillDeactivated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.skill.deactivated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; id: string; activationMessageID: string; reason: "conflict_resolved" }
+}
+
 export type SessionStepStarted = {
   id: string
   created: number
@@ -662,7 +715,14 @@ export type SessionCompactionEnded = {
   type: "session.compaction.ended"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; reason: "auto" | "manual"; text: string; recent: string }
+  data: {
+    sessionID: string
+    reason: "auto" | "manual"
+    text: string
+    recent: string
+    messages?: number
+    tokens?: TokenUsageInfo
+  }
 }
 
 export type SessionRevertCleared = {
@@ -683,16 +743,6 @@ export type SessionRevertCommitted = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; to: string }
-}
-
-export type SessionUsageRecorded = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  type: "session.usage.recorded"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { sessionID: string; source: "title" | "compaction" | "goal"; cost: MoneyUSD; tokens: TokenUsageInfo }
 }
 
 export type ModelsDevRefreshed = {
@@ -818,7 +868,7 @@ export type GuardrailAsked = {
     ruleIDs: Array<string>
     reason: string
     standard: boolean
-    metadata?: { [x: string]: any }
+    metadata?: { [x: string]: JsonValue }
   }
 }
 
@@ -900,7 +950,7 @@ export type ShellExited = {
   metadata?: { [x: string]: any }
   type: "shell.exited"
   location?: LocationRef
-  data: { id: string; exit?: number; status: "running" | "exited" | "timeout" | "killed" }
+  data: { id: string; exit?: number; status: "running" | "exited" | "timeout" | "memory-limit" | "killed" }
 }
 
 export type ShellDeleted = {
@@ -1055,22 +1105,6 @@ export type V2EventServerConnected = {
 
 export type SessionRevert = { messageID: string; snapshot?: string; files?: Array<FileDiffInfo> }
 
-export type SessionCacheDiagnostics = {
-  model: ModelRef
-  context: { total: number; limit?: number; remaining?: number; percent?: number }
-  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  cache: {
-    eligible: number
-    hitRatio?: number
-    mechanism: SessionCacheMechanism
-    readReported: boolean
-    writeReported: boolean
-    minimumTokens?: number
-    belowMinimum?: boolean
-  }
-  estimatedCost: MoneyUSD
-}
-
 export type SessionProviderCacheDiagnostics = {
   mechanism: SessionCacheMechanism
   readReported: boolean
@@ -1159,6 +1193,7 @@ export type SessionMessageSkill = {
   name: string
   text: string
   conflicts?: SkillConflicts
+  skillDeactivations?: Array<SessionMessageSkillDeactivation>
   artifact?: SessionMessageArtifactProvenance
 }
 
@@ -1752,6 +1787,23 @@ export type ProjectArtifactApiMetrics = {
 
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
+export type SessionCacheDiagnostics = {
+  model: ModelRef
+  context: { total: number; limit?: number; remaining?: number; percent?: number }
+  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
+  cache: {
+    eligible: number
+    hitRatio?: number
+    mechanism: SessionCacheMechanism
+    readReported: boolean
+    writeReported: boolean
+    minimumTokens?: number
+    belowMinimum?: boolean
+  }
+  estimatedCost?: MoneyUSD
+  requests?: ProviderRequestSummary
+}
+
 export type SessionRevertStaged = {
   id: string
   created: number
@@ -2161,6 +2213,7 @@ export type SessionMessageAssistant = {
   agent: string
   model: ModelRef
   content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
+  skillDeactivations?: Array<SessionMessageSkillDeactivation>
   snapshot?: { start?: string; end?: string; files?: Array<string> }
   finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
   cost?: MoneyUSD
@@ -2235,7 +2288,7 @@ export type FormCreated = {
 
 export type ProjectArtifactApiListItem = ProjectArtifactArtifactSummary | ProjectArtifactApiTrashSummary
 
-export type SessionEventDurable =
+export type SessionEventPublicDurable =
   | SessionCreated
   | SessionAgentSelected
   | SessionModelSelected
@@ -2254,6 +2307,7 @@ export type SessionEventDurable =
   | SessionTaskUpdated
   | SessionSynthetic
   | SessionSkillActivated
+  | SessionSkillDeactivated
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted
@@ -2277,11 +2331,14 @@ export type SessionEventDurable =
   | SessionRevertStaged
   | SessionRevertCleared
   | SessionRevertCommitted
-  | SessionUsageRecorded
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessageInfo>
-  cursor: { previous?: string | null; next?: string | null }
+  cursor: {
+    previous?: string | null
+    next?: string | null
+    messages?: number | "Infinity" | "-Infinity" | "NaN" | null
+  }
 }
 
 export type V2Event =
@@ -2309,6 +2366,7 @@ export type V2Event =
   | SessionTaskUpdated
   | SessionSynthetic
   | SessionSkillActivated
+  | SessionSkillDeactivated
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted
@@ -2376,7 +2434,7 @@ export type V2Event =
   | McpResourcesChanged
   | V2EventServerConnected
 
-export type SessionLogItem = SessionEventDurable | EventLogSynced
+export type SessionLogItem = SessionEventPublicDurable | EventLogSynced
 
 export type UnauthorizedError = { readonly _tag: "UnauthorizedError"; readonly message: string }
 export const isUnauthorizedError = (value: unknown): value is UnauthorizedError =>
@@ -2471,6 +2529,10 @@ export type SkillNotFoundError = {
 }
 export const isSkillNotFoundError = (value: unknown): value is SkillNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SkillNotFoundError"
+
+export type SkillConflictNotFoundError = { readonly _tag: "SkillConflictNotFoundError"; readonly message: string }
+export const isSkillConflictNotFoundError = (value: unknown): value is SkillConflictNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SkillConflictNotFoundError"
 
 export type SessionBusyError = {
   readonly _tag: "SessionBusyError"
@@ -3341,10 +3403,18 @@ export type SessionSkillsOutput = {
         conflicts: Array<{ type: "skill" | "instruction"; id: string; name: string }>
         declarations: SkillConflicts
         state: "inactive"
-        inactiveReason: "agent_switched" | "compacted"
+        inactiveReason: "agent_switched" | "compacted" | "conflict_resolved"
       }
   >
 }["data"]
+
+export type SessionResolveSkillConflictInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly winner: { readonly winner: string; readonly loser: string }["winner"]
+  readonly loser: { readonly winner: string; readonly loser: string }["loser"]
+}
+
+export type SessionResolveSkillConflictOutput = void
 
 export type SessionSyntheticInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
@@ -3515,7 +3585,7 @@ export type GuardrailRequestListOutput = {
 export type GuardrailRequestReplyInput = {
   readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
   readonly requestID: { readonly sessionID: string; readonly requestID: string }["requestID"]
-  readonly reply: { readonly reply: "once" | "reject" }["reply"]
+  readonly reply: { readonly reply: "once" | "always" | "reject" }["reply"]
 }
 
 export type GuardrailRequestReplyOutput = void
@@ -3600,6 +3670,77 @@ export type ProviderGetInput = {
 export type ProviderGetOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
   data: ProviderV2Info
+}
+
+export type ProviderUsageListInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["location"]
+  readonly refresh?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["refresh"]
+}
+
+export type ProviderUsageListOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: Array<{
+    providerID: string
+    label: string
+    status: ProviderUsageStatus
+    source: ProviderUsageSource
+    stability: ProviderUsageStability
+    updatedAt: number
+    windows: Array<{
+      id: string
+      label: string
+      unit: ProviderUsageUnit
+      used?: number
+      limit?: number
+      remaining?: number
+      unlimited?: boolean
+      resetAt?: number
+      periodSeconds?: number
+    }>
+    message?: string
+  }>
+}
+
+export type ProviderUsageGetInput = {
+  readonly providerID: { readonly providerID: string }["providerID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["location"]
+  readonly refresh?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["refresh"]
+}
+
+export type ProviderUsageGetOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: {
+    providerID: string
+    label: string
+    status: ProviderUsageStatus
+    source: ProviderUsageSource
+    stability: ProviderUsageStability
+    updatedAt: number
+    windows: Array<{
+      id: string
+      label: string
+      unit: ProviderUsageUnit
+      used?: number
+      limit?: number
+      remaining?: number
+      unlimited?: boolean
+      resetAt?: number
+      periodSeconds?: number
+    }>
+    message?: string
+  }
 }
 
 export type IntegrationListInput = {
@@ -5046,24 +5187,35 @@ export type ShellCreateInput = {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["command"]
   readonly cwd?: {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["cwd"]
   readonly timeout: {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["timeout"]
+  readonly memoryLimitMb?: {
+    readonly command: string
+    readonly cwd?: string
+    readonly timeout: number
+    readonly memoryLimitMb?: number
+    readonly metadata?: { readonly [x: string]: JsonValue }
+  }["memoryLimitMb"]
   readonly metadata?: {
     readonly command: string
     readonly cwd?: string
     readonly timeout: number
+    readonly memoryLimitMb?: number
     readonly metadata?: { readonly [x: string]: JsonValue }
   }["metadata"]
 }
@@ -5213,6 +5365,17 @@ export type VcsStatusInput = {
 export type VcsStatusOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
   data: Array<VcsFileStatus>
+}
+
+export type VcsBranchInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type VcsBranchOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: VcsBranch
 }
 
 export type VcsDiffInput = {

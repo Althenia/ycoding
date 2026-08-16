@@ -1,21 +1,27 @@
 export * as SessionCompaction from "./compaction"
 
-import { LLM, LLMClient, LLMError, LLMEvent, Message, SystemPart, type LLMRequest, type Model } from "@ycoding-ai/ai"
+import { LLM, LLMClient, LLMError, LLMEvent, LLMRequest, Message, SystemPart, type Model } from "@ycoding-ai/ai"
+import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer, Stream } from "effect"
+import { Money } from "@ycoding-ai/schema/money"
+import { AgentV2 } from "../agent"
 import { Config } from "../config"
 import { EventV2 } from "../event"
 import { makeLocationNode } from "../effect/app-node"
 import { llmClient } from "../effect/app-node-platform"
 import { assembleCompactionConstraints } from "./compaction-constraints"
 import { SessionEvent } from "./event"
+import { SessionHelperPolicy } from "./helper-policy"
 import type { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
-import { SessionRunnerModel } from "./runner/model"
+import { SessionProviderRequest } from "./provider-request"
+import { SessionRunnerCache } from "./runner/cache"
+import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionSchema } from "./schema"
 import { toSessionError } from "./to-session-error"
 import { Token } from "../util/token"
-import type { ModelV2 } from "../model"
+import { ModelV2 } from "../model"
 import { SessionUsage } from "./usage"
 
 const DEFAULT_BUFFER = 20_000
@@ -66,8 +72,12 @@ type Dependencies = {
   readonly llm: {
     readonly stream: (request: LLMRequest) => Stream.Stream<LLMEvent, LLMError>
   }
-  readonly models: SessionRunnerModel.Interface
+  readonly agents: AgentV2.Interface
+  readonly helpers: SessionHelperPolicy.Interface
+  readonly requests: SessionProviderRequest.Interface
+  readonly cacheRuntime: SessionCacheRuntime.Interface
   readonly config: Settings
+  readonly configService: Config.Interface
 }
 
 export type AutoInput = {
@@ -88,10 +98,12 @@ export type ManualInput = {
 type Plan = {
   readonly session: SessionSchema.Info
   readonly model: Model
+  readonly modelRef: ModelV2.Ref
   readonly cost: ModelV2.Info["cost"]
   readonly reason: SessionMessage.Compaction["reason"]
   readonly prompt: string
   readonly recent: string
+  readonly messages: number
   readonly inputID?: SessionMessage.ID
   readonly system: readonly SystemPart[]
 }
@@ -173,7 +185,7 @@ const settings = (documents: readonly Config.Entry[]) => {
 const select = (
   messages: readonly SessionMessage.Info[],
   tokens: number,
-): { readonly head: string; readonly recent: string } | undefined => {
+): { readonly head: string; readonly recent: string; readonly headMessages: number; readonly recentMessages: number } | undefined => {
   const conversation = messages
     .filter((message) => message.type !== "compaction" && message.type !== "system")
     .flatMap((message) => {
@@ -203,6 +215,8 @@ const select = (
       .slice(split)
       .map((item) => item.text)
       .join("\n\n"),
+    headMessages: split,
+    recentMessages: conversation.length - split,
   }
 }
 
@@ -216,21 +230,53 @@ export const buildPrompt = (input: { readonly previousSummary?: string; readonly
     ...input.context,
   ].join("\n\n")
 
-const planContent = (messages: readonly SessionMessage.Info[], tokens: number) => {
+const planContent = (messages: readonly SessionMessage.Info[], tokens: number, fits?: (prompt: string) => boolean) => {
   const selected = select(messages, tokens)
-  if (!selected) return
-  const previousSummary = messages.findLast(
-    (message) => message.type === "compaction" && message.status === "completed",
-  )
+  if (!selected) return undefined
+  const previousSummary = messages.findLast((message) => message.type === "compaction" && message.status === "completed")
   const previousRecent = previousSummary?.type === "compaction" ? previousSummary.recent : ""
   const summarizeRecent = !previousRecent && !selected.head
-  return {
-    prompt: buildPrompt({
+  const source = summarizeRecent ? selected.recent : [previousRecent, selected.head].filter(Boolean).join("\n\n")
+  const recent = summarizeRecent ? "" : selected.recent
+  const prompt = (context: string) =>
+    buildPrompt({
       previousSummary: previousSummary?.type === "compaction" ? previousSummary.summary : undefined,
-      context: summarizeRecent ? [selected.recent] : [previousRecent, selected.head].filter(Boolean),
-    }),
-    recent: summarizeRecent ? "" : selected.recent,
+      context: context ? [context] : [],
+    })
+  // The folded message count belongs to this branch's compaction event; the budget search below is
+  // from main. They are independent: the count reflects which messages were selected, not how much
+  // of the source text fits the prompt.
+  const folded = summarizeRecent ? selected.recentMessages : selected.headMessages
+  if (!fits || fits(prompt(source))) return { prompt: prompt(source), recent, messages: folded }
+
+  let lower = 0
+  let upper = source.length
+  while (lower < upper) {
+    const middle = Math.ceil((lower + upper) / 2)
+    if (fits(prompt(source.slice(0, middle)))) lower = middle
+    else upper = middle - 1
   }
+  return {
+    prompt: prompt(source.slice(0, lower)),
+    recent: [source.slice(lower), recent].filter(Boolean).join("\n\n"),
+    messages: folded,
+  }
+}
+
+const promptFits = (model: Model, system: readonly SystemPart[], buffer: number) => {
+  const context = model.route.defaults.limits?.context
+  if (context === undefined || context <= 0) return
+  const output = Math.min(model.route.defaults.limits?.output ?? 0, OUTPUT_TOKEN_MAX)
+  const threshold = context - (output || buffer)
+  return (prompt: string) =>
+    estimateRequestTokens(
+      LLM.request({
+        model,
+        system,
+        messages: [Message.user(prompt)],
+        tools: [],
+      }),
+    ) <= threshold
 }
 
 const make = (dependencies: Dependencies) => {
@@ -252,6 +298,59 @@ const make = (dependencies: Dependencies) => {
       inputID: plan.inputID,
     })
 
+    const modelRef = plan.modelRef
+    const baseRequest = LLM.request({
+      model: plan.model,
+      http: { headers: SessionModelHeaders.make(plan.session, dependencies.headers) },
+      system: plan.system,
+      messages: [Message.user(plan.prompt)],
+      tools: [],
+    })
+    const namespaceInput = {
+      scope: "compaction" as const,
+      projectID: plan.session.projectID,
+      directory: plan.session.location.directory,
+      workspaceID: plan.session.location.workspaceID,
+      providerID: modelRef.providerID,
+      modelID: modelRef.id,
+      variant: modelRef.variant ?? "default",
+      policyRevision: CACHE_POLICY_REVISION,
+      permissions: [],
+      system: baseRequest.system,
+      tools: baseRequest.tools,
+    }
+    const efficiency = SessionRunnerCache.efficiencySettings(
+      Config.latest(yield* dependencies.configService.entries(), "efficiency"),
+    )
+    const ttl = yield* dependencies.cacheRuntime.policy({
+      namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
+      modelID: modelRef.id,
+      configured: efficiency.anthropicTtl,
+    })
+    const cache = SessionRunnerCache.providerOptions({
+      ...namespaceInput,
+      sessionID: plan.session.id,
+      routeID: plan.model.route.id,
+      anthropicTtlSeconds: ttl.ttlSeconds,
+      openaiMode: efficiency.openaiMode,
+      openaiExtendedRetention: efficiency.openaiExtendedRetention,
+    })
+    const tracker = yield* dependencies.requests.next({
+      sessionID: plan.session.id,
+      inputID: plan.inputID,
+      source: "compaction",
+      agent: AgentV2.ID.make("compaction"),
+      model: modelRef,
+      routeID: plan.model.route.id,
+      promptCacheKey: cache.promptCacheKey,
+      systemDigest: cache.systemDigest,
+      toolDigest: cache.toolDigest,
+    })
+    const request = LLMRequest.update(baseRequest, {
+      id: tracker.requestID,
+      providerOptions: cache.providerOptions,
+      cache: cache.cache,
+    })
     const chunks: string[] = []
     let failure: SessionError.Error | undefined
     let usage: SessionUsage.Recorded | undefined
@@ -264,57 +363,74 @@ const make = (dependencies: Dependencies) => {
           })
         : Effect.void,
     )
-    yield* dependencies.llm
-      .stream(
-        LLM.request({
-          model: plan.model,
-          http: { headers: SessionModelHeaders.make(plan.session, dependencies.headers) },
-          system: plan.system,
-          messages: [Message.user(plan.prompt)],
-          tools: [],
-        }),
-      )
-      .pipe(
-        Stream.runForEach((event) => {
-          if (LLMEvent.is.providerError(event))
-            failure = {
-              type: event.classification === "context-overflow" ? "provider.invalid-request" : "provider.error",
-              message: event.message,
-            }
-          if (LLMEvent.is.textDelta(event)) {
-            chunks.push(event.text)
-            return dependencies.events.publish(SessionEvent.Compaction.Delta, {
-              sessionID: plan.session.id,
-              text: event.text,
-            })
-          }
-          if (LLMEvent.is.stepFinish(event)) {
-            const step = SessionUsage.record(event.usage, plan.cost)
-            usage = usage ? SessionUsage.add(usage, step) : step
-          }
-          return Effect.void
-        }),
-        Effect.catchTag("LLM.Error", (error) =>
-          Effect.sync(() => {
-            failure = toSessionError(error)
+    const completeRequest = Effect.suspend(() => {
+      const recorded = usage ?? {
+        cost: Money.USD.zero,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      }
+      return Effect.all(
+        [
+          tracker.complete({
+            tokens: recorded.tokens,
+            ...(usage === undefined || SessionUsage.estimatedCost(plan.cost, recorded.tokens) === undefined
+              ? {}
+              : { cost: SessionUsage.estimatedCost(plan.cost, recorded.tokens)! }),
+            continuation: "full",
+            ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
           }),
-        ),
-        Effect.onInterrupt(() =>
-          recordUsage.pipe(
-            Effect.andThen(
-              plan.reason === "auto"
-                ? failed({
-                    sessionID: plan.session.id,
-                    reason: plan.reason,
-                    error: { type: "compaction.interrupted", message: "Compaction was interrupted" },
-                    inputID: plan.inputID,
-                  }).pipe(Effect.asVoid)
-                : Effect.void,
-            ),
+          dependencies.cacheRuntime.observe({
+            namespace: cache.promptCacheKey,
+            cacheRead: recorded.tokens.cache.read,
+            cacheWrite: recorded.tokens.cache.write,
+            eligible: recorded.tokens.input + recorded.tokens.cache.read + recorded.tokens.cache.write,
+          }),
+        ],
+        { discard: true },
+      )
+    })
+    yield* dependencies.llm.stream(request).pipe(
+      Stream.runForEach((event) => {
+        if (LLMEvent.is.providerError(event))
+          failure = {
+            type: event.classification === "context-overflow" ? "provider.invalid-request" : "provider.error",
+            message: event.message,
+          }
+        if (LLMEvent.is.textDelta(event)) {
+          chunks.push(event.text)
+          return dependencies.events.publish(SessionEvent.Compaction.Delta, {
+            sessionID: plan.session.id,
+            text: event.text,
+          })
+        }
+        if (LLMEvent.is.stepFinish(event)) {
+          const step = SessionUsage.record(event.usage, plan.cost)
+          usage = usage ? SessionUsage.add(usage, step) : step
+        }
+        return Effect.void
+      }),
+      Effect.catchTag("LLM.Error", (error) =>
+        Effect.sync(() => {
+          failure = toSessionError(error)
+        }),
+      ),
+      Effect.onInterrupt(() =>
+        recordUsage.pipe(
+          Effect.andThen(completeRequest),
+          Effect.andThen(
+            plan.reason === "auto"
+              ? failed({
+                  sessionID: plan.session.id,
+                  reason: plan.reason,
+                  error: { type: "compaction.interrupted", message: "Compaction was interrupted" },
+                  inputID: plan.inputID,
+                }).pipe(Effect.asVoid)
+              : Effect.void,
           ),
         ),
-      )
+      ),
+    )
     yield* recordUsage
+    yield* completeRequest
     const summary = chunks.join("")
     if (failure || !summary.trim()) {
       const error = failure ?? { type: "compaction.failed" as const, message: "Compaction produced no summary" }
@@ -330,20 +446,34 @@ const make = (dependencies: Dependencies) => {
       reason: plan.reason,
       text: summary,
       recent: plan.recent,
+      messages: plan.messages,
+      ...(usage ? { tokens: usage.tokens } : {}),
     })
     return { status: "completed" as const }
   })
   const compact = Effect.fn("SessionCompaction.compact")(function* (input: AutoInput) {
-    const content = planContent(input.messages, config.tokens)
-    if (content)
-      return yield* execute({
-        session: input.session,
-        model: input.model,
-        cost: input.cost,
-        reason: "auto",
-        system: assembleCompactionConstraints(input.system.map((part) => part.text)).map(SystemPart.make),
-        ...content,
-      })
+    if (available(input.messages)) {
+      const agent = yield* dependencies.agents.get(AgentV2.ID.make("compaction"))
+      const resolved = yield* dependencies.helpers.resolveModel(input.session, "compaction", agent)
+      if (!resolved)
+        return yield* failed({
+          sessionID: input.session.id,
+          reason: "auto",
+          error: { type: "compaction.failed", message: "No model is available for compaction" },
+        })
+      const system = assembleCompactionConstraints(input.system.map((part) => part.text)).map(SystemPart.make)
+      const content = planContent(input.messages, config.tokens, promptFits(resolved.model, system, config.buffer))
+      if (content)
+        return yield* execute({
+          session: input.session,
+          model: resolved.model,
+          modelRef: resolved.ref,
+          cost: resolved.cost,
+          reason: "auto",
+          system,
+          ...content,
+        })
+    }
     const error = { type: "compaction.unavailable" as const, message: "Nothing to compact yet" }
     return yield* failed({
       sessionID: input.session.id,
@@ -368,7 +498,24 @@ const make = (dependencies: Dependencies) => {
     return used >= threshold || (request !== undefined && estimateRequestTokens(request) >= threshold)
   }
   const compactManual = Effect.fn("SessionCompaction.compactManual")(function* (input: ManualInput) {
-    const content = planContent(input.messages, config.tokens)
+    if (!available(input.messages))
+      return yield* failed({
+        sessionID: input.session.id,
+        reason: "manual",
+        error: { type: "compaction.unavailable", message: "Nothing to compact yet" },
+        inputID: input.inputID,
+      })
+    const agent = yield* dependencies.agents.get(AgentV2.ID.make("compaction"))
+    const resolved = yield* dependencies.helpers.resolveModel(input.session, "compaction", agent)
+    if (!resolved)
+      return yield* failed({
+        sessionID: input.session.id,
+        reason: "manual",
+        error: { type: "compaction.failed", message: "No model is available for compaction" },
+        inputID: input.inputID,
+      })
+    const system = assembleCompactionConstraints((input.system ?? []).map((part) => part.text)).map(SystemPart.make)
+    const content = planContent(input.messages, config.tokens, promptFits(resolved.model, system, config.buffer))
     if (!content)
       return yield* failed({
         sessionID: input.session.id,
@@ -376,24 +523,14 @@ const make = (dependencies: Dependencies) => {
         error: { type: "compaction.unavailable", message: "Nothing to compact yet" },
         inputID: input.inputID,
       })
-    const resolved = yield* dependencies.models.resolve(input.session).pipe(
-      Effect.catch((cause) =>
-        failed({
-          sessionID: input.session.id,
-          reason: "manual",
-          error: toSessionError(cause),
-          inputID: input.inputID,
-        }),
-      ),
-    )
-    if ("status" in resolved) return resolved
     return yield* execute({
       session: input.session,
       model: resolved.model,
+      modelRef: resolved.ref,
       cost: resolved.cost,
       reason: "manual",
       inputID: input.inputID,
-      system: assembleCompactionConstraints((input.system ?? []).map((part) => part.text)).map(SystemPart.make),
+      system,
       ...content,
     })
   })
@@ -416,22 +553,44 @@ function estimateRequestTokens(request: LLMRequest) {
   )
 }
 
-export const layer = (options?: SessionModelHeaders.Options) => Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const events = yield* EventV2.Service
-    const llm = yield* LLMClient.Service
-    const config = yield* Config.Service
-    const models = yield* SessionRunnerModel.Service
-    return make({ events, llm, models, config: settings(yield* config.entries()), headers: options })
-  }),
-)
+export const layer = (options?: SessionModelHeaders.Options) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const llm = yield* LLMClient.Service
+      const config = yield* Config.Service
+      const agents = yield* AgentV2.Service
+      const helpers = yield* SessionHelperPolicy.Service
+      const requests = yield* SessionProviderRequest.Service
+      const cacheRuntime = yield* SessionCacheRuntime.Service
+      return make({
+        events,
+        llm,
+        agents,
+        helpers,
+        requests,
+        cacheRuntime,
+        config: settings(yield* config.entries()),
+        configService: config,
+        headers: options,
+      })
+    }),
+  )
 
 export function configured(options?: SessionModelHeaders.Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [EventV2.node, llmClient, Config.node, SessionRunnerModel.node],
+    deps: [
+      EventV2.node,
+      llmClient,
+      Config.node,
+      AgentV2.node,
+      SessionHelperPolicy.node,
+      SessionProviderRequest.node,
+      SessionCacheRuntime.node,
+    ],
   })
 }
 

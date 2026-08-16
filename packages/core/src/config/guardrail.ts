@@ -5,18 +5,11 @@ import { Schema } from "effect"
 import { ConfigMarkdown } from "./markdown"
 import { PositiveInt } from "../schema"
 
-const NonNegativeMoney = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0))
-
 export class Info extends Schema.Class<Info>("Config.Guardrail")({
   enabled: Schema.Boolean.pipe(Schema.optional),
   max_concurrent_shells: PositiveInt.pipe(Schema.optional),
   max_concurrent_subagents: PositiveInt.pipe(Schema.optional),
   max_pending_reviews: PositiveInt.pipe(Schema.optional),
-  max_cost_usd: NonNegativeMoney.pipe(Schema.optional),
-  max_steps: PositiveInt.pipe(Schema.optional),
-  max_tool_calls: PositiveInt.pipe(Schema.optional),
-  max_file_mutations: PositiveInt.pipe(Schema.optional),
-  max_network_actions: PositiveInt.pipe(Schema.optional),
 }) {}
 
 export interface Document {
@@ -45,9 +38,6 @@ export function parse(path: string, content: string): Document {
         resources: property(markdown.data, "resources"),
         reason: property(markdown.data, "reason"),
         priority: numberProperty(markdown.data, "priority") ?? 0,
-        ...(booleanProperty(markdown.data, "persistent") === undefined
-          ? {}
-          : { persistent: booleanProperty(markdown.data, "persistent") }),
       }),
     }
   } catch (cause) {
@@ -56,8 +46,8 @@ export function parse(path: string, content: string): Document {
 }
 
 function property(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object" || !(key in value)) return undefined
-  return value[key as keyof typeof value]
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return Object.prototype.hasOwnProperty.call(value, key) ? Reflect.get(value, key) : undefined
 }
 
 function booleanProperty(value: unknown, key: string) {

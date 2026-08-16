@@ -1,3 +1,6 @@
+import path from "path"
+import type { SessionSkillsOutput } from "@ycoding-ai/client"
+
 export type SessionSkill = {
   id: string
   name: string
@@ -7,7 +10,29 @@ export type SessionSkill = {
   conflicts: ReadonlyArray<{ type: "skill" | "instruction"; id: string; name: string }>
   declarations: unknown
   state: "active" | "inactive"
-  inactiveReason?: "agent_switched" | "compacted"
+  inactiveReason?: SessionSkillsOutput[number]["inactiveReason"]
+  scope?: "project" | "global"
+}
+
+export function sessionSkillScope(input: {
+  location?: string
+  projectDirectory?: string
+  home: string
+  globalConfigDirectory: string
+}): "project" | "global" | undefined {
+  const location = input.location
+  if (!location) return undefined
+  if (input.projectDirectory && contains(input.projectDirectory, location)) return "project"
+  if (
+    [
+      path.join(input.home, ".agents", "skills"),
+      path.join(input.home, ".claude", "skills"),
+      path.join(input.globalConfigDirectory, "skills"),
+    ].some((directory) => contains(directory, location))
+  ) {
+    return "global"
+  }
+  return undefined
 }
 
 export function filterSessionSkills(skills: ReadonlyArray<SessionSkill>, query: string) {
@@ -30,4 +55,9 @@ export function sessionSkillLabel(skill: SessionSkill) {
 
 export function sessionSkillContent(content: unknown) {
   return typeof content === "string" ? content : ""
+}
+
+function contains(root: string, target: string) {
+  const relative = path.relative(root, target)
+  return relative === "" || (relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative))
 }

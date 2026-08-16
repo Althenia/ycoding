@@ -5,9 +5,8 @@ import { optional } from "./schema.js"
 import { ToolContent } from "./llm.js"
 import { Model } from "./model.js"
 import { Prompt } from "./prompt.js"
-import { DateTimeUtcFromMillis, NonNegativeInt, PositiveInt, RelativePath, statics } from "./schema.js"
-import { ascending } from "./identifier.js"
-import { Event } from "./event.js"
+import { DateTimeUtcFromMillis, NonNegativeInt, PositiveInt, RelativePath } from "./schema.js"
+import { ID as SessionMessageID } from "./session-message-id.js"
 import { Shell as ShellSchema } from "./shell.js"
 import { FinishReason } from "./llm.js"
 import { SessionError } from "./session-error.js"
@@ -18,13 +17,7 @@ import { Money } from "./money.js"
 import { Snapshot } from "./snapshot.js"
 import { TokenUsage } from "./token-usage.js"
 
-export const ID = Schema.String.check(Schema.isStartsWith("msg_")).pipe(
-  Schema.brand("Session.Message.ID"),
-  statics((schema) => ({
-    create: () => schema.make("msg_" + ascending()),
-    fromEvent: (eventID: Event.ID) => schema.make(eventID.replace(/^evt_/, "msg_")),
-  })),
-)
+export const ID = SessionMessageID
 export type ID = typeof ID.Type
 
 const Base = {
@@ -36,12 +29,12 @@ const Base = {
 const projectArtifactScopeBrand: string = "ProjectArtifact.ScopeID"
 const projectArtifactVersionBrand: string = "ProjectArtifact.VersionID"
 const projectArtifactIDBrand: string = "ProjectArtifact.ID"
-const ArtifactScopeID = Schema.String.check(
-  Schema.isPattern(/^pas_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/),
-).pipe(Schema.brand(projectArtifactScopeBrand))
-const ArtifactVersionID = Schema.String.check(
-  Schema.isPattern(/^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/),
-).pipe(Schema.brand(projectArtifactVersionBrand))
+const ArtifactScopeID = Schema.String.check(Schema.isPattern(/^pas_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)).pipe(
+  Schema.brand(projectArtifactScopeBrand),
+)
+const ArtifactVersionID = Schema.String.check(Schema.isPattern(/^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)).pipe(
+  Schema.brand(projectArtifactVersionBrand),
+)
 const ArtifactID = Schema.String.check(
   Schema.isPattern(/^(?!(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/),
 ).pipe(Schema.brand(projectArtifactIDBrand))
@@ -100,6 +93,12 @@ export const System = Schema.Struct({
   text: Schema.String,
 }).annotate({ identifier: "Session.Message.System" })
 
+export interface SkillDeactivation extends Schema.Schema.Type<typeof SkillDeactivation> {}
+export const SkillDeactivation = Schema.Struct({
+  skill: SkillSchema.ID,
+  reason: Schema.Literal("conflict_resolved"),
+}).annotate({ identifier: "Session.Message.SkillDeactivation" })
+
 export interface Skill extends Schema.Schema.Type<typeof Skill> {}
 export const Skill = Schema.Struct({
   ...Base,
@@ -108,6 +107,7 @@ export const Skill = Schema.Struct({
   name: SkillSchema.Name,
   text: Schema.String,
   conflicts: SkillSchema.Conflicts.pipe(optional),
+  skillDeactivations: Schema.Array(SkillDeactivation).pipe(optional),
   artifact: ArtifactProvenance.pipe(optional),
 }).annotate({ identifier: "Session.Message.Skill" })
 
@@ -216,6 +216,7 @@ export const Assistant = Schema.Struct({
   agent: Agent.ID,
   model: Model.Ref,
   content: AssistantContent.pipe(Schema.Array),
+  skillDeactivations: Schema.Array(SkillDeactivation).pipe(optional),
   snapshot: Schema.Struct({
     start: Snapshot.ID.pipe(optional),
     end: Snapshot.ID.pipe(optional),
@@ -254,6 +255,8 @@ export const CompactionCompleted = Schema.Struct({
   reason: Schema.Literals(["auto", "manual"]),
   summary: Schema.String,
   recent: Schema.String,
+  messages: NonNegativeInt.pipe(optional),
+  tokens: TokenUsage.Info.pipe(optional),
 }).annotate({ identifier: "Session.Message.Compaction.Completed" })
 
 export interface CompactionFailed extends Schema.Schema.Type<typeof CompactionFailed> {}

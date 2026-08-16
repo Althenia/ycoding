@@ -2,7 +2,7 @@ export * as Vcs from "./vcs"
 
 import { Context, Effect, Layer } from "effect"
 import { FileDiff } from "@ycoding-ai/schema/file-diff"
-import { FileStatus, Mode } from "@ycoding-ai/schema/vcs"
+import { Branch, FileStatus, Mode } from "@ycoding-ai/schema/vcs"
 import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Location } from "./location"
@@ -10,7 +10,7 @@ import { AppProcess } from "./process"
 import { VcsGit } from "./vcs/git"
 import { VcsHg } from "./vcs/hg"
 
-export { FileStatus, Mode }
+export { Branch, FileStatus, Mode }
 
 export interface DiffOptions {
   readonly context?: number
@@ -19,6 +19,7 @@ export interface DiffOptions {
 export interface Interface {
   readonly status: () => Effect.Effect<FileStatus[]>
   readonly diff: (mode: Mode, options?: DiffOptions) => Effect.Effect<FileDiff.Info[]>
+  readonly branch: () => Effect.Effect<Branch>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Vcs") {}
@@ -47,6 +48,10 @@ const layer = Layer.effect(
       diff: Effect.fn("Vcs.diff")(function* (mode: Mode, options?: DiffOptions) {
         if (!impl) return []
         return yield* impl.diff(mode, options)
+      }),
+      branch: Effect.fn("Vcs.branch")(function* () {
+        if (!impl) return {}
+        return yield* impl.branch()
       }),
     })
   }),

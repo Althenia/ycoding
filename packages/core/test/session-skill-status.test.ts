@@ -235,6 +235,37 @@ describe("SessionSkillStatus.list", () => {
     ])
   })
 
+  test("decodes persisted boundaries for both original inactive reasons", () => {
+    const decode = Schema.decodeUnknownSync(SessionMessage.Info)
+    const activation = Schema.encodeSync(SessionMessage.Info)(reference("activation", "review", "Review", "content"))
+    const switched = Schema.encodeSync(SessionMessage.Info)(
+      SessionMessage.AgentSelected.make({
+        id: messageID("switched"),
+        type: "agent-switched",
+        agent: AgentV2.defaultID,
+        time: { created },
+      }),
+    )
+    const compacted = Schema.encodeSync(SessionMessage.Info)(
+      SessionMessage.CompactionCompleted.make({
+        id: messageID("compacted"),
+        type: "compaction",
+        status: "completed",
+        reason: "auto",
+        summary: "",
+        recent: "",
+        time: { created },
+      }),
+    )
+
+    expect(SessionSkillStatus.list([decode(activation), decode(switched)], [])).toEqual([
+      expect.objectContaining({ state: "inactive", inactiveReason: "agent_switched" }),
+    ])
+    expect(SessionSkillStatus.list([decode(activation), decode(compacted)], [])).toEqual([
+      expect.objectContaining({ state: "inactive", inactiveReason: "compacted" }),
+    ])
+  })
+
   test("rejects invalid state and inactive-reason combinations", () => {
     const base = {
       id: skillID("review"),

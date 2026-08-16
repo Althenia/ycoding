@@ -13,6 +13,16 @@ export function list(
   instructionKeys: ReadonlyArray<string>,
 ): Info[] {
   const statuses = messages.reduce<Map<SkillV2.ID, Info>>((result, message) => {
+    const applyDeactivations = (deactivations: readonly SessionMessage.SkillDeactivation[] | undefined) =>
+      deactivations?.forEach((deactivation) => {
+        const status = result.get(deactivation.skill)
+        if (status)
+          result.set(deactivation.skill, {
+            ...status,
+            state: "inactive",
+            inactiveReason: deactivation.reason,
+          })
+      })
     if (message.type === "skill") {
       result.set(message.skill, {
         id: message.skill,
@@ -24,6 +34,7 @@ export function list(
         conflicts: [],
         declarations: message.conflicts ?? emptyDeclarations,
       })
+      applyDeactivations(message.skillDeactivations)
       return result
     }
     if (message.type === "assistant") {
@@ -45,6 +56,7 @@ export function list(
             declarations: output.conflicts ?? emptyDeclarations,
           })
         })
+      applyDeactivations(message.skillDeactivations)
       return result
     }
     const inactiveReason =

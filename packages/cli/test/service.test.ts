@@ -13,17 +13,19 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { expect, test } from "bun:test"
-import { Effect, Schedule, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ServiceConfig } from "../src/services/service-config"
 
-test("managed service ports are stable per installation channel", () => {
-  expect(ServiceConfig.defaultPort("latest")).toBe(0xc0de)
-  expect(ServiceConfig.defaultPort("local")).toBe(0xc0df)
+test("managed service ports are stable and namespaced to YCoding", () => {
+  expect(ServiceConfig.defaultPort("latest")).toBe(43_094)
+  expect(ServiceConfig.defaultPort("local")).toBe(26_378)
+  expect(ServiceConfig.defaultPort("main")).toBe(29_706)
   expect(ServiceConfig.defaultPort("preview-a")).toBe(ServiceConfig.defaultPort("preview-a"))
   expect(ServiceConfig.defaultPort("preview-a")).not.toBe(ServiceConfig.defaultPort("preview-b"))
+  expect(ServiceConfig.defaultPort("main")).not.toBe(45_430)
 })
 
 test("local channel stores service config with the local service filename", async () => {
@@ -31,7 +33,9 @@ test("local channel stores service config with the local service filename", asyn
   try {
     await Effect.runPromise(
       ServiceConfig.set("hostname", "127.0.0.2").pipe(
-        Effect.provide(Global.layerWith({ config: path.join(root, "config"), state: path.join(root, "state") })),
+        Effect.provide(
+          Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") }),
+        ),
         Effect.provide(NodeFileSystem.layer),
       ),
     )
@@ -222,7 +226,7 @@ test("clean managed service shutdown removes its registration", async () => {
   }
 }, 30_000)
 
-test("concurrent service processes elect one server", async () => {
+test("concurrent service processes elect one server without resuming suspended Sessions", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-service-election-"))
   const database = path.join(root, "ycoding.db")
   const env = {
@@ -282,7 +286,10 @@ test("concurrent service processes elect one server", async () => {
       ),
     )
     const loserOutput = errors.filter(Boolean).join("\n")
-    expect(losers.map((process) => process.exitCode), loserOutput).toEqual(losers.map(() => 0))
+    expect(
+      losers.map((process) => process.exitCode),
+      loserOutput,
+    ).toEqual(losers.map(() => 0))
     expect(loserOutput).not.toContain("database is locked")
     expect(winner.exitCode).toBe(null)
     expect(new URL(info.url).port).toBe(String(port))
@@ -310,6 +317,7 @@ test("concurrent service processes elect one server", async () => {
       contender.kill("SIGTERM")
       await contender.exited
     }
+    await Bun.sleep(250)
     expect(
       await withDatabase(
         database,
@@ -322,8 +330,8 @@ test("concurrent service processes elect one server", async () => {
             .pipe(Effect.orDie)
         }),
       ),
-    ).toEqual({ timeSuspended: null })
-    expect(await waitForExecutionStart(database, sessionID)).toBe(1)
+    ).toMatchObject({ timeSuspended: expect.any(Number) })
+    expect(await executionStarts(database, sessionID)).toBe(0)
     await Effect.runPromise(Service.stop({ file: registration }).pipe(Effect.provide(NodeFileSystem.layer)))
     await winner.exited
     const winnerOutput = (await new Response(winner.stdout).text()) + (await new Response(winner.stderr).text())
@@ -379,7 +387,9 @@ test("unrelated managed port occupancy reports an actionable conflict", async ()
     expect(await contender.exited).not.toBe(0)
     const output = (await new Response(contender.stdout).text()) + (await new Response(contender.stderr).text())
     expect(output).toContain(`Managed service port ${port} on 127.0.0.1 is already in use by another process`)
-    expect(output).toContain("ycoding service set port <port>")
+    expect(output).toContain("Set `port` in service-local.json under the YCoding config directory")
+    expect(output).toContain("ycoding --standalone")
+    expect(output).not.toContain("ycoding service set")
     expect(await Bun.file(registration).exists()).toBe(false)
   } finally {
     listener.stop(true)
@@ -568,7 +578,7 @@ function withDatabase<A, E>(file: string, effect: Effect.Effect<A, E, Database.S
   return Effect.runPromise(effect.pipe(Effect.provide(Database.layer({ path: file })), Effect.scoped))
 }
 
-function waitForExecutionStart(file: string, sessionID: SessionV2.ID) {
+function executionStarts(file: string, sessionID: SessionV2.ID) {
   return withDatabase(
     file,
     Effect.gen(function* () {
@@ -590,9 +600,7 @@ function waitForExecutionStart(file: string, sessionID: SessionV2.ID) {
                   ),
             ),
           ),
-          Effect.filterOrFail((rows) => rows.length > 0),
           Effect.map((rows) => rows.length),
-          Effect.retry(Schedule.max([Schedule.spaced("50 millis"), Schedule.recurs(200)])),
         )
     }),
   )

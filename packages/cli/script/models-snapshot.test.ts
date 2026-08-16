@@ -42,10 +42,30 @@ test("fetches a bounded validated refresh and rejects non-success responses", as
   ).rejects.toThrow("Models.dev refresh failed with status 503")
 })
 
-test("committed snapshot contains current Claude 5 catalog metadata", async () => {
+test("committed snapshot contains current OpenAI and Anthropic catalog pricing", async () => {
   const snapshot = JSON.parse(
     await Bun.file(path.join(import.meta.dir, "models-dev.snapshot.json")).text(),
   ) as {
+    openai?: {
+      models?: Record<
+        string,
+        {
+          cost?: {
+            input?: number
+            output?: number
+            cache_read?: number
+            cache_write?: number
+            tiers?: Array<{
+              input?: number
+              output?: number
+              cache_read?: number
+              cache_write?: number
+              tier?: { type?: string; size?: number }
+            }>
+          }
+        }
+      >
+    }
     anthropic?: {
       models?: Record<
         string,
@@ -59,9 +79,25 @@ test("committed snapshot contains current Claude 5 catalog metadata", async () =
       >
     }
   }
+  const sol = snapshot.openai?.models?.["gpt-5.6-sol"]
   const opus = snapshot.anthropic?.models?.["claude-opus-5"]
   const fable = snapshot.anthropic?.models?.["claude-fable-5"]
 
+  expect(sol?.cost).toMatchObject({
+    input: 5,
+    output: 30,
+    cache_read: 0.5,
+    cache_write: 6.25,
+    tiers: [
+      {
+        input: 10,
+        output: 45,
+        cache_read: 1,
+        cache_write: 12.5,
+        tier: { type: "context", size: 272_000 },
+      },
+    ],
+  })
   expect(opus).toMatchObject({
     id: "claude-opus-5",
     reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],

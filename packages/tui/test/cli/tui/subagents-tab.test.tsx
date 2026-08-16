@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { BoxRenderable, type Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import { createEffect } from "solid-js"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
@@ -57,7 +58,11 @@ test("formats provider, model, and optional variant", () => {
     }),
   ).toBe("openai/gpt-5.6-luna#high")
   expect(module.formatSubagentModel({ providerID: "openai", id: "gpt-5.6-sol" })).toBe("openai/gpt-5.6-sol")
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-sonnet-5" })).toBe("Sonnet 5")
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe("Haiku 4.5")
   expect(module.formatSubagentModel(undefined)).toBeUndefined()
+  expect(module.formatSubagentCacheHit(undefined)).toBe("—")
+  expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
 })
 
 test("lists BTW children in stable creation order with independent model labels", () => {
@@ -168,49 +173,54 @@ test("sections active tasks before inactive tasks and sorts each section determi
 
   expect(entries).toEqual([
     expect.objectContaining({
+      sessionID: "ses_waiting",
+      agent: "reviewer",
+      title: "Review implementation",
+      status: "waiting",
+      current: true,
+    }),
+    expect.objectContaining({
       sessionID: "ses_running_new",
+      agent: "general",
       title: "Run validation",
       status: "running",
       current: false,
     }),
     expect.objectContaining({
       sessionID: "ses_running_old",
+      agent: "explore",
       title: "Investigate regression",
       status: "running",
       current: false,
     }),
     expect.objectContaining({
-      sessionID: "ses_waiting",
-      title: "Review implementation",
-      status: "waiting",
-      current: true,
-    }),
-    expect.objectContaining({
       sessionID: "ses_alpha",
+      agent: "general",
       title: "Report findings",
       status: "completed",
       current: false,
     }),
     expect.objectContaining({
       sessionID: "ses_lost",
+      agent: "explore",
       title: "Inspect runtime",
       status: "lost",
       current: false,
     }),
   ])
   expect(module.subagentSections(entries)).toEqual([
-    { label: "Active", entries: entries.slice(0, 3) },
-    { label: "Inactive", entries: entries.slice(3) },
+    { label: "ACTIVE", entries: entries.slice(0, 3) },
+    { label: "INACTIVE", entries: entries.slice(3) },
   ])
-  expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "Active", entries: entries.slice(0, 3) }])
-  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "Inactive", entries: entries.slice(3) }])
+  expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "ACTIVE", entries: entries.slice(0, 3) }])
+  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "INACTIVE", entries: entries.slice(3) }])
   expect(module.subagentScrollIndex(entries, 0)).toBe(1)
-  expect(module.subagentScrollIndex(entries, 3)).toBe(5)
+  expect(module.subagentScrollIndex(entries, 3)).toBe(6)
   expect(module.subagentScrollIndex(entries.slice(3), 0)).toBe(1)
-  expect(module.taskStatusLabel("waiting")).toBe("Waiting")
-  expect(module.taskStatusLabel("failed")).toBe("Failed")
-  expect(module.taskStatusLabel("lost")).toBe("Lost")
-  expect(module.taskStatusLabel("cancelled")).toBe("Cancelled")
+  expect(module.taskStatusLabel("waiting")).toBe("? awaiting")
+  expect(module.taskStatusLabel("failed")).toBe("failed")
+  expect(module.taskStatusLabel("lost")).toBe("lost")
+  expect(module.taskStatusLabel("cancelled")).toBe("cancelled")
 })
 
 test("classifies every non-terminal orchestration state as active", () => {
@@ -397,10 +407,14 @@ test("renders section headings while keyboard navigation selects only task rows 
     import("../../../src/context/theme"),
   ])
   const config = createTuiResolvedConfig()
+  let routeSessionID: string | undefined
 
   function RouteProbe() {
     const route = useRoute().data
-    return <text>Route:{route.type === "session" ? route.sessionID : "home"}</text>
+    createEffect(() => {
+      routeSessionID = route.type === "session" ? route.sessionID : undefined
+    })
+    return null
   }
 
   const app = await testRender(
@@ -429,17 +443,17 @@ test("renders section headings while keyboard navigation selects only task rows 
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 80, height: 12 },
+    { width: 80, height: 32 },
   )
   app.renderer.start()
 
   try {
-    await app.waitForFrame((frame) => frame.includes("Active") && frame.includes("Inactive"))
+    await app.waitForFrame((frame) => frame.includes("ACTIVE") && frame.includes("INACTIVE"))
     const initial = app.captureCharFrame()
-    expect(initial).toContain("Active")
-    expect(initial).toContain("Inactive")
-    expect(initial).toContain("Reviewer: Review implementation")
-    expect(initial).not.toContain("General: Archive results")
+    expect(initial).toContain("ACTIVE")
+    expect(initial).toContain("INACTIVE")
+    expect(initial).toContain("reviewer  · Review implementation")
+    expect(initial).toContain("general  · Archive results")
     const sectionRoots = findScrollBox(app.renderer.root)?.getChildren() ?? []
     expect(sectionRoots).toHaveLength(2)
     expect(sectionRoots.every((child) => child instanceof BoxRenderable)).toBe(true)
@@ -448,9 +462,10 @@ test("renders section headings while keyboard navigation selects only task rows 
     app.mockInput.pressKey("ARROW_DOWN")
     app.mockInput.pressKey("ARROW_DOWN")
     await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("General: Archive results")
+    expect(app.captureCharFrame()).toContain("general  · Archive results")
     app.mockInput.pressEnter()
-    await app.waitForFrame((frame) => frame.includes("Route:ses_inactive_second"))
+    await app.renderOnce()
+    expect(routeSessionID).toBe("ses_inactive_second")
   } finally {
     app.renderer.destroy()
   }

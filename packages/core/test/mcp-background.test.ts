@@ -8,6 +8,7 @@ import { MCP } from "@ycoding-ai/core/mcp/index"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { SessionV2 } from "@ycoding-ai/core/session"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { McpTool } from "@ycoding-ai/core/tool/mcp"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -132,6 +133,9 @@ const runtime = Layer.effect(
 )
 
 const permissions = Layer.mock(PermissionV2.Service, { assert: () => Effect.void })
+const guardrails = Layer.mock(SessionGuardrail.Service, {
+  assert: () => Effect.succeed({ release: Effect.void }),
+})
 const events = Layer.mock(EventV2.Service, { subscribe: () => Stream.never })
 const it = testEffect(
   AppNodeBuilder.build(
@@ -139,6 +143,7 @@ const it = testEffect(
     [
       [MCP.node, mcp],
       [PermissionV2.node, permissions],
+      [SessionGuardrail.node, guardrails],
       [EventV2.node, events],
       [PluginRuntime.node, runtime],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

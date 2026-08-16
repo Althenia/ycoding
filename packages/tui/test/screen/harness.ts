@@ -1,5 +1,4 @@
 import { mock } from "bun:test"
-import { ScrollBoxRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { Effect, FileSystem } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -60,13 +59,9 @@ export async function renderScreen(input: {
   }
 
   return {
-    events,
     frame: () => setup.captureCharFrame(),
     lines: () => setup.captureCharFrame().split("\n"),
     spans: () => setup.captureSpans(),
-    scrollbox: () => findScrollBox(setup.renderer.root),
-    input: setup.mockInput,
-    mouse: setup.mockMouse,
     /** Foreground ints of the first span containing `text`, or undefined. */
     colorOf: (text: string) =>
       setup
@@ -81,9 +76,4 @@ export async function renderScreen(input: {
       mock.restore()
     },
   }
-}
-
-function findScrollBox(root: Renderable): ScrollBoxRenderable | undefined {
-  if (root instanceof ScrollBoxRenderable) return root
-  return root.getChildren().map(findScrollBox).find(Boolean)
 }

@@ -22,7 +22,7 @@ const program = Effect.gen(function* () {
 })
 ```
 
-Run `LLMClient.stream(request)` instead of `generate` when you want incremental `LLMEvent`s. The event stream is provider-neutral — same shape across OpenAI Chat, OpenAI Responses, Anthropic Messages, Gemini, Bedrock Converse, and any OpenAI-compatible deployment.
+Run `LLMClient.stream(request)` instead of `generate` when you want incremental `LLMEvent`s. The event stream is provider-neutral — the same shape across direct OpenAI Responses, Anthropic Messages, Gemini, Bedrock Converse, and explicitly configured OpenAI-compatible Chat or Responses deployments.
 
 ## Image generation
 
@@ -203,11 +203,11 @@ The hosted result is represented as a provider-executed tool call and tool resul
 
 ## Caching
 
-Prompt caching is **on by default**. Every `LLMRequest` resolves to `cache: "auto"` unless the caller opts out with `cache: "none"`. Each protocol translates `CacheHint`s to its wire format (`cache_control` on Anthropic, `cachePoint` on Bedrock; OpenAI and Gemini do implicit caching server-side and don't need inline markers — auto is a no-op there).
+Prompt caching is **on by default**. Every `LLMRequest` resolves to `cache: "auto"` unless the caller opts out with `cache: "none"`. Each protocol translates `CacheHint`s to its wire format. Anthropic uses `cache_control`, Bedrock uses `cachePoint`, and pre-GPT-5.6 OpenAI, Codex, compatible OpenAI routes, and Gemini use key-only or implicit provider caching. Direct public GPT-5.6 OpenAI routes also support explicit markers.
 
 ### Auto placement
 
-`"auto"` places three breakpoints — last tool definition, last system part, latest user message. The last-user-message boundary is the load-bearing detail: in a tool-use loop, a single user turn expands into many assistant/tool round-trips, all sharing that prefix. Caching at that boundary lets every intra-turn API call hit.
+`"auto"` places up to four breakpoints — the last tool definition, the last system part, and the two most recent cacheable messages — on providers that serialize those marker types. Direct public GPT-5.6 OpenAI routes generate one combined system-text marker and selected user/assistant text markers only. Chat serializes marked assistant text through native `text` arrays; Responses serializes a marked assistant message through `input_text` EasyInput blocks and otherwise preserves `output_text`. Tool definitions, tool results, and unsupported content receive no generated GPT-5.6 marker, though they can remain inside a later cached prefix.
 
 The math justifies the default: Anthropic's 5-minute cache write is 1.25× base, read is 0.1×, so a single reuse within 5 minutes already wins. One-shot completions below the per-model minimum-cacheable-token threshold silently no-op on the wire, so the worst case is harmless.
 
@@ -235,7 +235,7 @@ cache: {
 
 ### Manual hints
 
-Inline `CacheHint` on any text / system / tool / tool-result part overrides automatic placement. The auto policy preserves manual hints; it only fills gaps.
+Inline `CacheHint` controls provider-native placement where the selected route can serialize it. Direct public GPT-5.6 OpenAI routes emit generated markers only for combined system text and user/assistant text; they do not serialize tool-definition or tool-result markers. The auto policy preserves supported manual hints and fills eligible gaps.
 
 ```ts
 LLM.request({
@@ -249,12 +249,13 @@ LLM.request({
 
 ### Provider behavior table
 
-| Protocol                | `cache: "auto"`                                                           |
-| ----------------------- | ------------------------------------------------------------------------- |
-| Anthropic Messages      | emits up to 3 `cache_control` markers (4-breakpoint cap enforced)         |
-| Bedrock Converse        | emits up to 3 `cachePoint` blocks (4-breakpoint cap enforced)             |
-| OpenAI Chat / Responses | no-op (implicit caching above 1024 tokens)                                |
-| Gemini                  | no-op (implicit caching on 2.5+; explicit `CachedContent` is out-of-band) |
+| Protocol                                                         | `cache: "auto"`                                                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Anthropic Messages                                               | emits up to 4 `cache_control` markers (4-breakpoint cap enforced)                          |
+| Bedrock Converse                                                 | emits up to 4 `cachePoint` blocks (4-breakpoint cap enforced)                              |
+| Direct OpenAI Responses before GPT-5.6, Codex, compatible routes | key-only or implicit provider caching                                                      |
+| Direct OpenAI Responses GPT-5.6+                                 | combined system and user/assistant text markers; marked assistant replay uses `input_text` |
+| Gemini                                                           | no-op (implicit caching on 2.5+; explicit `CachedContent` is out-of-band)                  |
 
 Normalized cache usage is read back into `response.usage.cacheReadInputTokens` and `cacheWriteInputTokens` across every provider.
 
@@ -289,9 +290,8 @@ const selected = model("gpt-5", {
 })
 ```
 
-OpenAI Chat and OpenAI Responses are separate semantic entrypoints:
+Direct OpenAI has one Responses semantic entrypoint:
 
-- `@ycoding-ai/ai/providers/openai/chat`
 - `@ycoding-ai/ai/providers/openai/responses`
 - `@ycoding-ai/ai/providers/openai-compatible/responses`
 - `@ycoding-ai/ai/providers/anthropic-compatible`
@@ -300,7 +300,13 @@ OpenAI Chat and OpenAI Responses are separate semantic entrypoints:
 - `@ycoding-ai/ai/providers/google-vertex/responses`
 - `@ycoding-ai/ai/providers/google-vertex/messages`
 
-Responses HTTP versus WebSocket is a scoped `transport` setting on the OpenAI Responses entrypoint, not another entrypoint. Azure follows the same Chat/Responses split at `providers/azure/chat` and `providers/azure/responses`. Generic OpenAI-compatible Chat remains at `providers/openai-compatible`; compatible Responses is separate at `providers/openai-compatible/responses`. Generic Anthropic Messages-compatible providers use `providers/anthropic-compatible`, which the named Anthropic provider composes. Google Gemini and Amazon Bedrock expose their single native API through their existing provider paths.
+Responses HTTP versus WebSocket is a scoped `transport` setting on the direct OpenAI Responses entrypoint, not another entrypoint. The removed direct OpenAI Chat facade and entrypoint are not public surfaces. Azure retains its separate Chat/Responses entrypoints at `providers/azure/chat` and `providers/azure/responses`. Generic OpenAI-compatible Chat remains at `providers/openai-compatible` for third-party Chat deployments; compatible Responses is separate at `providers/openai-compatible/responses`. Generic Anthropic Messages-compatible providers use `providers/anthropic-compatible`, which the named Anthropic provider composes. Google Gemini and Amazon Bedrock expose their single native API through their existing provider paths.
+
+### Direct OpenAI Responses lifecycle
+
+Direct GPT-5.6 Responses defaults to stateless `store: false`, requests encrypted reasoning replay metadata, and enables server-side context management at a 200,000-token threshold. A returned encrypted compaction item is opaque state: the next stateless request replays that item for the same model and prunes input before the compaction boundary. This does not enable stored-response continuation.
+
+`OpenAI.webSearch(...)` adds OpenAI's hosted `web_search` Responses tool. It runs at OpenAI and its provider-executed call item is replayed on stateless follow-ups. URL citations are appended to assistant text as a `Source: <title>` line followed by the URL, so canonical and durable transcripts retain the provider's attribution. Hosted search is distinct from YCoding Core's local `websearch` tool, which selects Exa or Parallel independently of the model provider.
 
 Vertex Gemini, Vertex Chat, Vertex Responses, and Vertex Messages are separate API entrypoints. All accept `project`, `location`, and an optional `accessToken`; when no explicit token or auth override is supplied they lazily use Google Application Default Credentials. Vertex Gemini instead selects express mode when `apiKey` or `GOOGLE_VERTEX_API_KEY` is present. Vertex Chat targets MaaS models through the OpenAI-compatible Chat Completions endpoint, while Vertex Responses targets Grok models and defaults `store` to `false` as required by Vertex. `providers/google-vertex` remains the default alias for `providers/google-vertex/gemini`.
 

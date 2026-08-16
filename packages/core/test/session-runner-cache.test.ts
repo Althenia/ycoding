@@ -3,6 +3,9 @@ import { SystemPart, ToolDefinition } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
+import { ExecuteTool } from "@ycoding-ai/core/tool/execute"
+import { Tool } from "@ycoding-ai/core/tool/tool"
+import { Effect, Schema } from "effect"
 
 const base = {
   projectID: "project",
@@ -41,8 +44,16 @@ const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
 
 test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
-    "64ad6709b4f0b116df48ceb83fd9ab2c743042814b393270141fd4b25742cc5c",
+    "6e41470c1087dc6e2208831a8e3f954750ca0f56b6152934e3637c7751a10853",
   )
+})
+
+test("keeps ordinary keys stable while isolating compaction cache scope", () => {
+  const normal = SessionRunnerCache.promptCacheNamespace(base)
+  const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })
+
+  expect(normal).toBe("6e41470c1087dc6e2208831a8e3f954750ca0f56b6152934e3637c7751a10853")
+  expect(compaction).not.toBe(normal)
 })
 
 test("canonicalizes object order and preserves JSON array positions", () => {
@@ -67,7 +78,7 @@ test("canonicalizes object order and preserves JSON array positions", () => {
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {
   expect(namespaceWithSchema({ "10": "ten", "2": "two", "\u{10000}": "astral", "\u{e000}": "bmp" })).toBe(
-    "478d42a1f266f34fefe44cac04dce27a30583909d64c0f9261382fae8a40d875",
+    "0a99be3cf8b1d65f41acfb4aeeac2c1efbe3287f443f6fd3a7fc57be0303bb3a",
   )
 })
 
@@ -102,10 +113,50 @@ test("isolates every cache sharing dimension", () => {
   expect(SessionRunnerCache.promptCacheNamespace({ ...base, workspaceID: undefined })).not.toBe(baseline)
 })
 
-test("shares equivalent parent and routed-subagent request prefixes", () => {
-  const parent = { ...base, agentID: "build" }
-  const routedSubagent = { ...base, agentID: "reviewer" }
-  expect(SessionRunnerCache.promptCacheNamespace(routedSubagent)).toBe(SessionRunnerCache.promptCacheNamespace(parent))
+test("keeps the CodeMode execute namespace stable across dynamic catalogs", () => {
+  const registered = (namespace: string, name: string, description: string) => {
+    const child = Tool.make({
+      description,
+      input: Schema.Struct({ query: Schema.String }),
+      output: Schema.String,
+      execute: ({ query }) => Effect.succeed(query),
+    })
+    const execute = ExecuteTool.create(new Map([[`${namespace}_${name}`, { tool: child, name, namespace }]]))
+    return Tool.definition("execute", execute)
+  }
+  const first = registered("github", "issue", "Find a GitHub issue")
+  const second = registered("slack", "channel", "Find a Slack channel")
+
+  expect(SessionRunnerCache.promptCacheNamespace({ ...base, tools: [first] })).toBe(
+    SessionRunnerCache.promptCacheNamespace({ ...base, tools: [second] }),
+  )
+  expect(
+    SessionRunnerCache.promptCacheNamespace({
+      ...base,
+      tools: [{ ...first, inputSchema: { type: "object", properties: { code: { type: "number" } } } }],
+    }),
+  ).not.toBe(SessionRunnerCache.promptCacheNamespace({ ...base, tools: [first] }))
+})
+
+test("shares subagent prefixes only when every model-visible dimension is equal", () => {
+  const parent = SessionRunnerCache.promptCacheNamespace(base)
+  expect(SessionRunnerCache.promptCacheNamespace({ ...base })).toBe(parent)
+
+  const mismatches = [
+    { providerID: "other-provider" },
+    { modelID: "other-model" },
+    { variant: "high" },
+    { projectID: "other-project" },
+    { directory: "/other" },
+    { workspaceID: "other-workspace" },
+    { policyRevision: `${CACHE_POLICY_REVISION}-other` },
+    { permissions: [{ action: "read", resource: "**", effect: "deny" }] },
+    { system: [SystemPart.make("Subagent system")] },
+    { tools: [] },
+  ] satisfies ReadonlyArray<Partial<SessionRunnerCache.PromptCacheNamespaceInput>>
+
+  for (const mismatch of mismatches)
+    expect(SessionRunnerCache.promptCacheNamespace({ ...base, ...mismatch })).not.toBe(parent)
 })
 
 test("separates provider session namespace from the shared prefix key", () => {
@@ -159,6 +210,124 @@ test("different sessions share a prompt cache key but not an OpenRouter session 
 
   expect(first.providerOptions.openrouter.session_id).toBe(second.providerOptions.openrouter.session_id)
   expect(first.providerOptions.openrouter.prompt_cache_key).toBe(second.providerOptions.openrouter.prompt_cache_key)
+})
+
+test("selects hybrid auto or explicit OpenAI caching only for supported direct GPT-5.6 routes", () => {
+  const automatic = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_auto",
+    routeID: "openai-responses",
+    openaiMode: "auto",
+  })
+  expect(automatic.providerOptions.openai).toEqual({
+    promptCacheKey: automatic.promptCacheKey,
+    promptCacheOptions: { mode: "implicit", ttl: "30m" },
+  })
+  expect(automatic.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+
+  const directRoute = SessionRunnerCache.providerOptions({
+    ...base,
+    providerID: "catalog-alias",
+    sessionID: "ses_openai_route_identity",
+    routeID: "openai-chat",
+    openaiMode: "auto",
+  })
+  expect(directRoute.providerOptions.openai).toEqual({
+    promptCacheKey: directRoute.promptCacheKey,
+    promptCacheOptions: { mode: "implicit", ttl: "30m" },
+  })
+  expect(directRoute.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+
+  const webSocket = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_websocket",
+    routeID: "openai-responses-websocket",
+    openaiMode: "explicit",
+  })
+  expect(webSocket.providerOptions.openai).toEqual({
+    promptCacheKey: webSocket.promptCacheKey,
+    promptCacheOptions: { mode: "explicit", ttl: "30m" },
+  })
+  expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
+
+  const explicit = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_explicit",
+    routeID: "openai-responses",
+    openaiMode: "explicit",
+  })
+  expect(explicit.providerOptions.openai).toEqual({
+    promptCacheKey: explicit.promptCacheKey,
+    promptCacheOptions: { mode: "explicit", ttl: "30m" },
+  })
+  expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
+
+  const legacy = SessionRunnerCache.providerOptions({
+    ...base,
+    modelID: "gpt-5.5",
+    sessionID: "ses_openai_legacy",
+    routeID: "openai-responses",
+    openaiMode: "auto",
+    openaiExtendedRetention: true,
+  })
+  expect(legacy.providerOptions.openai).toEqual({
+    promptCacheKey: legacy.promptCacheKey,
+    promptCacheRetention: "24h",
+  })
+  expect(legacy.cache).toBeUndefined()
+
+  const unsupportedLegacy = SessionRunnerCache.providerOptions({
+    ...base,
+    modelID: "gpt-4o-mini",
+    sessionID: "ses_openai_unsupported_legacy",
+    routeID: "openai-responses",
+    openaiMode: "explicit",
+    openaiExtendedRetention: true,
+  })
+  expect(unsupportedLegacy.providerOptions.openai).toEqual({
+    promptCacheKey: unsupportedLegacy.promptCacheKey,
+  })
+  expect(unsupportedLegacy.cache).toBeUndefined()
+
+  const compatible = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_compatible",
+    routeID: "openai-compatible-responses",
+    openaiMode: "explicit",
+    openaiExtendedRetention: true,
+  })
+  expect(compatible.providerOptions.openai).toEqual({ promptCacheKey: compatible.promptCacheKey })
+  expect(compatible.cache).toBeUndefined()
+
+  const codexBackend = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_codex",
+    routeID: "openai-codex-responses",
+    openaiMode: "auto",
+  })
+  expect(codexBackend.providerOptions.openai).toEqual({ promptCacheKey: codexBackend.promptCacheKey })
+  expect(codexBackend.cache).toBeUndefined()
+
+  const implicit = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_implicit",
+    routeID: "openai-chat",
+    openaiMode: "implicit",
+  })
+  expect(implicit.providerOptions.openai).toEqual({ promptCacheKey: implicit.promptCacheKey })
+  expect(implicit.cache).toBeUndefined()
+})
+
+test("maps selected Anthropic TTL into a concrete cache policy", () => {
+  const result = SessionRunnerCache.providerOptions({
+    ...base,
+    providerID: "anthropic",
+    modelID: "claude-sonnet-4-5",
+    sessionID: "ses_anthropic_ttl",
+    routeID: "anthropic-messages",
+    anthropicTtlSeconds: 300,
+  })
+  expect(result.cache).toEqual({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 })
 })
 
 test("native openrouter route uses camelCase fields", () => {

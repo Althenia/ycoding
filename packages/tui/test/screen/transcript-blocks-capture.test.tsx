@@ -146,7 +146,7 @@ const route: FetchHandler = (url) => {
   )
     return json({ data: [] })
   if (/^\/api\/session\/ses_(docs_sync|cache_audit)\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal" } })
   if (url.pathname === `/api/session/${sessionID}/todo`)
     return json({
       data: [
@@ -277,7 +277,7 @@ test("captures the product transcript block primitives at canonical terminal dim
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig()}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <TranscriptBlocksFixture width={viewport.width} />
+              <TranscriptBlocksFixture />
             </ThemeProvider>
           </ConfigProvider>
         </TestTuiContexts>
@@ -324,7 +324,7 @@ test("captures the product transcript block primitives at canonical terminal dim
       ] as const) {
         const row = rows.find((item) => item.includes(command))
         expect(row).toBeDefined()
-        expect(row!.indexOf(status)).toBe(viewport.width - 3 - status.length)
+        expect(row!.indexOf(status)).toBe(viewport.width - 4 - status.length)
       }
 
       await mkdir(renders, { recursive: true })
@@ -350,10 +350,11 @@ test("captures transcript blocks through the real session route", async () => {
     expect(lines).toHaveLength(viewport.height)
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
     expect(text).toContain("Applied the cache accounting fix.")
-    expect(text).toContain("Edited 1 file")
     expect(text).toContain("packages/core/src/provider/usage.ts")
     expect(text).toContain("+3")
     expect(text).toContain("−1")
+    expect(text).toContain("const read = usage.cacheRead ?? 0")
+    expect(text).toContain("if (total === 0) return undefined")
     expect(text).toContain("bun test provider")
     expect(text).toContain("14 pass · 0 fail")
     expect(text).toContain("bun typecheck")
@@ -361,30 +362,52 @@ test("captures transcript blocks through the real session route", async () => {
     expect(text).toContain("goal off")
     expect(text).toContain("YOLO off")
 
+    if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
+      for (const [row, column, value] of [
+        [11, 3, "packages/core/src/provider/usage.ts"],
+        [11, 58, "+3"],
+        [11, 63, "−1"],
+        [13, 5, "86"],
+        [13, 13, "  const read = usage.cacheRead ?? 0"],
+        [15, 5, "87"],
+        [15, 13, "- return read / total"],
+        [17, 5, "87"],
+        [17, 13, "+ if (total === 0) return undefined"],
+        [19, 5, "88"],
+        [19, 13, "+ return read / total"],
+        [21, 5, "89"],
+        [21, 13, "}"],
+      ] as const)
+        expect(lines[row - 1]?.indexOf(value)).toBe(column)
+      expect(lines.slice(10, 21).join("\n")).not.toContain("─")
+      expect(lines.slice(10, 21).join("\n")).not.toContain("│")
+    }
+
+    if (viewport.width === DESIGN_VIEWPORT.width) {
+      expect(lines[25]?.indexOf("ok")).toBe(3)
+      expect(lines[25]?.indexOf("bun test provider")).toBe(10)
+      expect(lines[28]?.indexOf("!")).toBe(3)
+      expect(lines[28]?.indexOf("bun typecheck")).toBe(10)
+    }
 
     await mkdir(renders, { recursive: true })
     await Bun.write(path.join(renders, `transcript-blocks-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
   }
 }, 120_000)
 
-test("truncates command text without displacing its status at 80 columns", async () => {
+test("wraps command text without displacing its status at 80 columns", async () => {
   const app = await testRender(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            {/* Explicit width: the row fills 100% of its parent, which an auto-sized box reports
-                as zero. */}
-            <box width={80}>
-              <box width={74} marginLeft={3}>
-                <InlineCommand
-                  icon="✓"
-                  command="bun test provider with the focused transcript command-result regression suite"
-                  pass={14}
-                  fail={0}
-                  width={74}
-                />
-              </box>
+            <box paddingLeft={3} paddingRight={3}>
+              <InlineCommand
+                icon="✓"
+                command="bun test provider with the focused transcript command-result regression suite"
+                pass={14}
+                fail={0}
+              />
             </box>
           </ThemeProvider>
         </ConfigProvider>
@@ -401,8 +424,8 @@ test("truncates command text without displacing its status at 80 columns", async
     const status = "14 pass · 0 fail"
     const row = rows.find((item) => item.includes(status))
     expect(row).toBeDefined()
-    expect(row!.indexOf(status)).toBe(80 - 3 - status.length)
-    expect(rows.join("\n")).toContain("bun test provider with ...result regression suite")
+    expect(row!.indexOf(status)).toBe(80 - 4 - status.length)
+    expect(rows.join("\n")).toContain("command-result regression suite")
   } finally {
     app.renderer.destroy()
   }
@@ -433,16 +456,14 @@ test("selects structured transcript blocks only for matching tool message data",
   expect(transcriptToolPresentation({ tool: "plugin_tool", input: {}, output: "done" })).toBeUndefined()
 })
 
-function TranscriptBlocksFixture(props: { width: number }) {
+function TranscriptBlocksFixture() {
   return (
-    <box width={props.width} flexDirection="column">
-      <box width={props.width - 6} marginLeft={3} flexDirection="column">
-        <text>YCODING</text>
-        <text>Applied the cache accounting fix.</text>
-        <InlineDiff path="packages/core/src/provider/usage.ts" additions={3} deletions={1} files={[{ diff: DIFF_FIXTURE }]} />
-        <InlineCommand icon="✓" command="bun test provider" pass={14} fail={0} width={props.width - 6} />
-        <InlineCommand icon="!" command="bun typecheck" errors={2} failed={true} width={props.width - 6} />
-      </box>
+    <box flexDirection="column" paddingLeft={3} paddingRight={3}>
+      <text>YCODING</text>
+      <text>Applied the cache accounting fix.</text>
+      <InlineDiff diff={DIFF_FIXTURE} />
+      <InlineCommand icon="✓" command="bun test provider" pass={14} fail={0} />
+      <InlineCommand icon="!" command="bun typecheck" errors={2} failed={true} />
     </box>
   )
 }

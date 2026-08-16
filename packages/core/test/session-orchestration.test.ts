@@ -337,6 +337,11 @@ describe("Session orchestration helpers", () => {
         SessionSchema.ID.make("ses_01"),
       ])
       expect(Buffer.byteLength(rendered.text)).toBeLessThanOrEqual(32 * 1024)
+      expect(rendered.text).toContain("Internal orchestration context")
+      expect(rendered.text).toContain("Do not surface subagent status unless the user explicitly asks")
+      const payload = JSON.parse(rendered.text.slice(rendered.text.indexOf("\n") + 1))
+      expect(payload.children[0]?.sessionID).toBe(rendered.view.children[0]?.sessionID)
+      expect(payload.children[0]?.state).toBe(rendered.view.children[0]?.state)
       expect(
         rendered.view.children.every(
           (task, index, items) => index === 0 || items[index - 1]!.state === "running" || task.state !== "running",

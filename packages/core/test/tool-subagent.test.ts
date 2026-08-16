@@ -10,6 +10,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventV2 } from "@ycoding-ai/core/event"
+import { Form } from "@ycoding-ai/core/form"
 import { Location } from "@ycoding-ai/core/location"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
@@ -27,12 +28,13 @@ import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionPendingTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
+import { SessionPendingTable, SessionTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { QuestionV2 } from "@ycoding-ai/core/question"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { SubagentTool } from "@ycoding-ai/core/tool/subagent"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
@@ -207,6 +209,11 @@ describe("SubagentTool", () => {
           prompt: "p".repeat(64 * 1024 + 1),
         }),
       ).toThrow()
+      expect(SubagentTool.description).toContain("Do not mention subagent status unless the user explicitly asks")
+      expect(SubagentTool.description).toContain(
+        "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands.",
+      )
+      expect(SubagentTool.description).not.toContain("you will be notified when they finish")
     }),
   )
 
@@ -402,6 +409,12 @@ describe("SubagentTool", () => {
           })
 
           expect(settled.output?.structured).toMatchObject({ status: "running" })
+          expect(settled.output?.content[0]).toMatchObject({
+            type: "text",
+            text: expect.stringContaining(
+              "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands.",
+            ),
+          })
           const child = yield* sessions.get(outputSessionID(settled.output?.structured))
           expect(progress[0]?.structured).toEqual({ sessionID: child.id, status: "running" })
           expect(child).toMatchObject({
@@ -464,9 +477,9 @@ describe("SubagentTool", () => {
   it.effect("sends progress prompts every ten minutes until interrupted", () =>
     Effect.gen(function* () {
       const prompts: string[] = []
-      const fiber = yield* SubagentTool.repeatProgress(Effect.sync(() => prompts.push(SubagentTool.progressPrompt))).pipe(
-        Effect.forkScoped,
-      )
+      const fiber = yield* SubagentTool.repeatProgress(
+        Effect.sync(() => prompts.push(SubagentTool.progressPrompt)),
+      ).pipe(Effect.forkScoped)
 
       yield* TestClock.adjust("10 minutes")
       expect(prompts).toEqual(["Report current status, blockers, and ETA."])
@@ -710,7 +723,7 @@ describe("SubagentTool", () => {
           yield* orchestration.answer({
             parentID: parent.id,
             childID: child.sessionID,
-            questionID: question.id,
+            questionID: question.question.id,
             text: "yes",
           })
           expect(
@@ -718,7 +731,7 @@ describe("SubagentTool", () => {
               orchestration.answer({
                 parentID: parent.id,
                 childID: child.sessionID,
-                questionID: question.id,
+                questionID: question.question.id,
                 text: "again",
               }),
             ),
@@ -747,39 +760,33 @@ describe("SubagentTool", () => {
           expect((yield* orchestration.resume({ parentID: parent.id, childID: child.sessionID })).state).toBe("running")
           yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: "done" })
           expect(
-            (
-              yield* orchestration.send({
-                parentID: parent.id,
-                childID: child.sessionID,
-                messageID: SessionMessage.ID.make("msg_completed_reuse"),
-                text: "completed",
-                delivery: "steer",
-              })
-            ).state,
+            (yield* orchestration.send({
+              parentID: parent.id,
+              childID: child.sessionID,
+              messageID: SessionMessage.ID.make("msg_completed_reuse"),
+              text: "completed",
+              delivery: "steer",
+            })).state,
           ).toBe("running")
           yield* orchestration.settle(child.sessionID, { type: "failed", error: "failed" })
           expect(
-            (
-              yield* orchestration.send({
-                parentID: parent.id,
-                childID: child.sessionID,
-                messageID: SessionMessage.ID.make("msg_failed_reuse"),
-                text: "failed",
-                delivery: "steer",
-              })
-            ).state,
+            (yield* orchestration.send({
+              parentID: parent.id,
+              childID: child.sessionID,
+              messageID: SessionMessage.ID.make("msg_failed_reuse"),
+              text: "failed",
+              delivery: "steer",
+            })).state,
           ).toBe("running")
           yield* orchestration.settle(child.sessionID, { type: "lost" })
           expect(
-            (
-              yield* orchestration.send({
-                parentID: parent.id,
-                childID: child.sessionID,
-                messageID: SessionMessage.ID.make("msg_lost_reuse"),
-                text: "lost",
-                delivery: "steer",
-              })
-            ).state,
+            (yield* orchestration.send({
+              parentID: parent.id,
+              childID: child.sessionID,
+              messageID: SessionMessage.ID.make("msg_lost_reuse"),
+              text: "lost",
+              delivery: "steer",
+            })).state,
           ).toBe("running")
         }),
       ),
@@ -937,19 +944,27 @@ describe("SubagentTool", () => {
 
           const unstarted = yield* launch("recover_unstarted")
           expect(executionWakes.filter((id) => id === unstarted.sessionID)).toHaveLength(1)
-           yield* orchestration.recover
-           expect(executionWakes.filter((id) => id === unstarted.sessionID)).toHaveLength(2)
+          yield* orchestration.recover
+          expect(executionWakes.filter((id) => id === unstarted.sessionID)).toHaveLength(2)
 
           const terminalPending = yield* launch("recover_terminal_pending")
           const db = (yield* Database.Service).db
-          yield* db.delete(SessionPendingTable).where(eq(SessionPendingTable.session_id, terminalPending.sessionID)).run()
+          yield* db
+            .delete(SessionPendingTable)
+            .where(eq(SessionPendingTable.session_id, terminalPending.sessionID))
+            .run()
           yield* orchestration.settle(terminalPending.sessionID, { type: "completed", excerpt: "done" })
           yield* sessions.synthetic({
             id: SessionMessage.ID.make("msg_recover_terminal_1"),
             sessionID: terminalPending.sessionID,
             text: "admitted before task reactivation",
             description: "Parent subagent message",
-            metadata: { source: "subagent_parent", parentID: parent.id, childID: terminalPending.sessionID, kind: "message" },
+            metadata: {
+              source: "subagent_parent",
+              parentID: parent.id,
+              childID: terminalPending.sessionID,
+              kind: "message",
+            },
             delivery: "steer",
             resume: false,
           })
@@ -958,7 +973,12 @@ describe("SubagentTool", () => {
             sessionID: terminalPending.sessionID,
             text: "second admitted input",
             description: "Parent subagent message",
-            metadata: { source: "subagent_parent", parentID: parent.id, childID: terminalPending.sessionID, kind: "message" },
+            metadata: {
+              source: "subagent_parent",
+              parentID: parent.id,
+              childID: terminalPending.sessionID,
+              kind: "message",
+            },
             delivery: "queue",
             resume: false,
           })
@@ -967,7 +987,7 @@ describe("SubagentTool", () => {
           expect(executionWakes.filter((id) => id === terminalPending.sessionID)).toHaveLength(2)
           expect((yield* orchestration.get(parent.id, terminalPending.sessionID)).state).toBe("running")
 
-           const inFlight = yield* launch("recover_inflight")
+          const inFlight = yield* launch("recover_inflight")
           const assistantMessageID = SessionMessage.ID.make("msg_inflight_assistant")
           yield* EventV2.Service.use((events) =>
             events.publish(SessionEvent.Step.Started, {
@@ -1084,6 +1104,153 @@ describe("SubagentTool", () => {
     ),
   )
 
+  it.live("auto handles child permissions and questions for yolo and goal roots without notifications", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* SessionV2.Service
+          const parent = yield* sessions.create({
+            location,
+            model: parentModel,
+            permissionCeiling: [{ action: "delete", resource: "*", effect: "deny" }],
+          })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          yield* AgentV2.Service.use((agents) =>
+            agents.transform((draft) =>
+              draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+                agent.permissions = [{ action: "*", resource: "*", effect: "ask" }]
+              }),
+            ),
+          ).pipe(Effect.provide(locations.get(parent.location)))
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          const prepared = yield* SessionOrchestration.preflight(parent, {
+            agent: AgentV2.ID.make("reviewer"),
+            caller: toolIdentity.agent,
+          }).pipe(Effect.provide(locations.get(parent.location)))
+          const child = yield* orchestration.launch({
+            parentID: parent.id,
+            parentAssistantMessageID: SessionMessage.ID.make("msg_autonomous_parent"),
+            toolCallID: "call_autonomous_child",
+            agent: AgentV2.ID.make("reviewer"),
+            description: "hold autonomous child",
+            prompt: "continue safely",
+            background: true,
+            prepared,
+          })
+          const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const questions = yield* QuestionV2.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const forms = yield* Form.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const db = (yield* Database.Service).db
+
+          for (const mode of ["yolo", "goal"] as const) {
+            yield* db
+              .update(SessionTable)
+              .set({
+                autonomy:
+                  mode === "goal"
+                    ? {
+                        mode,
+                        goal: {
+                          text: "Finish the parent goal",
+                          status: "active",
+                          iteration: 0,
+                          noProgress: 0,
+                          maxNoProgress: 3,
+                        },
+                      }
+                    : { mode },
+              })
+              .where(eq(SessionTable.id, parent.id))
+              .run()
+              .pipe(Effect.orDie)
+
+            expect(
+              yield* permission.ask({
+                id: PermissionV2.ID.create(`per_child_${mode}`),
+                sessionID: child.sessionID,
+                agent: AgentV2.ID.make("reviewer"),
+                action: "edit",
+                resources: ["src/index.ts"],
+              }),
+            ).toMatchObject({ effect: "allow" })
+            expect(
+              yield* permission.ask({
+                id: PermissionV2.ID.create(`per_child_deny_${mode}`),
+                sessionID: child.sessionID,
+                agent: AgentV2.ID.make("reviewer"),
+                action: "delete",
+                resources: ["src/index.ts"],
+              }),
+            ).toMatchObject({ effect: "deny" })
+            expect(
+              yield* questions.ask({
+                sessionID: child.sessionID,
+                questions: [
+                  {
+                    question: "Which option?",
+                    header: "Option",
+                    options: [{ label: "Safest", description: "Use the safest option" }],
+                  },
+                ],
+              }),
+            ).toEqual([["Safest"]])
+            expect(
+              yield* forms.ask({
+                sessionID: child.sessionID,
+                title: `Choose for ${mode}`,
+                fields: [
+                  {
+                    key: "choice",
+                    type: "string",
+                    required: true,
+                    options: [{ value: "safe", label: "Safe" }],
+                  },
+                ],
+              }),
+            ).toMatchObject({ status: "answered", answer: { choice: "safe" } })
+
+            expect(
+              yield* executeTool(registry, {
+                sessionID: child.sessionID,
+                agent: AgentV2.ID.make("reviewer"),
+                messageID: SessionMessage.ID.make(`msg_child_question_${mode}`),
+                call: {
+                  type: "tool-call",
+                  id: `call_child_question_${mode}`,
+                  name: SubagentReportTool.name,
+                  input: { action: "question", text: `How should ${mode} continue?` },
+                },
+              }),
+            ).toMatchObject({ type: "text" })
+            expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({
+              state: "running",
+              question: undefined,
+            })
+          }
+
+          expect(yield* permission.list()).toEqual([])
+          expect(yield* questions.list()).toEqual([])
+          expect(yield* forms.list({ sessionID: child.sessionID })).toEqual([])
+          expect(
+            (yield* db
+              .select({ type: SessionTaskNotificationTable.type })
+              .from(SessionTaskNotificationTable)
+              .where(eq(SessionTaskNotificationTable.task_session_id, child.sessionID))
+              .all()
+              .pipe(Effect.orDie))
+              .filter((item) => item.type === "question"),
+          ).toEqual([])
+        }),
+      ),
+    ),
+  )
+
   it.live("re-evaluates subagent permission for model-originated parent controls", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -1195,18 +1362,18 @@ describe("SubagentTool", () => {
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           yield* waitForTool(registry, SubagentTool.name)
 
-          expect(
-            yield* executeTool(registry, {
-              sessionID: parent.id,
-              ...toolIdentity,
-              call: {
-                type: "tool-call",
-                id: "call-subagent-failure",
-                name: SubagentTool.name,
-                input: { agent: "reviewer", description: "fail review", prompt: "please fail" },
-              },
-            }),
-          ).toMatchObject({ type: "text", value: expect.stringContaining("working in the background") })
+          const launch = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-failure",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "fail review", prompt: "please fail" },
+            },
+          })
+          expect(launch).toMatchObject({ type: "text", value: expect.stringContaining("Subagent launched") })
+          expect(launch).toMatchObject({ type: "text", value: expect.not.stringContaining("notify the user") })
         }),
       ),
     ),

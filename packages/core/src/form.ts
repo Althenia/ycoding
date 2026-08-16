@@ -155,14 +155,12 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const form = yield* create(input)
           const entry = yield* find(form.id).pipe(Effect.orDie)
-          const mode = Schema.is(SessionSchema.ID)(form.sessionID)
-            ? (
-                yield* autonomy
-                  .get(form.sessionID)
-                  .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
-              ).mode
-            : "normal"
-          const answer = mode === "yolo" || mode === "goal" ? automaticAnswer(form) : undefined
+          const autonomous = Schema.is(SessionSchema.ID)(form.sessionID)
+            ? yield* autonomy
+                .isAutonomous(form.sessionID)
+                .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            : false
+          const answer = autonomous ? automaticAnswer(form) : undefined
           if (answer) {
             const next: TerminalState = { status: "answered", answer }
             yield* events.publish(Event.Replied, { id: form.id, sessionID: form.sessionID, answer })

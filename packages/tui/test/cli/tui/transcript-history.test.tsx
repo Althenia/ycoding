@@ -271,6 +271,32 @@ test("expands 1000 archived messages, preserves the collapsed archive, and rende
   }
 })
 
+test("states the archived size on the collapsed placeholder before any archive page is loaded", async () => {
+  const hot = descending(1001, 1050)
+  const archiveRequests: string[] = []
+  const mounted = await mount((url) => {
+    if (url.pathname !== `/api/session/${sessionID}/message`) return
+    const cursor = url.searchParams.get("cursor")
+    if (cursor) {
+      archiveRequests.push(cursor)
+      return
+    }
+    return json({ data: hot, cursor: { next: "cursor-archive", messages: 1204 } })
+  })
+
+  try {
+    await mounted.data.session.message.sync(sessionID)
+    expect(mounted.data.session.message.history(sessionID)).toMatchObject([
+      { sessionID, cursor: "cursor-archive", state: "collapsed", count: 1204 },
+    ])
+    // The count comes from the response cursor, so no archive payload was transferred to learn it.
+    expect(archiveRequests).toEqual([])
+    expect(mounted.data.session.message.page(sessionID)).toEqual([])
+  } finally {
+    mounted.destroy()
+  }
+})
+
 test("sync pages far enough to retain 50 completed messages plus every live boundary", async () => {
   const complete = descending(956, 1000)
   const running = Array.from({ length: 5 }, (_, index) => assistant(1001 + index, "running"))

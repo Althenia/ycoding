@@ -95,15 +95,13 @@ const layer = Layer.effect(
     const ask = Effect.fn("QuestionV2.ask")((input: AskInput) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const mode = (
-            yield* autonomy
-              .get(input.sessionID)
-              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
-          ).mode
-          if (mode === "yolo" || mode === "goal") {
+          const autonomous = yield* autonomy
+            .isAutonomous(input.sessionID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+          if (autonomous) {
             return input.questions.map((question) => {
               const selected = question.options[0]?.label
-              return selected ? [selected] : ["Continue with the safest reasonable default."]
+              return selected ? [selected] : [SessionAutonomy.AutomaticAnswer]
             })
           }
           const id = ID.ascending()

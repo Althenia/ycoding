@@ -3,7 +3,7 @@ export * from "./session/schema"
 
 import { Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
-import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -12,6 +12,7 @@ import { SessionMessage } from "./session/message"
 import { InstructionState } from "./session/instruction-state"
 import { SessionCacheDiagnostics } from "./session/cache-diagnostics"
 import { SessionPermissionCeiling } from "./session/permission-ceiling"
+import { SessionProviderRequest } from "./session/provider-request"
 import { SessionAutonomy } from "./session/autonomy"
 import { Info, list } from "./session/skill-status"
 import { SessionGoal } from "./session/goal"
@@ -166,6 +167,13 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.Bus
 export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundError>()("Session.SkillNotFoundError", {
   skill: SkillV2.ID,
 }) {}
+export class SkillConflictNotFoundError extends Schema.TaggedErrorClass<SkillConflictNotFoundError>()(
+  "Session.SkillConflictNotFoundError",
+  {
+    winner: SkillV2.ID,
+    loser: SkillV2.ID,
+  },
+) {}
 
 export class DestinationNotFoundError extends Schema.TaggedErrorClass<DestinationNotFoundError>()(
   "Session.DestinationNotFoundError",
@@ -190,6 +198,7 @@ export type Error =
   | CompactionConflictError
   | BusyError
   | SkillNotFoundError
+  | SkillConflictNotFoundError
   | DestinationNotFoundError
   | DestinationNotDirectoryError
   | CommandV2.NotFoundError
@@ -214,6 +223,13 @@ export interface Interface {
       direction: "previous" | "next"
     }
   }) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
+  // Counts the messages a `next` cursor still has behind it without decoding their payloads, so a
+  // client can describe the size of unloaded history instead of walking every page to discover it.
+  readonly messageRemainder: (input: {
+    sessionID: SessionSchema.ID
+    afterID: SessionMessage.ID
+    order: "asc" | "desc"
+  }) => Effect.Effect<number, NotFoundError>
   readonly message: (input: {
     sessionID: SessionSchema.ID
     messageID: SessionMessage.ID
@@ -241,7 +257,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     after?: number
     follow?: boolean
-  }) => Stream.Stream<SessionEvent.DurableEvent | EventLog.Synced, NotFoundError>
+  }) => Stream.Stream<SessionEvent.PublicDurableEvent | EventLog.Synced, NotFoundError>
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: AgentV2.ID
@@ -299,7 +315,11 @@ export interface Interface {
     command: string
   }) => Effect.Effect<
     void,
-    NotFoundError | ShellSandbox.Unavailable | Shell.SpawnError | SessionGuardrail.AssertError
+    | NotFoundError
+    | ShellSandbox.Unavailable
+    | Shell.MemoryLimitUnavailable
+    | Shell.SpawnError
+    | SessionGuardrail.AssertError
   >
   readonly skill: (input: {
     id?: SessionMessage.ID
@@ -307,6 +327,11 @@ export interface Interface {
     skill: SkillV2.ID
     resume?: boolean
   }) => Effect.Effect<void, NotFoundError | SkillNotFoundError>
+  readonly resolveSkillConflict: (input: {
+    sessionID: SessionSchema.ID
+    winner: SkillV2.ID
+    loser: SkillV2.ID
+  }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError>
   readonly compact: (
     input: CompactInput,
   ) => Effect.Effect<SessionPending.Compaction, NotFoundError | CompactionConflictError>
@@ -348,6 +373,7 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
     const store = yield* SessionStore.Service
+    const providerRequests = yield* SessionProviderRequest.Service
     const locations = yield* LocationServiceMap.Service
     const fs = yield* FSUtil.Service
     const jobs = yield* Job.Service
@@ -357,7 +383,7 @@ const layer = Layer.effect(
     const activeShells = new Set<SessionSchema.ID>()
     const shellLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
-    const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
+    const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
     const projectArtifactSource = Effect.fnUntraced(function* (location: Location.Ref) {
       return yield* ProjectArtifactSource.Service.pipe(
         Effect.map((source): ProjectArtifactSource.Interface | undefined => source),
@@ -465,10 +491,12 @@ const layer = Layer.effect(
       }),
       diagnostics: Effect.fn("V2Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        return SessionCacheDiagnostics.fromMessages(
+        const diagnostics = SessionCacheDiagnostics.fromMessages(
           yield* store.context(sessionID),
           session.revert?.messageID,
         )
+        if (!diagnostics) return diagnostics
+        return { ...diagnostics, requests: yield* providerRequests.summary(sessionID) }
       }),
       autonomy: {
         get: Effect.fn("V2Session.autonomy.get")(function* (sessionID) {
@@ -583,6 +611,30 @@ const layer = Layer.effect(
         )
         return yield* Effect.forEach(direction === "previous" ? rows.toReversed() : rows, decode)
       }),
+      messageRemainder: Effect.fn("V2Session.messageRemainder")(function* (input) {
+        yield* result.get(input.sessionID)
+        const anchor = yield* db
+          .select({ seq: SessionMessageTable.seq })
+          .from(SessionMessageTable)
+          .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.afterID)))
+          .get()
+          .pipe(Effect.orDie)
+        if (!anchor) return 0
+        // Mirrors the boundary a `next` cursor applies, so the count always describes exactly the
+        // rows that continuing to page would return.
+        const remaining = yield* db
+          .select({ total: count() })
+          .from(SessionMessageTable)
+          .where(
+            and(
+              eq(SessionMessageTable.session_id, input.sessionID),
+              input.order === "asc" ? gt(SessionMessageTable.seq, anchor.seq) : lt(SessionMessageTable.seq, anchor.seq),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        return remaining?.total ?? 0
+      }),
       message: Effect.fn("V2Session.message")(function* (input) {
         const stored = yield* store.message(input.messageID)
         return stored?.sessionID === input.sessionID ? stored.message : undefined
@@ -618,8 +670,8 @@ const layer = Layer.effect(
             .pipe(Effect.as(events.log({ aggregateID: input.sessionID, after: input.after, follow: input.follow }))),
         ).pipe(
           Stream.filter(
-            (item): item is SessionEvent.DurableEvent | EventLog.Synced =>
-              EventV2.isSynced(item) || isDurableSessionEvent(item),
+            (item): item is SessionEvent.PublicDurableEvent | EventLog.Synced =>
+              EventV2.isSynced(item) || isPublicDurableSessionEvent(item),
           ),
         ),
       prompt: Effect.fn("V2Session.prompt")((input) =>
@@ -857,6 +909,23 @@ const layer = Layer.effect(
           yield* execution
             .resume(input.sessionID)
             .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
+      }),
+      resolveSkillConflict: Effect.fn("V2Session.resolveSkillConflict")(function* (input) {
+        const statuses = yield* result.skills(input.sessionID)
+        const winner = statuses.find((status) => status.id === input.winner && status.state === "active")
+        const loser = statuses.find((status) => status.id === input.loser && status.state === "active")
+        if (
+          !winner ||
+          !loser ||
+          !loser.conflicts.some((conflict) => conflict.type === "skill" && conflict.id === winner.id)
+        )
+          return yield* new SkillConflictNotFoundError({ winner: input.winner, loser: input.loser })
+        yield* events.publish(SessionEvent.Skill.Deactivated, {
+          sessionID: input.sessionID,
+          id: loser.id,
+          activationMessageID: loser.activationMessageID,
+          reason: "conflict_resolved",
+        })
       }),
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
         const session = yield* result.get(input.sessionID)
@@ -1296,6 +1365,7 @@ export const node = makeGlobalNode({
     SessionExecution.node,
     SessionAutonomy.node,
     SessionStore.node,
+    SessionProviderRequest.node,
     LocationServiceMap.node,
     SessionProjector.node,
     FSUtil.node,

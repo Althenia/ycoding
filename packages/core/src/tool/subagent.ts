@@ -22,8 +22,10 @@ export const name = "subagent"
 
 const NO_TEXT = "Subagent completed without a text response."
 export const progressPrompt = "Report current status, blockers, and ETA."
+const backgroundCompletionGuidance =
+  "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands."
 const backgroundStarted = (sessionID: SessionSchema.ID) =>
-  `The subagent is working in the background (id: ${sessionID}). You will be notified automatically when it finishes. DO NOT sleep, poll, or proactively check on its progress.`
+  `Subagent launched (id: ${sessionID}). ${backgroundCompletionGuidance} Do not mention the launch or any running, completed, failed, or total status unless the user explicitly asks for subagent status.`
 
 export const repeatProgress = <E, R>(send: Effect.Effect<unknown, E, R>) =>
   Effect.sleep("10 minutes").pipe(Effect.andThen(send), Effect.repeat(Schedule.forever))
@@ -48,8 +50,9 @@ export const Output = Schema.Struct({
 
 export const description = [
   "Spawn a subagent: a child session running a configured agent with fresh context.",
-  "Subagents always launch in the background and return immediately; you will be notified when they finish.",
-  "The parent requests each running subagent's status, blockers, and ETA every ten minutes.",
+  `Subagents launch as durable background children and return immediately. ${backgroundCompletionGuidance}`,
+  "Do not mention subagent status unless the user explicitly asks. Keep launch, running, completed, failed, and total bookkeeping internal.",
+  "If a child failure prevents the requested outcome, report the blocker without routine status counts.",
 ].join("\n")
 
 export const availableAgents = Effect.fn("SubagentTool.availableAgents")(function* (input: {
@@ -60,12 +63,14 @@ export const availableAgents = Effect.fn("SubagentTool.availableAgents")(functio
 }) {
   const evaluated = yield* Effect.forEach(input.candidates, (candidate) => {
     if (candidate.mode === "primary" || candidate.hidden) return Effect.succeed(undefined)
-    return input.permission.evaluateEffective({
-      sessionID: input.sessionID,
-      agent: input.agent,
-      action: name,
-      resource: candidate.id,
-    }).pipe(Effect.map((effect) => (effect === "deny" ? undefined : candidate)))
+    return input.permission
+      .evaluateEffective({
+        sessionID: input.sessionID,
+        agent: input.agent,
+        action: name,
+        resource: candidate.id,
+      })
+      .pipe(Effect.map((effect) => (effect === "deny" ? undefined : candidate)))
   })
   return evaluated
     .filter((candidate): candidate is AgentV2.Info => candidate !== undefined)
@@ -196,7 +201,10 @@ export const Plugin = {
                   })
                   .pipe(
                     Effect.catchCause((cause) =>
-                      Effect.logWarning("project artifact subagent activation failed", { cause, sessionID: context.sessionID }),
+                      Effect.logWarning("project artifact subagent activation failed", {
+                        cause,
+                        sessionID: context.sessionID,
+                      }),
                     ),
                   )
 
@@ -204,21 +212,26 @@ export const Plugin = {
                   structured: { sessionID: child.sessionID, status: "running" },
                 })
 
-                const run = Effect.scoped(Effect.gen(function* () {
-                  yield* repeatProgress(
-                    orchestration.send({
+                const run = Effect.scoped(
+                  Effect.gen(function* () {
+                    yield* repeatProgress(
+                      orchestration.send({
                         parentID: context.sessionID,
                         childID: child.sessionID,
                         messageID: SessionMessage.ID.create(),
                         text: progressPrompt,
                         delivery: "steer",
                       }),
-                  ).pipe(Effect.forkScoped)
-                  yield* runtime.session.resume(child.sessionID)
-                  const text = yield* latestAssistantText(child.sessionID)
-                  yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: text.slice(0, 16 * 1024) })
-                  return text
-                })).pipe(
+                    ).pipe(Effect.forkScoped)
+                    yield* runtime.session.resume(child.sessionID)
+                    const text = yield* latestAssistantText(child.sessionID)
+                    yield* orchestration.settle(child.sessionID, {
+                      type: "completed",
+                      excerpt: text.slice(0, 16 * 1024),
+                    })
+                    return text
+                  }),
+                ).pipe(
                   Effect.tapCause((cause) =>
                     Cause.hasInterruptsOnly(cause)
                       ? Effect.void

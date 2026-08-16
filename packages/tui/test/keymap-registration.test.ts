@@ -38,5 +38,14 @@ test("session skills is registered only by the session route", async () => {
 
   expect(session).toContain('title: "Session skills"')
   expect(session).toContain('id: "session.skills"')
-  expect(session).toContain("<DialogSessionSkills sessionID={route.sessionID} />")
+  expect(session).toContain("<DialogSessionSkills sessionID={route.sessionID} location={location()} />")
+})
+
+test("shell output relies on configurable action bindings", async () => {
+  const route = await Bun.file("src/routes/shell-output.tsx").text()
+
+  expect(route).toContain('id: "shell-output.back"')
+  expect(route).toContain('id: "shell-output.kill"')
+  expect(route).not.toContain('bind: "escape"')
+  expect(route).not.toContain('bind: "ctrl+d"')
 })

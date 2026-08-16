@@ -60,7 +60,7 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
     expected.messages[0].content = [expected.messages[0].content.trimEnd(), ProjectArtifactInstructions.content].join(
       "\n\n",
     )
-    expected.prompt_cache_key = "d55a945e37314aefc494e43fe24507223db7c6e1c4e3a40865dad2a9590ab342"
+    expected.prompt_cache_key = "2fff2b3cee2a78e9b0dd8aa9ce55a03db47a341bf5f08c15520447075782f21e"
     expect(incoming.headers).toEqual(recorded.headers)
     expect(JSON.parse(incoming.body)).toEqual(expected)
     return incoming.method === recorded.method && incoming.url === recorded.url
@@ -249,6 +249,8 @@ describe("SessionRunnerLLM recorded", () => {
         "session.text.started.1",
         "session.text.ended.1",
         "session.step.ended.1",
+        "session.provider.request.recorded.1",
+        "session.renamed.1",
       ])
     }),
   )

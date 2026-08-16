@@ -3,6 +3,7 @@ import { GenerateHandler } from "./handlers/generate"
 import { MessageHandler } from "./handlers/message"
 import { ModelHandler } from "./handlers/model"
 import { ProviderHandler } from "./handlers/provider"
+import { ProviderUsageHandler } from "./handlers/provider-usage"
 import { SessionHandler } from "./handlers/session"
 import { PermissionHandler } from "./handlers/permission"
 import { FileSystemHandler } from "./handlers/fs"
@@ -42,6 +43,7 @@ export const handlers = Layer.mergeAll(
   ModelHandler,
   GenerateHandler,
   ProviderHandler,
+  ProviderUsageHandler,
   IntegrationHandler,
   McpHandler,
   CredentialHandler,

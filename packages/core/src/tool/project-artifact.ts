@@ -111,7 +111,11 @@ export const Plugin = {
                   agent: context.agent,
                   action: name,
                   resource: input.id,
-                }).pipe(Effect.mapError(() => new ToolFailure({ message: "Project artifact permission could not be evaluated" })))
+                }).pipe(
+                  Effect.mapError(
+                    (error) => new ToolFailure({ message: "Project artifact permission could not be evaluated", error }),
+                  ),
+                )
                 if (decision === "deny") return yield* new ToolFailure({ message: "Project artifact is denied" })
                 const definition =
                   input.kind === "skill"
@@ -149,7 +153,16 @@ export const Plugin = {
                     baseVersionID: input.base_version_id,
                   })
                   .pipe(
-                    Effect.mapError(() => new ToolFailure({ message: "Project artifact write was rejected" })),
+                    Effect.mapError(
+                      (error) =>
+                        new ToolFailure({
+                          message: automaticWriteFailureMessage(error),
+                          error: new ProjectArtifactStore.StoreError({
+                            code: error.code,
+                            message: automaticWriteFailureMessage(error),
+                          }),
+                        }),
+                    ),
                     Effect.ensuring(reservation.release),
                   )
                 yield* source.refresh()
@@ -169,4 +182,35 @@ export const Plugin = {
       )
       .pipe(Effect.orDie)
   }),
+}
+
+const automaticWriteFailureRemedies = {
+  ProjectIdentityUnavailable: "retry from a stable project.",
+  InvalidArtifact: "correct the artifact fields.",
+  UnsafeContent:
+    "remove secrets, URLs, filesystem paths, contact details, markup or links, prompt-injection markers, executable code or commands, and packaging filenames.",
+  UnsupportedKind: "choose a supported artifact kind.",
+  InvalidScope: "choose a valid artifact scope.",
+  ArtifactNotFound: "choose an existing artifact.",
+  VersionNotFound: "pass an existing base_version_id.",
+  DeletionNotFound: "choose an existing deletion.",
+  ArtifactCollision: "choose another artifact id.",
+  ScopeCollision: "choose a different artifact scope.",
+  VersionConflict: "pass base_version_id for the current version.",
+  OwnershipMismatch: "use an artifact owned by this project.",
+  DestinationExists: "choose a different destination.",
+  ProjectAdoptionConflict: "resolve project ownership before retrying.",
+  ConfirmationExpired: "request a new confirmation.",
+  TrashExpired: "create a new artifact instead.",
+  ContentTooLarge: "reduce the artifact content.",
+  ScopeQuotaExceeded: "prune project artifacts or versions before retrying.",
+  WriteRateExceeded: "wait before another automatic write.",
+  ArtifactCooldown: "wait before updating this artifact.",
+  StorageUnavailable: "retry after storage is available.",
+  LockTimeout: "retry after another artifact operation completes.",
+  ReconciliationRequired: "reconcile project artifacts before retrying.",
+} satisfies Record<ProjectArtifact.ErrorCode, string>
+
+function automaticWriteFailureMessage(error: ProjectArtifactStore.StoreError) {
+  return `Project artifact write was rejected: ${error.code}; ${automaticWriteFailureRemedies[error.code]}`
 }

@@ -1,7 +1,8 @@
-import type { SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
-import { createMemo, For, Show, createEffect, onMount, onCleanup } from "solid-js"
+import type { SessionCacheDiagnostics, SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import { createMemo, For, Show, createEffect, createSignal, onMount, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useRoute, useRouteData } from "../../../context/route"
 import { useData } from "../../../context/data"
 import { useClient } from "../../../context/client"
@@ -19,8 +20,10 @@ interface SubagentEntry {
   agent: string
   title: string
   detail?: string
+  awaitingInput: boolean
   status: SessionOrchestrationTask["state"]
   model?: string
+  startedAt?: number
   current: boolean
 }
 
@@ -34,8 +37,30 @@ type CancelClient = {
   }
 }
 
+const taskStateOrder = {
+  waiting: 0,
+  starting: 1,
+  running: 1,
+  cancelling: 2,
+  completed: 3,
+  cancelled: 4,
+  failed: 5,
+  lost: 6,
+} as const
+
 export function formatSubagentModel(model: { providerID: string; id: string; variant?: string } | undefined) {
+  if (model?.providerID === "anthropic" && model.id === "claude-sonnet-5") return "Sonnet 5"
+  if (model?.providerID === "anthropic" && model.id === "claude-haiku-4-5") return "Haiku 4.5"
   return formatDiagnosticsModel(model)
+}
+
+export function formatSubagentCacheHit(diagnostics: SessionCacheDiagnostics | null | undefined) {
+  return diagnostics?.cache.hitRatio === undefined ? "—" : `${Math.round(diagnostics.cache.hitRatio * 100)}% hit`
+}
+
+export function formatSubagentElapsed(startedAt: number | undefined, now: number) {
+  if (startedAt === undefined) return undefined
+  return Locale.duration(Math.max(0, now - startedAt))
 }
 
 export function entriesFromTasks(
@@ -44,7 +69,7 @@ export function entriesFromTasks(
 ): SubagentEntry[] {
   return [...tasks]
     .sort((a, b) => {
-      const state = Number(isActiveSubagent(b.state)) - Number(isActiveSubagent(a.state))
+      const state = taskStateOrder[a.state] - taskStateOrder[b.state]
       if (state !== 0) return state
       const created = b.time.created - a.time.created
       if (created !== 0) return created
@@ -52,11 +77,13 @@ export function entriesFromTasks(
     })
     .map((task) => ({
       sessionID: task.sessionID,
-      agent: Locale.titlecase(task.agent),
+      agent: task.agent,
       title: task.description,
       detail: task.question?.text ?? task.progress?.text,
+      awaitingInput: Boolean(task.question?.text),
       status: task.state,
       model: formatSubagentModel(task.model),
+      startedAt: task.time.created,
       current: task.sessionID === currentSessionID,
     }))
 }
@@ -75,7 +102,9 @@ export function entriesFromBtwSessions(sessions: ReadonlyArray<SessionInfo>, cur
       title: session.title,
       status: "completed",
       model: formatSubagentModel(session.model),
+      startedAt: session.time.created,
       current: session.id === currentSessionID,
+      awaitingInput: false,
     }))
 }
 
@@ -83,26 +112,27 @@ export function subagentSections(entries: ReadonlyArray<SubagentEntry>) {
   const active = entries.filter((entry) => isActiveSubagent(entry.status))
   const inactive = entries.filter((entry) => !isActiveSubagent(entry.status))
   return [
-    ...(active.length > 0 ? [{ label: "Active", entries: active }] : []),
-    ...(inactive.length > 0 ? [{ label: "Inactive", entries: inactive }] : []),
+    ...(active.length > 0 ? [{ label: "ACTIVE", entries: active }] : []),
+    ...(inactive.length > 0 ? [{ label: "INACTIVE", entries: inactive }] : []),
   ]
 }
 
 export function subagentScrollIndex(entries: ReadonlyArray<SubagentEntry>, index: number) {
   const active = entries.filter((entry) => isActiveSubagent(entry.status)).length
-  return index + Number(active > 0) + Number(index >= active && entries.length > active)
+  const questionRowsBefore = entries.slice(0, index).filter((entry) => entry.awaitingInput).length
+  return index + Number(active > 0) + Number(index >= active && entries.length > active) + questionRowsBefore
 }
 
 export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
   return {
-    starting: "Starting",
-    running: "Running",
-    waiting: "Waiting",
-    cancelling: "Cancelling",
-    cancelled: "Cancelled",
-    completed: "Completed",
-    failed: "Failed",
-    lost: "Lost",
+    starting: "starting",
+    running: "running",
+    waiting: "? awaiting",
+    cancelling: "cancelling",
+    cancelled: "cancelled",
+    completed: "completed",
+    failed: "failed",
+    lost: "lost",
   }[state]
 }
 
@@ -114,9 +144,16 @@ export function cancelManagedSubagent(client: CancelClient, parentID: string, ch
   return client.api.session.subagent.cancel({ parentID, childID })
 }
 
-export function SubagentMetadata(props: { model?: string; status?: string; active: boolean }) {
+export function SubagentMetadata(props: {
+  model?: string
+  cacheHit?: string
+  elapsed?: string
+  status?: string
+  active: boolean
+}) {
   const { themeV2 } = useTheme()
   const color = () => (props.active ? themeV2.text.action.primary.focused : themeV2.text.subdued)
+  const telemetry = () => [props.cacheHit, props.elapsed].filter((value): value is string => Boolean(value))
 
   return (
     <box flexDirection="row" minWidth={0} gap={1}>
@@ -127,11 +164,25 @@ export function SubagentMetadata(props: { model?: string; status?: string; activ
           </text>
         </box>
       </Show>
-      <Show when={props.model && props.status}>
+      <Show when={props.model && (telemetry().length > 0 || props.status)}>
         <text fg={color()} flexShrink={0}>
           ·
         </text>
       </Show>
+      <For each={telemetry()}>
+        {(item, index) => (
+          <>
+            <text fg={color()} wrapMode="none" flexShrink={0}>
+              {item}
+            </text>
+            <Show when={index() < telemetry().length - 1 || props.status}>
+              <text fg={color()} flexShrink={0}>
+                ·
+              </text>
+            </Show>
+          </>
+        )}
+      </For>
       <Show when={props.status}>
         <text fg={color()} wrapMode="none" flexShrink={0}>
           {props.status}
@@ -146,9 +197,10 @@ export function SubagentsTab(props: { sessionID: string }) {
   const data = useData()
   const client = useClient()
   const { themeV2 } = useTheme()
-  const navigate = useRoute().navigate
+  const navigation = useRoute()
+  const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
-  const shortcuts = Keymap.useShortcuts()
+  const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => data.session.get(props.sessionID))
   const parentID = createMemo(() => session()?.parentID ?? props.sessionID)
@@ -167,11 +219,21 @@ export function SubagentsTab(props: { sessionID: string }) {
     ]
   })
   const sections = createMemo(() => subagentSections(entries()))
+  const [now, setNow] = createSignal(Date.now())
 
   createEffect(() => {
     if (!composer.active("subagents")) return
     const id = parentID()
     void data.session.subagent.sync(id).catch((error) => console.error("Failed to load durable subagent tasks", error))
+  })
+  createEffect(() => {
+    if (!composer.active("subagents")) return
+    entries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
+  })
+  createEffect(() => {
+    if (dimensions().width < 100 || !composer.active("subagents") || !entries().some((entry) => entry.status === "running")) return
+    const interval = setInterval(() => setNow(Date.now()), 1_000)
+    onCleanup(() => clearInterval(interval))
   })
 
   const [store, setStore] = createStore({ selected: 0 })
@@ -228,12 +290,13 @@ export function SubagentsTab(props: { sessionID: string }) {
       label: "Subagents",
       hints: () => {
         const entry = selectedEntry()
-        if (!entry || !canCancelSubagent(entry.status)) return []
+        if (!entry) return []
         return [
-          {
-            label: "cancel",
-            shortcut: shortcuts.get("composer.subagent.interrupt") ?? "",
-          },
+          { label: "Enter", shortcut: "attach", gapAfter: 3 },
+          { label: "↑↓", shortcut: "move", gapAfter: 3 },
+          { label: "⌃x k", shortcut: "cancel", gapAfter: 4 },
+          { label: "r", shortcut: "answer", gapAfter: 3 },
+          { label: "Esc", shortcut: "close" },
         ]
       },
       onClose: () => {
@@ -274,7 +337,7 @@ export function SubagentsTab(props: { sessionID: string }) {
       },
       {
         id: "composer.subagent.select",
-        title: "Navigate to subagent",
+        title: "Attach to subagent",
         group: "Composer",
         bind: "return",
         run() {
@@ -283,10 +346,20 @@ export function SubagentsTab(props: { sessionID: string }) {
         },
       },
       {
+        id: "composer.subagent.answer",
+        title: "Answer subagent",
+        group: "Composer",
+        bind: "r",
+        run() {
+          const entry = selectedEntry()
+          if (entry?.awaitingInput) navigate({ type: "session", sessionID: entry.sessionID })
+        },
+      },
+      {
         id: "composer.subagent.interrupt",
         title: "Cancel subagent",
         group: "Composer",
-        bind: "ctrl+d",
+        bind: "ctrl+x k",
         run() {
           const entry = selectedEntry()
           if (!entry || !canCancelSubagent(entry.status)) return
@@ -306,7 +379,9 @@ export function SubagentsTab(props: { sessionID: string }) {
     <Show when={composer.active("subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
-        maxHeight={5}
+        maxHeight={16}
+        maxWidth={139}
+        paddingTop={2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
         <Show when={entries().length > 0} fallback={<text fg={themeV2.text.subdued}> No subagents</text>}>
@@ -320,49 +395,78 @@ export function SubagentsTab(props: { sessionID: string }) {
                   {(entry) => {
                     const entryIndex = createMemo(() => entries().indexOf(entry))
                     const active = createMemo(() => entryIndex() === selected())
+                    const awaitingInput = createMemo(() => entry.awaitingInput)
+                    const statusColor = createMemo(() => {
+                      if (awaitingInput()) return themeV2.text.feedback.warning.default
+                      if (entry.status === "running") return themeV2.text.feedback.success.default
+                      if (entry.status === "cancelled") return themeV2.text.feedback.error.default
+                      return themeV2.text.subdued
+                    })
                     return (
-                      <box
-                        flexDirection="row"
-                        paddingLeft={1}
-                        paddingRight={1}
-                        backgroundColor={
-                          active()
-                            ? themeV2.background.action.primary.focused
-                            : entry.current
-                              ? themeV2.background.action.primary.selected
-                              : themeV2.background.action.primary.default
-                        }
-                        onMouseOver={() => setStore("selected", entryIndex())}
-                        onMouseUp={() => {
-                          setStore("selected", entryIndex())
-                          navigate({
-                            type: "session",
-                            sessionID: entry.sessionID,
-                          })
-                        }}
-                      >
-                        <box flexGrow={1} minWidth={0} flexDirection="row">
-                          <text
-                            fg={
+                      <>
+                        <box flexDirection="row" minWidth={0} flexGrow={1}>
+                          <box
+                            flexDirection="row"
+                            minWidth={0}
+                            flexGrow={1}
+                            paddingLeft={0}
+                            paddingRight={1}
+                            paddingTop={active() ? 1 : 0}
+                            paddingBottom={active() ? 1 : entry.status === "running" || entry.status === "completed" ? 2 : 0}
+                            backgroundColor={
                               active()
-                                ? themeV2.text.action.primary.focused
+                                ? themeV2.background.action.primary.focused
                                 : entry.current
-                                  ? themeV2.text.action.primary.selected
-                                  : themeV2.text.action.primary.default
+                                  ? themeV2.background.action.primary.selected
+                                  : themeV2.background.action.primary.default
                             }
-                            attributes={active() ? TextAttributes.BOLD : undefined}
-                            wrapMode="none"
+                            onMouseOver={() => setStore("selected", entryIndex())}
+                            onMouseUp={() => {
+                              setStore("selected", entryIndex())
+                              navigate({
+                                type: "session",
+                                sessionID: entry.sessionID,
+                              })
+                            }}
                           >
-                            {entry.agent}: {entry.title}
-                            <Show when={entry.detail}> — {entry.detail}</Show>
-                          </text>
+                            <box width={16} flexShrink={0}>
+                              <text fg={statusColor()} wrapMode="none">
+                                {taskStatusLabel(entry.status)}
+                              </text>
+                            </box>
+                            <text
+                              fg={
+                                active()
+                                  ? themeV2.text.action.primary.focused
+                                  : entry.current
+                                    ? themeV2.text.action.primary.selected
+                                    : themeV2.text.action.primary.default
+                              }
+                              attributes={active() ? TextAttributes.BOLD : undefined}
+                              wrapMode="none"
+                            >
+                              {entry.agent}
+                            </text>
+                            <text fg={themeV2.text.subdued} wrapMode="none">
+                              {`  · ${entry.title}`}
+                            </text>
+                            <box flexGrow={1} />
+                            <SubagentMetadata
+                              model={entry.status === "running" ? "attached" : entry.model}
+                              cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
+                              elapsed={dimensions().width >= 100 ? formatSubagentElapsed(entry.startedAt, now()) : undefined}
+                              active={active()}
+                            />
+                          </box>
                         </box>
-                        <SubagentMetadata
-                          model={entry.model}
-                          status={taskStatusLabel(entry.status)}
-                          active={active()}
-                        />
-                      </box>
+                        <Show when={entry.awaitingInput && entry.detail}>
+                          <box paddingLeft={16} paddingBottom={1}>
+                            <text fg={themeV2.text.feedback.warning.default} wrapMode="none">
+                              ? {entry.detail}
+                            </text>
+                          </box>
+                        </Show>
+                      </>
                     )
                   }}
                 </For>

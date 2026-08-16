@@ -17,7 +17,7 @@ import { SessionAutonomy } from "./autonomy"
 import { SessionMessage } from "./message"
 import { SessionPending } from "./pending"
 import { SessionTaskTable } from "./sql"
-import { eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 
 export interface Interface {
@@ -74,6 +74,19 @@ export const layer = Layer.effect(
         .get(sessionID)
         .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
       if (state.mode !== "goal" || !state.goal || state.goal.status !== "active") return undefined
+      const activeChild = yield* db
+        .select({ sessionID: SessionTaskTable.session_id })
+        .from(SessionTaskTable)
+        .where(
+          and(
+            eq(SessionTaskTable.parent_id, sessionID),
+            inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]),
+          ),
+        )
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      if (activeChild) return undefined
       const messages = yield* store.context(sessionID)
       const assistant = messages.findLast((message) => message.type === "assistant")
       const progress =

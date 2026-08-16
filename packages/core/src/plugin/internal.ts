@@ -27,6 +27,7 @@ import { LocationMutation } from "../location-mutation";
 import { ModelsDev } from "../models-dev";
 import { Npm } from "../npm";
 import { PermissionV2 } from "../permission";
+import { ProviderUsageV2 } from "../provider-usage";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
 import { SessionGuardrail } from "../session/guardrail";
@@ -85,6 +86,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const models = yield* ModelsDev.Service;
   const npm = yield* Npm.Service;
   const permission = yield* PermissionV2.Service;
+  const providerUsage = yield* ProviderUsageV2.Service;
   const guardrail = yield* SessionGuardrail.Service;
   const runtime = yield* PluginRuntime.Service;
   const form = yield* Form.Service;
@@ -120,6 +122,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(ModelsDev.Service, models),
     Context.make(Npm.Service, npm),
     Context.make(PermissionV2.Service, permission),
+    Context.make(ProviderUsageV2.Service, providerUsage),
     Context.make(SessionGuardrail.Service, guardrail),
     Context.make(PluginRuntime.Service, runtime),
     Context.make(Form.Service, form),

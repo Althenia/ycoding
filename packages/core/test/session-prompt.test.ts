@@ -440,7 +440,7 @@ describe("SessionV2.prompt", () => {
       const publicEvents = (input: { sessionID: SessionV2.ID; after?: number }) =>
         session
           .log({ ...input, follow: true })
-          .pipe(Stream.filter((item): item is SessionEvent.DurableEvent => !EventV2.isSynced(item)))
+          .pipe(Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventV2.isSynced(item)))
       const fiber = yield* publicEvents({ sessionID }).pipe(Stream.take(4), Stream.runCollect, Effect.forkScoped)
       yield* Effect.yieldNow
 

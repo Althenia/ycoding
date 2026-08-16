@@ -4,10 +4,12 @@ import { Auth } from "../auth"
 import type { Interface as RequestExecutorInterface } from "../executor"
 import type { Interface as WebSocketExecutorInterface } from "./websocket"
 import type { LLMError, LLMRequest } from "../../schema"
+import type { TransportAttempt } from "./attempt"
 
 export interface TransportRuntime {
   readonly http: RequestExecutorInterface
   readonly webSocket?: WebSocketExecutorInterface
+  readonly observeAttempt?: TransportAttempt.Observer
 }
 
 export interface Transport<Body, Prepared, Frame> {
@@ -29,5 +31,6 @@ export interface TransportPrepareInput<Body> {
   readonly headers?: (input: { readonly request: LLMRequest }) => Record<string, string>
 }
 
+export * as TransportAttempt from "./attempt"
 export * as HttpTransport from "./http"
 export { WebSocketExecutor, WebSocketTransport } from "./websocket"

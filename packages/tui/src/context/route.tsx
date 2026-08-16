@@ -21,7 +21,13 @@ export type PluginRoute = {
   data?: Record<string, unknown>
 }
 
-export type Route = HomeRoute | SessionRoute | PluginRoute
+export type ShellOutputRoute = {
+  type: "shell-output"
+  sessionID: string
+  shellID: string
+}
+
+export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   name: "Route",
@@ -56,6 +62,15 @@ function initialRoute(value: unknown): Route | undefined {
     typeof value.name === "string"
   ) {
     return { type: "plugin", id: value.id, name: value.name }
+  }
+  if (
+    value.type === "shell-output" &&
+    "sessionID" in value &&
+    typeof value.sessionID === "string" &&
+    "shellID" in value &&
+    typeof value.shellID === "string"
+  ) {
+    return { type: "shell-output", sessionID: value.sessionID, shellID: value.shellID }
   }
 }
 

@@ -6,7 +6,6 @@ describe("provider package entrypoints", () => {
     const modules = await Promise.all([
       import("@ycoding-ai/ai/providers/openai"),
       import("@ycoding-ai/ai/providers/openai/responses"),
-      import("@ycoding-ai/ai/providers/openai/chat"),
       import("@ycoding-ai/ai/providers/anthropic"),
       import("@ycoding-ai/ai/providers/anthropic-compatible"),
       import("@ycoding-ai/ai/providers/openai-compatible"),
@@ -25,8 +24,17 @@ describe("provider package entrypoints", () => {
 
     for (const module of modules) expect(module.model).toBeFunction()
     expect(modules[0].model).toBe(modules[1].model)
-    expect(modules[8].model).toBe(modules[9].model)
-    expect(modules[12].model).toBe(modules[13].model)
+    expect(modules[7].model).toBe(modules[8].model)
+    expect(modules[11].model).toBe(modules[12].model)
+  })
+
+  test("direct OpenAI exposes only Responses model selectors", async () => {
+    const OpenAI = await import("@ycoding-ai/ai/providers/openai")
+    const OpenAIChat = await import("@ycoding-ai/ai/providers/openai/chat")
+
+    expect(OpenAI.routes.map((route) => route.id)).toEqual(["openai-responses", "openai-responses-websocket"])
+    expect(Object.hasOwn(OpenAI.configure({ apiKey: "fixture" }), "chat")).toBeFalse()
+    expect(Object.hasOwn(OpenAIChat, "model")).toBeFalse()
   })
 
   test("maps package settings onto the executable model", () => {
@@ -48,6 +56,20 @@ describe("provider package entrypoints", () => {
   test("selects transport without changing the semantic API", () => {
     expect(model("gpt-5", { apiKey: "fixture" }).route.id).toBe("openai-responses")
     expect(model("gpt-5", { apiKey: "fixture", transport: "websocket" }).route.id).toBe("openai-responses-websocket")
+  })
+
+  test("gives GitHub Copilot dedicated Chat and Responses route IDs", async () => {
+    const GitHubCopilot = await import("@ycoding-ai/ai/providers/github-copilot")
+    const provider = GitHubCopilot.configure({ baseURL: "https://copilot.example.test", apiKey: "fixture" })
+
+    expect(GitHubCopilot.routes.map((route) => route.id)).toEqual([
+      "github-copilot-responses",
+      "github-copilot-chat",
+    ])
+    expect(provider.responses("gpt-5.6").route.id).toBe("github-copilot-responses")
+    expect(provider.chat("gpt-4.1").route.id).toBe("github-copilot-chat")
+    expect(provider.model("gpt-5.6").route.id).toBe("github-copilot-responses")
+    expect(provider.model("gpt-4.1").route.id).toBe("github-copilot-chat")
   })
 
   test("maps OpenAI-compatible Responses settings onto the executable model", async () => {
