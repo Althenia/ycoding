@@ -3,6 +3,8 @@ import fs from "fs/promises"
 import { describe, expect } from "bun:test"
 import { Effect, Fiber, Layer, Logger, PubSub, Schema, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
+import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigModel } from "@ycoding-ai/core/config/model"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { ConfigProvider } from "@ycoding-ai/core/config/provider"
@@ -121,6 +123,7 @@ describe("Config", () => {
             openai_extended_retention: true,
           },
           openai_responses_continuation: "auto",
+          openai_responses_state: "stateless",
         },
       })
       expect(decoded.efficiency).toEqual({
@@ -137,11 +140,62 @@ describe("Config", () => {
           openai_extended_retention: true,
         },
         openai_responses_continuation: "auto",
+        openai_responses_state: "stateless",
       })
+      expect(ConfigEfficiency.openAIResponsesState()).toBe("stored")
+      expect(ConfigEfficiency.openAIResponsesState(decoded.efficiency)).toBe("stateless")
       expect(Schema.decodeUnknownSync(Config.Info)({}).efficiency).toBeUndefined()
       expect(() =>
         Schema.decodeUnknownSync(Config.Info)({ efficiency: { prompt_cache: { anthropic_ttl: "forever" } } }),
       ).toThrow()
+    }),
+  )
+
+  it.effect("decodes and resolves selective compaction policy", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownSync(Config.Info)
+      const lower = decode({
+        compaction: {
+          keep_recent_messages: 3,
+          max_manifest_bytes: 32_768,
+          advisory: { consider_percent: 60, strongly_advised_percent: 80 },
+        },
+      }).compaction!
+      const higher = decode({
+        compaction: {
+          reserved_output_tokens: 1_024,
+          context_safety_margin_tokens: 8_192,
+          advisory: false,
+        },
+      }).compaction!
+
+      expect(ConfigCompaction.resolve([])).toEqual({
+        keepRecentMessages: 0,
+        reservedOutputTokens: 0,
+        contextSafetyMarginTokens: 4_096,
+        timeoutSeconds: 0,
+        maxOutputTokens: 0,
+        maxManifestBytes: 65_536,
+        maxInternalPasses: 8,
+        advisory: { considerPercent: 70, stronglyAdvisedPercent: 90 },
+      })
+      expect(ConfigCompaction.resolve([lower, higher])).toEqual({
+        keepRecentMessages: 3,
+        reservedOutputTokens: 1_024,
+        contextSafetyMarginTokens: 8_192,
+        timeoutSeconds: 0,
+        maxOutputTokens: 0,
+        maxManifestBytes: 32_768,
+        maxInternalPasses: 8,
+        advisory: false,
+      })
+      expect(decode({ compaction: { max_summary_bytes: 1, max_manifest_bytes: 2 } }).compaction).toEqual({
+        max_manifest_bytes: 2,
+      })
+      expect(() => decode({ compaction: { advisory: { consider_percent: 0, strongly_advised_percent: 90 } } })).toThrow()
+      expect(() => decode({ compaction: { advisory: { consider_percent: 70, strongly_advised_percent: 100 } } })).toThrow()
+      expect(() => decode({ compaction: { advisory: { consider_percent: 80, strongly_advised_percent: 80 } } })).toThrow()
+      expect(() => decode({ compaction: { advisory: { consider_percent: 90, strongly_advised_percent: 80 } } })).toThrow()
     }),
   )
 
@@ -741,7 +795,7 @@ describe("Config", () => {
                   context_safety_margin_tokens: 4096,
                   timeout_seconds: 30,
                   max_output_tokens: 4000,
-                  max_summary_bytes: 65536,
+                  max_manifest_bytes: 65536,
                   max_internal_passes: 8,
                 },
                 skills: ["./skills", "~/shared-skills", "https://example.com/.well-known/skills/"],
@@ -831,7 +885,7 @@ describe("Config", () => {
               context_safety_margin_tokens: 4096,
               timeout_seconds: 30,
               max_output_tokens: 4000,
-              max_summary_bytes: 65536,
+              max_manifest_bytes: 65536,
               max_internal_passes: 8,
             })
             expect(documents[0]?.info.skills).toEqual([

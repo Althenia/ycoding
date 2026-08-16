@@ -14,6 +14,7 @@ import { UserInterruptedError } from "./error"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
+import { SessionCompactionExecution } from "./compaction-execution"
 import { SessionMessage } from "./message"
 import { SessionPending } from "./pending"
 import { SessionTaskTable } from "./sql"
@@ -55,6 +56,7 @@ export const layer = Layer.effect(
     const events = yield* EventV2.Service
     const db = (yield* Database.Service).db
     const autonomy = yield* SessionAutonomy.Service
+    const compactionExecution = yield* SessionCompactionExecution.Service
     const reportLifecycle = <A>(sessionID: SessionSchema.ID, effect: Effect.Effect<A>) =>
       effect.pipe(
         Effect.tapCause((cause) =>
@@ -182,6 +184,7 @@ export const layer = Layer.effect(
         if (task && task.state !== "running") return
         return yield* SessionRunner.Service.use((runner) => runner.drain({ sessionID, force })).pipe(
           Effect.provide(locations.get(session.location)),
+          SessionCompactionExecution.bind(compactionExecution),
           Effect.tapCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
@@ -263,7 +266,14 @@ export const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, SessionAutonomy.node, SessionStore.node, LocationServiceMap.node, EventV2.node],
+  deps: [
+    Database.node,
+    SessionAutonomy.node,
+    SessionCompactionExecution.node,
+    SessionStore.node,
+    LocationServiceMap.node,
+    EventV2.node,
+  ],
 })
 
 /** Low-level compatibility layer for callers that only need durable Session recording. */

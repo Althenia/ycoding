@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
-import { ImageRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
+import type { Renderable } from "@opentui/core"
 import { describe, expect, test } from "bun:test"
 import { createSignal } from "solid-js"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
@@ -8,6 +8,7 @@ import { Keymap } from "../src/context/keymap"
 import { modeChips } from "../src/component/prompt/mode-chips"
 import {
   Header,
+  pendingModelVariant,
   headerSegments,
   headerStatusLabel,
   type SessionHeaderIdentity,
@@ -19,6 +20,7 @@ import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DEFAULT_THEMES } from "../src/theme/builtins"
 import { resolveThemeFile } from "../src/theme/v2/resolve"
+import { getGlyph } from "../src/ui/glyph"
 
 const identity = {
   path: "~/Workspace/Personal/YCoding",
@@ -30,14 +32,6 @@ const identity = {
 
 function labels(width: number) {
   return headerSegments({ ...identity, width }).map((segment) => segment.label)
-}
-
-function findImage(node: Renderable): ImageRenderable | undefined {
-  if (node instanceof ImageRenderable) return node
-  return node
-    .getChildren()
-    .flatMap((child) => findImage(child) ?? [])
-    .at(0)
 }
 
 describe("header truncation ladder", () => {
@@ -75,7 +69,7 @@ describe("header truncation ladder", () => {
 describe("header status", () => {
   const cases: Array<[SessionHeaderState, number, string]> = [
     [{ type: "ready" }, 100, "ready"],
-    [{ type: "working", elapsed: 4.14 }, 120, "working 4.1s"],
+    [{ type: "working", elapsed: 4.14 }, 120, "cooking 4.1s"],
     [{ type: "thinking", elapsed: 4.14 }, 120, "thinking · 4.1s"],
     [{ type: "tool-running", elapsed: 4.14 }, 120, "tool running · 4.1s"],
     [{ type: "waiting", count: 1 }, 100, "waiting · 1 subagent"],
@@ -84,7 +78,8 @@ describe("header status", () => {
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", code: 429 }, 100, "provider error \u00b7 429"],
     [{ type: "provider-error" }, 100, "provider error"],
-    [{ type: "yolo" }, 100, "YOLO \u00b7 auto-approve"],
+    [{ type: "autonomy", mode: "yolo", state: { type: "ready" } }, 100, "YOLO \u00b7 auto-approve · ready"],
+    [{ type: "autonomy", mode: "goal", state: { type: "working", elapsed: 4.14 } }, 120, "Goal · autonomous · cooking 4.1s"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -100,6 +95,38 @@ describe("header status", () => {
   test("shows the active shell count instead of ready", () => {
     expect(headerStatusLabel({ type: "ready" }, 100, 3)).toBe("3 shells running")
   })
+
+  test("reports the retry attempt and countdown", () => {
+    expect(headerStatusLabel({ type: "retrying", attempt: 2, at: 15_000 }, 100, undefined, 10_000)).toBe(
+      "1 failed · retry 2 · in 5s",
+    )
+  })
+
+  test("keeps active autonomy and retry status visible together", () => {
+    expect(
+      headerStatusLabel(
+        { type: "autonomy", mode: "goal", state: { type: "retrying", attempt: 2, at: 15_000 } },
+        100,
+        undefined,
+        10_000,
+      ),
+    ).toBe("Goal · autonomous · 1 failed · retry 2 · in 5s")
+  })
+})
+
+test("shows the selected model and variant only while the session still uses a different next-prompt choice", () => {
+  expect(
+    pendingModelVariant(
+      { model: "GPT-5.6 Terra", variant: "high" },
+      { pendingModel: "GPT-5.6 Terra", pendingVariant: "xhigh" },
+    ),
+  ).toBe("→ GPT-5.6 Terra · xhigh")
+  expect(
+    pendingModelVariant(
+      { model: "GPT-5.6 Terra", variant: "high" },
+      { pendingModel: "GPT-5.6 Terra", pendingVariant: "high" },
+    ),
+  ).toBeUndefined()
 })
 
 function HeaderKeymap(props: Parameters<typeof Header>[0]) {
@@ -118,6 +145,16 @@ function HeaderKeymap(props: Parameters<typeof Header>[0]) {
       <text>{leaderActive() ? "leader pending" : ""}</text>
     </>
   )
+}
+
+function findSpinnerInterval(node: Renderable): number | undefined {
+  if ("interval" in node && "frames" in node && typeof node.interval === "number" && Array.isArray(node.frames)) {
+    return node.interval
+  }
+  return node
+    .getChildren()
+    .flatMap((child) => findSpinnerInterval(child) ?? [])
+    .at(0)
 }
 
 async function renderHeader(
@@ -240,7 +277,7 @@ describe("header rendering", () => {
     )
     expect(spans.find((span) => span.text.includes("Build"))?.fg.toInts()).toEqual(theme.text.default.toInts())
     expect(spans.find((span) => span.text.includes("anthropic/claude-opus-5"))?.fg.toInts()).toEqual(
-      theme.text.default.toInts(),
+      theme.text.subdued.toInts(),
     )
     expect(spans.find((span) => span.text.includes("max"))?.fg.toInts()).toEqual(
       theme.text.feedback.success.default.toInts(),
@@ -270,13 +307,15 @@ describe("header rendering", () => {
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const cases: Array<[SessionHeaderState, string, { toInts(): readonly number[] }]> = [
       [{ type: "ready" }, "ready", theme.text.subdued],
-      [{ type: "working", elapsed: 4.1 }, "working 4.1s", theme.text.feedback.success.default],
+      [{ type: "working", elapsed: 4.1 }, "cooking 4.1s", theme.text.feedback.success.default],
       [{ type: "thinking", elapsed: 4.1 }, "thinking · 4.1s", theme.text.feedback.success.default],
       [{ type: "tool-running", elapsed: 4.1 }, "tool running · 4.1s", theme.text.feedback.info.default],
       [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error" }, "provider error", theme.text.feedback.error.default],
-      [{ type: "yolo" }, "YOLO · auto-approve", theme.text.feedback.error.default],
+      [{ type: "autonomy", mode: "yolo", state: { type: "ready" } }, "YOLO · auto-approve · ready", theme.text.feedback.error.default],
+      [{ type: "autonomy", mode: "goal", state: { type: "ready" } }, "Goal · autonomous · ready", theme.text.feedback.success.default],
+      [{ type: "retrying", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
     ]
 
     for (const [state, label, color] of cases) {
@@ -289,20 +328,16 @@ describe("header rendering", () => {
     }
   })
 
-  test("shows the icon mark, version, identity, and status on the strip at 160 columns", async () => {
+  test("shows the brand mark, mint dot trail, version, identity, and cooking status on the strip at 160 columns", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
     const frame = app.captureCharFrame()
     const lines = frame.split("\n")
-    const image = findImage(app.renderer.root)
-    expect(String(image?.source)).toEndWith("ycoding-mark-256.png")
-    expect(image?.width).toBe(6)
-    expect(image?.height).toBe(1)
-    expect(image?.x).toBe(1)
+    expect(frame).toMatch(/\.\.●|\.●\.|●\.\./)
     expect(frame).toContain(`v${InstallationVersion}`)
     expect(frame).not.toContain("y. ycoding")
     expect(frame).toContain("~/Workspace/Personal/YCoding")
     expect(frame).toContain("main")
-    expect(frame).toContain("working 4.1s")
+    expect(frame).toContain("cooking 4.1s")
     expect(lines.findIndex((line) => line.includes(`v${InstallationVersion}`))).toBe(1)
     expect(lines[0]?.trim()).toBe("")
     expect(lines[2]?.trim()).toBe("")
@@ -312,7 +347,6 @@ describe("header rendering", () => {
   test("drops the path and branch at 80 columns instead of shrinking the state word", async () => {
     const app = await renderHeader(80, { type: "ready" })
     const frame = app.captureCharFrame()
-    expect(String(findImage(app.renderer.root)?.source)).toEndWith("ycoding-mark-256.png")
     expect(frame).toContain(`v${InstallationVersion}`)
     expect(frame).not.toContain("y. ycoding")
     expect(frame).toContain("claude-opus-5")
@@ -322,7 +356,7 @@ describe("header rendering", () => {
   })
 
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
-    const app = await renderHeader(100, { type: "yolo" })
+    const app = await renderHeader(100, { type: "autonomy", mode: "yolo", state: { type: "ready" } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
@@ -334,6 +368,26 @@ describe("header rendering", () => {
         span.bg.toInts().every((value, index) => value === theme.background.action.destructive.default.toInts()[index]),
       ),
     ).toBe(false)
+    app.renderer.destroy()
+  })
+
+  test("counts down the top-right retry indicator", async () => {
+    const app = await renderHeader(160, { type: "retrying", attempt: 2, at: Date.now() + 1_500 })
+    await app.waitForFrame((frame) => frame.includes("1 failed · retry 2 · in 2s"))
+    await Bun.sleep(600)
+    await app.waitForFrame((frame) => frame.includes("1 failed · retry 2 · in 1s"))
+    app.renderer.destroy()
+  })
+
+  test("renders the failed glyph in error ink while retry text remains warning", async () => {
+    const app = await renderHeader(160, { type: "retrying", attempt: 2, at: Date.now() + 5_000 })
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+
+    expect(spans.find((span) => span.text === getGlyph("failed").glyph)?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
+    expect(spans.find((span) => span.text.includes("1 failed · retry 2 · in"))?.fg.toInts()).toEqual(
+      theme.text.feedback.warning.default.toInts(),
+    )
     app.renderer.destroy()
   })
 
@@ -378,15 +432,14 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("keeps a focused model at its role color and uses the label token for its hint", async () => {
+  test("keeps a focused model subdued and uses the label token for its hint", async () => {
     const app = await renderHeader(160, { type: "ready" }, { focused: "model" })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const model = spans.find((span) => span.text.includes("anthropic/claude-opus-5"))
     const hint = spans.find((span) => span.text.includes("\u2303x m change"))
 
-    expect(model?.fg.toInts()).toEqual(theme.text.default.toInts())
-    expect(model?.fg.toInts()).not.toEqual(theme.text.feedback.info.default.toInts())
+    expect(model?.fg.toInts()).toEqual(theme.text.subdued.toInts())
     expect(model?.bg.toInts()).toEqual(theme.background.surface.overlay.toInts())
     expect(hint?.fg.toInts()).toEqual(theme.text.label.toInts())
 
@@ -411,26 +464,126 @@ describe("header rendering", () => {
     app.renderer.destroy()
   })
 
-  test("renders subagent identity and working status in the info token", async () => {
+  test("renders subagent identity and cooking status in the info token", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 }, { subagent: true })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const brand = spans.find((span) => span.text.includes("◦ subagent"))
-    const status = spans.find((span) => span.text.includes("working 4.1s"))
+    const status = spans.find((span) => span.text.includes("cooking 4.1s"))
 
     expect(brand?.fg.toInts()).toEqual(theme.text.feedback.info.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.info.default.toInts())
     app.renderer.destroy()
   })
 
-  test("keeps main-session identity and working status in the accent token", async () => {
+  test("keeps main-session cooking status and dot trail in the accent token", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-    const status = spans.find((span) => span.text.includes("working 4.1s"))
+    const status = spans.find((span) => span.text.includes("cooking 4.1s"))
 
-    expect(String(findImage(app.renderer.root)?.source)).toEndWith("ycoding-mark-256.png")
+    expect(spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
+    app.renderer.destroy()
+  })
+
+  test("uses the slower native spinner interval while preserving normal working success color", async () => {
+    const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+
+    expect(findSpinnerInterval(app.renderer.root)).toBe(160)
+    expect(spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))?.fg.toInts()).toEqual(
+      theme.text.feedback.success.default.toInts(),
+    )
+    app.renderer.destroy()
+  })
+
+  test("uses the YOLO error token for the dot trail and adjacent working status", async () => {
+    const app = await renderHeader(160, { type: "autonomy", mode: "yolo", state: { type: "working", elapsed: 4.1 } })
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+    const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
+    const status = spans.find((span) => span.text.includes("YOLO · auto-approve · cooking 4.1s"))
+
+    expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
+    expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
+    app.renderer.destroy()
+  })
+
+  test("keeps the animation-disabled normal working fallback static and success-colored", async () => {
+    const app = await renderHeader(
+      160,
+      { type: "working", elapsed: 4.1 },
+      { config: createTuiResolvedConfig({ animations: false }) },
+    )
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+    const fallback = spans.find((span) => span.text.includes("⋯"))
+
+    expect(app.captureCharFrame()).not.toMatch(/\.\.●|\.●\.|●\.\./)
+    expect(fallback?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
+    app.renderer.destroy()
+  })
+
+  test("renders next-prompt agent, model, and variant for a main Session but not a subagent", async () => {
+    const config = createTuiResolvedConfig()
+    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+      import("../src/config"),
+      import("../src/context/theme"),
+    ])
+    let setPendingAgent!: (value: string | undefined) => void
+    let setPending!: (value: Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">) => void
+    let setSubagent!: (value: boolean) => void
+    function LiveHeader() {
+      const [pendingAgent, setAgent] = createSignal<string>()
+      const [pending, set] = createSignal<Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">>({})
+      const [subagent, setSubagentSignal] = createSignal(false)
+      setPendingAgent = setAgent
+      setPending = set
+      setSubagent = setSubagentSignal
+      return (
+        <Header
+          {...identity}
+          pendingAgent={pendingAgent()}
+          pendingModel={pending().pendingModel}
+          pendingVariant={pending().pendingVariant}
+          state={{ type: "ready" }}
+          subagent={subagent()}
+        />
+      )
+    }
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={config}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider config={config}>
+                <LiveHeader />
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 160, height: 6, kittyKeyboard: true },
+    )
+    app.renderer.start()
+    await app.waitForFrame((frame) => frame.includes("anthropic/claude-opus-5"))
+    setPendingAgent("Zeus")
+    await app.waitForFrame((frame) => frame.includes("→ Zeus"))
+    setPending({ pendingModel: "GPT-5.6 Terra", pendingVariant: "high" })
+    await app.waitForFrame((frame) => frame.includes("→ GPT-5.6 Terra · high"))
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const highlight = app
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes("→ GPT-5.6 Terra · high"))
+
+    expect(highlight?.fg.toInts()).toEqual(theme.text.subdued.toInts())
+    setSubagent(true)
+    await app.waitForFrame((frame) => frame.includes("subagent"))
+    expect(app.captureCharFrame()).not.toContain("→ Zeus")
+    expect(app.captureCharFrame()).not.toContain("→ GPT-5.6 Terra · high")
     app.renderer.destroy()
   })
 

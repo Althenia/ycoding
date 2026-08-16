@@ -36,8 +36,14 @@ import { Form } from "@ycoding-ai/core/form"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
+import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
+import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
+import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
+import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
+import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPermissionCeiling } from "@ycoding-ai/core/session/permission-ceiling"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
@@ -65,7 +71,11 @@ import { Tool } from "@ycoding-ai/core/tool/tool"
 import {
   InstructionStateTable,
   SessionPendingTable,
+  SessionContextStateTable,
   SessionMessageTable,
+  SessionProviderContinuationTable,
+  SessionProviderStateBlobTable,
+  SessionProviderStateLinkTable,
   SessionTable,
 } from "@ycoding-ai/core/session/sql"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
@@ -200,28 +210,57 @@ const reply = {
     LLMEvent.finish({ reason: "tool-calls" }),
   ],
 }
-const model = Model.make({ id: "fake-model", provider: "fake", route: OpenAIChat.route })
+const testLimits = { context: 262_144, output: 8_192 } as const
+const model = Model.make({
+  id: "fake-model",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: testLimits }),
+})
 const anthropicCacheModel = Model.make({
   id: "claude-sonnet-4-5",
   provider: "anthropic",
-  route: AnthropicMessages.route,
+  route: AnthropicMessages.route.with({ limits: testLimits }),
 })
-const openAI56Model = Model.make({ id: "gpt-5.6", provider: "openai", route: OpenAIChat.route })
+const openAI56Model = Model.make({
+  id: "gpt-5.6",
+  provider: "openai",
+  route: OpenAIChat.route.with({ limits: testLimits }),
+})
 const storedOpenAIResponsesModel = Model.make({
   id: "gpt-5.6",
   provider: "openai",
-  route: OpenAIResponses.route,
+  route: OpenAIResponses.route.with({ limits: testLimits }),
+  defaults: { providerOptions: { openai: { store: true } } },
+})
+const storedRecoveryResponsesModel = Model.make({
+  id: "gpt-5.6",
+  provider: "openai",
+  route: OpenAIResponses.route.with({ limits: { context: 20_000, output: 1_000 } }),
+  defaults: { providerOptions: { openai: { store: true } } },
+})
+const storedCopilotResponsesModel = Model.make({
+  id: "gpt-5.6",
+  provider: "github-copilot",
+  route: OpenAIResponses.route.with({
+    id: "ai-sdk:@ai-sdk/github-copilot",
+    provider: "github-copilot",
+    limits: testLimits,
+  }),
   defaults: { providerOptions: { openai: { store: true } } },
 })
 const unstoredOpenAIResponsesModel = Model.make({
   id: "gpt-5.6",
   provider: "openai",
-  route: OpenAIResponses.route,
+  route: OpenAIResponses.route.with({ limits: testLimits }),
 })
 const defaultSystem = PROMPT_DEFAULT
 const withProjectArtifactGuidance = (...values: readonly string[]) =>
   [...values, ProjectArtifactInstructions.content].join("\n\n")
-const replacementModel = Model.make({ id: "replacement", provider: "fake", route: OpenAIChat.route })
+const replacementModel = Model.make({
+  id: "replacement",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: testLimits }),
+})
 const compactModel = Model.make({
   id: "compact",
   provider: "fake",
@@ -237,6 +276,12 @@ const recoveryModel = Model.make({
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
 })
+const missingOutputLimitModel = Model.make({
+  id: "missing-output-limit",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: { context: 20_000 } }),
+})
+const missingContextLimitModel = Model.make({ id: "missing-context-limit", provider: "fake", route: OpenAIChat.route })
 
 test("calculates step cost using the matching context tier", () => {
   expect(
@@ -476,6 +521,61 @@ const config = Layer.succeed(
       ]),
   }),
 )
+const compactionExecution = Layer.effect(
+  SessionCompactionExecution.Service,
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const jobs = yield* SessionCompactionJob.Service
+    const contextState = yield* SessionContextState.Service
+    const guardrails = yield* SessionGuardrail.Service
+    const owner = "runner-test-compaction"
+    const wake = (sessionID: SessionV2.ID) =>
+      Effect.gen(function* () {
+        const pending = (yield* jobs.pending(sessionID))[0]
+        if (!pending) return
+        const now = Date.now()
+        const job = yield* jobs.claim({ jobID: pending.id, owner, now, expiresAt: now + 30_000 })
+        if (!job) return
+        const guardrail = yield* guardrails.snapshot(sessionID)
+        const capture = yield* SessionLiveState.captureDatabase(db, sessionID).pipe(Effect.orDie)
+        yield* contextState.activate({
+          sessionID,
+          jobID: job.id,
+          leaseOwner: owner,
+          manifest: Object.freeze({
+            schemaVersion: 1,
+            baseContextRevision: job.baseContextRevision,
+            coveredThrough: Object.freeze({
+              messageID: job.requestedThrough.messageID,
+              seq: EventV2.Seq.make(job.requestedThrough.seq),
+            }),
+            protectedState: Object.freeze(
+              SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrail }).map((entry) =>
+                Object.freeze(entry),
+              ),
+            ),
+            exclusions: Object.freeze([]),
+            inputTokens: 100,
+            retainedTokens: 50,
+          }),
+        })
+      }).pipe(Effect.orDie)
+    return SessionCompactionExecution.Service.of({
+      active: Effect.succeed(new Set()),
+      wake,
+      wait: (jobID) =>
+        jobs
+          .get(jobID)
+          .pipe(
+            Effect.flatMap((job) =>
+              job ? Effect.succeed(job) : Effect.die(new Error(`Compaction job not found: ${jobID}`)),
+            ),
+          ),
+      cancel: (jobID) => jobs.get(jobID),
+      recover: Effect.void,
+    })
+  }),
+)
 let pluginFlushHook = Effect.void
 const pluginSupervisor = Layer.succeed(
   PluginSupervisor.Service,
@@ -516,8 +616,10 @@ const execution = Layer.effect(
   SessionExecution.Service,
   Effect.gen(function* () {
     const sessionRunner = yield* SessionRunner.Service
+    const compactionExecution = yield* SessionCompactionExecution.Service
     const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, SessionRunner.RunError>({
-      drain: (sessionID, force) => sessionRunner.drain({ sessionID, force }),
+      drain: (sessionID, force) =>
+        sessionRunner.drain({ sessionID, force }).pipe(SessionCompactionExecution.bind(compactionExecution)),
     })
     return SessionExecution.Service.of({
       active: coordinator.active,
@@ -544,6 +646,7 @@ const it = testEffect(
       PluginHooks.node,
       echoNode,
       SessionRunnerModel.node,
+      SessionTodo.node,
       InstructionBuiltIns.node,
       InstructionDiscovery.node,
       InstructionEntry.node,
@@ -552,6 +655,10 @@ const it = testEffect(
       Config.node,
       Snapshot.node,
       SessionRunnerLLM.node,
+      SessionCompactionJob.node,
+      SessionContextState.node,
+      SessionGuardrail.node,
+      SessionCompactionExecution.node,
       SessionExecution.node,
       SessionV2.node,
     ]),
@@ -571,6 +678,7 @@ const it = testEffect(
       [Config.node, config],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [PluginSupervisor.node, pluginSupervisor],
+      [SessionCompactionExecution.node, compactionExecution],
     ],
   ),
 )
@@ -592,6 +700,7 @@ const insertSession = (id: SessionV2.ID) =>
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
+    yield* SessionContextState.initialize(db, id, Date.now())
   })
 
 const setup = Effect.gen(function* () {
@@ -660,6 +769,20 @@ const invalidRequest = () =>
     reason: new InvalidRequestReason({ message: "Invalid request" }),
   })
 
+const contextOverflow = () =>
+  new LLMError({
+    module: "test",
+    method: "stream",
+    reason: new InvalidRequestReason({ message: "Prompt is too long", classification: "context-overflow" }),
+  })
+
+const invalidPreviousResponse = () =>
+  new LLMError({
+    module: "test",
+    method: "stream",
+    reason: new InvalidRequestReason({ message: "Previous response ID is invalid or expired" }),
+  })
+
 const rateLimited = (retryAfterMs?: number) =>
   new LLMError({
     module: "test",
@@ -683,6 +806,7 @@ const messageTexts = (request: LLMRequest, role: "user" | "system") =>
   )
 const userTexts = (request: LLMRequest) => messageTexts(request, "user")
 const systemTexts = (request: LLMRequest) => messageTexts(request, "system")
+const nonVolatileMessages = (request: LLMRequest) => request.messages.filter((message) => message.volatile !== true)
 
 const recordedEventTypes = (id: SessionV2.ID) =>
   Effect.gen(function* () {
@@ -871,13 +995,17 @@ const verifyEphemeralDeltas = (kind: FragmentKind) =>
     expect(Array.from(yield* Fiber.join(live))).toHaveLength(32)
     expect(deltas).toHaveLength(0)
     expect(
-      requireAssistant(yield* session.context(sessionID)).content.find((content) => content.type === fixture.expectedContent.type),
+      requireAssistant(yield* session.context(sessionID)).content.find(
+        (content) => content.type === fixture.expectedContent.type,
+      ),
     ).toMatchObject(fixture.expectedContent)
 
     yield* replaySessionProjection(sessionID)
 
     expect(
-      requireAssistant(yield* session.context(sessionID)).content.find((content) => content.type === fixture.expectedContent.type),
+      requireAssistant(yield* session.context(sessionID)).content.find(
+        (content) => content.type === fixture.expectedContent.type,
+      ),
     ).toMatchObject(fixture.expectedContent)
   })
 
@@ -946,6 +1074,56 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("renders authoritative live state before other volatile context without pending content", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const db = (yield* Database.Service).db
+      const hooks = yield* PluginHooks.Service
+      const todos = yield* SessionTodo.Service
+      yield* todos.update({
+        sessionID,
+        todos: [
+          { content: "first", status: "in_progress", priority: "high" },
+          { content: "second", status: "pending", priority: "medium" },
+        ],
+      })
+      yield* db
+        .insert(SessionPendingTable)
+        .values({
+          id: SessionMessage.ID.make("msg_queued_live_state_secret"),
+          session_id: sessionID,
+          type: "user",
+          data: { text: "queued secret prompt" },
+          delivery: "queue",
+          admitted_seq: 10_000,
+          time_created: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.messages.push(Message.make({ role: "user", content: "TeamView marker", volatile: true }))
+        }),
+      )
+
+      yield* admit(session, "Visible prompt")
+      yield* session.resume(sessionID)
+
+      const first = requests[0]
+      expect(first).toBeDefined()
+      const volatile = first!.messages.filter((message) => message.volatile === true)
+      expect(volatile.map((message) => message.role)).toEqual(["system", "user"])
+      expect(volatile[0]?.content).toEqual([
+        {
+          type: "text",
+          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"permissionCeiling":[],"todos":[{"content":"first","priority":"high","status":"in_progress"},{"content":"second","priority":"medium","status":"pending"}]}',
+        },
+      ])
+      expect(volatile[1]?.content).toEqual([{ type: "text", text: "TeamView marker" }])
+      expect(JSON.stringify(first!.messages)).not.toContain("queued secret prompt")
+    }),
+  )
+
   it.effect("executes the provider without application artifact routing", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -969,13 +1147,13 @@ describe("SessionRunnerLLM", () => {
       const citation = "\n\nSource: Effect Documentation\nhttps://effect.website/docs"
       responses = [
         [
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.textStart({ id: "citation" }),
-        LLMEvent.textDelta({ id: "citation", text: "Read the documentation." }),
-        LLMEvent.textDelta({ id: "citation", text: citation }),
-        LLMEvent.textEnd({ id: "citation" }),
-        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
-        LLMEvent.finish({ reason: "stop" }),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "citation" }),
+          LLMEvent.textDelta({ id: "citation", text: "Read the documentation." }),
+          LLMEvent.textDelta({ id: "citation", text: citation }),
+          LLMEvent.textEnd({ id: "citation" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
         ],
         reply.text("Reasoning summary", "text-reasoning-summary"),
       ]
@@ -1217,12 +1395,12 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.cache).toEqual({
         tools: false,
         system: true,
-        messages: { tail: Number.MAX_SAFE_INTEGER },
+        messages: { tail: 50 },
       })
     }),
   )
 
-  it.effect("retains all cacheable message boundaries for direct GPT-5.6 OpenAI explicit caching", () =>
+  it.effect("retains the newest 50 cacheable message boundaries for direct GPT-5.6 OpenAI explicit caching", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = openAI56Model
@@ -1239,7 +1417,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.cache).toEqual({
         tools: false,
         system: true,
-        messages: { tail: Number.MAX_SAFE_INTEGER },
+        messages: { tail: 50 },
       })
     }),
   )
@@ -1247,7 +1425,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("continues a compatible stored OpenAI Responses tool turn", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      currentModel = storedOpenAIResponsesModel
+      currentModel = storedRecoveryResponsesModel
       efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "auto" })
       responses = [
         reply.toolWithResponse("call-continued", "echo", { text: "continued" }, "resp_first"),
@@ -1261,7 +1439,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
       expect(requests[1]?.providerOptions?.openai).toMatchObject({
         previousResponseId: "resp_first",
-        continuationInputStart: requests[0]!.messages.length + 1,
+        continuationInputStart: nonVolatileMessages(requests[0]).length + 1,
       })
       const records = yield* SessionProviderRequest.Service.pipe(
         Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
@@ -1275,7 +1453,80 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("never enables OpenAI Responses storage to obtain continuation", () =>
+  it.effect("continues at a complete multipart boundary only when the volatile suffix matches", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const hooks = yield* PluginHooks.Service
+      currentModel = storedRecoveryResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      let teamView = "Stable team view"
+      yield* hooks.register("session", "context", (event) =>
+        Effect.sync(() => {
+          event.messages.push(Message.make({ role: "user", content: teamView, volatile: true }))
+        }),
+      )
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "multipart-reasoning" }),
+          LLMEvent.reasoningDelta({ id: "multipart-reasoning", text: "Thinking" }),
+          LLMEvent.reasoningEnd({ id: "multipart-reasoning" }),
+          LLMEvent.toolCall({ id: "multipart-tool", name: "echo", input: { text: "multipart" } }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "tool-calls",
+            providerMetadata: { openai: { responseId: "resp_multipart" } },
+          }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        reply.textWithResponse("Done", "multipart-done", "resp_multipart_done"),
+        reply.textWithResponse("Rebased", "multipart-rebased", "resp_multipart_rebased"),
+      ]
+
+      yield* admit(session, "Use multipart output")
+      yield* session.resume(sessionID)
+
+      const continuationInputStart = requests[1]?.providerOptions?.openai?.continuationInputStart
+      expect(requests[1]?.providerOptions?.openai?.previousResponseId).toBe("resp_multipart")
+      expect(typeof continuationInputStart).toBe("number")
+      expect(requests[1]?.messages.slice(continuationInputStart as number).map((message) => message.role)).toEqual([
+        "tool",
+      ])
+      expect(JSON.stringify(requests[0]?.messages)).toContain("Stable team view")
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain("Stable team view")
+
+      teamView = "Changed team view"
+      yield* admit(session, "Rebase after volatile change")
+      yield* session.resume(sessionID)
+
+      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(JSON.stringify(requests[2]?.messages)).toContain("Changed team view")
+    }),
+  )
+
+  it.effect("does not continue a Copilot AI SDK Responses tool turn", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedCopilotResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "auto" })
+      responses = [
+        reply.toolWithResponse("call-copilot", "echo", { text: "continued" }, "resp_copilot_first"),
+        reply.textWithResponse("Done", "copilot-done", "resp_copilot_second"),
+      ]
+
+      yield* admit(session, "Use the tool and continue")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      const records = yield* SessionProviderRequest.Service.pipe(
+        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+      )
+      expect(records.map((record) => record.continuation)).toEqual(["full", "full"])
+    }),
+  )
+
+  it.effect("forces stored OpenAI Responses state when the state mode is omitted", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = unstoredOpenAIResponsesModel
@@ -1289,8 +1540,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests.every((request) => request.providerOptions?.openai?.store !== true)).toBe(true)
-      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests.every((request) => request.providerOptions?.openai?.store === true)).toBe(true)
+      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_unstored")
     }),
   )
 
@@ -1336,7 +1587,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("clears stored response state when an execution ends", () =>
+  it.effect("keeps stored response state across executions", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = storedOpenAIResponsesModel
@@ -1352,7 +1603,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_execution_first")
     }),
   )
 
@@ -1363,7 +1614,9 @@ describe("SessionRunnerLLM", () => {
       efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
       responseStreams = [
         Stream.fromIterable(reply.toolWithResponse("call-fallback", "echo", { text: "fallback" }, "resp_first")),
-        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]).pipe(Stream.concat(Stream.fail(invalidRequest()))),
+        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]).pipe(
+          Stream.concat(Stream.fail(invalidPreviousResponse())),
+        ),
         Stream.fromIterable(reply.textWithResponse("Recovered", "fallback-recovered", "resp_recovered")),
       ]
 
@@ -1377,7 +1630,6 @@ describe("SessionRunnerLLM", () => {
       const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
       expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
         "session.step.started.1",
-        "session.step.started.1",
         "session.step.ended.1",
       ])
       const records = yield* SessionProviderRequest.Service.pipe(
@@ -1390,6 +1642,57 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("caps continuation fallback attempts at ten with monotonic retry events", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      const failure = providerUnavailable()
+      responseStreams = [
+        Stream.fromIterable(reply.toolWithResponse("call-fallback-budget", "echo", { text: "budget" }, "resp_budget")),
+        Stream.fail(invalidPreviousResponse()),
+        ...Array.from({ length: 9 }, () => Stream.fail(failure)),
+      ]
+
+      yield* admit(session, "Cap continuation fallback retries")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 3) yield* Effect.yieldNow
+      for (const delay of [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000]) {
+        yield* TestClock.adjust(delay)
+        while (requests.length < 3 + [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000].indexOf(delay) + 1)
+          yield* Effect.yieldNow
+      }
+      expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(11)
+
+      const database = (yield* Database.Service).db
+      const retries = yield* database
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, "session.retry.scheduled.1"))
+        .orderBy(asc(EventTable.seq))
+        .all()
+        .pipe(Effect.orDie)
+      expect(retries.map((event) => event.data)).toMatchObject([
+        { attempt: 3, at: 2_000 },
+        { attempt: 4, at: 6_000 },
+        { attempt: 5, at: 14_000 },
+        { attempt: 6, at: 30_000 },
+        { attempt: 7, at: 62_000 },
+        { attempt: 8, at: 126_000 },
+        { attempt: 9, at: 246_000 },
+        { attempt: 10, at: 366_000 },
+      ])
+      const records = yield* SessionProviderRequest.Service.pipe(
+        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+      )
+      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
+        { attempts: 1, continuation: "full" },
+        { attempts: 10, continuation: "fallback" },
+      ])
+    }),
+  )
+
   it.effect("does not retry a second invalid request after the continuation fallback", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -1397,8 +1700,8 @@ describe("SessionRunnerLLM", () => {
       efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
       responseStreams = [
         Stream.fromIterable(reply.toolWithResponse("call-fallback-once", "echo", { text: "once" }, "resp_once")),
-        Stream.fail(invalidRequest()),
-        Stream.fail(invalidRequest()),
+        Stream.fail(invalidPreviousResponse()),
+        Stream.fail(invalidPreviousResponse()),
       ]
 
       yield* admit(session, "Fallback only once")
@@ -1418,32 +1721,50 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("does not treat a generic invalid request as stale continuation state", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responseStreams = [
+        Stream.fromIterable(reply.toolWithResponse("call-generic-invalid", "echo", { text: "once" }, "resp_once")),
+        Stream.fail(invalidRequest()),
+      ]
+
+      yield* admit(session, "Do not rebase a generic invalid request")
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBeInstanceOf(LLMError)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_once")
+    }),
+  )
+
   it.effect("reports normalized cache diagnostics without treating cache hits as free context", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = Model.make({
         id: "diagnostic-model",
         provider: "openai",
-        route: OpenAIChat.route.with({ limits: { context: 2_000, output: 200 } }),
+        route: OpenAIChat.route.with({ limits: { context: 20_000, output: 200 } }),
       })
       responses = [
         [
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.textStart({ id: "diagnostic-text" }),
-        LLMEvent.textDelta({ id: "diagnostic-text", text: "Done" }),
-        LLMEvent.textEnd({ id: "diagnostic-text" }),
-        LLMEvent.stepFinish({
-          index: 0,
-          reason: "stop",
-          usage: {
-            inputTokens: 1_000,
-            nonCachedInputTokens: 100,
-            cacheReadInputTokens: 900,
-            outputTokens: 30,
-            reasoningTokens: 10,
-          },
-        }),
-        LLMEvent.finish({ reason: "stop" }),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "diagnostic-text" }),
+          LLMEvent.textDelta({ id: "diagnostic-text", text: "Done" }),
+          LLMEvent.textEnd({ id: "diagnostic-text" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            usage: {
+              inputTokens: 1_000,
+              nonCachedInputTokens: 100,
+              cacheReadInputTokens: 900,
+              outputTokens: 30,
+              reasoningTokens: 10,
+            },
+          }),
+          LLMEvent.finish({ reason: "stop" }),
         ],
         reply.text("Provider summary", "text-provider-summary"),
       ]
@@ -1452,7 +1773,7 @@ describe("SessionRunnerLLM", () => {
 
       const assistant = requireAssistant(yield* session.context(sessionID))
       expect(assistant.diagnostics).toEqual({
-        contextLimit: 2_000,
+        contextLimit: 20_000,
         providerCache: {
           mechanism: "openai-prefix-cache",
           readReported: true,
@@ -1472,7 +1793,7 @@ describe("SessionRunnerLLM", () => {
       })
       const diagnostics = yield* session.diagnostics(sessionID)
       expect(diagnostics).toMatchObject({
-        context: { total: 1_030, limit: 2_000, remaining: 970, percent: 52 },
+        context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
         tokens: { uncachedInput: 100, output: 20, reasoning: 10, cacheRead: 900, cacheWrite: 0 },
         cache: {
           eligible: 1_000,
@@ -1508,9 +1829,11 @@ describe("SessionRunnerLLM", () => {
       yield* session.wait(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect((yield* session.messages({ sessionID })).find((item) => item.id === message.id)).toMatchObject(
-        { id: message.id, type: "user", text: "Run automatically" },
-      )
+      expect((yield* session.messages({ sessionID })).find((item) => item.id === message.id)).toMatchObject({
+        id: message.id,
+        type: "user",
+        text: "Run automatically",
+      })
     }),
   )
 
@@ -1553,7 +1876,9 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
       expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
-      expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
+      expect(
+        nonVolatileMessages(requests[0]).map((message) => ({ role: message.role, content: message.content })),
+      ).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
       ])
@@ -1691,7 +2016,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.wait(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user"])
     }),
   )
 
@@ -1825,7 +2150,7 @@ describe("SessionRunnerLLM", () => {
         defaultSystem,
         withProjectArtifactGuidance("Initial context"),
       ])
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user", "assistant", "user"])
       expect(
         yield* db
           .select({ id: EventTable.id })
@@ -1854,7 +2179,12 @@ describe("SessionRunnerLLM", () => {
         [defaultSystem, withProjectArtifactGuidance("Initial context")],
         [defaultSystem, withProjectArtifactGuidance("Initial context")],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "system", "user"])
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "system",
+        "user",
+      ])
       expect(requests[1]?.messages.at(2)?.content).toEqual([{ type: "text", text: "Changed context" }])
       expect(yield* session.messages({ sessionID })).toHaveLength(4)
       const { db } = yield* Database.Service
@@ -1885,7 +2215,11 @@ describe("SessionRunnerLLM", () => {
   it.effect("uses the selected model family prompt when the agent does not override it", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      currentModel = Model.make({ id: "gpt-5", provider: "openai", route: OpenAIChat.route })
+      currentModel = Model.make({
+        id: "gpt-5",
+        provider: "openai",
+        route: OpenAIChat.route.with({ limits: testLimits }),
+      })
       yield* admit(session, "First")
 
       response = reply.text("Done", "text-provider-prompt")
@@ -1901,7 +2235,11 @@ describe("SessionRunnerLLM", () => {
   it.effect("uses the selected model family prompt when the agent system override is empty", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      currentModel = Model.make({ id: "gpt-5", provider: "openai", route: OpenAIChat.route })
+      currentModel = Model.make({
+        id: "gpt-5",
+        provider: "openai",
+        route: OpenAIChat.route.with({ limits: testLimits }),
+      })
       const agent = yield* AgentV2.Service
       yield* agent.transform((editor) =>
         editor.update(AgentV2.ID.make("build"), (agent) => {
@@ -2203,7 +2541,12 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "Second")
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "system", "user"])
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "system",
+        "user",
+      ])
       expect(requests[1]?.messages.at(2)?.content).toEqual([
         { type: "text", text: "System context source removed: test/context" },
       ])
@@ -2237,7 +2580,12 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "Second")
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "system", "user"])
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "system",
+        "user",
+      ])
       expect(requests[1]?.messages.at(2)?.content).toEqual([
         {
           type: "text",
@@ -2258,7 +2606,7 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "Third")
       yield* session.resume(sessionID)
 
-      expect(requests[2]?.messages.map((message) => message.role)).toEqual([
+      expect(nonVolatileMessages(requests[2]).map((message) => message.role)).toEqual([
         "user",
         "assistant",
         "system",
@@ -2267,7 +2615,7 @@ describe("SessionRunnerLLM", () => {
         "system",
         "user",
       ])
-      expect(requests[2]?.messages.at(-2)?.content).toEqual([
+      expect(nonVolatileMessages(requests[2]).at(-2)?.content).toEqual([
         { type: "text", text: 'The context under "deploy-target" no longer applies. Disregard it.' },
       ])
       expect(yield* contextEntries.list(sessionID)).toEqual([])
@@ -2339,8 +2687,13 @@ describe("SessionRunnerLLM", () => {
         [defaultSystem, withProjectArtifactGuidance("Initial context")],
         [defaultSystem, withProjectArtifactGuidance("Initial context")],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "system", "user"])
-      expect(requests[2]?.messages.filter((message) => message.role === "system")).toHaveLength(2)
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual([
+        "user",
+        "assistant",
+        "system",
+        "user",
+      ])
+      expect(nonVolatileMessages(requests[2]).filter((message) => message.role === "system")).toHaveLength(2)
       expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
         "user",
         "assistant",
@@ -2391,12 +2744,12 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "First")
 
       yield* session.resume(sessionID)
-      yield* events.publish(SessionEvent.Compaction.Started, {
+      yield* events.publish(SessionEvent.Compaction.StartedV1, {
         sessionID,
         reason: "manual",
         recent: "",
       })
-      yield* events.publish(SessionEvent.Compaction.Ended, {
+      yield* events.publish(SessionEvent.Compaction.EndedV1, {
         sessionID,
         reason: "manual",
         text: "summary",
@@ -2410,14 +2763,13 @@ describe("SessionRunnerLLM", () => {
         [defaultSystem, withProjectArtifactGuidance("Initial context")],
         [defaultSystem, withProjectArtifactGuidance("Initial context")],
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "system", "user"])
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual(["user", "system", "user"])
       expect(requests[1]?.messages.at(1)?.content).toEqual([{ type: "text", text: "Replacement context" }])
       yield* replaySessionProjection(sessionID)
       yield* admit(session, "Third")
       yield* session.resume(sessionID)
     }),
   )
-
 
   it.effect("uses epoch values after compaction while a source is unavailable", () =>
     Effect.gen(function* () {
@@ -2429,12 +2781,12 @@ describe("SessionRunnerLLM", () => {
       systemBaseline = "Changed context"
       yield* admit(session, "Second")
       yield* session.resume(sessionID)
-      yield* events.publish(SessionEvent.Compaction.Started, {
+      yield* events.publish(SessionEvent.Compaction.StartedV1, {
         sessionID,
         reason: "manual",
         recent: "",
       })
-      yield* events.publish(SessionEvent.Compaction.Ended, {
+      yield* events.publish(SessionEvent.Compaction.EndedV1, {
         sessionID,
         reason: "manual",
         text: "summary",
@@ -2460,48 +2812,48 @@ describe("SessionRunnerLLM", () => {
 
       responses = [
         [
-        LLMEvent.stepStart({ index: 0 }),
-        LLMEvent.reasoningStart({ id: "reasoning-1" }),
-        LLMEvent.reasoningDelta({ id: "reasoning-1", text: "Think" }),
-        LLMEvent.reasoningEnd({ id: "reasoning-1" }),
-        LLMEvent.toolInputStart({ id: "call-error", name: "write" }),
-        LLMEvent.toolInputDelta({ id: "call-error", name: "write", text: '{"path":"README.md"}' }),
-        LLMEvent.toolInputEnd({ id: "call-error", name: "write" }),
-        LLMEvent.toolCall({ id: "call-error", name: "write", input: { path: "README.md" }, providerExecuted: true }),
-        LLMEvent.toolError({ id: "call-error", name: "write", message: "Denied" }),
-        LLMEvent.toolResult({ id: "call-error", name: "write", result: { type: "error", value: "Denied" } }),
-        LLMEvent.toolCall({
-          id: "call-provider",
-          name: "web_search",
-          input: { query: "hello" },
-          providerExecuted: true,
-          providerMetadata: { openai: { source: "provider" } },
-        }),
-        LLMEvent.toolResult({
-          id: "call-provider",
-          name: "web_search",
-          result: {
-            type: "content",
-            value: [
-              { type: "text", text: "Hello" },
-              { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "hello.png" },
-            ],
-          },
-          providerExecuted: true,
-          providerMetadata: { openai: { source: "provider" } },
-        }),
-        LLMEvent.stepFinish({
-          index: 0,
-          reason: "tool-calls",
-          usage: {
-            inputTokens: 10,
-            nonCachedInputTokens: 8,
-            outputTokens: 4,
-            reasoningTokens: 1,
-            cacheReadInputTokens: 2,
-          },
-        }),
-        LLMEvent.finish({ reason: "tool-calls" }),
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-1" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-1", text: "Think" }),
+          LLMEvent.reasoningEnd({ id: "reasoning-1" }),
+          LLMEvent.toolInputStart({ id: "call-error", name: "write" }),
+          LLMEvent.toolInputDelta({ id: "call-error", name: "write", text: '{"path":"README.md"}' }),
+          LLMEvent.toolInputEnd({ id: "call-error", name: "write" }),
+          LLMEvent.toolCall({ id: "call-error", name: "write", input: { path: "README.md" }, providerExecuted: true }),
+          LLMEvent.toolError({ id: "call-error", name: "write", message: "Denied" }),
+          LLMEvent.toolResult({ id: "call-error", name: "write", result: { type: "error", value: "Denied" } }),
+          LLMEvent.toolCall({
+            id: "call-provider",
+            name: "web_search",
+            input: { query: "hello" },
+            providerExecuted: true,
+            providerMetadata: { openai: { source: "provider" } },
+          }),
+          LLMEvent.toolResult({
+            id: "call-provider",
+            name: "web_search",
+            result: {
+              type: "content",
+              value: [
+                { type: "text", text: "Hello" },
+                { type: "file", uri: "data:image/png;base64,aGVsbG8=", mime: "image/png", name: "hello.png" },
+              ],
+            },
+            providerExecuted: true,
+            providerMetadata: { openai: { source: "provider" } },
+          }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "tool-calls",
+            usage: {
+              inputTokens: 10,
+              nonCachedInputTokens: 8,
+              outputTokens: 4,
+              reasoningTokens: 1,
+              cacheReadInputTokens: 2,
+            },
+          }),
+          LLMEvent.finish({ reason: "tool-calls" }),
         ],
         reply.text("Reasoning summary", "text-reasoning-summary"),
       ]
@@ -2562,7 +2914,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual(["user", "assistant", "tool"])
       expect(authorizations).toMatchObject([{ sessionID, callID: "call-echo" }])
       expect(executions).toEqual(["hello"])
       const context = yield* session.context(sessionID)
@@ -2703,19 +3055,22 @@ describe("SessionRunnerLLM", () => {
       yield* replaySessionProjection(sessionID)
       requests.length = 0
 
-      expect(requireAssistant((yield* session.context(sessionID)).slice(0, 2)).content.filter((content) => content.type === "reasoning"))
-        .toMatchObject([
-          {
-            type: "reasoning",
-            text: "Signed thought",
-            state: { signature: "sig_1" },
-          },
-          {
-            type: "reasoning",
-            text: "Encrypted thought",
-            state: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" },
-          },
-        ])
+      expect(
+        requireAssistant((yield* session.context(sessionID)).slice(0, 2)).content.filter(
+          (content) => content.type === "reasoning",
+        ),
+      ).toMatchObject([
+        {
+          type: "reasoning",
+          text: "Signed thought",
+          state: { signature: "sig_1" },
+        },
+        {
+          type: "reasoning",
+          text: "Encrypted thought",
+          state: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" },
+        },
+      ])
 
       yield* admit(session, "Continue")
       response = reply.text("Continued", "text-reasoning-continued")
@@ -2771,7 +3126,7 @@ describe("SessionRunnerLLM", () => {
       response = reply.text("Continued", "text-search-continued")
       yield* session.resume(sessionID)
 
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user", "assistant", "user"])
       expect(
         requests[0]?.messages[1]?.content.filter(
           (content) => content.type === "tool-call" || content.type === "tool-result",
@@ -2794,6 +3149,136 @@ describe("SessionRunnerLLM", () => {
           providerMetadata: { openai: { blockType: "web_search_tool_result" } },
         },
       ])
+    }),
+  )
+
+  it.effect("keeps opaque provider state private and replays it only in stateless same-model requests", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_state: "stateless" })
+      const reasoningOpaque = {
+        type: "compaction",
+        id: "cmp_reasoning",
+        encrypted_content: "reasoning-secret",
+        future_field: { version: 2 },
+      }
+      const toolCallOpaque = {
+        type: "compaction",
+        id: "cmp_tool_call",
+        encrypted_content: "tool-call-secret",
+      }
+      const toolResultOpaque = {
+        type: "compaction",
+        id: "cmp_tool_result",
+        encrypted_content: "tool-result-secret",
+      }
+      yield* admit(session, "Use private provider state")
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "private-reasoning", providerMetadata: { openai: { signature: "sig_1" } } }),
+        LLMEvent.reasoningDelta({
+          id: "private-reasoning",
+          text: "Private thought",
+          providerMetadata: { openai: { signature: "sig_1", opaqueCompactionItem: reasoningOpaque } },
+        }),
+        LLMEvent.reasoningEnd({ id: "private-reasoning", providerMetadata: { openai: { signature: "sig_1" } } }),
+        LLMEvent.toolCall({
+          id: "private-tool",
+          name: "web_search",
+          input: { query: "Effect" },
+          providerExecuted: true,
+          providerMetadata: { openai: { itemId: "private-tool", opaqueCompactionItem: toolCallOpaque } },
+        }),
+        LLMEvent.toolResult({
+          id: "private-tool",
+          name: "web_search",
+          result: { type: "json", value: [{ title: "Effect" }] },
+          providerExecuted: true,
+          providerMetadata: { openai: { blockType: "web_search_tool_result", opaqueCompactionItem: toolResultOpaque } },
+        }),
+        LLMEvent.textStart({ id: "private-answer" }),
+        LLMEvent.textDelta({ id: "private-answer", text: "Done" }),
+        LLMEvent.textEnd({ id: "private-answer" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      const context = yield* session.context(sessionID)
+      const durableEvents = yield* db.select({ data: EventTable.data }).from(EventTable).all()
+      expect(JSON.stringify(context)).not.toContain("opaqueCompactionItem")
+      expect(JSON.stringify(durableEvents)).not.toContain("opaqueCompactionItem")
+      expect(
+        yield* db
+          .select({
+            ordinal: SessionProviderStateLinkTable.part_ordinal,
+            kind: SessionProviderStateLinkTable.part_kind,
+          })
+          .from(SessionProviderStateLinkTable)
+          .orderBy(asc(SessionProviderStateLinkTable.part_ordinal), asc(SessionProviderStateLinkTable.part_kind))
+          .all(),
+      ).toEqual([
+        { ordinal: 0, kind: "reasoning" },
+        { ordinal: 1, kind: "tool-call" },
+        { ordinal: 1, kind: "tool-result" },
+      ])
+      expect(yield* db.select().from(SessionProviderStateBlobTable).all()).toHaveLength(3)
+
+      yield* admit(session, "Continue with private state")
+      response = reply.text("Continued", "private-continued")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests.every((request) => request.providerOptions?.openai?.store === false)).toBe(true)
+      expect(JSON.stringify(requests[1]?.messages)).toContain("reasoning-secret")
+      expect(JSON.stringify(requests[1]?.messages)).toContain("tool-call-secret")
+      expect(JSON.stringify(requests[1]?.messages)).toContain("tool-result-secret")
+    }),
+  )
+
+  it.effect("does not persist provider state or continuation before Step.Ended commits", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const { db } = yield* Database.Service
+      const failure = providerUnavailable()
+      currentModel = storedOpenAIResponsesModel
+      yield* admit(session, "Fail before provider state settlement")
+      responseStream = Stream.concat(
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "unsettled-private" }),
+          LLMEvent.reasoningDelta({
+            id: "unsettled-private",
+            text: "Partial",
+            providerMetadata: {
+              openai: {
+                opaqueCompactionItem: {
+                  type: "compaction",
+                  id: "cmp_unsettled",
+                  encrypted_content: "must-not-settle",
+                },
+              },
+            },
+          }),
+          LLMEvent.reasoningEnd({ id: "unsettled-private" }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "stop",
+            providerMetadata: { openai: { responseId: "resp_unsettled" } },
+          }),
+        ]),
+        Stream.fail(failure),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+
+      expect(yield* db.select().from(SessionProviderStateBlobTable).all()).toHaveLength(0)
+      expect(yield* db.select().from(SessionProviderStateLinkTable).all()).toHaveLength(0)
+      expect(yield* db.select().from(SessionProviderContinuationTable).all()).toHaveLength(0)
+      expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("opaqueCompactionItem")
     }),
   )
 
@@ -2991,7 +3476,11 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       yield* admit(session, "Start working")
 
-      responses = [reply.tool("call-echo", "echo", { text: "hello" }), reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture")]
+      responses = [
+        reply.tool("call-echo", "echo", { text: "hello" }),
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+      ]
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -3019,7 +3508,12 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       yield* admit(session, "Start working")
 
-      responses = [reply.tool("call-cache", "echo", { text: "continue" }), reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture")]
+      responses = [
+        reply.tool("call-cache", "echo", { text: "continue" }),
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+      ]
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -3124,7 +3618,11 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       yield* admit(session, "Start working")
 
-      responses = [reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture")]
+      responses = [
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+      ]
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -3170,7 +3668,12 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       yield* admit(session, "Start working")
 
-      responses = [reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture"), reply.text("Fixture response", "text-fixture")]
+      responses = [
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+        reply.text("Fixture response", "text-fixture"),
+      ]
       const firstGate = yield* Deferred.make<void>()
       const secondGate = yield* Deferred.make<void>()
       streamGate = firstGate
@@ -3355,7 +3858,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user", "assistant", "tool"])
       expect((yield* session.context(sessionID)).slice(0, 2)).toMatchObject([
         { type: "user", text: "Recover interrupted tool" },
         {
@@ -3413,7 +3916,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user", "assistant"])
       expect(requests[0]?.messages[1]?.content).toMatchObject([
         {
           type: "tool-call",
@@ -3450,7 +3953,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user", "assistant", "tool"])
       expect((yield* session.context(sessionID)).slice(0, 2)).toMatchObject([
         { type: "user", text: "Recover interrupted tool input" },
         { type: "assistant", content: [{ type: "tool", id: "call-pending-interrupted", state: { status: "error" } }] },
@@ -3538,6 +4041,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       const parentID = SessionV2.ID.make("ses_runner_parent")
       const { db } = yield* Database.Service
+      yield* insertSession(parentID)
       yield* db
         .update(SessionTable)
         .set({ parent_id: parentID })
@@ -3717,7 +4221,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(nonVolatileMessages(requests[1]).map((message) => message.role)).toEqual(["user", "assistant", "tool"])
       const context = yield* session.context(sessionID)
       expect(context).toMatchObject([
         { type: "user", text: "Call defect" },
@@ -4069,7 +4573,7 @@ describe("SessionRunnerLLM", () => {
       responseStream = undefined
       response = reply.text("Recovered blocked tool", "text-recovered-blocked-tool")
       yield* session.resume(sessionID)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(nonVolatileMessages(requests[0]).map((message) => message.role)).toEqual(["user", "assistant", "tool"])
     }),
   )
 
@@ -4158,7 +4662,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.toolChoice).toBeUndefined()
       expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
       expect(requests[1]?.tools).toEqual([])
-      expect(requests[1]?.messages.at(-1)).toMatchObject({
+      expect(nonVolatileMessages(requests[1]).at(-1)).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: expect.stringContaining("MAXIMUM STEPS REACHED") }],
       })
@@ -4333,6 +4837,170 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("rebases once after pre-output context overflow and retries without provider-only state", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const db = (yield* Database.Service).db
+      currentModel = storedRecoveryResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      const opaque = {
+        type: "compaction",
+        id: "cmp_overflow_private",
+        encrypted_content: "overflow-private-state",
+      }
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "overflow-reasoning" }),
+          LLMEvent.reasoningDelta({
+            id: "overflow-reasoning",
+            text: "Thinking",
+            providerMetadata: { openai: { opaqueCompactionItem: opaque } },
+          }),
+          LLMEvent.reasoningEnd({ id: "overflow-reasoning" }),
+          LLMEvent.toolCall({ id: "overflow-tool", name: "echo", input: { text: "overflow" } }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "tool-calls",
+            providerMetadata: { openai: { responseId: "resp_before_overflow" } },
+          }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ]),
+        Stream.fromIterable([
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        ]),
+        Stream.fromIterable(reply.textWithResponse("Recovered", "overflow-recovered", "resp_after_overflow")),
+      ]
+
+      yield* admit(session, "Recover from overflow")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_before_overflow")
+      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(JSON.stringify(requests[2]?.messages)).not.toContain("overflow-private-state")
+      expect(
+        yield* db
+          .select({ revision: SessionContextStateTable.revision })
+          .from(SessionContextStateTable)
+          .where(eq(SessionContextStateTable.session_id, sessionID))
+          .get(),
+      ).toEqual({ revision: 1 })
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Recover from overflow" },
+        { type: "assistant" },
+        { type: "assistant", finish: "stop", content: [{ type: "text", text: "Recovered" }] },
+      ])
+    }),
+  )
+
+  it.effect("converts a second pre-output overflow into context.limit without a third request", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.providerError({ message: "first overflow", classification: "context-overflow" }),
+        ]),
+        Stream.fromIterable([
+          LLMEvent.providerError({ message: "second overflow", classification: "context-overflow" }),
+        ]),
+      ]
+
+      yield* admit(session, "Overflow twice")
+      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toContain("after one compaction rebase")
+
+      expect(requests).toHaveLength(2)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: expect.stringContaining("Earlier question") },
+        { type: "assistant", finish: "stop" },
+        { type: "user", text: "Overflow twice" },
+        { type: "assistant", finish: "error", error: { type: "context.limit" } },
+      ])
+    }),
+  )
+
+  it.effect("rebases once after a native streamed context-overflow failure", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      responseStreams = [
+        Stream.fromIterable([LLMEvent.stepStart({ index: 0 })]).pipe(Stream.concat(Stream.fail(contextOverflow()))),
+        Stream.fromIterable(reply.text("Recovered", "native-overflow-recovered")),
+      ]
+
+      yield* admit(session, "Recover native overflow")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const assistant = (yield* session.context(sessionID)).findLast((message) => message.type === "assistant")
+      if (!assistant || assistant.type !== "assistant") throw new Error("Recovered assistant missing")
+      const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
+      expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
+      expect(
+        events.filter((event) => event.type === "session.step.ended.1" || event.type === "session.step.failed.1"),
+      ).toHaveLength(1)
+      expect(assistant).toMatchObject({ finish: "stop", content: [{ type: "text", text: "Recovered" }] })
+    }),
+  )
+
+  it.effect("fails closed before provider execution without a configured context window", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = missingContextLimitModel
+
+      yield* admit(session, "Unprovable context limit")
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      if (!("error" in failure)) return yield* Effect.die(new Error("Expected context limit failure"))
+      expect(failure.error).toMatchObject({ type: "context.limit" })
+
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("fails closed before provider execution without a configured output limit", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = missingOutputLimitModel
+
+      yield* admit(session, "Unprovable output limit")
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      if (!("error" in failure)) return yield* Effect.die(new Error("Expected context limit failure"))
+      expect(failure.error).toMatchObject({ type: "context.limit" })
+
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("fails a started overflow step once when recovery preflight cannot prove the cap", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      responseStream = Stream.fromEffect(
+        Effect.sync(() => {
+          currentModel = missingContextLimitModel
+          return LLMEvent.stepStart({ index: 0 })
+        }),
+      ).pipe(
+        Stream.concat(
+          Stream.fromIterable([
+            LLMEvent.providerError({ message: "overflow before unprovable retry", classification: "context-overflow" }),
+          ]),
+        ),
+      )
+
+      yield* admit(session, "Fail overflow recovery preflight")
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      if (!("error" in failure)) return yield* Effect.die(new Error("Expected context limit failure"))
+      expect(failure.error).toMatchObject({ type: "context.limit" })
+
+      expect(requests).toHaveLength(1)
+      const assistant = (yield* session.context(sessionID)).findLast((message) => message.type === "assistant")
+      if (!assistant || assistant.type !== "assistant") throw new Error("Failed assistant missing")
+      const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
+      expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
+      expect(events.filter((event) => event.type === "session.step.failed.1")).toHaveLength(1)
+      expect(events.filter((event) => event.type === "session.step.ended.1")).toHaveLength(0)
+    }),
+  )
+
   it.effect("does not recover context overflow after durable assistant output", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -4396,12 +5064,18 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(2)
       const eventTypes = yield* recordedEventTypes(sessionID)
       expect(eventTypes).toContain("session.retry.scheduled.1")
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
       expect(eventTypes.filter((type) => type === "session.input.consumed.1")).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", time: { consumed: expect.anything() } },
         { type: "assistant", finish: "stop", content: [{ type: "text", text: "Recovered" }] },
       ])
+      const assistant = requireAssistant(yield* session.context(sessionID))
+      const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
+      expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
+      expect(
+        events.filter((event) => event.type === "session.step.ended.1" || event.type === "session.step.failed.1"),
+      ).toHaveLength(1)
       yield* replaySessionProjection(sessionID)
       const replayed = yield* session.context(sessionID)
       expect(replayed.filter((message) => message.type === "assistant")).toHaveLength(1)
@@ -4481,7 +5155,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("stops after five total retry attempts", () =>
+  it.effect("stops after ten total retry attempts with capped exponential backoff", () =>
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Exhaust retries")
@@ -4489,12 +5163,15 @@ describe("SessionRunnerLLM", () => {
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (requests.length < 1) yield* Effect.yieldNow
-      for (const [index, delay] of [2_000, 4_000, 8_000, 16_000].entries()) {
+      for (const [index, delay] of [2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 120_000, 120_000, 120_000].entries()) {
         yield* TestClock.adjust(delay)
-        while (requests.length < index + 2) yield* Effect.yieldNow
+        while (requests.length < index + 2) {
+          if (run.pollUnsafe() !== undefined) break
+          yield* Effect.yieldNow
+        }
       }
       expect(yield* Fiber.join(run).pipe(Effect.flip)).toBe(streamFailure)
-      expect(requests).toHaveLength(5)
+      expect(requests).toHaveLength(10)
 
       const database = (yield* Database.Service).db
       const retries = yield* database
@@ -4509,14 +5186,15 @@ describe("SessionRunnerLLM", () => {
         { attempt: 3, at: 6_000 },
         { attempt: 4, at: 14_000 },
         { attempt: 5, at: 30_000 },
+        { attempt: 6, at: 62_000 },
+        { attempt: 7, at: 126_000 },
+        { attempt: 8, at: 246_000 },
+        { attempt: 9, at: 366_000 },
+        { attempt: 10, at: 486_000 },
       ])
-      expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1")).toHaveLength(5)
+      expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1")).toHaveLength(1)
       const assistant = requireAssistant(yield* session.context(sessionID))
       expect(yield* recordedStepSettlementEvents(sessionID, assistant.id)).toMatchObject([
-        { type: "session.step.started.1" },
-        { type: "session.step.started.1" },
-        { type: "session.step.started.1" },
-        { type: "session.step.started.1" },
         { type: "session.step.started.1" },
         { type: "session.step.failed.1" },
       ])
@@ -4531,7 +5209,7 @@ describe("SessionRunnerLLM", () => {
       ).toEqual([
         {
           request: 1,
-          attempts: 5,
+          attempts: 10,
           invalidation: "retry-fallback",
           continuation: "fallback",
         },
@@ -4551,7 +5229,10 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "Retry without consuming a step")
       const failure = providerUnavailable()
       responseStream = Stream.fail(failure)
-      responses = [reply.tool("call-after-retry", "echo", { text: "recovered" }), reply.text("Fixture response", "text-fixture")]
+      responses = [
+        reply.tool("call-after-retry", "echo", { text: "recovered" }),
+        reply.text("Fixture response", "text-fixture"),
+      ]
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (requests.length < 1) yield* Effect.yieldNow
@@ -4563,19 +5244,19 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("echo")
       expect(requests[1]?.toolChoice).toBeUndefined()
       expect(requests[1]?.tools.map((tool) => tool.name)).toContain("echo")
-      expect(requests[1]?.messages.at(-1)).not.toMatchObject({
+      expect(nonVolatileMessages(requests[1]).at(-1)).not.toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: expect.stringContaining("MAXIMUM STEPS REACHED") }],
       })
       expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
       expect(requests[2]?.tools).toEqual([])
-      expect(requests[2]?.messages.at(-1)).toMatchObject({
+      expect(nonVolatileMessages(requests[2]).at(-1)).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: expect.stringContaining("MAXIMUM STEPS REACHED") }],
       })
       expect(executions).toEqual(["recovered"])
       const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(3)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
       expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(1)
       expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toHaveLength(2)
 
@@ -4677,7 +5358,12 @@ describe("SessionRunnerLLM", () => {
         reply.silence(),
         [
           LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.toolCall({ id: "call-hosted-recovery", name: "web_search", input: { query: "Effect" }, providerExecuted: true }),
+          LLMEvent.toolCall({
+            id: "call-hosted-recovery",
+            name: "web_search",
+            input: { query: "Effect" },
+            providerExecuted: true,
+          }),
           LLMEvent.toolResult({
             id: "call-hosted-recovery",
             name: "web_search",
@@ -4826,10 +5512,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       yield* admit(session, "Answer without tools")
-      responses = [
-        reply.silence(),
-        reply.tool("call-recovery-tool", "echo", { text: "must not execute" }),
-      ]
+      responses = [reply.silence(), reply.tool("call-recovery-tool", "echo", { text: "must not execute" })]
 
       expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
         "Tools are disabled for terminal response recovery",

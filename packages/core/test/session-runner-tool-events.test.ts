@@ -92,6 +92,33 @@ test("provider-executed success retains its raw provider result", async () => {
   expect(success?.data).toHaveProperty("result")
 })
 
+test("edit results record numeric file-change counts", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(
+    publisher.publish(LLMEvent.toolCall({ id: "edit", name: "edit", input: { filePath: "src/file.ts" } })),
+  )
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.toolResult({
+        id: "edit",
+        name: "edit",
+        result: { type: "json", value: { files: [] } },
+        output: {
+          structured: {
+            files: [{ file: "src/file.ts", patch: "@@", additions: 2, deletions: 1 }],
+          },
+          content: [],
+        },
+      }),
+    ),
+  )
+
+  expect(published).toContainEqual({
+    type: "session.file-change.recorded.1",
+    data: { sessionID, change: { path: "src/file.ts", patch: "@@", additions: 2, deletions: 1 } },
+  })
+})
+
 test("provider metadata is flattened using the route key", async () => {
   const { published, publisher } = capture()
   await Effect.runPromise(

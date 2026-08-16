@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { YCodingEvent, SessionOrchestrationTask } from "@ycoding-ai/client"
+import type {
+  ProviderRequestSummary,
+  SessionMessageInfo,
+  YCodingEvent,
+  SessionOrchestrationTask,
+} from "@ycoding-ai/client"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { createEffect, onMount, type ParentProps } from "solid-js"
@@ -11,6 +16,8 @@ import { LocationProvider, useLocation } from "../../../src/context/location"
 import { createSessionRows, type SessionRow } from "../../../src/routes/session/rows"
 import { createApi, createEventStream, createFetch, directory, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
+
+type KeyedSessionRow = SessionRow & { key: string }
 
 const formFields = [{ key: "authorization", type: "external", url: "https://example.com" }] satisfies [
   {
@@ -76,6 +83,105 @@ function subagentPage(data: SessionOrchestrationTask[], cursor: { previous?: str
     cursor,
   }
 }
+
+test("preserves the resident transcript through V2 compaction activation and canonical reconciliation", async () => {
+  const sessionID = "session-v2-compaction-resident"
+  const resident: SessionMessageInfo[] = [
+    {
+      id: "msg_original",
+      type: "user",
+      text: "Keep this resident message",
+      files: [],
+      agents: [],
+      time: { created: 1 },
+    },
+  ]
+  const canonical: SessionMessageInfo[] = [
+    ...resident,
+    {
+      id: "msg_compaction_job",
+      type: "compaction",
+      jobID: "cmp_resident",
+      trigger: "advised",
+      admissionMode: "background",
+      status: "pending",
+      time: { created: 2 },
+    },
+  ]
+  const events = createEventStream()
+  let messageRequests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/message`) {
+      messageRequests++
+      // Each response is a complete canonical transcript. The second response
+      // adds the server-projected job without dropping resident messages.
+      return json({ data: messageRequests === 1 ? resident : canonical, cursor: {} })
+    }
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.length > 0)
+
+  try {
+    await data.session.message.sync(sessionID)
+    const residentMessageIDs = () => data.session.message.list(sessionID).map((message) => message.id)
+    const compaction = () => data.session.compaction.get(sessionID, "cmp_resident")
+    expect(residentMessageIDs()).toEqual(resident.map((message) => message.id))
+
+    emitEvent(events, {
+      id: "evt_compaction_admitted_resident_v2",
+      created: 2,
+      type: "session.compaction.admitted",
+      durable: durable(sessionID, 2, 2),
+      data: { sessionID, jobID: "cmp_resident" },
+    })
+
+    await wait(() => compaction()?.status === "pending")
+    data.session.message.invalidate(sessionID)
+    await data.session.message.sync(sessionID)
+    expect(residentMessageIDs()).toEqual(canonical.map((message) => message.id))
+    expect(data.session.message.list(sessionID).filter((message) => message.type === "compaction")).toHaveLength(1)
+    expect(compaction()).toMatchObject({
+      jobID: "cmp_resident",
+      messageID: "msg_compaction_job",
+      trigger: "advised",
+      admissionMode: "background",
+      status: "pending",
+    })
+
+    emitEvent(events, {
+      id: "evt_compaction_started_resident_v2",
+      created: 3,
+      type: "session.compaction.started",
+      durable: durable(sessionID, 3, 2),
+      data: { sessionID, jobID: "cmp_resident" },
+    })
+
+    await wait(() => compaction()?.status === "running")
+    expect(residentMessageIDs()).toEqual(canonical.map((message) => message.id))
+    expect(messageRequests).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 test("preloads root sessions before applying the session limit", async () => {
   const events = createEventStream()
@@ -628,229 +734,6 @@ test("updates session location when moved", async () => {
   }
 })
 
-test("restores running manual compaction before applying live deltas", async () => {
-  const events = createEventStream()
-  const calls = createFetch((url) => {
-    if (url.pathname === "/api/session/session-compaction/message")
-      return json({
-        data: [
-          {
-            id: "message-compaction",
-            type: "compaction",
-            status: "running",
-            reason: "manual",
-            summary: "Existing ",
-            recent: "",
-            time: { created: 1 },
-          },
-        ],
-        cursor: {},
-      })
-  }, events)
-  let data!: ReturnType<typeof useData>
-
-  function Probe() {
-    data = useData()
-    return <box />
-  }
-
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <ClientProvider api={createApi(calls.fetch)}>
-        <ProjectProvider>
-          <DataProvider>
-            <Probe />
-          </DataProvider>
-        </ProjectProvider>
-      </ClientProvider>
-    </TestTuiContexts>
-  ))
-
-  try {
-    await data.session.message.sync("session-compaction")
-    expect(data.session.message.get("session-compaction", "message-compaction")).toMatchObject({
-      type: "compaction",
-      status: "running",
-      summary: "Existing ",
-    })
-
-    emitEvent(events, {
-      id: "evt_compaction_delta",
-      created: 2,
-      type: "session.compaction.delta",
-      data: { sessionID: "session-compaction", text: "summary" },
-    })
-
-    await wait(() => {
-      const message = data.session.message.get("session-compaction", "message-compaction")
-      return message?.type === "compaction" && message.status === "running" && message.summary === "Existing summary"
-    })
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("replaces resident history after conversation summarization succeeds", async () => {
-  const events = createEventStream()
-  const sessionID = "session-conversation-summary"
-  let compacted = false
-  let messageRequests = 0
-  const calls = createFetch((url) => {
-    if (url.pathname !== `/api/session/${sessionID}/message`) return undefined
-    messageRequests++
-    return json({
-      data: compacted
-        ? [
-            {
-              id: "message-summary",
-              type: "compaction",
-              status: "completed",
-              reason: "manual",
-              summary: "Summary A",
-              recent: "",
-              time: { created: 2 },
-            },
-            {
-              id: "message-recent",
-              type: "user",
-              text: "Recent message",
-              files: [],
-              agents: [],
-              time: { created: 3 },
-            },
-          ]
-        : [
-            {
-              id: "message-old",
-              type: "user",
-              text: "Covered message",
-              files: [],
-              agents: [],
-              time: { created: 1 },
-            },
-            {
-              id: "message-recent",
-              type: "user",
-              text: "Recent message",
-              files: [],
-              agents: [],
-              time: { created: 3 },
-            },
-          ],
-      cursor: {},
-    })
-  }, events)
-  let data!: ReturnType<typeof useData>
-
-  function Probe() {
-    data = useData()
-    return <box />
-  }
-
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <ClientProvider api={createApi(calls.fetch)}>
-        <ProjectProvider>
-          <DataProvider>
-            <Probe />
-          </DataProvider>
-        </ProjectProvider>
-      </ClientProvider>
-    </TestTuiContexts>
-  ))
-
-  try {
-    await data.session.message.sync(sessionID)
-    expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual([
-      "message-old",
-      "message-recent",
-    ])
-
-    emitEvent(events, {
-      id: "evt_summary_step_started",
-      created: 4,
-      type: "session.step.started",
-      durable: durable(sessionID, 4),
-      data: {
-        sessionID,
-        assistantMessageID: "message-assistant",
-        agent: "build",
-        model: { id: "model", providerID: "provider" },
-      },
-    })
-    emitEvent(events, {
-      id: "evt_summary_tool_started",
-      created: 5,
-      type: "session.tool.input.started",
-      durable: durable(sessionID, 5),
-      data: {
-        sessionID,
-        assistantMessageID: "message-assistant",
-        callID: "call-summary",
-        name: "conversation_summarize",
-      },
-    })
-    emitEvent(events, {
-      id: "evt_summary_tool_called",
-      created: 6,
-      type: "session.tool.called",
-      durable: durable(sessionID, 6),
-      data: {
-        sessionID,
-        assistantMessageID: "message-assistant",
-        callID: "call-summary",
-        input: { boundary_message_id: "message-old" },
-        executed: true,
-      },
-    })
-    await wait(() => {
-      const assistant = data.session.message.get(sessionID, "message-assistant")
-      return (
-        assistant?.type === "assistant" &&
-        assistant.content[0]?.type === "tool" &&
-        assistant.content[0].state.status === "running"
-      )
-    })
-
-    compacted = true
-    emitEvent(events, {
-      id: "evt_summary_tool_succeeded",
-      created: 7,
-      type: "session.tool.success",
-      durable: durable(sessionID, 7),
-      data: {
-        sessionID,
-        assistantMessageID: "message-assistant",
-        callID: "call-summary",
-        structured: {
-          summary_message_id: "message-summary",
-          provider: "provider",
-          model: "model",
-          summarized_through_sequence: 1,
-          deleted_count: 1,
-          remaining_count: 3,
-          summary_revision: 1,
-          context_rebuild_required: true,
-        },
-        content: [],
-        executed: true,
-      },
-    })
-
-    await wait(() => messageRequests === 2)
-    await wait(() => data.session.message.get(sessionID, "message-summary") !== undefined)
-    expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual([
-      "message-summary",
-      "message-recent",
-      "message-assistant",
-    ])
-    expect(data.session.message.get(sessionID, "message-old")).toBeUndefined()
-    expect(data.session.message.memory(sessionID).counts.messages).toBe(3)
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
 test("reconnects the event stream and resyncs active data", async () => {
   const events = createEventStream()
   const requests = { active: 0, event: 0, message: 0, model: 0 }
@@ -1007,6 +890,14 @@ test("completes exploration when a queued prompt is promoted", async () => {
   try {
     await wait(() => client.connection.status() === "connected")
     emitEvent(events, {
+      id: "evt_execution_started",
+      created: 0,
+      type: "session.execution.started",
+      durable: durable(sessionID),
+      data: { sessionID },
+    })
+    await wait(() => data.session.status(sessionID) === "running")
+    emitEvent(events, {
       id: "evt_step_started",
       created: 1,
       type: "session.step.started",
@@ -1054,7 +945,11 @@ test("completes exploration when a queued prompt is promoted", async () => {
       data: { sessionID, inputID: "message-user" },
     })
     await wait(() => rows.find((row) => row.type === "group")?.completed === true)
-    expect(rows.at(-1)).toEqual({ type: "message", messageID: "message-user" })
+    expect(rows.at(-1) as KeyedSessionRow).toEqual({
+      type: "message",
+      messageID: "message-user",
+      key: "message:message-user",
+    })
 
     emitEvent(events, {
       id: "evt_prompt_consumed",
@@ -1292,12 +1187,10 @@ test("tracks session status from active sessions and execution events", async ()
   }, events)
   let data!: ReturnType<typeof useData>
   let rows!: SessionRow[]
-  let manualRows!: SessionRow[]
 
   function Probe() {
     data = useData()
     rows = createSessionRows(() => "session-retry")
-    manualRows = createSessionRows(() => "session-manual")
     return <box />
   }
 
@@ -1569,219 +1462,6 @@ test("tracks session status from active sessions and execution events", async ()
     })
     await wait(() => data.session.status("session-retry") === "idle")
     expect(data.session.message.get("session-retry", "message-retry")).not.toHaveProperty("retry")
-
-    emitEvent(events, {
-      id: "evt_manual_compaction_admitted",
-      created: 0,
-      type: "session.compaction.admitted",
-      durable: durable("session-manual", 1),
-      data: { sessionID: "session-manual", inputID: "message-compaction" },
-    })
-    await wait(() => data.session.pending.list("session-manual").some((item) => item.id === "message-compaction"))
-    emitEvent(events, {
-      id: "evt_manual_compaction_started",
-      created: 1,
-      type: "session.compaction.started",
-      durable: durable("session-manual", 2),
-      data: {
-        sessionID: "session-manual",
-        reason: "manual",
-        recent: "",
-        inputID: "message-compaction",
-      },
-    })
-    emitEvent(events, {
-      id: "evt_manual_compaction_delta",
-      created: 2,
-      type: "session.compaction.delta",
-      data: { sessionID: "session-manual", text: "Streamed summary" },
-    })
-    await wait(() => {
-      const message = data.session.message.get("session-manual", "message-compaction")
-      return message?.type === "compaction" && message.status === "running" && message.summary === "Streamed summary"
-    })
-    expect(data.session.pending.list("session-manual")).toEqual([])
-    const compactionRow = manualRows.find((row) => row.type === "message" && row.messageID === "message-compaction")
-    emitEvent(events, {
-      id: "evt_manual_compaction_ended",
-      created: 3,
-      type: "session.compaction.ended",
-      durable: durable("session-manual", 4),
-      data: {
-        sessionID: "session-manual",
-        reason: "manual",
-        text: "Streamed summary",
-        recent: "recent",
-      },
-    })
-    await wait(() => {
-      const message = data.session.message.get("session-manual", "message-compaction")
-      return message?.type === "compaction" && message.status === "completed"
-    })
-    expect(manualRows.filter((row) => row.type === "message")).toEqual([
-      { type: "message", messageID: "message-compaction" },
-    ])
-    expect(manualRows.find((row) => row.type === "message" && row.messageID === "message-compaction")).toBe(
-      compactionRow,
-    )
-
-    emitEvent(events, {
-      id: "evt_compaction_started",
-      created: 0,
-      type: "session.compaction.started",
-      durable: durable("session-live", 2),
-      data: { sessionID: "session-live", reason: "auto", recent: "" },
-    })
-    emitEvent(events, {
-      id: "evt_compaction_delta_1",
-      created: 0,
-      type: "session.compaction.delta",
-      data: { sessionID: "session-live", text: "Live " },
-    })
-    emitEvent(events, {
-      id: "evt_compaction_delta_2",
-      created: 0,
-      type: "session.compaction.delta",
-      data: { sessionID: "session-live", text: "summary" },
-    })
-    await wait(() => {
-      const message = data.session.message.get("session-live", "msg_compaction_started")
-      return message?.type === "compaction" && message.status === "running" && message.summary === "Live summary"
-    })
-    const autoCompactionRow = rows.find((row) => row.type === "message" && row.messageID === "msg_compaction_started")
-
-    emitEvent(events, {
-      id: "evt_compaction_ended",
-      created: 0,
-      type: "session.compaction.ended",
-      durable: durable("session-live", 5),
-      data: {
-        sessionID: "session-live",
-        reason: "auto",
-        text: "Live summary",
-        recent: "recent",
-      },
-    })
-    await wait(() => {
-      const message = data.session.message.get("session-live", "msg_compaction_started")
-      return message?.type === "compaction" && message.status === "completed"
-    })
-    expect(data.session.message.get("session-live", "msg_compaction_started")).toMatchObject({
-      type: "compaction",
-      status: "completed",
-      summary: "Live summary",
-    })
-    expect(rows.find((row) => row.type === "message" && row.messageID === "msg_compaction_started")).toBe(
-      autoCompactionRow,
-    )
-    expect(rows.some((row) => row.type === "message" && row.messageID === "msg_compaction_ended")).toBeFalse()
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("restores queued compaction from durable pending input", async () => {
-  const events = createEventStream()
-  const sessionID = "session-compaction-queued"
-  let pending = [
-    {
-      admittedSeq: 3,
-      id: "message-compaction-queued",
-      sessionID,
-      timeCreated: 1,
-      type: "compaction" as const,
-    },
-    {
-      admittedSeq: 4,
-      id: "message-compaction-later",
-      sessionID,
-      timeCreated: 2,
-      type: "compaction" as const,
-    },
-  ]
-  const calls = createFetch((url) => {
-    if (url.pathname !== `/api/session/${sessionID}/pending`) return
-    return json({ data: pending })
-  }, events)
-  let data!: ReturnType<typeof useData>
-  let rows!: ReturnType<typeof createSessionRows>
-  let client!: ReturnType<typeof useClient>
-
-  function Probe() {
-    data = useData()
-    client = useClient()
-    rows = createSessionRows(() => sessionID)
-    return <box />
-  }
-
-  const app = await testRender(() => (
-    <TestTuiContexts>
-      <ClientProvider api={createApi(calls.fetch)}>
-        <ProjectProvider>
-          <DataProvider>
-            <Probe />
-          </DataProvider>
-        </ProjectProvider>
-      </ClientProvider>
-    </TestTuiContexts>
-  ))
-
-  try {
-    await wait(() => client.connection.status() === "connected")
-    await wait(() => data.session.pending.list(sessionID).length === 2)
-    expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual([
-      "message-compaction-queued",
-      "message-compaction-later",
-    ])
-    await wait(() => rows.filter((row) => row.type === "compaction-queued").length === 2)
-    expect(rows.filter((row) => row.type === "compaction-queued")).toEqual([
-      { type: "compaction-queued", inputID: "message-compaction-queued" },
-      { type: "compaction-queued", inputID: "message-compaction-later" },
-    ])
-
-    emitEvent(events, {
-      id: "evt_text_ended",
-      created: 2,
-      type: "session.text.ended",
-      durable: durable(sessionID, 5),
-      data: {
-        sessionID,
-        assistantMessageID: "message-assistant",
-        ordinal: 0,
-        text: "Active output",
-      },
-    })
-    await wait(() => rows.some((row) => row.type === "part"))
-    expect(rows.map((row) => row.type)).toEqual(["part", "compaction-queued", "compaction-queued"])
-
-    emitEvent(events, {
-      id: "evt_compaction_started",
-      created: 2,
-      type: "session.compaction.started",
-      durable: durable(sessionID, 4),
-      data: {
-        sessionID,
-        reason: "manual",
-        recent: "",
-        inputID: "message-compaction-queued",
-      },
-    })
-    await wait(() => data.session.pending.list(sessionID).length === 1)
-    expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual(["message-compaction-later"])
-
-    emitEvent(events, {
-      id: "evt_compaction_ended",
-      created: 3,
-      type: "session.compaction.ended",
-      durable: durable(sessionID, 5),
-      data: { sessionID, reason: "manual", text: "Summary", recent: "" },
-    })
-    expect(data.session.pending.list(sessionID).map((item) => item.id)).toEqual(["message-compaction-later"])
-
-    pending = []
-    data.session.pending.invalidate(sessionID)
-    await data.session.pending.sync(sessionID)
-    await wait(() => data.session.pending.list(sessionID).length === 0)
   } finally {
     app.renderer.destroy()
   }
@@ -3466,6 +3146,136 @@ test("loads and refreshes normalized session diagnostics", async () => {
   }
 })
 
+test("caches durable session usage independently from diagnostics", async () => {
+  const events = createEventStream()
+  let usageRequests = 0
+  const usage: ProviderRequestSummary = {
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    cost: 0.42,
+    tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 50, write: 10 } },
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_usage/usage") {
+      usageRequests++
+      return json({ data: usage })
+    }
+    if (url.pathname === "/api/session/ses_usage/diagnostics") return json({ data: null })
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await data.session.usage.sync("ses_usage")
+    expect(data.session.usage.get("ses_usage")).toEqual(usage)
+    expect(data.session.diagnostics.get("ses_usage")).toBeUndefined()
+    expect(usageRequests).toBe(1)
+
+    await data.session.usage.sync("ses_usage")
+    expect(usageRequests).toBe(1)
+
+    data.session.usage.invalidate("ses_usage")
+    await data.session.usage.sync("ses_usage")
+    expect(usageRequests).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("refreshes the resident parent ledger after a durable child file-change event", async () => {
+  const events = createEventStream()
+  const sessionID = "ses_file_change_parent"
+  const childID = "ses_file_change_child"
+  let requests = 0
+  let files = [{ path: "src/first.ts", patch: "--- a/src/first.ts\n+++ b/src/first.ts", additions: 1, deletions: 0 }]
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}/subagent`)
+      return json(
+        subagentPage([
+          {
+            sessionID: childID,
+            parentID: sessionID,
+            description: "Edit a file",
+            agent: "build",
+            model: { providerID: "anthropic", id: "claude-opus-5" },
+            background: true,
+            state: "completed",
+            revision: 1,
+            time: { created: 0, updated: 0 },
+          },
+        ]),
+      )
+    if (url.pathname !== `/api/session/${sessionID}/file-change`) return undefined
+    requests++
+    return json({ data: files })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await data.session.subagent.sync(sessionID)
+    await data.session.fileChange.sync(sessionID)
+    expect(data.session.fileChange.list(sessionID)).toEqual(files)
+
+    files = [
+      ...files,
+      { path: "src/second.ts", patch: "--- a/src/second.ts\n+++ b/src/second.ts", additions: 1, deletions: 0 },
+    ]
+    emitEvent(events, {
+      id: "evt_file_change",
+      created: 1,
+      type: "session.file-change.recorded",
+      durable: durable(childID, 1),
+      data: {
+        sessionID: childID,
+        change: files[1],
+      },
+    } as YCodingEvent)
+
+    await wait(() => data.session.fileChange.list(sessionID).length === 2)
+    expect(data.session.fileChange.list(sessionID)).toEqual(files)
+    expect(requests).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("syncs durable subagent tasks and refreshes them from task events", async () => {
   const events = createEventStream()
   let requests = 0
@@ -3534,24 +3344,39 @@ test("syncs durable subagent tasks and refreshes them from task events", async (
 
 test("replaces bounded subagent pages instead of appending them", async () => {
   const events = createEventStream()
-  const tasks = Array.from({ length: 12 }, (_, index): SessionOrchestrationTask => ({
-    sessionID: `ses_child_${index}`,
-    parentID: "ses_parent",
-    description: `Child ${index}`,
-    agent: "reviewer",
-    model: { providerID: "openai", id: "gpt-5.6" },
-    background: true,
-    state: index === 0 ? "waiting" : "completed",
-    revision: index,
-    time: { created: index, updated: 12 - index },
-  }))
+  const tasks = Array.from(
+    { length: 12 },
+    (_, index): SessionOrchestrationTask => ({
+      sessionID: `ses_child_${index}`,
+      parentID: "ses_parent",
+      description: `Child ${index}`,
+      agent: "reviewer",
+      model: { providerID: "openai", id: "gpt-5.6" },
+      background: true,
+      state: index === 0 ? "waiting" : "completed",
+      revision: index,
+      time: { created: index, updated: 12 - index },
+    }),
+  )
   const calls = createFetch((url) => {
     if (url.pathname !== "/api/session/ses_parent/subagent") return undefined
     if (url.searchParams.get("cursor") === "older")
-      return json({ data: tasks.slice(10), summary: { total: 12, active: 1, running: 0, waiting: 1 }, cursor: { previous: "top" } })
+      return json({
+        data: tasks.slice(10),
+        summary: { total: 12, active: 1, running: 0, waiting: 1 },
+        cursor: { previous: "top" },
+      })
     if (url.searchParams.get("cursor") === "top")
-      return json({ data: tasks.slice(0, 10), summary: { total: 12, active: 1, running: 0, waiting: 1 }, cursor: { next: "older" } })
-    return json({ data: tasks.slice(0, 10), summary: { total: 12, active: 1, running: 0, waiting: 1 }, cursor: { next: "older" } })
+      return json({
+        data: tasks.slice(0, 10),
+        summary: { total: 12, active: 1, running: 0, waiting: 1 },
+        cursor: { next: "older" },
+      })
+    return json({
+      data: tasks.slice(0, 10),
+      summary: { total: 12, active: 1, running: 0, waiting: 1 },
+      cursor: { next: "older" },
+    })
   }, events)
   let data!: ReturnType<typeof useData>
 
@@ -3604,9 +3429,7 @@ test("replaces bounded subagent pages instead of appending them", async () => {
       offset: 10,
     })
     expect(older.data).toHaveLength(2)
-    expect(
-      older.offset + older.data.findIndex((task) => task.sessionID === "ses_child_11") + 1,
-    ).toBe(12)
+    expect(older.offset + older.data.findIndex((task) => task.sessionID === "ses_child_11") + 1).toBe(12)
     await data.session.subagent.loadNewer("ses_parent")
     const newer = data.session.subagent.page("ses_parent")!
     expect({
@@ -3719,7 +3542,19 @@ test("keeps a refreshed top page when an older request settles late", async () =
       return json({ data: [], summary: { total: 11, active: 1, running: 1, waiting: 0 }, cursor: { previous: "top" } })
     }
     return json({
-      data: [{ sessionID: `ses_top_${requests}`, parentID: "ses_parent", description: "top", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "running", revision: requests, time: { created: requests, updated: requests } }],
+      data: [
+        {
+          sessionID: `ses_top_${requests}`,
+          parentID: "ses_parent",
+          description: "top",
+          agent: "reviewer",
+          model: { providerID: "openai", id: "gpt-5.6" },
+          background: true,
+          state: "running",
+          revision: requests,
+          time: { created: requests, updated: requests },
+        },
+      ],
       summary: { total: 11, active: 1, running: 1, waiting: 0 },
       cursor: { next: "older" },
     })

@@ -70,13 +70,6 @@ const settings: Setting[] = [
     values: ["hide", "show"],
   },
   {
-    title: "Markdown",
-    category: "Session",
-    path: ["session", "markdown"],
-    default: "rendered",
-    values: ["source", "rendered"],
-  },
-  {
     title: "Grouping",
     category: "Session",
     path: ["session", "grouping"],
@@ -260,7 +253,7 @@ export function DialogConfig() {
   }
   const options = createMemo(() =>
     settings.flatMap((setting, index) => {
-      const canonical = ["Theme", "Color mode", "Animations", "Sidebar", "Thinking", "Markdown", "Layout", "File tree"].includes(setting.title)
+      const canonical = ["Theme", "Color mode", "Animations", "Sidebar", "Thinking", "Layout", "File tree"].includes(setting.title)
       if (!canonical && query().length === 0) return []
       return [{
       title: setting.title,

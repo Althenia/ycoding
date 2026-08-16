@@ -1,13 +1,14 @@
 export * as SessionRunnerCache from "./cache"
 
 import type { CachePolicy, LLMRequest } from "@ycoding-ai/ai"
+import { OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT } from "@ycoding-ai/ai/cache-policy"
 import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import type { ConfigEfficiency } from "../../config/efficiency"
 import type { PermissionV2 } from "../../permission"
 import { Hash } from "../../util/hash"
 
 export interface PromptCacheNamespaceInput {
-  readonly scope?: "compaction" | "summarizer"
+  readonly scope?: "compaction"
   readonly projectID: string
   readonly directory: string
   readonly workspaceID?: string
@@ -136,13 +137,15 @@ export const providerOptions = (input: ProviderOptionsInput) => {
       ? { prompt_cache_key: promptCacheKey, session_id: providerSessionID }
       : { promptCacheKey, sessionID: providerSessionID }
   const openaiCacheCapability = OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID)
-  const controlledOpenAI =
-    openaiCacheCapability === "gpt-5.6" &&
+  const breakpointOpenAI =
+    OpenAIOptions.supportsPromptCacheBreakpoints(input.routeID, input.apiModelID) &&
     input.openaiMode !== undefined &&
     input.openaiMode !== "implicit" &&
     (input.openaiMode === "auto" || input.openaiMode === "explicit")
+  const controlledOpenAI = openaiCacheCapability === "gpt-5.6" && breakpointOpenAI
   const openai = {
     promptCacheKey,
+    ...(input.routeID === "openai-codex-responses" ? { providerSessionID } : {}),
     ...(controlledOpenAI
       ? {
           promptCacheOptions: {
@@ -156,14 +159,13 @@ export const providerOptions = (input: ProviderOptionsInput) => {
         ? { promptCacheRetention: "24h" as const }
         : {}),
   }
-  const cache: CachePolicy | undefined = controlledOpenAI
+  const cache: CachePolicy | undefined = breakpointOpenAI
     ? {
         tools: false,
         system: true,
-        // OpenAI currently documents conflicting 50- and 80-breakpoint read
-        // windows. Retain every stable conversation boundary and let the
-        // service choose its live read window and latest write candidates.
-        messages: { tail: Number.MAX_SAFE_INTEGER },
+        // The AI lowerer reserves the system and managed implicit slots, then
+        // selects the newest eligible boundaries within this provider limit.
+        messages: { tail: OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT },
       }
     : input.anthropicTtlSeconds !== undefined && ANTHROPIC_CACHE_ROUTES.has(input.routeID)
       ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }

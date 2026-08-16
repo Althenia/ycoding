@@ -1,3 +1,5 @@
+/// <reference path="../markdown.d.ts" />
+
 export * as AgentPlugin from "./agent"
 
 import path from "path"
@@ -5,32 +7,86 @@ import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { Effect } from "effect"
 import { AgentV2 } from "../agent"
 import { Global } from "../global"
-import { Location } from "../location"
 import { PermissionV2 } from "../permission"
+import tldrContent from "./agent/TLDR.md" with { type: "text" }
+import architechContent from "./agent/architech.md" with { type: "text" }
+import godContent from "./agent/god.md" with { type: "text" }
+import occamContent from "./agent/occam.md" with { type: "text" }
+import omoikaneContent from "./agent/omoikane.md" with { type: "text" }
+import wittgensteinContent from "./agent/wittgenstein.md" with { type: "text" }
+import yangiContent from "./agent/yangi.md" with { type: "text" }
+import zeusContent from "./agent/zeus.md" with { type: "text" }
 
 // Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
 // Whitelisted so agents can read a command's full captured output without an external-directory prompt.
 const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
-const BUILD_SYSTEM =
-  "You are an AI coding agent. Help the user accomplish software engineering tasks by inspecting the workspace, making targeted changes, and using tools according to the configured permissions."
-
-const PROMPT_EXPLORE = `You are a file search specialist. You excel at thoroughly navigating and exploring codebases.
-
-Your strengths:
-- Rapidly finding files using glob patterns
-- Searching code and text with powerful regex patterns
-- Reading and analyzing file contents
-
-Guidelines:
-- Use Glob for broad file pattern matching
-- Use Grep for searching file contents with regex
-- Use Read when you know the specific file path you need to read
-- Adapt your search approach based on the thoroughness level specified by the caller
-- Return file paths as absolute paths in your final response
-- For clear communication, avoid using emojis
-- Do not create any files, or run bash commands that modify the user's system state in any way
-
-Complete the user's search request efficiently and report your findings clearly.`
+const builtIns = [
+  {
+    id: "TLDR",
+    description:
+      "Aggressively lazy but competent builder that refuses unnecessary work, silently finishes the smallest correct solution, and answers briefly.",
+    mode: "primary",
+    temperature: 0.1,
+    color: "#95a5a6",
+    system: sourceSystem(tldrContent),
+  },
+  {
+    id: "architech",
+    description: "Pragmatic evidence-led architect that finds material system gaps, connects every relevant boundary, and implements sound trade-offs.",
+    mode: "primary",
+    temperature: 0.3,
+    color: "#3498db",
+    system: sourceSystem(architechContent),
+  },
+  {
+    id: "god",
+    description: "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
+    mode: "primary",
+    temperature: 0.2,
+    color: "#f1c40f",
+    system: sourceSystem(godContent),
+  },
+  {
+    id: "yangi",
+    description: "Seasoned old master who speaks concisely, decides precisely, and completes engineering work without wasted motion.",
+    mode: "primary",
+    temperature: 0.1,
+    color: "#2ecc71",
+    system: sourceSystem(yangiContent),
+  },
+  {
+    id: "occam",
+    description: "Pragmatic minimalist that completes one bounded task precisely with minimum waste.",
+    mode: "subagent",
+    temperature: 0.1,
+    color: "#2ecc71",
+    system: sourceSystem(occamContent),
+  },
+  {
+    id: "omoikane",
+    description: "Systems-minded designer and implementer that connects the wider context for one bounded task.",
+    mode: "subagent",
+    temperature: 0.3,
+    color: "#3498db",
+    system: sourceSystem(omoikaneContent),
+  },
+  {
+    id: "wittgenstein",
+    description: "Silent executor that completes one bounded task and reports only essential evidence.",
+    mode: "subagent",
+    temperature: 0.1,
+    color: "#95a5a6",
+    system: sourceSystem(wittgensteinContent),
+  },
+  {
+    id: "zeus",
+    description: "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
+    mode: "subagent",
+    temperature: 0.2,
+    color: "#f1c40f",
+    system: sourceSystem(zeusContent),
+  },
+] as const
 
 const PROMPT_COMPACTION = `You are an anchored context summarization assistant for coding sessions.
 
@@ -109,11 +165,13 @@ Rules:
 - If the conversation ends with an unanswered question to the user, preserve that exact question
 - If the conversation ends with an imperative statement or request to the user (e.g. "Now please run the command and paste the console output"), always include that exact request in the summary`
 
+function sourceSystem(content: string) {
+  return content.slice(content.indexOf("\n---\n\n") + "\n---\n\n".length)
+}
+
 export const Plugin = define({
   id: "ycoding.agent",
   effect: Effect.fn(function* (ctx) {
-    const location = yield* Location.Service
-    const worktree = location.directory
     const whitelistedDirs = [SHELL_OUTPUT_GLOB, path.join(Global.Path.tmp, "*")]
     const readonlyExternalDirectory: PermissionV2.Ruleset = [
       { action: "external_directory", resource: "*", effect: "ask" },
@@ -134,68 +192,33 @@ export const Plugin = define({
     ]
 
     yield* ctx.agent.transform((draft) => {
-      draft.update(AgentV2.defaultID, (item) => {
-        item.name = AgentV2.Name.make("Build")
-        item.description = "The default agent. Executes tools based on configured permissions."
-        item.mode = "primary"
-        item.permissions.push(
-          ...PermissionV2.merge(defaults, [
-            { action: "question", resource: "*", effect: "allow" },
-            { action: "plan_enter", resource: "*", effect: "allow" },
-          ]),
-        )
-      })
-
-      draft.update(AgentV2.ID.make("plan"), (item) => {
-        item.name = AgentV2.Name.make("Plan")
-        item.description = "Plan mode. Disallows all edit tools."
-        item.mode = "primary"
-        item.permissions.push(
-          ...PermissionV2.merge(defaults, [
-            { action: "question", resource: "*", effect: "allow" },
-            { action: "plan_exit", resource: "*", effect: "allow" },
-            { action: "external_directory", resource: path.join(Global.Path.data, "plans", "*"), effect: "allow" },
-            { action: "edit", resource: "*", effect: "deny" },
-            { action: "edit", resource: path.join(".ycoding", "plans", "*.md"), effect: "allow" },
-            {
-              action: "edit",
-              resource: path.relative(worktree, path.join(Global.Path.data, "plans", "*.md")),
-              effect: "allow",
-            },
-          ]),
-        )
-      })
-
-      draft.update(AgentV2.ID.make("general"), (item) => {
-        item.name = AgentV2.Name.make("General")
-        item.description =
-          "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel."
-        item.mode = "subagent"
-        item.permissions.push(...PermissionV2.merge(defaults, [{ action: "subagent", resource: "*", effect: "deny" }]))
-      })
-
-      draft.update(AgentV2.ID.make("explore"), (item) => {
-        item.name = AgentV2.Name.make("Explore")
-        item.description =
-          'Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.'
-        item.system = PROMPT_EXPLORE
-        item.mode = "subagent"
-        item.permissions.push(
-          ...PermissionV2.merge(
-            defaults,
-            [
-              { action: "grep", resource: "*", effect: "allow" },
-              { action: "glob", resource: "*", effect: "allow" },
-              { action: "webfetch", resource: "*", effect: "allow" },
-              { action: "websearch", resource: "*", effect: "allow" },
-              { action: "read", resource: "*", effect: "allow" },
-              { action: "edit", resource: "*", effect: "deny" },
-              { action: "subagent", resource: "*", effect: "deny" },
-            ],
-            readonlyExternalDirectory,
-          ),
-        )
-      })
+      for (const definition of builtIns) {
+        draft.update(AgentV2.ID.make(definition.id), (item) => {
+          item.name = AgentV2.Name.make(definition.id)
+          item.description = definition.description
+          item.mode = definition.mode
+          item.request.body = { temperature: definition.temperature }
+          item.color = definition.color
+          item.system = definition.system
+          item.permissions.splice(
+            0,
+            item.permissions.length,
+            ...PermissionV2.merge(
+              defaults,
+              definition.mode === "subagent"
+                ? [
+                    { action: "subagent", resource: "*", effect: "deny" },
+                    { action: "shell", resource: "*", effect: "allow" },
+                  ]
+                : [
+                    { action: "question", resource: "*", effect: "allow" },
+                    { action: "plan_enter", resource: "*", effect: "allow" },
+                    { action: "shell", resource: "*", effect: "allow" },
+                  ],
+            ),
+          )
+        })
+      }
 
       draft.update(AgentV2.ID.make("btw"), (item) => {
         item.name = AgentV2.Name.make("BTW")

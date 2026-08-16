@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "199974f0-ccb8-45da-a10c-34e5534bd380",
+  "id": "76ed750b-4d38-4e12-aa79-91755c83bc23",
   "prevIds": [
-    "129738d8-afe3-4730-9f11-0a683a0ca724"
+    "6b611feb-f989-431b-9669-e08c55d67c8d"
   ],
   "ddl": [
     {
@@ -107,6 +107,10 @@
       "entityType": "tables"
     },
     {
+      "name": "compaction_manifest_blob",
+      "entityType": "tables"
+    },
+    {
       "name": "instruction_blob",
       "entityType": "tables"
     },
@@ -119,6 +123,26 @@
       "entityType": "tables"
     },
     {
+      "name": "session_compaction_job",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_context_exclusion",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_context_revision",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_context_state",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_file_change",
+      "entityType": "tables"
+    },
+    {
       "name": "session_message",
       "entityType": "tables"
     },
@@ -127,7 +151,23 @@
       "entityType": "tables"
     },
     {
+      "name": "session_provider_continuation_generation",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_provider_continuation",
+      "entityType": "tables"
+    },
+    {
       "name": "session_provider_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_provider_state_blob",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_provider_state_link",
       "entityType": "tables"
     },
     {
@@ -143,7 +183,15 @@
       "entityType": "tables"
     },
     {
+      "name": "session_todo_state",
+      "entityType": "tables"
+    },
+    {
       "name": "session_todo",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_usage",
       "entityType": "tables"
     },
     {
@@ -507,6 +555,16 @@
       "default": null,
       "generated": null,
       "name": "active",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "generation",
       "entityType": "columns",
       "table": "credential"
     },
@@ -2402,6 +2460,66 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "digest",
+      "entityType": "columns",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "schema_version",
+      "entityType": "columns",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content",
+      "entityType": "columns",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_tokens",
+      "entityType": "columns",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "retained_tokens",
+      "entityType": "columns",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "hash",
       "entityType": "columns",
       "table": "instruction_blob"
@@ -2525,6 +2643,526 @@
       "name": "current_values",
       "entityType": "columns",
       "table": "instruction_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "legacy_input_id",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "trigger",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admission_mode",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "requested_through_message_id",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "requested_through_seq",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "base_context_revision",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_max_input_tokens",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "config_digest",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_owner",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lease_expires_at",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempts",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manifest_digest",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error_code",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error_message",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_started",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_ended",
+      "entityType": "columns",
+      "table": "session_compaction_job"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_revision",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_key",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_kind",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_selector",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "dependency_group",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reason",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manifest_digest",
+      "entityType": "columns",
+      "table": "session_context_exclusion"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_revision",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manifest_digest",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "covered_through_message_id",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "covered_through_seq",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activation_event_id",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activation_sequence",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_context_revision"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "manifest_digest",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "covered_through_message_id",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "covered_through_seq",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activated_event_id",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_activated",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error_code",
+      "entityType": "columns",
+      "table": "session_context_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_file_change"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "entityType": "columns",
+      "table": "session_file_change"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "patch",
+      "entityType": "columns",
+      "table": "session_file_change"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "additions",
+      "entityType": "columns",
+      "table": "session_file_change"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deletions",
+      "entityType": "columns",
+      "table": "session_file_change"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "latest_seq",
+      "entityType": "columns",
+      "table": "session_file_change"
     },
     {
       "type": "text",
@@ -2665,6 +3303,226 @@
       "name": "time_created",
       "entityType": "columns",
       "table": "session_pending"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_revision",
+      "entityType": "columns",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "response_id",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "represented_through_message_id",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "represented_message_count",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_revision",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation_generation",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "route_id",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_id",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "variant",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "connection_identity_digest",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_cache_key",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "instructions_digest",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tools_digest",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "options_digest",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "volatile_context_digest",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation_fingerprint",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_provider_continuation"
     },
     {
       "type": "text",
@@ -2835,6 +3693,156 @@
       "name": "time_created",
       "entityType": "columns",
       "table": "session_provider_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "digest",
+      "entityType": "columns",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider",
+      "entityType": "columns",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_id",
+      "entityType": "columns",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "item_type",
+      "entityType": "columns",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content",
+      "entityType": "columns",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "part_ordinal",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "part_kind",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_id",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "blob_digest",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_revision",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_provider_state_link"
     },
     {
       "type": "text",
@@ -3023,6 +4031,26 @@
       "default": null,
       "generated": null,
       "name": "autonomy",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "autonomy_revision",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "orchestration_revision",
       "entityType": "columns",
       "table": "session"
     },
@@ -3388,6 +4416,46 @@
     },
     {
       "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_todo_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "session_todo_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "digest",
+      "entityType": "columns",
+      "table": "session_todo_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_todo_state"
+    },
+    {
+      "type": "text",
       "notNull": true,
       "autoincrement": false,
       "default": null,
@@ -3455,6 +4523,146 @@
       "name": "time_updated",
       "entityType": "columns",
       "table": "session_todo"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_key",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "logical",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "physical",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "helpers",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continued",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fallback",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reasoning",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read",
+      "entityType": "columns",
+      "table": "session_usage"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_write",
+      "entityType": "columns",
+      "table": "session_usage"
     },
     {
       "type": "text",
@@ -4050,6 +5258,209 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_compaction_job_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        "manifest_digest"
+      ],
+      "tableTo": "compaction_manifest_blob",
+      "columnsTo": [
+        "digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_session_compaction_job_manifest_digest_compaction_manifest_blob_digest_fk",
+      "entityType": "fks",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        "session_id",
+        "base_context_revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_compaction_job_base_revision_fk",
+      "entityType": "fks",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_context_exclusion_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "columns": [
+        "manifest_digest"
+      ],
+      "tableTo": "compaction_manifest_blob",
+      "columnsTo": [
+        "digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_session_context_exclusion_manifest_digest_compaction_manifest_blob_digest_fk",
+      "entityType": "fks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "columns": [
+        "session_id",
+        "context_revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_context_exclusion_revision_fk",
+      "entityType": "fks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_context_revision_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_context_revision"
+    },
+    {
+      "columns": [
+        "manifest_digest"
+      ],
+      "tableTo": "compaction_manifest_blob",
+      "columnsTo": [
+        "digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_session_context_revision_manifest_digest_compaction_manifest_blob_digest_fk",
+      "entityType": "fks",
+      "table": "session_context_revision"
+    },
+    {
+      "columns": [
+        "session_id",
+        "parent_revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_context_revision_parent_fk",
+      "entityType": "fks",
+      "table": "session_context_revision"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_context_state_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_context_state"
+    },
+    {
+      "columns": [
+        "manifest_digest"
+      ],
+      "tableTo": "compaction_manifest_blob",
+      "columnsTo": [
+        "digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_session_context_state_manifest_digest_compaction_manifest_blob_digest_fk",
+      "entityType": "fks",
+      "table": "session_context_state"
+    },
+    {
+      "columns": [
+        "session_id",
+        "revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_context_state_revision_fk",
+      "entityType": "fks",
+      "table": "session_context_state"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_file_change_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_file_change"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_message_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_message"
@@ -4080,9 +5491,120 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_provider_continuation_generation_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "columns": [
+        "session_id",
+        "context_revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_provider_continuation_generation_revision_fk",
+      "entityType": "fks",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_provider_continuation_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "columns": [
+        "session_id",
+        "context_revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_provider_continuation_revision_fk",
+      "entityType": "fks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_provider_request_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_provider_state_link_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "columns": [
+        "blob_digest"
+      ],
+      "tableTo": "session_provider_state_blob",
+      "columnsTo": [
+        "digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_session_provider_state_link_blob_digest_session_provider_state_blob_digest_fk",
+      "entityType": "fks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "columns": [
+        "session_id",
+        "context_revision"
+      ],
+      "tableTo": "session_context_revision",
+      "columnsTo": [
+        "session_id",
+        "revision"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "session_provider_state_link_revision_fk",
+      "entityType": "fks",
+      "table": "session_provider_state_link"
     },
     {
       "columns": [
@@ -4170,9 +5692,39 @@
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
+      "name": "fk_session_todo_state_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_todo_state"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
       "name": "fk_session_todo_session_id_session_id_fk",
       "entityType": "fks",
       "table": "session_todo"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_usage_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_usage"
     },
     {
       "columns": [
@@ -4244,12 +5796,65 @@
     {
       "columns": [
         "session_id",
+        "context_revision",
+        "target_key"
+      ],
+      "nameExplicit": false,
+      "name": "session_context_exclusion_pk",
+      "entityType": "pks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "columns": [
+        "session_id",
+        "revision"
+      ],
+      "nameExplicit": false,
+      "name": "session_context_revision_pk",
+      "entityType": "pks",
+      "table": "session_context_revision"
+    },
+    {
+      "columns": [
+        "session_id",
+        "path"
+      ],
+      "nameExplicit": false,
+      "name": "session_file_change_pk",
+      "entityType": "pks",
+      "table": "session_file_change"
+    },
+    {
+      "columns": [
+        "session_id",
+        "message_id",
+        "part_ordinal",
+        "part_kind"
+      ],
+      "nameExplicit": false,
+      "name": "session_provider_state_link_pk",
+      "entityType": "pks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "columns": [
+        "session_id",
         "position"
       ],
       "nameExplicit": false,
       "name": "session_todo_pk",
       "entityType": "pks",
       "table": "session_todo"
+    },
+    {
+      "columns": [
+        "session_id",
+        "model_key"
+      ],
+      "nameExplicit": false,
+      "name": "session_usage_pk",
+      "entityType": "pks",
+      "table": "session_usage"
     },
     {
       "columns": [
@@ -4442,6 +6047,15 @@
     },
     {
       "columns": [
+        "digest"
+      ],
+      "nameExplicit": false,
+      "name": "compaction_manifest_blob_pk",
+      "table": "compaction_manifest_blob",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "hash"
       ],
       "nameExplicit": false,
@@ -4456,6 +6070,24 @@
       "nameExplicit": false,
       "name": "instruction_state_pk",
       "table": "instruction_state",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_compaction_job_pk",
+      "table": "session_compaction_job",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_context_state_pk",
+      "table": "session_context_state",
       "entityType": "pks"
     },
     {
@@ -4478,11 +6110,38 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_provider_continuation_generation_pk",
+      "table": "session_provider_continuation_generation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_provider_continuation_pk",
+      "table": "session_provider_continuation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "id"
       ],
       "nameExplicit": false,
       "name": "session_provider_request_pk",
       "table": "session_provider_request",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "digest"
+      ],
+      "nameExplicit": false,
+      "name": "session_provider_state_blob_pk",
+      "table": "session_provider_state_blob",
       "entityType": "pks"
     },
     {
@@ -4510,6 +6169,15 @@
       "nameExplicit": false,
       "name": "session_task_pk",
       "table": "session_task",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_todo_state_pk",
+      "table": "session_todo_state",
       "entityType": "pks"
     },
     {
@@ -5092,6 +6760,124 @@
           "isExpression": false
         },
         {
+          "value": "base_context_revision",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"session_compaction_job\".\"status\" = 'pending'",
+      "origin": "manual",
+      "name": "session_compaction_job_pending_revision_idx",
+      "entityType": "indexes",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "legacy_input_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"session_compaction_job\".\"legacy_input_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "session_compaction_job_legacy_input_idx",
+      "entityType": "indexes",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        },
+        {
+          "value": "lease_expires_at",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_compaction_job_recovery_idx",
+      "entityType": "indexes",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "manifest_digest",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_compaction_job_manifest_idx",
+      "entityType": "indexes",
+      "table": "session_compaction_job"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "target_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_context_exclusion_current_target_idx",
+      "entityType": "indexes",
+      "table": "session_context_exclusion"
+    },
+    {
+      "columns": [
+        {
+          "value": "manifest_digest",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_context_exclusion_manifest_idx",
+      "entityType": "indexes",
+      "table": "session_context_exclusion"
+    },
+    {
+      "columns": [
+        {
+          "value": "path",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_file_change_path_session_idx",
+      "entityType": "indexes",
+      "table": "session_file_change"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
           "value": "seq",
           "isExpression": false
         }
@@ -5188,20 +6974,6 @@
         {
           "value": "session_id",
           "isExpression": false
-        }
-      ],
-      "isUnique": true,
-      "where": "\"session_pending\".\"type\" = 'compaction'",
-      "origin": "manual",
-      "name": "session_pending_session_compaction_idx",
-      "entityType": "indexes",
-      "table": "session_pending"
-    },
-    {
-      "columns": [
-        {
-          "value": "session_id",
-          "isExpression": false
         },
         {
           "value": "admitted_seq",
@@ -5250,6 +7022,38 @@
       "name": "session_provider_request_session_source_idx",
       "entityType": "indexes",
       "table": "session_provider_request"
+    },
+    {
+      "columns": [
+        {
+          "value": "blob_digest",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_provider_state_link_blob_idx",
+      "entityType": "indexes",
+      "table": "session_provider_state_link"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "context_revision",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_provider_state_link_revision_idx",
+      "entityType": "indexes",
+      "table": "session_provider_state_link"
     },
     {
       "columns": [
@@ -5463,6 +7267,12 @@
       "name": "session_task_input_id_unique",
       "entityType": "uniques",
       "table": "session_task"
+    },
+    {
+      "value": "typeof(\"generation\") = 'integer' AND \"generation\" >= 0",
+      "name": "credential_generation_check",
+      "entityType": "checks",
+      "table": "credential"
     },
     {
       "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'paa_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
@@ -5913,6 +7723,348 @@
       "name": "project_artifact_write_time_check",
       "entityType": "checks",
       "table": "project_artifact_write"
+    },
+    {
+      "value": "length(\"digest\") = 64 AND \"digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "compaction_manifest_blob_digest_check",
+      "entityType": "checks",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "value": "\"schema_version\" > 0",
+      "name": "compaction_manifest_blob_schema_version_check",
+      "entityType": "checks",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "value": "json_valid(\"content\")",
+      "name": "compaction_manifest_blob_content_check",
+      "entityType": "checks",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "value": "typeof(\"input_tokens\") = 'integer' AND \"input_tokens\" >= 0 AND typeof(\"retained_tokens\") = 'integer' AND \"retained_tokens\" >= 0",
+      "name": "compaction_manifest_blob_counts_check",
+      "entityType": "checks",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0",
+      "name": "compaction_manifest_blob_time_check",
+      "entityType": "checks",
+      "table": "compaction_manifest_blob"
+    },
+    {
+      "value": "length(\"id\") > 4 AND substr(\"id\", 1, 4) = 'cmp_'",
+      "name": "session_compaction_job_id_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "(\"legacy_input_id\" IS NULL OR length(\"legacy_input_id\") > 0)",
+      "name": "session_compaction_job_legacy_input_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "\"trigger\" IN ('consider', 'advised', 'mandatory', 'manual')",
+      "name": "session_compaction_job_trigger_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "\"admission_mode\" IN ('background', 'mandatory')",
+      "name": "session_compaction_job_admission_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "length(\"requested_through_message_id\") > 0",
+      "name": "session_compaction_job_requested_message_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "typeof(\"requested_through_seq\") = 'integer' AND \"requested_through_seq\" >= 0 AND typeof(\"base_context_revision\") = 'integer' AND \"base_context_revision\" >= 0 AND (\"target_max_input_tokens\" IS NULL OR (typeof(\"target_max_input_tokens\") = 'integer' AND \"target_max_input_tokens\" >= 0)) AND typeof(\"attempts\") = 'integer' AND \"attempts\" >= 0",
+      "name": "session_compaction_job_counts_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "(\"config_digest\" IS NULL OR (length(\"config_digest\") = 64 AND \"config_digest\" NOT GLOB '*[^0-9a-f]*'))",
+      "name": "session_compaction_job_config_digest_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "(\"manifest_digest\" IS NULL OR (length(\"manifest_digest\") = 64 AND \"manifest_digest\" NOT GLOB '*[^0-9a-f]*'))",
+      "name": "session_compaction_job_manifest_digest_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "\"legacy_input_id\" IS NOT NULL OR (\"target_max_input_tokens\" IS NOT NULL AND \"config_digest\" IS NOT NULL)",
+      "name": "session_compaction_job_current_input_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "\"status\" IN ('pending', 'running', 'ended', 'failed')",
+      "name": "session_compaction_job_status_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "(\"lease_owner\" IS NULL AND \"lease_expires_at\" IS NULL) OR (length(\"lease_owner\") > 0 AND typeof(\"lease_expires_at\") = 'integer' AND \"lease_expires_at\" >= 0)",
+      "name": "session_compaction_job_lease_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "(\"status\" = 'pending' AND \"lease_owner\" IS NULL AND \"time_started\" IS NULL AND \"time_ended\" IS NULL AND \"manifest_digest\" IS NULL AND \"error_code\" IS NULL AND \"error_message\" IS NULL) OR (\"status\" = 'running' AND \"lease_owner\" IS NOT NULL AND \"time_started\" IS NOT NULL AND \"time_ended\" IS NULL AND \"manifest_digest\" IS NULL AND \"error_code\" IS NULL AND \"error_message\" IS NULL) OR (\"status\" = 'ended' AND \"lease_owner\" IS NULL AND \"time_started\" IS NOT NULL AND \"time_ended\" IS NOT NULL AND \"manifest_digest\" IS NOT NULL AND \"error_code\" IS NULL AND \"error_message\" IS NULL) OR (\"status\" = 'failed' AND \"lease_owner\" IS NULL AND \"time_ended\" IS NOT NULL AND \"manifest_digest\" IS NULL AND \"error_code\" IS NOT NULL)",
+      "name": "session_compaction_job_terminal_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0 AND (\"time_started\" IS NULL OR (typeof(\"time_started\") = 'integer' AND \"time_started\" >= 0)) AND (\"time_ended\" IS NULL OR (typeof(\"time_ended\") = 'integer' AND \"time_ended\" >= 0))",
+      "name": "session_compaction_job_time_check",
+      "entityType": "checks",
+      "table": "session_compaction_job"
+    },
+    {
+      "value": "length(\"target_key\") = 64 AND \"target_key\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "session_context_exclusion_target_key_check",
+      "entityType": "checks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "value": "\"target_kind\" IN ('message', 'part', 'provider_state')",
+      "name": "session_context_exclusion_target_kind_check",
+      "entityType": "checks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "value": "json_valid(\"target_selector\")",
+      "name": "session_context_exclusion_selector_check",
+      "entityType": "checks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "value": "(\"dependency_group\" IS NULL OR length(\"dependency_group\") > 0)",
+      "name": "session_context_exclusion_dependency_check",
+      "entityType": "checks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "value": "\"reason\" IN ('exact_duplicate', 'superseded_authority', 'terminal_intermediate', 'stale_tool_result', 'provider_rebase')",
+      "name": "session_context_exclusion_reason_check",
+      "entityType": "checks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "value": "length(\"manifest_digest\") = 64 AND \"manifest_digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "session_context_exclusion_manifest_check",
+      "entityType": "checks",
+      "table": "session_context_exclusion"
+    },
+    {
+      "value": "(\"revision\" = 0 AND \"parent_revision\" IS NULL) OR (\"revision\" > 0 AND \"parent_revision\" = \"revision\" - 1)",
+      "name": "session_context_revision_lineage_check",
+      "entityType": "checks",
+      "table": "session_context_revision"
+    },
+    {
+      "value": "(\"manifest_digest\" IS NULL OR (length(\"manifest_digest\") = 64 AND \"manifest_digest\" NOT GLOB '*[^0-9a-f]*'))",
+      "name": "session_context_revision_manifest_check",
+      "entityType": "checks",
+      "table": "session_context_revision"
+    },
+    {
+      "value": "(\"covered_through_message_id\" IS NULL AND \"covered_through_seq\" IS NULL) OR (length(\"covered_through_message_id\") > 0 AND typeof(\"covered_through_seq\") = 'integer' AND \"covered_through_seq\" >= 0)",
+      "name": "session_context_revision_boundary_check",
+      "entityType": "checks",
+      "table": "session_context_revision"
+    },
+    {
+      "value": "(\"activation_event_id\" IS NULL AND \"activation_sequence\" IS NULL) OR (length(\"activation_event_id\") > 0 AND typeof(\"activation_sequence\") = 'integer' AND \"activation_sequence\" >= 0)",
+      "name": "session_context_revision_activation_check",
+      "entityType": "checks",
+      "table": "session_context_revision"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0",
+      "name": "session_context_revision_time_check",
+      "entityType": "checks",
+      "table": "session_context_revision"
+    },
+    {
+      "value": "\"status\" IN ('active', 'quarantined')",
+      "name": "session_context_state_status_check",
+      "entityType": "checks",
+      "table": "session_context_state"
+    },
+    {
+      "value": "typeof(\"revision\") = 'integer' AND \"revision\" >= 0",
+      "name": "session_context_state_revision_check",
+      "entityType": "checks",
+      "table": "session_context_state"
+    },
+    {
+      "value": "(\"manifest_digest\" IS NULL OR (length(\"manifest_digest\") = 64 AND \"manifest_digest\" NOT GLOB '*[^0-9a-f]*'))",
+      "name": "session_context_state_manifest_check",
+      "entityType": "checks",
+      "table": "session_context_state"
+    },
+    {
+      "value": "(\"covered_through_message_id\" IS NULL AND \"covered_through_seq\" IS NULL) OR (length(\"covered_through_message_id\") > 0 AND typeof(\"covered_through_seq\") = 'integer' AND \"covered_through_seq\" >= 0)",
+      "name": "session_context_state_boundary_check",
+      "entityType": "checks",
+      "table": "session_context_state"
+    },
+    {
+      "value": "(\"activated_event_id\" IS NULL AND \"time_activated\" IS NULL) OR (length(\"activated_event_id\") > 0 AND typeof(\"time_activated\") = 'integer' AND \"time_activated\" >= 0)",
+      "name": "session_context_state_activation_check",
+      "entityType": "checks",
+      "table": "session_context_state"
+    },
+    {
+      "value": "(\"status\" = 'active' AND \"error_code\" IS NULL) OR (\"status\" = 'quarantined' AND length(\"error_code\") > 0)",
+      "name": "session_context_state_error_check",
+      "entityType": "checks",
+      "table": "session_context_state"
+    },
+    {
+      "value": "typeof(\"generation\") = 'integer' AND \"generation\" >= 0",
+      "name": "session_provider_continuation_generation_counts_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "value": "typeof(\"context_revision\") = 'integer' AND \"context_revision\" >= 0",
+      "name": "session_provider_continuation_generation_revision_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "value": "typeof(\"time_updated\") = 'integer' AND \"time_updated\" >= 0",
+      "name": "session_provider_continuation_generation_time_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation_generation"
+    },
+    {
+      "value": "length(\"response_id\") > 0",
+      "name": "session_provider_continuation_response_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "value": "(\"represented_message_count\" = 0 AND \"represented_through_message_id\" IS NULL) OR (\"represented_message_count\" > 0 AND length(\"represented_through_message_id\") > 0)",
+      "name": "session_provider_continuation_boundary_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "value": "typeof(\"represented_message_count\") = 'integer' AND \"represented_message_count\" >= 0 AND typeof(\"context_revision\") = 'integer' AND \"context_revision\" >= 0 AND typeof(\"continuation_generation\") = 'integer' AND \"continuation_generation\" >= 0",
+      "name": "session_provider_continuation_counts_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "value": "length(\"provider\") > 0 AND length(\"route_id\") > 0 AND length(\"model_id\") > 0 AND (\"variant\" IS NULL OR length(\"variant\") > 0) AND length(\"prompt_cache_key\") > 0",
+      "name": "session_provider_continuation_identity_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "value": "length(\"connection_identity_digest\") = 64 AND \"connection_identity_digest\" NOT GLOB '*[^0-9a-f]*' AND length(\"instructions_digest\") = 64 AND \"instructions_digest\" NOT GLOB '*[^0-9a-f]*' AND length(\"tools_digest\") = 64 AND \"tools_digest\" NOT GLOB '*[^0-9a-f]*' AND length(\"options_digest\") = 64 AND \"options_digest\" NOT GLOB '*[^0-9a-f]*' AND length(\"volatile_context_digest\") = 64 AND \"volatile_context_digest\" NOT GLOB '*[^0-9a-f]*' AND length(\"continuation_fingerprint\") = 64 AND \"continuation_fingerprint\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "session_provider_continuation_digest_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "value": "typeof(\"time_updated\") = 'integer' AND \"time_updated\" >= 0",
+      "name": "session_provider_continuation_time_check",
+      "entityType": "checks",
+      "table": "session_provider_continuation"
+    },
+    {
+      "value": "length(\"digest\") = 64 AND \"digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "session_provider_state_blob_digest_check",
+      "entityType": "checks",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "value": "length(\"provider\") > 0 AND length(\"model_id\") > 0 AND length(\"item_type\") > 0",
+      "name": "session_provider_state_blob_identity_check",
+      "entityType": "checks",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "value": "json_valid(\"content\")",
+      "name": "session_provider_state_blob_content_check",
+      "entityType": "checks",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0",
+      "name": "session_provider_state_blob_time_check",
+      "entityType": "checks",
+      "table": "session_provider_state_blob"
+    },
+    {
+      "value": "length(\"message_id\") > 0",
+      "name": "session_provider_state_link_message_check",
+      "entityType": "checks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "value": "typeof(\"part_ordinal\") = 'integer' AND \"part_ordinal\" >= 0",
+      "name": "session_provider_state_link_ordinal_check",
+      "entityType": "checks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "value": "length(\"part_kind\") > 0 AND length(\"provider\") > 0 AND length(\"model_id\") > 0",
+      "name": "session_provider_state_link_identity_check",
+      "entityType": "checks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "value": "length(\"blob_digest\") = 64 AND \"blob_digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "session_provider_state_link_blob_check",
+      "entityType": "checks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "value": "typeof(\"context_revision\") = 'integer' AND \"context_revision\" >= 0",
+      "name": "session_provider_state_link_revision_check",
+      "entityType": "checks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0",
+      "name": "session_provider_state_link_time_check",
+      "entityType": "checks",
+      "table": "session_provider_state_link"
+    },
+    {
+      "value": "typeof(\"revision\") = 'integer' AND \"revision\" >= 0",
+      "name": "session_todo_state_revision_check",
+      "entityType": "checks",
+      "table": "session_todo_state"
+    },
+    {
+      "value": "length(\"digest\") = 64 AND \"digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "session_todo_state_digest_check",
+      "entityType": "checks",
+      "table": "session_todo_state"
+    },
+    {
+      "value": "typeof(\"time_updated\") = 'integer' AND \"time_updated\" >= 0",
+      "name": "session_todo_state_time_check",
+      "entityType": "checks",
+      "table": "session_todo_state"
     }
   ],
   "renames": []

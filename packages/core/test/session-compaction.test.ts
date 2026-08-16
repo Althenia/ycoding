@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
+import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
@@ -9,81 +10,55 @@ import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
+import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { AgentV2 } from "@ycoding-ai/core/agent"
-import { ModelV2 } from "@ycoding-ai/core/model"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
+import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
+import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
+import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
-import {
-  SessionHelperPolicy,
-  localGoal,
-  localTitle,
-  selectHelperModel,
-} from "@ycoding-ai/core/session/helper-policy"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { SessionHelperPolicy, localGoal, localTitle } from "@ycoding-ai/core/session/helper-policy"
+import { SessionHistory } from "@ycoding-ai/core/session/history"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
-import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
+import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
-import { SessionMessageTable, SessionTable } from "@ycoding-ai/core/session/sql"
-import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionSummaryToon } from "@ycoding-ai/core/session/summary-toon"
-import { DateTime, Effect, Layer, Schema, Stream } from "effect"
-import { asc, eq } from "drizzle-orm"
+import { SessionMessageTable, SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionStore } from "@ycoding-ai/core/session/store"
+import { Token } from "@ycoding-ai/core/util/token"
+import { ID } from "@ycoding-ai/schema/session-compaction"
+import { DateTime, Effect, Layer, LayerMap, Schema, Stream } from "effect"
+import { asc, eq, inArray } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const model = Model.make({
-  id: "summary-model",
+  id: "manifest-model",
   provider: "test",
   route: OpenAIChat.route.with({ limits: { context: 10_000, output: 1_000 } }),
 })
 
-const memory = (through_sequence: number) =>
-  SessionSummaryToon.encode({
-    version: 1,
-    through_sequence,
-    objective: "Preserve the explicit summary contract",
-    current_state: "Testing",
-    facts: [],
-    decisions: [],
-    preferences: [],
-    constraints: [],
-    completed: [],
-    pending: [],
-    blockers: [],
-    unresolved: [],
-    important_identifiers: [],
-    continuation: "Continue safely",
-  })
-
 let requests: LLMRequest[] = []
-let summary = memory(2)
-let beforeSummary = Effect.void
-let summaryFailure: string | undefined
+let responseForRequest: ((request: LLMRequest) => string) | undefined
+let beforeResponse = Effect.void
+
 const client = Layer.mock(LLMClient.Service)({
   prepare: () => Effect.die("unused"),
   stream: (request) => {
     requests.push(request)
-    const events: Stream.Stream<LLMEvent> = summaryFailure
-      ? Stream.make(LLMEvent.providerError({ message: summaryFailure }))
-      : Stream.make(LLMEvent.textDelta({ id: "summary", text: summary }))
-    return Stream.unwrap(beforeSummary.pipe(Effect.as(events)))
+    const text = responseForRequest?.(request)
+    if (text === undefined) return Stream.make(LLMEvent.providerError({ message: "Missing manifest response" }))
+    return Stream.unwrap(beforeResponse.pipe(Effect.as(Stream.make(LLMEvent.textDelta({ id: "manifest", text })))))
   },
   generate: () => Effect.die("unused"),
 })
-const config = Layer.mock(Config.Service)({
-  entries: () =>
-    Effect.succeed([
-      new Config.Document({
-        type: "document",
-        info: new Config.Info({ compaction: new ConfigCompaction.Info({ keep_recent_messages: 1 }) }),
-      }),
-    ]),
-})
+
 const cacheRuntime = Layer.succeed(
   SessionCacheRuntime.Service,
   SessionCacheRuntime.Service.of({
@@ -103,34 +78,95 @@ const helpers = Layer.succeed(
     resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model)),
   }),
 )
-const it = testEffect(
-  AppNodeBuilder.build(
-    LayerNode.group([
-      Database.node,
-      EventV2.node,
-      SessionStore.node,
-      SessionProviderRequest.node,
-      SessionHelperPolicy.node,
-      SessionCompaction.node,
-    ]),
-    [
-      [llmClient, client],
-      [Config.node, config],
-      [SessionCacheRuntime.node, cacheRuntime],
-      [SessionRunnerModel.node, models],
-      [SessionHelperPolicy.node, helpers],
-    ],
+const unavailableHelpers = Layer.succeed(
+  SessionHelperPolicy.Service,
+  SessionHelperPolicy.Service.of({
+    settings: { titleMode: "local", goalMode: "local", models: {}, compactionScopes: {} },
+    localTitle,
+    localGoal,
+    resolveModel: () => Effect.succeed(undefined),
+  }),
+)
+const guardrailSnapshots = new Map<SessionSchema.ID, SessionGuardrail.Snapshot>()
+const guardrails = Layer.mock(SessionGuardrail.Service, {
+  withSnapshot: (sessionID, use) =>
+    use(guardrailSnapshots.get(sessionID) ?? { sequence: 0, digest: ContextManifest.payloadDigest(null) }),
+})
+const contextLocations = Layer.effect(
+  LocationServiceMap.Service,
+  LayerMap.make(
+    () =>
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+      guardrails as unknown as Layer.Layer<LocationServices>,
   ),
 )
 
-const insertMessage = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, id: SessionMessage.ID, seq: number) {
-  const message = SessionMessage.User.make({
-    id,
-    type: "user",
-    text: `message ${seq}`,
-    time: { created: DateTime.makeUnsafe(seq) },
+const configLayer = (compaction: ConfigCompaction.Info) =>
+  Layer.mock(Config.Service)({
+    entries: () =>
+      Effect.succeed([
+        new Config.Document({
+          type: "document",
+          info: new Config.Info({ compaction }),
+        }),
+      ]),
   })
-  const encoded = Schema.encodeSync(SessionMessage.Info)(message)
+
+const testWithConfig = (
+  compaction = new ConfigCompaction.Info({ keep_recent_messages: 1 }),
+  helperPolicy = helpers,
+) =>
+  testEffect(
+    AppNodeBuilder.build(
+      LayerNode.group([
+        Database.node,
+        EventV2.node,
+        SessionStore.node,
+        SessionProviderRequest.node,
+        SessionHelperPolicy.node,
+        SessionCompaction.node,
+        SessionContextState.node,
+      ]),
+      [
+        [llmClient, client],
+        [Config.node, configLayer(compaction)],
+        [SessionCacheRuntime.node, cacheRuntime],
+        [SessionRunnerModel.node, models],
+        [SessionHelperPolicy.node, helperPolicy],
+        [LocationServiceMap.node, contextLocations],
+      ],
+    ),
+  )
+
+const it = testWithConfig()
+const itWithTwoPasses = testWithConfig(new ConfigCompaction.Info({ keep_recent_messages: 1, max_internal_passes: 2 }))
+const itWithTinyManifest = testWithConfig(
+  new ConfigCompaction.Info({ keep_recent_messages: 1, max_manifest_bytes: 1, max_internal_passes: 1 }),
+)
+const itWithoutHelper = testWithConfig(new ConfigCompaction.Info({ keep_recent_messages: 1 }), unavailableHelpers)
+
+const decodeJSON = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
+
+const promptText = (request: LLMRequest) =>
+  request.messages
+    .flatMap((message) => message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])))
+    .join("\n")
+
+const insertMessage = Effect.fnUntraced(function* (
+  sessionID: SessionSchema.ID,
+  id: SessionMessage.ID,
+  seq: number,
+  text: string,
+  created = 1,
+) {
+  const encoded = Schema.encodeSync(SessionMessage.Info)(
+    SessionMessage.User.make({
+      id,
+      type: "user",
+      text,
+      time: { created: DateTime.toUtc(DateTime.makeUnsafe(created)) },
+    }),
+  )
   const { id: encodedID, type, ...data } = encoded
   const db = (yield* Database.Service).db
   yield* db
@@ -153,109 +189,14 @@ const insertMessage = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, 
       aggregate_id: sessionID,
       seq,
       created: seq,
-      type: EventV2.versionedType(SessionEvent.InputPromoted.type, 1),
+      type: EventV2.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
       data: { sessionID, inputID: id },
     })
     .run()
     .pipe(Effect.orDie)
 })
 
-const insertSystemMessage = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, id: SessionMessage.ID, seq: number) {
-  const message = SessionMessage.System.make({
-    id,
-    type: "system",
-    text: `system ${seq}`,
-    time: { created: DateTime.makeUnsafe(seq) },
-  })
-  const encoded = Schema.encodeSync(SessionMessage.Info)(message)
-  const { id: encodedID, type, ...data } = encoded
-  const db = (yield* Database.Service).db
-  yield* db
-    .insert(SessionMessageTable)
-    .values({
-      id: SessionMessage.ID.make(encodedID),
-      session_id: sessionID,
-      type,
-      seq,
-      time_created: seq,
-      time_updated: seq,
-      data,
-    })
-    .run()
-    .pipe(Effect.orDie)
-})
-
-const insertCompletedSummary = Effect.fnUntraced(function* (
-  sessionID: SessionSchema.ID,
-  id: SessionMessage.ID,
-  seq: number,
-  revision: number,
-) {
-  const message = SessionMessage.CompactionCompleted.make({
-    id,
-    type: "compaction",
-    status: "completed",
-    reason: "manual",
-    summary: memory(seq),
-    recent: "",
-    messages: 1,
-    time: { created: DateTime.makeUnsafe(seq) },
-    metadata: { summary_revision: revision },
-  })
-  const encoded = Schema.encodeSync(SessionMessage.Info)(message)
-  const { id: encodedID, type, ...data } = encoded
-  const db = (yield* Database.Service).db
-  yield* db
-    .insert(SessionMessageTable)
-    .values({
-      id: SessionMessage.ID.make(encodedID),
-      session_id: sessionID,
-      type,
-      seq,
-      time_created: seq,
-      time_updated: seq,
-      data,
-    })
-    .run()
-    .pipe(Effect.orDie)
-})
-
-const insertEvent = Effect.fnUntraced(function* (
-  sessionID: SessionSchema.ID,
-  seq: number,
-  id: string,
-  type: string,
-  data: Record<string, unknown>,
-) {
-  const db = (yield* Database.Service).db
-  yield* db
-    .insert(EventTable)
-    .values({ id: EventV2.ID.make(id), aggregate_id: sessionID, seq, created: seq, type, data })
-    .run()
-    .pipe(Effect.orDie)
-})
-
-const insertProtectedEvent = Effect.fnUntraced(function* (
-  sessionID: SessionSchema.ID,
-  seq: number,
-  id: string,
-  definition: { readonly type: string; readonly durable?: { readonly version: number } },
-) {
-  yield* insertEvent(
-    sessionID,
-    seq,
-    id,
-    EventV2.versionedType(definition.type, definition.durable!.version),
-    { sessionID },
-  )
-})
-
-const seedSession = Effect.fnUntraced(function* (input: {
-  readonly id: SessionSchema.ID
-  readonly sequence: number
-  readonly parentID?: SessionSchema.ID
-  readonly model?: SessionSchema.Info["model"]
-}) {
+const seedSession = Effect.fnUntraced(function* (sessionID: SessionSchema.ID, sequence: number) {
   const db = (yield* Database.Service).db
   yield* db
     .insert(ProjectTable)
@@ -265,617 +206,476 @@ const seedSession = Effect.fnUntraced(function* (input: {
     .pipe(Effect.orDie)
   yield* db
     .insert(SessionTable)
-    .values({
-      id: input.id,
-      project_id: Project.ID.global,
-      directory: "/project",
-      title: "Summary test",
-      ...(input.parentID === undefined ? {} : { parent_id: input.parentID }),
-      ...(input.model === undefined ? {} : { model: input.model }),
-    })
+    .values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "Manifest test" })
     .run()
     .pipe(Effect.orDie)
-  yield* db
-    .insert(EventSequenceTable)
-    .values({ aggregate_id: input.id, seq: input.sequence })
-    .run()
-    .pipe(Effect.orDie)
+  yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: sequence }).run().pipe(Effect.orDie)
 })
 
-const resetSummaryStream = () => {
-  requests = []
-  summary = memory(2)
-  beforeSummary = Effect.void
-  summaryFailure = undefined
+function manifestJob(
+  sessionID: SessionSchema.ID,
+  boundary: SessionCompactionJob.Job["requestedThrough"],
+  targetMaxInputTokens = 4_096,
+  mode: Pick<SessionCompactionJob.Job, "trigger" | "admissionMode"> = {
+    trigger: "manual",
+    admissionMode: "background",
+  },
+): SessionCompactionJob.Job {
+  return {
+    id: ID.make(`cmp_manifest_${sessionID}`),
+    sessionID,
+    ...mode,
+    requestedThrough: boundary,
+    baseContextRevision: 0,
+    targetMaxInputTokens,
+    configDigest: "a".repeat(64),
+    status: "running",
+    attempts: 1,
+    timeCreated: 0,
+  }
 }
 
-const decodeSessionMessage = Schema.decodeUnknownSync(SessionMessage.Info)
-const decodeProjection = (row: typeof SessionMessageTable.$inferSelect): SessionMessage.Info =>
-  decodeSessionMessage({ ...row.data, id: row.id, type: row.type })
+const generateManifest = Effect.fnUntraced(function* (job: SessionCompactionJob.Job) {
+  const compaction = yield* SessionCompaction.Service
+  return yield* compaction.manifest(job)
+})
 
-it.effect("summarizes only on the explicit service call and replaces covered message rows", () =>
+const reset = () => {
+  requests = []
+  responseForRequest = undefined
+  beforeResponse = Effect.void
+  guardrailSnapshots.clear()
+}
+
+function checkpoint(through: number, currentState = "Continue from the compacted conversation") {
+  return SessionSummaryToon.encode({
+    version: 1,
+    through_sequence: through,
+    objective: "Continue the current session",
+    current_state: currentState,
+    facts: [],
+    decisions: [],
+    preferences: [],
+    constraints: [],
+    completed: [],
+    pending: [],
+    blockers: [],
+    unresolved: [],
+    important_identifiers: [],
+    continuation: "Use the checkpoint and retained messages",
+  })
+}
+
+const validateGeneratedManifest = Effect.fnUntraced(function* (
+  sessionID: SessionSchema.ID,
+  manifest: ContextManifest.Manifest,
+  recentTailCount: number,
+) {
+  const rows = yield* (yield* Database.Service).db
+    .select({
+      id: SessionMessageTable.id,
+      seq: SessionMessageTable.seq,
+      type: SessionMessageTable.type,
+      data: SessionMessageTable.data,
+    })
+    .from(SessionMessageTable)
+    .where(eq(SessionMessageTable.session_id, sessionID))
+    .orderBy(asc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  const items = rows.flatMap((row, position): ReadonlyArray<ContextManifest.ContextItem> => {
+    if (!Schema.is(Schema.Json)(row.data)) return []
+    return [
+      {
+        kind: "message",
+        messageID: row.id,
+        position,
+        terminalSeq: EventV2.Seq.make(row.seq),
+        inputKind: row.type,
+        payload: row.data,
+        tokens: Token.estimate(JSON.stringify(row.data)),
+      },
+    ]
+  })
+  return ContextManifest.validate({
+    candidate: ContextManifest.decodeCandidate(
+      JSON.stringify({
+        schemaVersion: manifest.schemaVersion,
+        baseContextRevision: manifest.baseContextRevision,
+        coveredThrough: manifest.coveredThrough,
+        protectedState: manifest.protectedState,
+        exclusions: [],
+      }),
+    ),
+    summary: manifest.summary,
+    evidence: {
+      baseContextRevision: manifest.baseContextRevision,
+      coveredThrough: manifest.coveredThrough,
+      items,
+      settlements: [],
+      authorities: [],
+      resourceAuthorities: [],
+      toolResults: [],
+      recentTail: recentTailCount === 0 ? [] : items.slice(-recentTailCount).map(ContextManifest.selector),
+      protectedTargets: [],
+      providerLinks: [],
+      protectedState: manifest.protectedState,
+    },
+  })
+})
+
+function expectStrictFrozenSummary(manifest: ContextManifest.Manifest) {
+  expect(Object.isFrozen(manifest)).toBe(true)
+  expect(manifest.summary).toBeDefined()
+  expect(Object.isFrozen(manifest.summary)).toBe(true)
+  const summary = manifest.summary!
+  const parsed = SessionSummaryToon.parse(summary.text, {
+    throughSequence: summary.coveredThrough.seq,
+    maxSummaryBytes: Buffer.byteLength(summary.text, "utf8"),
+  })
+  expect("_tag" in parsed).toBe(false)
+  if ("_tag" in parsed) throw parsed
+  expect(SessionSummaryToon.encode(parsed)).toBe(summary.text)
+}
+
+function selectedTokens(messages: ReadonlyArray<SessionMessage.Info>) {
+  const encode = Schema.encodeSync(SessionMessage.Info)
+  return Token.estimate(JSON.stringify(messages.map((message) => encode(message))))
+}
+
+function retainManifestGuardrail(sessionID: SessionSchema.ID, manifest: ContextManifest.Manifest) {
+  const guardrail = manifest.protectedState.find((entry) => entry.source === "guardrails")!
+  guardrailSnapshots.set(sessionID, { sequence: guardrail.revision, digest: guardrail.digest })
+}
+
+it.effect("exposes one required manifest worker and no obsolete summarization members", () =>
   Effect.gen(function* () {
-    requests = []
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_explicit_summary")
-    const boundaryID = SessionMessage.ID.make("msg_explicit_boundary")
-    yield* db
-      .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-    yield* db
-      .insert(SessionTable)
-      .values({ id: sessionID, project_id: Project.ID.global, directory: "/project", title: "Explicit summary" })
-      .run()
-      .pipe(Effect.orDie)
-    yield* db
-      .insert(EventSequenceTable)
-      .values({ aggregate_id: sessionID, seq: 3 })
-      .run()
-      .pipe(Effect.orDie)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_explicit_first"), 1)
-    yield* insertMessage(sessionID, boundaryID, 2)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_explicit_recent"), 3)
-
-    const result = yield* compaction.summarize({ sessionID, boundaryMessageID: boundaryID })
-
-    expect(requests).toHaveLength(1)
-    expect(result).toMatchObject({ through: 2, deletedMessageCount: 2, remainingMessageCount: 2, summaryRevision: 1 })
-    expect(
-      yield* db
-        .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, seq: SessionMessageTable.seq })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .orderBy(asc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([
-      { id: result.summaryMessageID, type: "compaction", seq: 2 },
-      { id: SessionMessage.ID.make("msg_explicit_recent"), type: "user", seq: 3 },
-    ])
+    expect(Object.keys(yield* SessionCompaction.Service)).toEqual(["manifest"])
   }),
 )
 
-test("builds a versioned TOON summary prompt", () => {
-  const prompt = SessionCompaction.buildSummarizePrompt({ context: ["history"], through: 2 })
-  expect(prompt).toContain("Output exactly one TOON document")
-  expect(prompt).toContain("version: 1")
-  expect(prompt).toContain("through_sequence")
-})
-
-it.effect("preserves protected events while deleting each covered message event and projection once", () =>
+it.effect("uses bounded checkpoint TOON requests without asking the model to author manifest JSON", () =>
   Effect.gen(function* () {
-    resetSummaryStream()
-    summary = memory(6)
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_protected_events")
-    const firstID = SessionMessage.ID.make("msg_protected_first")
-    const coveredID = SessionMessage.ID.make("msg_protected_covered")
-    const boundaryID = SessionMessage.ID.make("msg_protected_boundary")
-    const recentID = SessionMessage.ID.make("msg_protected_recent")
-    yield* seedSession({ id: sessionID, sequence: 7 })
-    yield* insertMessage(sessionID, firstID, 1)
-    yield* insertProtectedEvent(sessionID, 2, "evt_protected_instructions", SessionEvent.InstructionsUpdated)
-    yield* insertProtectedEvent(sessionID, 3, "evt_protected_task", SessionEvent.Task.Updated)
-    yield* insertProtectedEvent(sessionID, 4, "evt_protected_provider", SessionEvent.ProviderRequestRecorded)
-    yield* insertMessage(sessionID, coveredID, 5)
-    yield* insertMessage(sessionID, boundaryID, 6)
-    yield* insertMessage(sessionID, recentID, 7)
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_batches")
+    const messageIDs = Array.from({ length: 6 }, (_, index) => SessionMessage.ID.make(`msg_manifest_batch_${index}`))
+    yield* seedSession(sessionID, messageIDs.length)
+    yield* Effect.forEach(
+      messageIDs,
+      (id, index) => insertMessage(sessionID, id, index + 1, `unique checkpoint material ${index} `.repeat(120)),
+      { discard: true },
+    )
+    responseForRequest = (request) => {
+      const match = promptText(request).match(/up to and including (\d+)/)
+      return checkpoint(Number(match?.[1]), "Model-authored checkpoint")
+    }
+    const budget = 4_096
 
-    const result = yield* compaction.summarize({ sessionID, boundaryMessageID: boundaryID })
-    const events = yield* db
-      .select({ id: EventTable.id, seq: EventTable.seq, type: EventTable.type })
-      .from(EventTable)
-      .where(eq(EventTable.aggregate_id, sessionID))
-      .orderBy(asc(EventTable.seq))
+    const manifest = yield* generateManifest(
+      manifestJob(sessionID, { messageID: messageIDs.at(-1)!, seq: messageIDs.length }, budget),
+    )
+
+    expect(requests.length).toBeGreaterThan(1)
+    expect(
+      requests.every(
+        (request) =>
+          request.providerOptions?.openai?.promptCacheKey ===
+          SessionRunnerCache.promptCacheNamespace({
+            scope: "compaction",
+            projectID: Project.ID.global,
+            directory: "/project",
+            providerID: model.provider,
+            modelID: model.id,
+            variant: "default",
+            policyRevision: CACHE_POLICY_REVISION,
+            permissions: [],
+            system: request.system,
+            tools: request.tools,
+          }),
+      ),
+    ).toBe(true)
+    expect(requests.every((request) => Token.estimate(promptText(request)) <= budget)).toBe(true)
+    expect(requests.every((request) => promptText(request).includes("conversation_memory"))).toBe(true)
+    expect(requests.some((request) => promptText(request).includes("strict JSON ContextManifest"))).toBe(false)
+    expect(manifest.exclusions).toEqual([])
+    expectStrictFrozenSummary(manifest)
+    expect(manifest.retainedTokens).toBeLessThan(manifest.inputTokens)
+  }),
+)
+
+itWithTwoPasses.effect("falls back to a local canonical checkpoint for malformed helper JSON and TOON", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_repair")
+    const firstID = SessionMessage.ID.make("msg_manifest_repair_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_repair_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "first malformed fallback source ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+    responseForRequest = () => '{"schemaVersion":1}'
+
+    const manifest = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }))
+
+    expect(requests).toHaveLength(1)
+    expectStrictFrozenSummary(manifest)
+    expect((yield* validateGeneratedManifest(sessionID, manifest, 1)).valid).toBe(true)
+  }),
+)
+
+it.effect("falls back to a local canonical checkpoint when the helper provider fails", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_provider_failure")
+    const firstID = SessionMessage.ID.make("msg_manifest_provider_failure_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_provider_failure_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "provider fallback source ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+
+    const manifest = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }))
+
+    expect(requests).toHaveLength(1)
+    expectStrictFrozenSummary(manifest)
+    expect((yield* validateGeneratedManifest(sessionID, manifest, 1)).valid).toBe(true)
+  }),
+)
+
+itWithoutHelper.effect("uses a local canonical checkpoint without provider traffic when no helper model resolves", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_no_helper")
+    const firstID = SessionMessage.ID.make("msg_manifest_no_helper_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_no_helper_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "local checkpoint source ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+
+    const manifest = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }, 2_048))
+    const providerRows = yield* (yield* Database.Service).db
+      .select()
+      .from(SessionProviderRequestTable)
+      .where(eq(SessionProviderRequestTable.session_id, sessionID))
       .all()
       .pipe(Effect.orDie)
-    const rows = yield* db
-      .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq, type: SessionMessageTable.type })
+
+    expect(requests).toEqual([])
+    expect(providerRows).toEqual([])
+    expectStrictFrozenSummary(manifest)
+    expect(manifest.retainedTokens).toBeLessThan(manifest.inputTokens)
+  }),
+)
+
+it.effect("falls back to a validated rolling summary for unique history while retaining the recent tail", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_no_reduction")
+    const firstID = SessionMessage.ID.make("msg_manifest_no_reduction_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_no_reduction_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "first unique message ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "second unique message")
+    const summary = SessionSummaryToon.encode({
+      version: 1,
+      through_sequence: 1,
+      objective: "Preserve the first unique request",
+      current_state: "The earlier request is recorded",
+      facts: [],
+      decisions: [],
+      preferences: [],
+      constraints: [],
+      completed: [],
+      pending: [],
+      blockers: [],
+      unresolved: [],
+      important_identifiers: [],
+      continuation: "Continue with the retained recent message",
+    })
+    responseForRequest = () => summary
+
+    const manifest = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }))
+
+    expect(decodeJSON(ContextManifest.manifestJSON(manifest))).toMatchObject({
+      summary: {
+        text: summary,
+        coveredThrough: { messageID: firstID, seq: 1 },
+      },
+    })
+    expect(manifest.exclusions.some((exclusion) => exclusion.target.messageID === boundaryID)).toBe(false)
+    expect(requests.every((request) => promptText(request).includes("conversation_memory"))).toBe(true)
+    expect(requests.some((request) => promptText(request).includes("strict JSON ContextManifest"))).toBe(false)
+    expect(manifest.retainedTokens).toBeLessThan(manifest.inputTokens)
+  }),
+)
+
+itWithTinyManifest.effect("falls back to the minimal local checkpoint when helper output exceeds max_manifest_bytes", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_oversized")
+    const firstID = SessionMessage.ID.make("msg_manifest_oversized_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_oversized_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "oversized fallback source ".repeat(300))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+    responseForRequest = () => checkpoint(1, "x".repeat(2_000))
+
+    const manifest = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }))
+
+    expect(requests).toHaveLength(1)
+    expectStrictFrozenSummary(manifest)
+    expect((yield* validateGeneratedManifest(sessionID, manifest, 1)).valid).toBe(true)
+  }),
+)
+
+const itMandatory = testWithConfig(new ConfigCompaction.Info({ keep_recent_messages: 0 }))
+
+itMandatory.effect("allows mandatory compaction to checkpoint through the full job boundary", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_full_boundary")
+    const firstID = SessionMessage.ID.make("msg_manifest_full_boundary_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_full_boundary_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "mandatory earlier source ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "mandatory job boundary ".repeat(200))
+    responseForRequest = () => checkpoint(2, "The mandatory boundary is covered")
+
+    const manifest = yield* generateManifest(
+      manifestJob(sessionID, { messageID: boundaryID, seq: 2 }, 4_096, {
+        trigger: "mandatory",
+        admissionMode: "mandatory",
+      }),
+    )
+
+    expect(manifest.summary?.coveredThrough.seq).toBe(manifest.coveredThrough.seq)
+    expect(manifest.retainedTokens).toBeLessThan(manifest.inputTokens)
+    expectStrictFrozenSummary(manifest)
+    expect((yield* validateGeneratedManifest(sessionID, manifest, 0)).valid).toBe(true)
+  }),
+)
+
+itMandatory.effect("requires sequential compaction to reduce the current model-visible checkpoint history", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const context = yield* SessionContextState.Service
+    const sessionID = SessionSchema.ID.make("ses_manifest_sequential_reduction")
+    const firstID = SessionMessage.ID.make("msg_manifest_sequential_first")
+    const laterID = SessionMessage.ID.make("msg_manifest_sequential_later")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_sequential_boundary")
+    yield* seedSession(sessionID, 1)
+    yield* SessionContextState.initialize(db, sessionID, 0)
+    yield* insertMessage(sessionID, firstID, 1, "large canonical first context ".repeat(400))
+    responseForRequest = () => checkpoint(1, "Small first checkpoint")
+
+    const first = yield* generateManifest(
+      manifestJob(sessionID, { messageID: firstID, seq: 1 }, 4_096, {
+        trigger: "mandatory",
+        admissionMode: "mandatory",
+      }),
+    )
+    retainManifestGuardrail(sessionID, first)
+    yield* context.activate({ sessionID, manifest: first })
+
+    yield* insertMessage(sessionID, laterID, 10, "later material remains useful ".repeat(35))
+    yield* insertMessage(sessionID, boundaryID, 11, "second boundary material ".repeat(35))
+    yield* db
+      .update(EventSequenceTable)
+      .set({ seq: 11 })
+      .where(eq(EventSequenceTable.aggregate_id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    const before = yield* SessionHistory.forModel(db, sessionID)
+    const beforeTokens = selectedTokens(before)
+    responseForRequest = () => checkpoint(11, "helper checkpoint growth ".repeat(260))
+
+    const second = yield* generateManifest({
+      ...manifestJob(sessionID, { messageID: boundaryID, seq: 11 }, 4_096, {
+        trigger: "mandatory",
+        admissionMode: "mandatory",
+      }),
+      baseContextRevision: 1,
+    })
+    retainManifestGuardrail(sessionID, second)
+    yield* context.activate({ sessionID, manifest: second })
+    const after = yield* SessionHistory.forModel(db, sessionID)
+    const afterTokens = selectedTokens(after)
+
+    expect(afterTokens).toBeLessThan(beforeTokens)
+    expect(second.inputTokens).toBe(beforeTokens)
+    expect(second.retainedTokens).toBe(afterTokens)
+  }),
+)
+
+it.effect("rejects the combined candidate when protected state changes during generation", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_protected_change")
+    const firstID = SessionMessage.ID.make("msg_manifest_protected_change_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_protected_change_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "immutable compacted source ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+    responseForRequest = () => checkpoint(1)
+    beforeResponse = (yield* Database.Service).db
+      .update(SessionTable)
+      .set({ autonomy_revision: 1 })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie, Effect.asVoid)
+
+    const error = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 })).pipe(Effect.flip)
+
+    expect(error.code).toBe("protected_state_changed")
+    expect(requests).toHaveLength(1)
+  }),
+)
+
+it.effect("leaves canonical message and source-event rows immutable", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const sessionID = SessionSchema.ID.make("ses_manifest_immutable")
+    const firstID = SessionMessage.ID.make("msg_manifest_immutable_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_immutable_boundary")
+    const eventIDs = [EventV2.ID.make(`evt_${sessionID}_1`), EventV2.ID.make(`evt_${sessionID}_2`)]
+    yield* seedSession(sessionID, 2)
+    yield* insertMessage(sessionID, firstID, 1, "immutable compacted source ".repeat(200))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+    const beforeMessages = yield* db
+      .select()
       .from(SessionMessageTable)
       .where(eq(SessionMessageTable.session_id, sessionID))
       .orderBy(asc(SessionMessageTable.seq))
       .all()
       .pipe(Effect.orDie)
+    const beforeEvents = yield* db
+      .select()
+      .from(EventTable)
+      .where(inArray(EventTable.id, eventIDs))
+      .orderBy(asc(EventTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    responseForRequest = () => checkpoint(1)
 
-    expect(result.deletedMessageCount).toBe(3)
-    expect(events).toContainEqual({
-      id: EventV2.ID.make("evt_protected_instructions"),
-      seq: 2,
-      type: EventV2.versionedType(SessionEvent.InstructionsUpdated.type, SessionEvent.InstructionsUpdated.durable.version),
-    })
-    expect(events).toContainEqual({
-      id: EventV2.ID.make("evt_protected_task"),
-      seq: 3,
-      type: EventV2.versionedType(SessionEvent.Task.Updated.type, SessionEvent.Task.Updated.durable.version),
-    })
-    expect(events).toContainEqual({
-      id: EventV2.ID.make("evt_protected_provider"),
-      seq: 4,
-      type: EventV2.versionedType(
-        SessionEvent.ProviderRequestRecorded.type,
-        SessionEvent.ProviderRequestRecorded.durable.version,
-      ),
-    })
-    expect(events).toContainEqual({
-      id: EventV2.ID.make(`evt_${sessionID}_7`),
-      seq: 7,
-      type: EventV2.versionedType(SessionEvent.InputPromoted.type, SessionEvent.InputPromoted.durable.version),
-    })
-    expect(events.some((event) => event.seq === 1 || event.seq === 5 || event.seq === 6)).toBe(false)
-    expect(rows).toEqual([
-      { id: result.summaryMessageID, seq: 6, type: "compaction" },
-      { id: recentID, seq: 7, type: "user" },
-    ])
-    expect(rows.map((row) => row.id)).not.toContain(firstID)
-    expect(rows.map((row) => row.id)).not.toContain(coveredID)
-    expect(rows.map((row) => row.id)).not.toContain(boundaryID)
-  }),
-)
-
-it.effect("preserves event and projection sequence gaps and appends above the deleted range", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    summary = memory(2)
-    const db = (yield* Database.Service).db
-    const events = yield* EventV2.Service
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_sequence_gap")
-    const boundaryID = SessionMessage.ID.make("msg_sequence_boundary")
-    const recentID = SessionMessage.ID.make("msg_sequence_recent")
-    yield* seedSession({ id: sessionID, sequence: 4 })
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_sequence_first"), 1)
-    yield* insertMessage(sessionID, boundaryID, 2)
-    yield* insertMessage(sessionID, recentID, 4)
-
-    yield* compaction.summarize({ sessionID, boundaryMessageID: boundaryID })
+    yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }))
 
     expect(
-      yield* db
-        .select({ seq: EventSequenceTable.seq })
-        .from(EventSequenceTable)
-        .where(eq(EventSequenceTable.aggregate_id, sessionID))
-        .get()
-        .pipe(Effect.orDie),
-    ).toEqual({ seq: 5 })
-    expect(
-      yield* db
-        .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .orderBy(asc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([
-      { id: expect.any(String), seq: 2 },
-      { id: recentID, seq: 4 },
-    ])
-
-    yield* events.publish(SessionEvent.InputPromoted, {
-      sessionID,
-      inputID: SessionMessage.ID.make("msg_sequence_append"),
-    })
-
-    expect(
-      yield* db
-        .select({ seq: EventSequenceTable.seq })
-        .from(EventSequenceTable)
-        .where(eq(EventSequenceTable.aggregate_id, sessionID))
-        .get()
-        .pipe(Effect.orDie),
-    ).toEqual({ seq: 6 })
-    expect(
-      yield* db
-        .select({ seq: EventTable.seq })
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .orderBy(asc(EventTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([{ seq: 4 }, { seq: 5 }, { seq: 6 }])
-  }),
-)
-
-it.effect("replaces the previous summary and covered source rows exactly once", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    summary = memory(3)
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_replace_previous")
-    const previousID = SessionMessage.ID.make("msg_replace_previous")
-    const boundaryID = SessionMessage.ID.make("msg_replace_boundary")
-    const recentID = SessionMessage.ID.make("msg_replace_recent")
-    yield* seedSession({ id: sessionID, sequence: 4 })
-    yield* insertCompletedSummary(sessionID, previousID, 1, 1)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_replace_first"), 2)
-    yield* insertMessage(sessionID, boundaryID, 3)
-    yield* insertMessage(sessionID, recentID, 4)
-
-    const result = yield* compaction.summarize({ sessionID, boundaryMessageID: boundaryID })
-
-    expect(result).toMatchObject({ deletedMessageCount: 3, summaryRevision: 2 })
-    expect(
-      yield* db
-        .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq, type: SessionMessageTable.type })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .orderBy(asc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([
-      { id: result.summaryMessageID, seq: 3, type: "compaction" },
-      { id: recentID, seq: 4, type: "user" },
-    ])
-    expect(
-      yield* db
-        .select({ seq: EventTable.seq })
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([{ seq: 4 }, { seq: 5 }])
-  }),
-)
-
-it.effect("keeps all source rows intact when the summarizer model fails", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    summaryFailure = "summary provider unavailable"
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_model_failure")
-    const boundaryID = SessionMessage.ID.make("msg_model_failure_boundary")
-    const previousID = SessionMessage.ID.make("msg_model_failure_previous")
-    yield* seedSession({ id: sessionID, sequence: 4 })
-    yield* insertCompletedSummary(sessionID, previousID, 1, 1)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_model_failure_first"), 2)
-    yield* insertMessage(sessionID, boundaryID, 3)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_model_failure_recent"), 4)
-
-    const failure = yield* compaction
-      .summarize({ sessionID, boundaryMessageID: boundaryID })
-      .pipe(Effect.flip, Effect.ensuring(Effect.sync(resetSummaryStream)))
-
-    expect(failure).toMatchObject({ type: "summarize.failed", message: "summary provider unavailable" })
-    expect(
-      yield* db
-        .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .orderBy(asc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([
-      { id: previousID, seq: 1 },
-      { id: SessionMessage.ID.make("msg_model_failure_first"), seq: 2 },
-      { id: boundaryID, seq: 3 },
-      { id: SessionMessage.ID.make("msg_model_failure_recent"), seq: 4 },
-    ])
-    expect(
-      yield* db
-        .select({ seq: EventTable.seq })
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .all()
-        .pipe(Effect.orDie),
-    ).toHaveLength(4)
-  }),
-)
-
-it.effect("keeps all source rows intact when TOON validation rejects the model output", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    summary = memory(1)
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_invalid_toon")
-    const boundaryID = SessionMessage.ID.make("msg_invalid_toon_boundary")
-    const previousID = SessionMessage.ID.make("msg_invalid_toon_previous")
-    yield* seedSession({ id: sessionID, sequence: 4 })
-    yield* insertCompletedSummary(sessionID, previousID, 1, 1)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_invalid_toon_first"), 2)
-    yield* insertMessage(sessionID, boundaryID, 3)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_invalid_toon_recent"), 4)
-
-    const failure = yield* compaction
-      .summarize({ sessionID, boundaryMessageID: boundaryID })
-      .pipe(Effect.flip, Effect.ensuring(Effect.sync(resetSummaryStream)))
-
-    expect(failure).toMatchObject({ type: "summarize.invalid-toon", message: expect.stringContaining("mismatch") })
-    expect(
-      yield* db
-        .select({ id: SessionMessageTable.id })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .all()
-        .pipe(Effect.orDie),
-    ).toHaveLength(4)
-    expect(
-      yield* db
-        .select({ id: EventTable.id })
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .all()
-        .pipe(Effect.orDie),
-    ).toHaveLength(4)
-  }),
-)
-
-it.effect("rolls back without deletion when the covered range changes before commit", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    summary = memory(2)
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_summary_conflict")
-    const boundaryID = SessionMessage.ID.make("msg_summary_conflict_boundary")
-    yield* seedSession({ id: sessionID, sequence: 3 })
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_summary_conflict_first"), 1)
-    yield* insertMessage(sessionID, boundaryID, 2)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_summary_conflict_recent"), 3)
-    beforeSummary = db
-      .update(SessionMessageTable)
-      .set({ seq: 99 })
-      .where(eq(SessionMessageTable.id, boundaryID))
-      .run()
-      .pipe(Effect.orDie, Effect.asVoid)
-
-    const failure = yield* compaction
-      .summarize({ sessionID, boundaryMessageID: boundaryID })
-      .pipe(Effect.flip, Effect.ensuring(Effect.sync(resetSummaryStream)))
-
-    expect(failure).toMatchObject({ type: "summarize.conflict", message: "The boundary changed" })
-    expect(
-      yield* db
-        .select({ id: SessionMessageTable.id, seq: SessionMessageTable.seq })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.session_id, sessionID))
-        .orderBy(asc(SessionMessageTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([
-      { id: SessionMessage.ID.make("msg_summary_conflict_first"), seq: 1 },
-      { id: SessionMessage.ID.make("msg_summary_conflict_recent"), seq: 3 },
-      { id: boundaryID, seq: 99 },
-    ])
-    expect(
-      yield* db
-        .select({ seq: EventTable.seq })
-        .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
-        .orderBy(asc(EventTable.seq))
-        .all()
-        .pipe(Effect.orDie),
-    ).toEqual([{ seq: 1 }, { seq: 2 }, { seq: 3 }, { seq: 4 }])
-  }),
-)
-
-it.effect("rejects unsafe, unknown, cross-session, covered, and empty boundaries before deletion", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    const compaction = yield* SessionCompaction.Service
-
-    const floorSession = SessionSchema.ID.make("ses_floor_boundary")
-    const floorBoundary = SessionMessage.ID.make("msg_floor_boundary")
-    yield* seedSession({ id: floorSession, sequence: 2 })
-    yield* insertMessage(floorSession, SessionMessage.ID.make("msg_floor_first"), 1)
-    yield* insertMessage(floorSession, floorBoundary, 2)
-    const floor = yield* compaction.summarize({ sessionID: floorSession, boundaryMessageID: floorBoundary }).pipe(Effect.flip)
-    expect(floor).toMatchObject({ type: "summarize.keep-recent-floor" })
-
-    const unknown = yield* compaction
-      .summarize({ sessionID: floorSession, boundaryMessageID: SessionMessage.ID.make("msg_unknown_boundary") })
-      .pipe(Effect.flip)
-    expect(unknown).toMatchObject({ type: "summarize.unknown-boundary" })
-
-    const firstSession = SessionSchema.ID.make("ses_cross_first")
-    const secondSession = SessionSchema.ID.make("ses_cross_second")
-    const crossBoundary = SessionMessage.ID.make("msg_cross_boundary")
-    yield* seedSession({ id: firstSession, sequence: 1 })
-    yield* seedSession({ id: secondSession, sequence: 2 })
-    yield* insertMessage(secondSession, SessionMessage.ID.make("msg_cross_first"), 1)
-    yield* insertMessage(secondSession, crossBoundary, 2)
-    const cross = yield* compaction
-      .summarize({ sessionID: firstSession, boundaryMessageID: crossBoundary })
-      .pipe(Effect.flip)
-    expect(cross).toMatchObject({ type: "summarize.cross-session" })
-
-    const coveredSession = SessionSchema.ID.make("ses_already_covered")
-    const coveredBoundary = SessionMessage.ID.make("msg_already_covered")
-    yield* seedSession({ id: coveredSession, sequence: 2 })
-    yield* insertMessage(coveredSession, SessionMessage.ID.make("msg_already_covered_first"), 1)
-    yield* insertMessage(coveredSession, coveredBoundary, 2)
-    summary = memory(1)
-    const firstSummary = yield* compaction.summarize({
-      sessionID: coveredSession,
-      boundaryMessageID: SessionMessage.ID.make("msg_already_covered_first"),
-    })
-    const covered = yield* compaction
-      .summarize({ sessionID: coveredSession, boundaryMessageID: firstSummary.summaryMessageID })
-      .pipe(Effect.flip)
-    expect(covered).toMatchObject({ type: "summarize.already-covered" })
-
-    const emptySession = SessionSchema.ID.make("ses_empty_range")
-    const emptyBoundary = SessionMessage.ID.make("msg_empty_boundary")
-    yield* seedSession({ id: emptySession, sequence: 2 })
-    yield* insertSystemMessage(emptySession, emptyBoundary, 1)
-    yield* insertMessage(emptySession, SessionMessage.ID.make("msg_empty_recent"), 2)
-    const empty = yield* compaction.summarize({ sessionID: emptySession, boundaryMessageID: emptyBoundary }).pipe(Effect.flip)
-    expect(empty).toMatchObject({ type: "summarize.empty-range" })
-  }),
-)
-
-it.effect("rebuilds context from one checkpoint and surviving messages without adding an assistant", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    summary = memory(2)
-    const db = (yield* Database.Service).db
-    const store = yield* SessionStore.Service
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_rebuilt_context")
-    const boundaryID = SessionMessage.ID.make("msg_rebuilt_boundary")
-    yield* seedSession({ id: sessionID, sequence: 4 })
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_rebuilt_deleted"), 1)
-    yield* insertMessage(sessionID, boundaryID, 2)
-    yield* insertMessage(sessionID, SessionMessage.ID.make("msg_rebuilt_survives"), 4)
-
-    yield* compaction.summarize({ sessionID, boundaryMessageID: boundaryID })
-
-    const history = (
       yield* db
         .select()
         .from(SessionMessageTable)
         .where(eq(SessionMessageTable.session_id, sessionID))
         .orderBy(asc(SessionMessageTable.seq))
         .all()
-        .pipe(Effect.orDie)
-    ).map(decodeProjection)
-    const lowered = toLLMMessages(history, SessionRunnerModel.resolved(model).ref)
-    const assembled = JSON.stringify(lowered)
-
-    expect(assembled.match(/message 4/g)).toHaveLength(1)
-    expect(assembled).not.toContain("message 1")
-    expect((yield* store.get(sessionID))?.id).toBe(sessionID)
-    expect(
-      yield* db
-        .select({ total: SessionMessageTable.id })
-        .from(SessionMessageTable)
-        .where(eq(SessionMessageTable.type, "assistant"))
-        .all()
         .pipe(Effect.orDie),
-    ).toEqual([])
-  }),
-)
-
-it.effect("resolves compaction models by chat scope without changing title or goal precedence", () =>
-  Effect.gen(function* () {
-    const store = yield* SessionStore.Service
-    const mainModel = SessionRunnerModel.resolved(model).ref
-    const parentModel = { ...mainModel, id: ModelV2.ID.make("parent-model") }
-    const subagentModel = { ...mainModel, id: ModelV2.ID.make("subagent-model") }
-    const agentModel = { ...mainModel, id: ModelV2.ID.make("agent-model") }
-    const parentID = SessionSchema.ID.make("ses_policy_parent")
-    const mainID = SessionSchema.ID.make("ses_policy_main")
-    const subagentID = SessionSchema.ID.make("ses_policy_subagent")
-    yield* seedSession({ id: parentID, sequence: 0, model: parentModel })
-    yield* seedSession({ id: mainID, sequence: 0, model: mainModel })
-    yield* seedSession({ id: subagentID, sequence: 0, parentID, model: subagentModel })
-    const main = yield* store.get(mainID)
-    const subagent = yield* store.get(subagentID)
-    if (!main || !subagent) return yield* Effect.die("seeded sessions must be readable")
-    const selected: SessionSchema.Info[] = []
-    const resolver = {
-      resolve: (session: SessionSchema.Info) =>
-        Effect.sync(() => {
-          selected.push(session)
-          return SessionRunnerModel.resolved(model)
-        }),
-    }
-    const policy = SessionHelperPolicy.make(
-      SessionHelperPolicy.settings([
-        new Config.Document({
-          type: "document",
-          info: Schema.decodeUnknownSync(Config.Info)({
-            efficiency: {
-              helper_models: {
-                title: "test/title-configured",
-                goal: "test/goal-configured",
-                compaction: { main: "test/main-configured", subagent: "test/subagent-configured" },
-              },
-            },
-          }),
-        }),
-      ]),
-      resolver,
-    )
-    const agent = { ...AgentV2.Info.empty(AgentV2.ID.make("policy-agent")), model: agentModel }
-
-    yield* policy.resolveModel(main, "compaction", agent)
-    yield* policy.resolveModel(subagent, "compaction", agent)
-    expect(selected.map((session) => session.model?.id)).toEqual([
-      ModelV2.ID.make("main-configured"),
-      ModelV2.ID.make("subagent-configured"),
-    ])
-
-    const ownModelPolicy = SessionHelperPolicy.make(
-      SessionHelperPolicy.settings([
-        new Config.Document({
-          type: "document",
-          info: Schema.decodeUnknownSync(Config.Info)({ efficiency: { helper_models: { compaction: { subagent: "session" } } } }),
-        }),
-      ]),
-      resolver,
-    )
-    yield* ownModelPolicy.resolveModel(subagent, "compaction")
-    yield* SessionHelperPolicy.make({ titleMode: "local", goalMode: "local", models: {} }, resolver).resolveModel(
-      subagent,
-      "compaction",
-    )
-    expect(selected.slice(-2).map((session) => session.model?.id)).toEqual([
-      ModelV2.ID.make("subagent-model"),
-      ModelV2.ID.make("subagent-model"),
-    ])
-    expect(
-      selectHelperModel({
-        agentModel,
-        roleModel: { ...mainModel, id: ModelV2.ID.make("title-role") },
-        sessionModel: mainModel,
-      }),
-    ).toEqual(agentModel)
-    expect(
-      selectHelperModel({
-        agentModel,
-        roleModel: { ...mainModel, id: ModelV2.ID.make("goal-role") },
-        sessionModel: mainModel,
-      }),
-    ).toEqual(agentModel)
-  }),
-)
-
-it.effect("does not start summaries from automatic, overflow, or legacy-manual entry points", () =>
-  Effect.gen(function* () {
-    resetSummaryStream()
-    const db = (yield* Database.Service).db
-    const store = yield* SessionStore.Service
-    const compaction = yield* SessionCompaction.Service
-    const sessionID = SessionSchema.ID.make("ses_no_automatic_summary")
-    yield* seedSession({ id: sessionID, sequence: 0 })
-    const session = yield* store.get(sessionID)
-    if (!session) return yield* Effect.die("seeded session must be readable")
-
-    expect(compaction.required({ session, messages: [], model, cost: [], system: [] })).toBe(false)
-    expect(yield* compaction.compact({ session, messages: [], model, cost: [], system: [] })).toMatchObject({
-      status: "failed",
-      error: { type: "compaction.unavailable", message: "Automatic compaction is disabled" },
-    })
-    expect(
-      yield* compaction.compactManual({
-        session,
-        messages: [],
-        inputID: SessionMessage.ID.make("msg_no_automatic_manual"),
-      }),
-    ).toMatchObject({
-      status: "failed",
-      error: { type: "compaction.unavailable", message: "Manual compaction must use the conversation_summarize tool" },
-    })
-    expect(requests).toEqual([])
+    ).toEqual(beforeMessages)
     expect(
       yield* db
-        .select({ type: EventTable.type, data: EventTable.data })
+        .select()
         .from(EventTable)
-        .where(eq(EventTable.aggregate_id, sessionID))
+        .where(inArray(EventTable.id, eventIDs))
+        .orderBy(asc(EventTable.seq))
         .all()
         .pipe(Effect.orDie),
-    ).toEqual([
-      {
-        type: EventV2.versionedType(SessionEvent.Compaction.Failed.type, 1),
-        data: expect.objectContaining({ inputID: SessionMessage.ID.make("msg_no_automatic_manual") }),
-      },
-    ])
+    ).toEqual(beforeEvents)
   }),
 )

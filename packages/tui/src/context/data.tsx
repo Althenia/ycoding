@@ -15,6 +15,7 @@ import type {
   ModelInfo,
   PermissionSavedInfo,
   PermissionV2Request,
+  ProviderRequestSummary,
   ProviderV2Info,
   ReferenceInfo,
   SessionMessageInfo,
@@ -24,6 +25,7 @@ import type {
   SessionMessageAssistantTool,
   SessionInfo,
   SessionDiagnosticsOutput,
+  SessionEventFileChangeInfo,
   SessionOrchestrationPage,
   SessionPendingInfo,
   SessionTodoInfo,
@@ -60,6 +62,74 @@ export type DataSessionMemoryEstimate = {
 }
 
 const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
+
+type CurrentCompactionMessage = Extract<SessionMessageInfo, { type: "compaction"; jobID: string }>
+
+export type DataSessionCompactionLifecycle = {
+  jobID: string
+  messageID?: string
+  trigger?: CurrentCompactionMessage["trigger"]
+  admissionMode?: CurrentCompactionMessage["admissionMode"]
+  status: "pending" | "running" | "completed" | "failed"
+  revision?: number
+  boundary?: { messageID: string; seq: number }
+  metrics?: { excludedMessages: number; excludedParts: number; inputTokens: number; retainedTokens: number }
+  code?: Extract<CurrentCompactionMessage, { status: "failed" }>["code"]
+  error?: { type: string; message: string }
+  time: { created: number }
+}
+
+function currentCompaction(message: SessionMessageInfo): CurrentCompactionMessage | undefined {
+  if (message.type !== "compaction" || !("jobID" in message)) return undefined
+  return message
+}
+
+function compactionLifecycle(message: SessionMessageInfo): DataSessionCompactionLifecycle | undefined {
+  const current = currentCompaction(message)
+  if (!current) return undefined
+  const base = {
+    jobID: current.jobID,
+    messageID: current.id,
+    trigger: current.trigger,
+    admissionMode: current.admissionMode,
+    status: current.status,
+    time: current.time,
+  }
+  if ("metrics" in current)
+    return { ...base, revision: current.revision, boundary: current.boundary, metrics: current.metrics }
+  if ("code" in current) return { ...base, code: current.code, error: current.error }
+  return base
+}
+
+function mergeCompactionLifecycle(
+  current: DataSessionCompactionLifecycle | undefined,
+  update: DataSessionCompactionLifecycle,
+): DataSessionCompactionLifecycle {
+  if (!current) return update
+  const rank = { pending: 0, running: 1, completed: 2, failed: 2 }
+  const lifecycle = rank[update.status] >= rank[current.status] ? update : current
+  const messageID = update.messageID ?? current.messageID
+  const trigger = update.trigger ?? current.trigger
+  const admissionMode = update.admissionMode ?? current.admissionMode
+  const base = {
+    jobID: update.jobID,
+    ...(messageID ? { messageID } : {}),
+    ...(trigger ? { trigger } : {}),
+    ...(admissionMode ? { admissionMode } : {}),
+    time: { created: Math.min(current.time.created, update.time.created) },
+  }
+  if (lifecycle.status === "completed")
+    return {
+      ...base,
+      status: lifecycle.status,
+      revision: lifecycle.revision,
+      boundary: lifecycle.boundary,
+      metrics: lifecycle.metrics,
+    }
+  if (lifecycle.status === "failed")
+    return { ...base, status: lifecycle.status, code: lifecycle.code, error: lifecycle.error }
+  return { ...base, status: lifecycle.status }
+}
 
 // Global MCP elicitations temporarily use "global" instead of a real session ID, so the
 // server cannot recover their Location when settling them. Preserve the event Location
@@ -98,7 +168,10 @@ type Store = {
     family: Record<string, string[]>
     active: Record<string, DataSessionStatus>
     diagnostics: Record<string, SessionDiagnosticsOutput>
+    usage: Record<string, ProviderRequestSummary>
+    fileChange: Record<string, SessionEventFileChangeInfo[]>
     message: Record<string, SessionMessageInfo[]>
+    compaction: Record<string, Record<string, DataSessionCompactionLifecycle>>
     pending: Record<string, SessionPendingInfo[]>
     subagent: Record<string, SubagentPage>
     todo: Record<string, SessionTodoInfo[]>
@@ -124,7 +197,10 @@ function locationQuery(ref?: LocationRef) {
 
 export function isMessageComplete(message: SessionMessageInfo) {
   if (message.type === "shell") return message.status !== "running"
-  if (message.type === "compaction") return message.status !== "running"
+  if (message.type === "compaction") {
+    if (currentCompaction(message)) return message.status === "completed" || message.status === "failed"
+    return message.status !== "running"
+  }
   if (message.type !== "assistant") return true
   if (!message.time.completed) return false
   return message.content.every((item) => {
@@ -141,15 +217,39 @@ function messageRevision(message: SessionMessageInfo) {
   if (message.type === "system") revision.push(message.text)
   if (message.type === "skill") revision.push(message.skill, message.name, message.text, message.conflicts)
   if (message.type === "shell")
-    revision.push(message.shellID, message.command, message.status, message.exit, message.output, message.time.completed)
-  if (message.type === "compaction")
     revision.push(
+      message.shellID,
+      message.command,
       message.status,
-      message.reason,
-      "summary" in message ? message.summary : undefined,
-      "recent" in message ? message.recent : undefined,
-      "error" in message ? message.error : undefined,
+      message.exit,
+      message.output,
+      message.time.completed,
     )
+  if (message.type === "compaction") {
+    if (currentCompaction(message)) {
+      const current = currentCompaction(message)
+      if (!current) return revision
+      revision.push(
+        current.jobID,
+        current.trigger,
+        current.admissionMode,
+        current.status,
+        "revision" in current ? current.revision : undefined,
+        "boundary" in current ? current.boundary : undefined,
+        "metrics" in current ? current.metrics : undefined,
+        "code" in current ? current.code : undefined,
+        "error" in current ? current.error : undefined,
+      )
+    } else {
+      revision.push(
+        message.status,
+        "reason" in message ? message.reason : undefined,
+        "summary" in message ? message.summary : undefined,
+        "recent" in message ? message.recent : undefined,
+        "error" in message ? message.error : undefined,
+      )
+    }
+  }
   if (message.type === "agent-switched") revision.push(message.agent)
   if (message.type === "model-switched") revision.push(message.model, message.previous)
   if (message.type === "assistant") {
@@ -169,7 +269,8 @@ function messageRevision(message: SessionMessageInfo) {
     message.content.forEach((content) => {
       revision.push(content.type)
       if (content.type === "text") revision.push(content.text)
-      if (content.type === "reasoning") revision.push(content.text, content.state, content.time?.created, content.time?.completed)
+      if (content.type === "reasoning")
+        revision.push(content.text, content.state, content.time?.created, content.time?.completed)
       if (content.type === "tool")
         revision.push(
           content.id,
@@ -351,7 +452,7 @@ export function estimateResidentSessionMemory(input: {
     if (message.type === "compaction")
       add("other", [
         message.status,
-        message.reason,
+        "reason" in message ? message.reason : undefined,
         "summary" in message ? message.summary : undefined,
         "recent" in message ? message.recent : undefined,
         "error" in message ? message.error : undefined,
@@ -447,7 +548,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         family: {},
         active: {},
         diagnostics: {},
+        usage: {},
+        fileChange: {},
         message: {},
+        compaction: {},
         pending: {},
         subagent: {},
         todo: {},
@@ -499,7 +603,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             .filter(([, version]) => version > requestVersion)
             .map(([id]) => id),
         )
-        replaceMessages(sessionID, reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active))
+        replaceMessages(
+          sessionID,
+          reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active),
+        )
+        response.forEach((item) => {
+          const lifecycle = compactionLifecycle(item)
+          if (!lifecycle) return
+          updateCompaction(sessionID, lifecycle)
+        })
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
       }
@@ -524,8 +636,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       )
     }
 
+    function updateCompaction(sessionID: string, lifecycle: DataSessionCompactionLifecycle) {
+      setStore("session", "compaction", sessionID, {
+        ...store.session.compaction[sessionID],
+        [lifecycle.jobID]: mergeCompactionLifecycle(store.session.compaction[sessionID]?.[lifecycle.jobID], lifecycle),
+      })
+    }
+
     function projectPending(item: SessionPendingInfo) {
-      if (item.type === "compaction") return
       message.update(item.sessionID, (draft, index) => {
         message.append(
           draft,
@@ -678,6 +796,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.invalidate(`session.subagent:${sessionID}`)
       sync.invalidate(`session.message:${sessionID}`)
       sync.invalidate(`session.diagnostics:${sessionID}`)
+      sync.invalidate(`session.usage:${sessionID}`)
       sync.invalidate(`session.permission:${sessionID}`)
       sync.invalidate(`session.guardrail:${sessionID}`)
       sync.invalidate(`session.form:${sessionID}:`)
@@ -687,7 +806,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.info[sessionID]
           delete draft.active[sessionID]
           delete draft.message[sessionID]
+          delete draft.compaction[sessionID]
           delete draft.diagnostics[sessionID]
+          delete draft.usage[sessionID]
           delete draft.pending[sessionID]
           delete draft.subagent[sessionID]
           for (const [parentID, page] of Object.entries(draft.subagent)) {
@@ -729,6 +850,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         offset: position === "top" ? 0 : pageOffset(page),
         position,
       })
+    }
+
+    async function completedSubagents(parentID: string) {
+      const tasks = []
+      let cursor: string | undefined
+      do {
+        const page = await client.api.session.subagent.list({ parentID, limit: 10, ...(cursor ? { cursor } : {}) })
+        tasks.push(...page.data.filter((task) => task.state === "completed"))
+        cursor = page.cursor.next
+      } while (cursor)
+      return tasks
     }
 
     function restoreSubagentTop(parentID: string) {
@@ -797,6 +929,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               cost: event.data.cost,
               tokens: event.data.tokens,
             })
+          result.session.usage.invalidate(event.data.sessionID)
+          if (store.session.usage[event.data.sessionID] !== undefined)
+            void result.session.usage.sync(event.data.sessionID).catch(() => undefined)
           break
         case "catalog.updated":
           result.location.model.invalidate(event.location)
@@ -830,6 +965,20 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "todo.updated":
           setStore("session", "todo", event.data.sessionID, reconcile(event.data.todos))
           break
+        case "session.file-change.recorded": {
+          const parentID =
+            store.session.info[event.data.sessionID]?.parentID ??
+            Object.entries(store.session.subagent).find(([, page]) =>
+              page.data.some((task) => task.sessionID === event.data.sessionID),
+            )?.[0]
+          const sessionIDs = [event.data.sessionID, parentID].filter((sessionID): sessionID is string => !!sessionID)
+          sessionIDs.forEach((sessionID) => {
+            result.session.fileChange.invalidate(sessionID)
+            if (store.session.fileChange[sessionID] === undefined) return
+            void result.session.fileChange.sync(sessionID).catch(() => undefined)
+          })
+          break
+        }
         case "session.model.selected":
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "model", event.data.model)
@@ -1124,15 +1273,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             match.state.content = [...event.data.content]
           })
           break
-        case "session.tool.success": {
-          const successfulTool = message.latestTool(
-            message.assistant(
-              store.session.message[event.data.sessionID] ?? [],
-              index(event.data.sessionID),
-              event.data.assistantMessageID,
-            ),
-            event.data.callID,
-          )
+        case "session.tool.success":
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.latestTool(
               message.assistant(draft, index, event.data.assistantMessageID),
@@ -1150,13 +1291,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             match.providerResultState = event.data.resultState
             match.time.completed = event.created
           })
-          if (successfulTool?.name === "conversation_summarize") {
-            messageSyncLoad.delete(event.data.sessionID)
-            sync.invalidate(`session.message:${event.data.sessionID}`)
-            void result.session.message.sync(event.data.sessionID).catch(() => undefined)
-          }
           break
-        }
         case "session.tool.failed":
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.latestTool(
@@ -1221,26 +1356,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           setSessionActive(event.data.sessionID, "running")
           break
         case "session.compaction.admitted":
-          addPending({
-            id: event.data.inputID,
-            sessionID: event.data.sessionID,
-            admittedSeq: event.durable.seq,
-            timeCreated: event.created,
-            type: "compaction",
+          updateCompaction(event.data.sessionID, {
+            jobID: event.data.jobID,
+            status: "pending",
+            time: { created: event.created },
           })
           break
         case "session.compaction.started":
-          removePending(event.data.sessionID, event.data.inputID)
-          message.update(event.data.sessionID, (draft, index) => {
-            message.append(draft, index, {
-              id: event.data.inputID ?? messageIDFromEvent(event.id),
-              type: "compaction",
-              status: "running",
-              reason: event.data.reason,
-              summary: "",
-              recent: event.data.recent ?? "",
-              time: { created: event.created },
-            })
+          updateCompaction(event.data.sessionID, {
+            jobID: event.data.jobID,
+            status: "running",
+            time: { created: event.created },
           })
           break
         case "session.execution.succeeded":
@@ -1285,60 +1411,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           result.session.diagnostics.invalidate(event.data.sessionID)
           void result.session.diagnostics.sync(event.data.sessionID).catch(() => undefined)
           break
-        case "session.compaction.delta":
-          message.update(event.data.sessionID, (draft) => {
-            const current = message.compaction(draft)
-            if (current?.status === "running") current.summary += event.data.text
-          })
-          break
         case "session.compaction.ended":
-          message.update(event.data.sessionID, (draft, index) => {
-            const position = draft.findLastIndex((item) => item.type === "compaction" && item.status === "running")
-            const current = draft[position]
-            if (current?.type === "compaction") {
-              Object.assign(current, {
-                status: "completed",
-                reason: event.data.reason,
-                summary: event.data.text,
-                recent: event.data.recent,
-              })
-              return
-            }
-            message.append(draft, index, {
-              id: messageIDFromEvent(event.id),
-              type: "compaction",
-              status: "completed",
-              reason: event.data.reason,
-              summary: event.data.text,
-              recent: event.data.recent,
-              time: { created: event.created },
-            })
+          updateCompaction(event.data.sessionID, {
+            jobID: event.data.jobID,
+            status: "completed",
+            revision: event.data.revision,
+            boundary: event.data.boundary,
+            metrics: event.data.metrics,
+            time: { created: event.created },
           })
-          result.session.diagnostics.invalidate(event.data.sessionID)
-          void result.session.diagnostics.sync(event.data.sessionID).catch(() => undefined)
           break
         case "session.compaction.failed":
-          removePending(event.data.sessionID, event.data.inputID)
-          message.update(event.data.sessionID, (draft, index) => {
-            const position = draft.findLastIndex((item) => item.type === "compaction" && item.status === "running")
-            const current = draft[position]
-            const failed: Extract<SessionMessageInfo, { type: "compaction"; status: "failed" }> = {
-              id: current?.id ?? event.data.inputID ?? messageIDFromEvent(event.id),
-              type: "compaction",
-              status: "failed",
-              reason: event.data.reason ?? "manual",
-              error: event.data.error ?? {
-                type: "compaction.failed",
-                message: "Compaction failed before recording an error",
-              },
-              metadata: current?.type === "compaction" ? current.metadata : event.metadata,
-              time: current?.type === "compaction" ? current.time : { created: event.created },
-            }
-            if (current?.type === "compaction") {
-              draft[position] = failed
-              return
-            }
-            message.append(draft, index, failed)
+          updateCompaction(event.data.sessionID, {
+            jobID: event.data.jobID,
+            status: "failed",
+            code: event.data.code,
+            error: event.data.error,
+            time: { created: event.created },
           })
           break
         case "permission.v2.asked":
@@ -1486,12 +1575,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 sessionID,
               })
               setStore("session", "pending", sessionID, reconcile(pending))
-              setStore(
-                "session",
-                "input",
-                sessionID,
-                reconcile(pending.filter((item) => item.type !== "compaction").map((item) => item.id)),
-              )
+              setStore("session", "input", sessionID, reconcile(pending.map((item) => item.id)))
               pending.forEach(projectPending)
             })
           },
@@ -1520,7 +1604,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           loadOlder(parentID: string) {
             const page = store.session.subagent[parentID]
             if (!page || !page.cursor.next) return Promise.resolve()
-            return loadSubagentPage(parentID, { cursor: page.cursor.next }, "older", () => page.offset + page.data.length)
+            return loadSubagentPage(
+              parentID,
+              { cursor: page.cursor.next },
+              "older",
+              () => page.offset + page.data.length,
+            )
           },
           loadNewer(parentID: string) {
             const page = store.session.subagent[parentID]
@@ -1528,6 +1617,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             return loadSubagentPage(parentID, { cursor: page.cursor.previous }, "older", (loaded) =>
               Math.max(0, page.offset - loaded.data.length),
             )
+          },
+          completed(parentID: string) {
+            return completedSubagents(parentID)
           },
           invalidate(parentID: string) {
             subagentGeneration.set(parentID, (subagentGeneration.get(parentID) ?? 0) + 1)
@@ -1554,6 +1646,32 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.diagnostics:${sessionID}`)
+          },
+        },
+        usage: {
+          get(sessionID: string) {
+            return store.session.usage[sessionID]
+          },
+          sync(sessionID: string) {
+            return sync.run(`session.usage:${sessionID}`, async () => {
+              setStore("session", "usage", sessionID, await client.api.session.usage({ sessionID }))
+            })
+          },
+          invalidate(sessionID: string) {
+            sync.invalidate(`session.usage:${sessionID}`)
+          },
+        },
+        fileChange: {
+          list(sessionID: string) {
+            return store.session.fileChange[sessionID] ?? []
+          },
+          sync(sessionID: string) {
+            return sync.run(`session.fileChange:${sessionID}`, async () => {
+              setStore("session", "fileChange", sessionID, await client.api.session["file-change"].list({ sessionID }))
+            })
+          },
+          invalidate(sessionID: string) {
+            sync.invalidate(`session.fileChange:${sessionID}`)
           },
         },
         todo: {
@@ -1605,11 +1723,22 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               "session",
               produce((draft) => {
                 delete draft.message[sessionID]
+                delete draft.compaction[sessionID]
               }),
             )
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.message:${sessionID}`)
+          },
+        },
+        compaction: {
+          get(sessionID: string, jobID: string) {
+            return store.session.compaction[sessionID]?.[jobID]
+          },
+          list(sessionID: string) {
+            return Object.values(store.session.compaction[sessionID] ?? {}).toSorted(
+              (a, b) => a.time.created - b.time.created || a.jobID.localeCompare(b.jobID),
+            )
           },
         },
         permission: {

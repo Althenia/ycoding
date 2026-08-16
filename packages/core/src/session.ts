@@ -1,19 +1,26 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { Effect, Layer, Schema, Context, Stream, Scope } from "effect"
+import { DateTime, Effect, Layer, Schema, Context, Stream, Scope, Option } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
+import { ProviderV2 } from "./provider"
 import { Location } from "./location"
 import { SessionMessage } from "./session/message"
 import { InstructionState } from "./session/instruction-state"
 import { SessionCacheDiagnostics } from "./session/cache-diagnostics"
 import { SessionPermissionCeiling } from "./session/permission-ceiling"
 import { SessionProviderRequest } from "./session/provider-request"
+import { SessionUsage } from "./session/usage"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionAutonomy } from "./session/autonomy"
+import { SessionCompactionJob } from "./session/compaction-job"
+import { SessionCompactionExecution } from "./session/compaction-execution"
+import { SessionContextState } from "./session/context-state"
 import { Info, list } from "./session/skill-status"
 import { SessionGoal } from "./session/goal"
 import { SessionGuardrail } from "./session/guardrail"
@@ -22,7 +29,10 @@ import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { EventV2 } from "./event"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
-import { SessionMessageTable, SessionTable } from "./session/sql"
+import { SessionContextExclusionCleanup } from "./session/context-exclusion-cleanup"
+import { SessionFileChangeCleanup } from "./session/file-change-cleanup"
+import { SessionUsageCleanup } from "./session/usage-cleanup"
+import { SessionFileChangeTable, SessionMessageTable, SessionTable, SessionTaskTable } from "./session/sql"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -64,8 +74,11 @@ import { ProjectArtifactSource } from "./project-artifact/source"
 import { SessionModelSwitch } from "./session/model-switch"
 import { SessionHistory } from "./session/history"
 import { SessionContextBudget } from "./session/context-budget"
+import { SessionRunnerModel } from "./session/runner/model"
 import { Catalog } from "./catalog"
 import { Config } from "./config"
+import { ConfigCompaction } from "./config/compaction"
+import { Hash } from "./util/hash"
 
 export const RevertState = Session.Revert
 export type RevertState = Session.Revert
@@ -117,8 +130,9 @@ type CreateInput = CreateBaseInput &
   ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
 
 type CompactInput = {
-  id?: SessionMessage.ID
+  id?: SessionCompaction.ID
   sessionID: SessionSchema.ID
+  trigger?: "consider" | "advised"
 }
 
 type ForkInput = {
@@ -163,7 +177,8 @@ export class CompactionConflictError extends Schema.TaggedErrorClass<CompactionC
   "Session.CompactionConflictError",
   {
     sessionID: SessionSchema.ID,
-    inputID: SessionMessage.ID,
+    jobID: SessionCompaction.ID,
+    message: Schema.String,
   },
 ) {}
 export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.BusyError", {
@@ -235,6 +250,7 @@ export interface Interface {
   readonly context: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
+  readonly fileChanges: (sessionID: SessionSchema.ID) => Effect.Effect<SessionEvent.FileChange.Info[], NotFoundError>
   readonly skills: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<Info[], NotFoundError | AgentNotFoundError | MessageDecodeError>
@@ -288,6 +304,7 @@ export interface Interface {
   readonly diagnostics: (
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<Session.CacheDiagnostics | undefined, NotFoundError | MessageDecodeError>
+  readonly usage: (sessionID: SessionSchema.ID) => Effect.Effect<ProviderRequest.Summary, NotFoundError>
   readonly autonomy: {
     readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.State, NotFoundError>
     readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError>
@@ -332,7 +349,7 @@ export interface Interface {
   }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError>
   readonly compact: (
     input: CompactInput,
-  ) => Effect.Effect<SessionPending.Compaction, NotFoundError | CompactionConflictError>
+  ) => Effect.Effect<SessionCompaction.Admission, NotFoundError | CompactionConflictError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -370,6 +387,9 @@ const layer = Layer.effect(
     const global = yield* Global.Service
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
+    const compactionJobs = yield* SessionCompactionJob.Service
+    const compactionExecution = yield* Effect.serviceOption(SessionCompactionExecution.Service)
+    const contextState = yield* SessionContextState.Service
     const store = yield* SessionStore.Service
     const providerRequests = yield* SessionProviderRequest.Service
     const locations = yield* LocationServiceMap.Service
@@ -395,22 +415,21 @@ const layer = Layer.effect(
       const resolution = yield* Effect.gen(function* () {
         const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
         const config = yield* Config.Service.pipe(Effect.provide(locations.get(session.location)))
-        const compaction = (yield* config.entries())
-          .filter((entry): entry is Config.Document => entry.type === "document")
-          .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : []))
+        const compaction = ConfigCompaction.resolve(
+          (yield* config.entries())
+            .filter((entry): entry is Config.Document => entry.type === "document")
+            .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : [])),
+        )
         return {
           target: SessionContextBudget.resolveCapabilities(
             yield* catalog.model.available(),
             targetModel.providerID,
             targetModel.id,
             {
-              safetyMarginTokens:
-                compaction.findLast((item) => item.context_safety_margin_tokens !== undefined)
-                  ?.context_safety_margin_tokens ?? 0,
+              safetyMarginTokens: compaction.contextSafetyMarginTokens,
             },
           ),
-          keepRecentMessages: compaction.findLast((item) => item.keep_recent_messages !== undefined)
-            ?.keep_recent_messages,
+          keepRecentMessages: compaction.keepRecentMessages,
         }
       })
       const messages = yield* SessionHistory.forModel(db, session.id)
@@ -421,6 +440,37 @@ const layer = Layer.effect(
         model: session.model ?? targetModel,
         target: resolution.target,
         keepRecentMessages: resolution.keepRecentMessages,
+      })
+    })
+    const family = Effect.fnUntraced(function* (session: SessionSchema.Info) {
+      if (session.parentID) return [session]
+      const sessions = [session]
+      for (const current of sessions) {
+        const children = yield* result.list({ parentID: current.id })
+        sessions.push(...children.data)
+      }
+      return sessions
+    })
+    const estimated = Effect.fnUntraced(function* (
+      session: SessionSchema.Info,
+      records: ReadonlyArray<ProviderRequest.Record>,
+    ) {
+      const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+      return yield* Effect.forEach(records, (record) => {
+        if (record.cost !== undefined) return Effect.succeed(record)
+        return Effect.gen(function* () {
+          const provider = yield* catalog.model.get(record.model.providerID, record.model.id)
+          const openrouter = yield* catalog.model.get(
+            ProviderV2.ID.openrouter,
+            ModelV2.ID.make(
+              record.model.providerID === ProviderV2.ID.openrouter
+                ? record.model.id
+                : `${record.model.providerID}/${record.model.id}`,
+            ),
+          )
+          const cost = SessionUsage.estimatedCatalogCost(provider?.cost ?? [], openrouter?.cost ?? [], record.tokens)
+          return cost === undefined ? record : { ...record, cost: cost.cost, costProvenance: "current_catalog" }
+        })
       })
     })
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -452,42 +502,41 @@ const layer = Layer.effect(
           .run()
           .pipe(Effect.orDie)
         const now = Date.now()
-        const permissionCeiling = SessionPermissionCeiling.inherit(
-          parent?.permissionCeiling,
-          input.permissionCeiling,
-        )
+        const permissionCeiling = SessionPermissionCeiling.inherit(parent?.permissionCeiling, input.permissionCeiling)
         const relative = path.relative(project.directory, location.directory).replaceAll("\\", "/")
-        const projected = yield* events.publish(
-          SessionEvent.Created,
-          {
-            sessionID,
-            projectID: project.id,
-            location,
-            parentID: input.parentID,
-            agent: input.agent,
-            model: input.model,
-            permissionCeiling: permissionCeiling.length > 0 ? permissionCeiling : undefined,
-            title: input.title ?? `New session - ${new Date(now).toISOString()}`,
-            subpath: relative.length > 0 ? RelativePath.make(relative) : undefined,
-            created: now,
-          },
-          { location },
-        ).pipe(
-          Effect.as({ type: "created" } as const),
-          Effect.catchDefect((defect) => {
-            if (!(defect instanceof SessionProjector.SessionAlreadyProjected)) {
-              return Effect.die(defect)
-            }
-            // Concurrent creation lost the projection race. The existing Session identity wins.
-            return store
-              .get(sessionID)
-              .pipe(
-                Effect.flatMap((session) =>
-                  session ? Effect.succeed({ type: "existing", session } as const) : Effect.die(defect),
-                ),
-              )
-          }),
-        )
+        const projected = yield* events
+          .publish(
+            SessionEvent.Created,
+            {
+              sessionID,
+              projectID: project.id,
+              location,
+              parentID: input.parentID,
+              agent: input.agent,
+              model: input.model,
+              permissionCeiling: permissionCeiling.length > 0 ? permissionCeiling : undefined,
+              title: input.title ?? `New session - ${new Date(now).toISOString()}`,
+              subpath: relative.length > 0 ? RelativePath.make(relative) : undefined,
+              created: now,
+            },
+            { location },
+          )
+          .pipe(
+            Effect.as({ type: "created" } as const),
+            Effect.catchDefect((defect) => {
+              if (!(defect instanceof SessionProjector.SessionAlreadyProjected)) {
+                return Effect.die(defect)
+              }
+              // Concurrent creation lost the projection race. The existing Session identity wins.
+              return store
+                .get(sessionID)
+                .pipe(
+                  Effect.flatMap((session) =>
+                    session ? Effect.succeed({ type: "existing", session } as const) : Effect.die(defect),
+                  ),
+                )
+            }),
+          )
         if (projected.type === "existing") return projected.session
         // TODO: Restore recorded sessions onto replacement synchronized workspaces in a future API slice.
         return yield* result.get(sessionID).pipe(Effect.orDie)
@@ -530,34 +579,49 @@ const layer = Layer.effect(
         if (!diagnostics) return diagnostics
         return { ...diagnostics, requests: yield* providerRequests.summary(sessionID) }
       }),
+      usage: Effect.fn("V2Session.usage")(function* (sessionID) {
+        const session = yield* result.get(sessionID)
+        const records = yield* Effect.forEach(yield* family(session), (item) =>
+          providerRequests.list(item.id).pipe(Effect.flatMap((records) => estimated(item, records))),
+        )
+        return SessionProviderRequest.summarize(
+          records
+            .flat()
+            .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
+        )
+      }),
       autonomy: {
         get: Effect.fn("V2Session.autonomy.get")(function* (sessionID) {
           yield* result.get(sessionID)
-          return yield* autonomy.get(sessionID).pipe(
-            Effect.catchTag("SessionAutonomy.NotFound", () => Effect.fail(new NotFoundError({ sessionID }))),
-          )
+          return yield* autonomy
+            .get(sessionID)
+            .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.fail(new NotFoundError({ sessionID }))))
         }),
         set: Effect.fn("V2Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
           if (input.mode !== "goal")
-            return yield* autonomy.setMode({ sessionID: input.sessionID, mode: input.mode }).pipe(
+            return yield* autonomy
+              .setMode({ sessionID: input.sessionID, mode: input.mode })
+              .pipe(
+                Effect.catchTag("SessionAutonomy.NotFound", () =>
+                  Effect.fail(new NotFoundError({ sessionID: input.sessionID })),
+                ),
+              )
+          const rawText = input.goal.trim()
+          const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+          const synthesized = yield* goals.synthesize({ session, text: rawText })
+          return yield* autonomy
+            .setGoal({
+              sessionID: input.sessionID,
+              text: synthesized ?? rawText,
+              rawText,
+              maxNoProgress: input.maxNoProgress,
+            })
+            .pipe(
               Effect.catchTag("SessionAutonomy.NotFound", () =>
                 Effect.fail(new NotFoundError({ sessionID: input.sessionID })),
               ),
             )
-          const rawText = input.goal.trim()
-          const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
-          const synthesized = yield* goals.synthesize({ session, text: rawText })
-          return yield* autonomy.setGoal({
-            sessionID: input.sessionID,
-            text: synthesized ?? rawText,
-            rawText,
-            maxNoProgress: input.maxNoProgress,
-          }).pipe(
-            Effect.catchTag("SessionAutonomy.NotFound", () =>
-              Effect.fail(new NotFoundError({ sessionID: input.sessionID })),
-            ),
-          )
         }),
       },
       remove: Effect.fn("V2Session.remove")(function* (sessionID) {
@@ -651,6 +715,28 @@ const layer = Layer.effect(
         yield* result.get(sessionID)
         return yield* store.context(sessionID)
       }),
+      fileChanges: Effect.fn("V2Session.fileChanges")(function* (sessionID) {
+        yield* result.get(sessionID)
+        const rows = yield* db
+          .select({
+            path: SessionFileChangeTable.path,
+            patch: SessionFileChangeTable.patch,
+            additions: SessionFileChangeTable.additions,
+            deletions: SessionFileChangeTable.deletions,
+          })
+          .from(SessionFileChangeTable)
+          .leftJoin(SessionTaskTable, eq(SessionTaskTable.session_id, SessionFileChangeTable.session_id))
+          .where(
+            or(
+              eq(SessionFileChangeTable.session_id, sessionID),
+              and(eq(SessionTaskTable.parent_id, sessionID), eq(SessionTaskTable.state, "completed")),
+            ),
+          )
+          .orderBy(asc(SessionFileChangeTable.path), asc(SessionFileChangeTable.session_id))
+          .all()
+          .pipe(Effect.orDie)
+        return rows.map((row) => SessionEvent.FileChange.Info.make(row))
+      }),
       skills: Effect.fn("V2Session.skills")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const rows = yield* db
@@ -661,8 +747,12 @@ const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         const messages = yield* Effect.forEach(rows, decode)
-        const contextModule = yield* Effect.promise<typeof import("./session/context")>(() => import("./session/" + "context"))
-        const context = yield* contextModule.SessionContext.Service.pipe(Effect.provide(locations.get(session.location)))
+        const contextModule = yield* Effect.promise<typeof import("./session/context")>(
+          () => import("./session/" + "context"),
+        )
+        const context = yield* contextModule.SessionContext.Service.pipe(
+          Effect.provide(locations.get(session.location)),
+        )
         const selection = yield* context.select(sessionID)
         const keys = yield* InstructionState.activeKeys(db, selection.instructions, sessionID)
         return list(messages, keys)
@@ -962,20 +1052,21 @@ const layer = Layer.effect(
               : undefined,
           },
           {
-            commit: provenance && source
-              ? (seq) =>
-                  source
-                    .activate({
-                      kind: "agent",
-                      id: input.agent,
-                      sessionID: input.sessionID,
-                      agentID: input.agent,
-                      source: "agent-selected",
-                      boundarySeq: ProjectArtifact.Revision.make(seq),
-                      activatedAt,
-                    })
-                    .pipe(Effect.orDie)
-              : undefined,
+            commit:
+              provenance && source
+                ? (seq) =>
+                    source
+                      .activate({
+                        kind: "agent",
+                        id: input.agent,
+                        sessionID: input.sessionID,
+                        agentID: input.agent,
+                        source: "agent-selected",
+                        boundarySeq: ProjectArtifact.Revision.make(seq),
+                        activatedAt,
+                      })
+                      .pipe(Effect.orDie)
+                : undefined,
           },
         )
       }),
@@ -1016,11 +1107,7 @@ const layer = Layer.effect(
         const info = yield* fs.stat(directory).pipe(Effect.catch(() => Effect.succeed(undefined)))
         if (!info) return yield* new DestinationNotFoundError({ directory })
         if (info.type !== "Directory") return yield* new DestinationNotDirectoryError({ directory })
-        if (
-          current.location.directory === directory &&
-          current.location.workspaceID === input.workspaceID
-        )
-          return
+        if (current.location.directory === directory && current.location.workspaceID === input.workspaceID) return
         const project = yield* projects.resolve(directory)
         yield* db
           .insert(ProjectTable)
@@ -1087,19 +1174,63 @@ const layer = Layer.effect(
         })
       }),
       compact: Effect.fn("V2Session.compact")(function* (input) {
-        yield* result.get(input.sessionID)
-        const inputID = input.id ?? SessionMessage.ID.create()
-        const admitted = yield* SessionPending.admitCompaction(db, events, {
-          id: inputID,
-          sessionID: input.sessionID,
-        }).pipe(
-          Effect.catchDefect((defect) =>
-            defect instanceof SessionPending.LifecycleConflict
-              ? new CompactionConflictError({ sessionID: input.sessionID, inputID })
-              : Effect.die(defect),
+        const session = yield* result.get(input.sessionID)
+        const jobID = input.id ?? SessionCompaction.ID.create()
+        const boundary = yield* latestCompleteBoundary(db, input.sessionID)
+        if (!boundary)
+          return yield* new CompactionConflictError({
+            sessionID: input.sessionID,
+            jobID,
+            message: "Session has no completed message boundary to compact",
+          })
+        const policy = yield* Config.Service.pipe(
+          Effect.provide(locations.get(session.location)),
+          Effect.flatMap((config) => config.entries()),
+          Effect.map((entries) =>
+            ConfigCompaction.resolve(
+              entries
+                .filter((entry): entry is Config.Document => entry.type === "document")
+                .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : [])),
+            ),
           ),
         )
-        yield* execution.wake(input.sessionID)
+        const resolved = yield* SessionRunnerModel.Service.pipe(
+          Effect.provide(locations.get(session.location)),
+          Effect.flatMap((models) => models.resolve(session)),
+          Effect.mapError(
+            (error) => new CompactionConflictError({ sessionID: input.sessionID, jobID, message: error.message }),
+          ),
+        )
+        const limits = resolved.model.route.defaults.limits
+        const hardInputCap = (limits?.context ?? 0) - (limits?.output ?? 0) - policy.contextSafetyMarginTokens
+        if (hardInputCap <= 0)
+          return yield* new CompactionConflictError({
+            sessionID: input.sessionID,
+            jobID,
+            message: "Selected model has no positive compaction input budget",
+          })
+        const targetMaxInputTokens = policy.advisory
+          ? Math.floor((hardInputCap * policy.advisory.considerPercent) / 100)
+          : hardInputCap
+        const current = yield* contextState.current(input.sessionID)
+        const trigger = input.trigger ?? "manual"
+        const admitted = yield* compactionJobs
+          .admit({
+            id: jobID,
+            sessionID: input.sessionID,
+            trigger,
+            admissionMode: "background",
+            requestedThrough: boundary,
+            baseContextRevision: current.revision,
+            targetMaxInputTokens,
+            configDigest: Hash.sha256(JSON.stringify(policy)),
+          })
+          .pipe(
+            Effect.mapError(
+              (error) => new CompactionConflictError({ sessionID: input.sessionID, jobID, message: error.message }),
+            ),
+          )
+        if (Option.isSome(compactionExecution)) yield* compactionExecution.value.wake(input.sessionID)
         return admitted
       }),
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
@@ -1373,6 +1504,41 @@ function positiveInt(value: string | null) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined
 }
 
+const latestCompleteBoundary = Effect.fnUntraced(function* (db: Database.Interface["db"], sessionID: SessionSchema.ID) {
+  const rows = yield* db
+    .select({
+      id: SessionMessageTable.id,
+      seq: SessionMessageTable.seq,
+      type: SessionMessageTable.type,
+      data: SessionMessageTable.data,
+    })
+    .from(SessionMessageTable)
+    .where(eq(SessionMessageTable.session_id, sessionID))
+    .orderBy(desc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  const boundary = rows.find((row) => isCompleteMessage(row.type, row.data))
+  if (!boundary) return undefined
+  return { messageID: boundary.id, seq: boundary.seq }
+})
+
+function isCompleteMessage(type: SessionMessage.Type, data: unknown) {
+  if (type === "user") return hasTime(data, "consumed")
+  if (type === "assistant" || type === "shell") return hasTime(data, "completed")
+  if (type !== "compaction") return true
+  if (!isRecord(data)) return false
+  return data.status === "completed" || data.status === "failed"
+}
+
+function hasTime(data: unknown, key: string) {
+  if (!isRecord(data) || !isRecord(data.time)) return false
+  return typeof data.time[key] === "number"
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
+}
+
 // Mirrors the shell tool's in-memory preview safety limit.
 const SHELL_MAX_CAPTURE_BYTES = 1024 * 1024
 
@@ -1386,10 +1552,16 @@ export const node = makeGlobalNode({
     ProjectV2.node,
     SessionExecution.node,
     SessionAutonomy.node,
+    SessionCompactionJob.node,
+    SessionCompactionExecution.node,
+    SessionContextState.node,
     SessionStore.node,
     SessionProviderRequest.node,
     LocationServiceMap.node,
     SessionProjector.node,
+    SessionContextExclusionCleanup.node,
+    SessionFileChangeCleanup.node,
+    SessionUsageCleanup.node,
     FSUtil.node,
     Global.node,
     ProjectArtifactAccounting.node,

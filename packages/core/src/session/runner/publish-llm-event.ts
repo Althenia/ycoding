@@ -20,6 +20,10 @@ type Input = {
   readonly providerMetadataKey: string
   readonly snapshot?: Snapshot.ID
   readonly assistantMessageID?: SessionMessage.ID
+  readonly captureProviderState?: (
+    state: Record<string, unknown> | undefined,
+    selector: { readonly messageID: SessionMessage.ID; readonly partOrdinal: number; readonly partKind: string },
+  ) => Record<string, unknown> | undefined
 }
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -45,6 +49,35 @@ const settledOutput = (value: ToolOutput | undefined, result: ToolResultValue): 
   return { structured: record(settled.structured), content: settled.content }
 }
 
+const fileChanges = (tool: string, structured: Record<string, unknown>) => {
+  if (tool !== "edit" && tool !== "patch") return []
+  const files = structured.files
+  if (!Array.isArray(files)) return []
+  return files.flatMap((file) => {
+    if (typeof file !== "object" || file === null || Array.isArray(file)) return []
+    const value = file as Record<string, unknown>
+    if (
+      typeof value.file !== "string" ||
+      typeof value.patch !== "string" ||
+      typeof value.additions !== "number" ||
+      !Number.isSafeInteger(value.additions) ||
+      value.additions < 0 ||
+      typeof value.deletions !== "number" ||
+      !Number.isSafeInteger(value.deletions) ||
+      value.deletions < 0
+    )
+      return []
+    return [
+      {
+        path: RelativePath.make(value.file),
+        patch: value.patch,
+        additions: value.additions,
+        deletions: value.deletions,
+      },
+    ]
+  })
+}
+
 /** Persist one step without executing tools or starting a continuation step. */
 export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish">, input: Input) => {
   const tools = new Map<
@@ -52,13 +85,16 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
     {
       readonly assistantMessageID: SessionMessage.ID
       readonly name: string
+      readonly partOrdinal: number
       called: boolean
       settled: boolean
       providerExecuted: boolean
     }
   >()
+  let nextContentOrdinal = 0
+  const reasoningContentOrdinals = new Map<string, number>()
   let assistantMessageID = input.assistantMessageID
-  let stepStarted = false
+  let stepStarted = input.assistantMessageID !== undefined
   let stepFailed = false
   let providerFailed = false
   let retryEvidence = false
@@ -91,6 +127,16 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
       ? Effect.die(new Error("Tool event before assistant step start"))
       : Effect.succeed(assistantMessageID)
   const providerState = (metadata: ProviderMetadata | undefined) => metadata?.[input.providerMetadataKey]
+  const capturedProviderState = (
+    metadata: ProviderMetadata | undefined,
+    messageID: SessionMessage.ID,
+    partOrdinal: number,
+    partKind: string,
+  ) => {
+    const state = providerState(metadata)
+    if (input.captureProviderState) return input.captureProviderState(state, { messageID, partOrdinal, partKind })
+    return state
+  }
   const textPhase = (metadata: ProviderMetadata | undefined) => {
     const phase = providerState(metadata)?.phase
     return phase === "commentary" || phase === "final_answer" ? phase : undefined
@@ -197,6 +243,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
     tools.set(event.id, {
       assistantMessageID,
       name: event.name,
+      partOrdinal: nextContentOrdinal++,
       called: false,
       settled: false,
       providerExecuted: event.providerExecuted === true,
@@ -254,11 +301,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
   const failTools = Effect.fnUntraced(function* (error: SessionError.Error, mode: "all" | "hosted" | "uncalled") {
     let failed = false
     for (const [callID, tool] of tools) {
-      if (
-        tool.settled ||
-        (mode === "hosted" && !tool.providerExecuted) ||
-        (mode === "uncalled" && tool.called)
-      )
+      if (tool.settled || (mode === "hosted" && !tool.providerExecuted) || (mode === "uncalled" && tool.called))
         continue
       tool.settled = true
       failed = true
@@ -317,6 +360,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         return
       case "text-start":
         retryEvidence = true
+        nextContentOrdinal += 1
         const startedTextPhase = textPhase(event.providerMetadata)
         const startedTextState = startedTextPhase === undefined ? undefined : { phase: startedTextPhase }
         const startedTextOrdinal = yield* text.start(event.id, startedTextState)
@@ -347,19 +391,37 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         return
       case "reasoning-start":
         retryEvidence = true
-        const startedReasoningOrdinal = yield* reasoning.start(event.id, providerState(event.providerMetadata))
+        const reasoningMessageID = yield* startAssistant()
+        const reasoningContentOrdinal = nextContentOrdinal++
+        reasoningContentOrdinals.set(event.id, reasoningContentOrdinal)
+        const startedReasoningOrdinal = yield* reasoning.start(event.id)
+        const startedReasoningState = capturedProviderState(
+          event.providerMetadata,
+          reasoningMessageID,
+          reasoningContentOrdinal,
+          "reasoning",
+        )
+        yield* reasoning.append(event.id, "", startedReasoningState)
         yield* events.publish(SessionEvent.Reasoning.Started, {
           sessionID: input.sessionID,
-          assistantMessageID: yield* startAssistant(),
+          assistantMessageID: reasoningMessageID,
           ordinal: startedReasoningOrdinal,
-          state: providerState(event.providerMetadata),
+          state: startedReasoningState,
         })
         return
       case "reasoning-delta":
+        const reasoningDeltaContentOrdinal = reasoningContentOrdinals.get(event.id)
+        if (reasoningDeltaContentOrdinal === undefined)
+          return yield* Effect.die(new Error(`Reasoning delta before start: ${event.id}`))
         const deltaReasoningOrdinal = yield* reasoning.append(
           event.id,
           event.text,
-          providerState(event.providerMetadata),
+          capturedProviderState(
+            event.providerMetadata,
+            yield* currentAssistantMessageID(),
+            reasoningDeltaContentOrdinal,
+            "reasoning",
+          ),
         )
         yield* events.publish(SessionEvent.Reasoning.Delta, {
           sessionID: input.sessionID,
@@ -369,7 +431,20 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         })
         return
       case "reasoning-end":
-        yield* reasoning.end(event.id, providerState(event.providerMetadata))
+        const reasoningEndContentOrdinal = reasoningContentOrdinals.get(event.id)
+        if (reasoningEndContentOrdinal === undefined)
+          return yield* Effect.die(new Error(`Reasoning end before start: ${event.id}`))
+        const endedReasoningOrdinal = yield* reasoning.append(event.id, "")
+        yield* reasoning.end(
+          event.id,
+          capturedProviderState(
+            event.providerMetadata,
+            yield* currentAssistantMessageID(),
+            reasoningEndContentOrdinal,
+            "reasoning",
+          ),
+        )
+        reasoningContentOrdinals.delete(event.id)
         return
       case "tool-input-start":
         retryEvidence = true
@@ -413,7 +488,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
           callID: event.id,
           input: record(event.input),
           executed: tool.providerExecuted,
-          state: providerState(event.providerMetadata),
+          state: capturedProviderState(event.providerMetadata, tool.assistantMessageID, tool.partOrdinal, "tool-call"),
         })
         return
       }
@@ -429,7 +504,12 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         tool.settled = true
         const result = error ? { error } : settledOutput(event.output, event.result)
         const executed = event.providerExecuted === true || tool.providerExecuted
-        const resultState = providerState(event.providerMetadata)
+        const resultState = capturedProviderState(
+          event.providerMetadata,
+          tool.assistantMessageID,
+          tool.partOrdinal,
+          "tool-result",
+        )
         if ("error" in result) {
           yield* events.publish(SessionEvent.Tool.Failed, {
             sessionID: input.sessionID,
@@ -451,6 +531,11 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
           executed,
           resultState,
         })
+        yield* Effect.forEach(
+          fileChanges(tool.name, result.structured),
+          (change) => events.publish(SessionEvent.FileChange.Recorded, { sessionID: input.sessionID, change }),
+          { discard: true },
+        )
         return
       }
       case "tool-error": {
@@ -469,7 +554,12 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
               ? { type: "tool.unknown", message: event.message }
               : { type: "tool.execution", message: event.message },
           executed: tool.providerExecuted,
-          resultState: providerState(event.providerMetadata),
+          resultState: capturedProviderState(
+            event.providerMetadata,
+            tool.assistantMessageID,
+            tool.partOrdinal,
+            "tool-result",
+          ),
         })
         return
       }

@@ -13,6 +13,9 @@ import { Keymap } from "../../src/context/keymap"
 import { RouteProvider, useRoute } from "../../src/context/route"
 import { ThemeProvider } from "../../src/context/theme"
 import { ShellRows } from "../../src/routes/session/composer/shell-tab"
+import { RailProvider } from "../../src/routes/session/rail-section"
+import { SessionRailContent } from "../../src/routes/session/sidebar"
+import { ShellRailContent } from "../../src/feature-plugins/sidebar/shells"
 import type { ShellInfo } from "@ycoding-ai/client"
 import { TestTuiContexts } from "../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
@@ -72,57 +75,34 @@ const tasks = [
   },
 ]
 
-test("captures populated shell ownership and rail states at reference dimensions", async () => {
-  for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
-    const capture = await boot(viewport)
-    try {
-      await waitFor(capture.frame, "y. ycoding vlocal")
-      await waitFor(capture.frame, "Message YCoding…")
-      await waitFor(capture.frame, "3 shells running")
-      capture.input.pressKey("ARROW_DOWN")
-      await waitFor(capture.frame, "Prompt")
-      const composerRow = capture.rows().findIndex((row) => row.includes("Prompt") && row.includes("Shell"))
-      expect(composerRow).toBeGreaterThanOrEqual(0)
-      await capture.mouse.click(capture.rows()[composerRow].indexOf("Shell"), composerRow)
-      await waitFor(capture.frame, "MAIN CHAT · THIS SESSION")
-      expect(capture.frame()).toContain("Shell")
+test("renders populated SHELLS after SESSION in the sidebar rail", async () => {
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <RailProvider shellSurface>
+              <SessionRailContent sessionID={parentID} title="Provider cache audit" />
+              <ShellRailContent groups={shellGroups()} terminalCount={1} />
+            </RailProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    DESIGN_VIEWPORT,
+  )
+  app.renderer.start()
 
-      const rows = capture.rows()
-      expect(rows).toHaveLength(viewport.height)
-      expect(rows.join("\n")).toContain("SHELLS")
-      expect(rows.filter((row) => row.includes("SHELLS"))).toHaveLength(1)
-      expect(rows.join("\n")).toMatch(/−\s+SHELLS\s+3 running/)
-      const tabRow = rows.find((row) => row.includes("Prompt") && row.includes("Shell")) ?? ""
-      expect(tabRow).toContain("Prompt")
-      expect(tabRow.indexOf("Shell")).toBeGreaterThan(tabRow.indexOf("Prompt"))
-      expect(tabRow.indexOf("Subagents")).toBeGreaterThan(tabRow.indexOf("Shell"))
-      expect(tabRow).toContain("Shell 3")
-      expect(rows.findIndex((row) => row.includes("Shell"))).toBeLessThan(Math.ceil(viewport.height / 2))
-      expect(rows.findIndex((row) => row.includes("SHELLS"))).toBeLessThan(rows.findIndex((row) => row.includes("SESSION")))
-      expect(rows.join("\n")).toContain("MAIN CHAT · THIS SESSION")
-      expect(rows.join("\n")).toContain("SUBAGENT · DOCS-SYNC · SYNC PROVIDER DOCS")
-      expect(rows.join("\n")).toContain("UNKNOWN SESSION")
-      expect(rows.join("\n")).toContain("exit — · 5m00s")
-      expect(rows[1]).toContain("3 shells running")
-      if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
-        expectAt(rows, 30, 3, "Prompt")
-        expectAt(rows, 30, 14, "Shell")
-        expectAt(rows, 30, 20, "3")
-        expectAt(rows, 30, 25, "Subagents")
-        expectAt(rows, 30, 36, "2")
-        expectAt(rows, 49, 3, "Enter view output")
-        expectAt(rows, 49, 23, "↑↓ move")
-        expectAt(rows, 49, 34, "⌃x k kill")
-        expectAt(rows, 49, 46, "Esc close")
-      }
-
-      await mkdir(renders, { recursive: true })
-      await Bun.write(path.join(renders, `shells-${viewport.width}x${viewport.height}.txt`), rows.join("\n"))
-    } finally {
-      await capture.dispose()
-    }
+  try {
+    await app.waitForFrame((frame) => frame.includes("SHELLS"))
+    const rows = app.captureCharFrame().split("\n")
+    expect(rows.filter((row) => row.includes("SHELLS"))).toHaveLength(1)
+    expect(rows.findIndex((row) => row.includes("SHELLS"))).toBeGreaterThan(rows.findIndex((row) => row.includes("SESSION")))
+    expect(rows.join("\n")).toMatch(/−\s+SHELLS\s+3\/4 running/)
+  } finally {
+    app.renderer.destroy()
   }
-}, 120_000)
+})
 
 test("accepts shell-output route navigation", async () => {
   const app = await testRender(
@@ -255,7 +235,8 @@ function route(url: URL) {
   if (url.pathname === `/api/session/${parentID}`) return json({ data: parent })
   if (url.pathname === `/api/session/${childID}`) return json({ data: child })
   if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
-  if (url.pathname === `/api/session/${parentID}/subagent`) return json({ data: tasks })
+  if (url.pathname === `/api/session/${parentID}/subagent`)
+    return json({ data: tasks, summary: { total: tasks.length, active: tasks.length, running: tasks.length, waiting: 0 }, cursor: {} })
   if ([parentID, childID].flatMap((id) => [`/api/session/${id}/pending`, `/api/session/${id}/permission`, `/api/session/${id}/todo`, `/api/session/${id}/skills`, `/api/session/${id}/guardrail/request`]).includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: { rootSessionID: parentID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: { model: { providerID: "anthropic", id: "claude-opus-5" }, context: { total: 1_464, percent: 56 }, tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 220_672, cacheWrite: 4_096 }, cache: { eligible: 220_672, hitRatio: 0.71, mechanism: "anthropic-cache-control", readReported: true, writeReported: true }, requests: { logical: 1, physical: 1, helpers: 0, continued: 0, fallback: 0, tokens: child.tokens, latestInvalidation: "stable-hit" } } })

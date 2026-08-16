@@ -10,6 +10,7 @@ import { Option, Schema } from "effect"
 import type { ModelV2 } from "../../model"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "@ycoding-ai/schema/prompt"
+import { SessionProviderState } from "../provider-state"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
@@ -118,11 +119,16 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
   }
 }
 
-const assistant = (message: SessionMessage.Assistant, model: ModelV2.Ref, providerMetadataKey: string) => {
+const assistant = (
+  message: SessionMessage.Assistant,
+  model: ModelV2.Ref,
+  providerMetadataKey: string,
+  materialized: ReadonlyMap<string, Record<string, unknown>>,
+) => {
   const sameModel =
     String(message.model.providerID) === String(model.providerID) && String(message.model.id) === String(model.id)
   const reuseProviderMetadata = sameModel && message.error === undefined
-  const content = message.content.flatMap((item): ContentPart[] => {
+  const content = message.content.flatMap((item, ordinal): ContentPart[] => {
     if (item.type === "text")
       return [
         {
@@ -140,7 +146,13 @@ const assistant = (message: SessionMessage.Assistant, model: ModelV2.Ref, provid
             {
               type: "reasoning",
               text: item.text,
-              providerMetadata: providerMetadata(providerMetadataKey, item.state),
+              providerMetadata: providerMetadata(
+                providerMetadataKey,
+                mergeProviderState(
+                  SessionProviderState.redact(item.state),
+                  materialized.get(SessionProviderState.key(message.id, ordinal, item.type)),
+                ),
+              ),
             },
           ]
         : item.text.length > 0
@@ -151,15 +163,23 @@ const assistant = (message: SessionMessage.Assistant, model: ModelV2.Ref, provid
       (sameModel &&
         item.executed === true &&
         (item.state.status === "completed" || (item.state.status === "error" && item.state.result !== undefined)))
+    const materializedCallState = materialized.get(SessionProviderState.key(message.id, ordinal, "tool-call"))
+    const callState = mergeProviderState(SessionProviderState.redact(item.providerState), materializedCallState)
     const call = toolCall(
       item,
-      reuseToolProviderMetadata ? providerMetadata(providerMetadataKey, item.providerState) : undefined,
+      reuseToolProviderMetadata ? providerMetadata(providerMetadataKey, callState) : undefined,
     )
     if (item.executed !== true) return [call]
     const result = toolResult(
       item,
       reuseToolProviderMetadata
-        ? providerMetadata(providerMetadataKey, item.providerResultState ?? item.providerState)
+        ? providerMetadata(
+            providerMetadataKey,
+            mergeProviderState(
+              SessionProviderState.redact(item.providerResultState ?? item.providerState),
+              materialized.get(SessionProviderState.key(message.id, ordinal, "tool-result")) ?? materializedCallState,
+            ),
+          )
         : undefined,
     )
     return result ? [call, result] : [call]
@@ -170,12 +190,19 @@ const assistant = (message: SessionMessage.Assistant, model: ModelV2.Ref, provid
     return part.text !== "" || (part.providerMetadata !== undefined && Object.keys(part.providerMetadata).length > 0)
   })
   const results = message.content
-    .filter((item): item is SessionMessage.AssistantTool => item.type === "tool" && item.executed !== true)
-    .map((item) =>
+    .flatMap((item, ordinal) => (item.type === "tool" && item.executed !== true ? [{ item, ordinal }] : []))
+    .map(({ item, ordinal }) =>
       toolResult(
         item,
         reuseProviderMetadata
-          ? providerMetadata(providerMetadataKey, item.providerResultState ?? item.providerState)
+          ? providerMetadata(
+              providerMetadataKey,
+              mergeProviderState(
+                SessionProviderState.redact(item.providerResultState ?? item.providerState),
+                materialized.get(SessionProviderState.key(message.id, ordinal, "tool-result")) ??
+                  materialized.get(SessionProviderState.key(message.id, ordinal, "tool-call")),
+              ),
+            )
           : undefined,
       ),
     )
@@ -188,7 +215,21 @@ const assistant = (message: SessionMessage.Assistant, model: ModelV2.Ref, provid
   ]
 }
 
-function toLLMMessage(message: SessionMessage.Info, model: ModelV2.Ref, providerMetadataKey: string): Message[] {
+const mergeProviderState = (
+  publicState: Record<string, unknown> | undefined,
+  materialized: Record<string, unknown> | undefined,
+) => {
+  if (!publicState) return materialized
+  if (!materialized) return publicState
+  return { ...publicState, ...materialized }
+}
+
+function toLLMMessage(
+  message: SessionMessage.Info,
+  model: ModelV2.Ref,
+  providerMetadataKey: string,
+  materialized: ReadonlyMap<string, Record<string, unknown>>,
+): Message[] {
   switch (message.type) {
     case "agent-switched":
       return [
@@ -231,9 +272,9 @@ function toLLMMessage(message: SessionMessage.Info, model: ModelV2.Ref, provider
         }),
       ]
     case "assistant":
-      return assistant(message, model, providerMetadataKey)
+      return assistant(message, model, providerMetadataKey, materialized)
     case "compaction":
-      if (message.status !== "completed") return []
+      if (message.status !== "completed" || !("reason" in message)) return []
       return [
         Message.make({
           id: message.id,
@@ -259,4 +300,5 @@ export const toLLMMessages = (
   messages: readonly SessionMessage.Info[],
   model: ModelV2.Ref,
   providerMetadataKey: string = model.providerID,
-) => messages.flatMap((message) => toLLMMessage(message, model, providerMetadataKey))
+  materialized: ReadonlyMap<string, Record<string, unknown>> = new Map(),
+) => messages.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, materialized))

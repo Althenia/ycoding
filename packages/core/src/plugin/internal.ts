@@ -31,8 +31,7 @@ import { ProviderUsageV2 } from "../provider-usage";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
 import { SessionGuardrail } from "../session/guardrail";
-import { SessionCompaction } from "../session/compaction";
-import { ConversationSummarizeTool } from "../tool/conversation-summarize";
+import { ConversationCompactTool } from "../tool/conversation-compact";
 import { SessionInstructions } from "../session/instructions";
 import { SessionRunnerModel } from "../session/runner/model";
 import { SessionTodo } from "../session/todo";
@@ -90,7 +89,6 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const permission = yield* PermissionV2.Service;
   const providerUsage = yield* ProviderUsageV2.Service;
   const guardrail = yield* SessionGuardrail.Service;
-  const compaction = yield* SessionCompaction.Service;
   const runtime = yield* PluginRuntime.Service;
   const form = yield* Form.Service;
   const read = yield* ReadToolFileSystem.Service;
@@ -127,7 +125,6 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(PermissionV2.Service, permission),
     Context.make(ProviderUsageV2.Service, providerUsage),
     Context.make(SessionGuardrail.Service, guardrail),
-    Context.make(SessionCompaction.Service, compaction),
     Context.make(PluginRuntime.Service, runtime),
     Context.make(Form.Service, form),
     Context.make(ReadToolFileSystem.Service, read),
@@ -159,7 +156,7 @@ const pre = [
   AgentPlugin.Plugin,
   CommandPlugin.Plugin,
   SkillPlugin.Plugin,
-  ConversationSummarizeTool.Plugin,
+  ConversationCompactTool.Plugin,
   ...SystemPromptPlugin.Plugins,
   ModelsDevPlugin,
   ...ProviderPlugins,

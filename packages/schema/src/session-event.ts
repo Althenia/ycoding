@@ -26,6 +26,7 @@ import { Project } from "./project.js"
 import { ProviderRequest } from "./provider-request.js"
 import { SessionOrchestration } from "./session-orchestration.js"
 import { Permission } from "./permission.js"
+import { SessionCompaction } from "./session-compaction.js"
 
 export { FileAttachment }
 
@@ -541,6 +542,26 @@ export namespace Tool {
   export type Failed = typeof Failed.Type
 }
 
+export namespace FileChange {
+  export interface Info extends Schema.Schema.Type<typeof Info> {}
+  export const Info = Schema.Struct({
+    path: RelativePath,
+    patch: Schema.String,
+    additions: NonNegativeInt,
+    deletions: NonNegativeInt,
+  }).annotate({ identifier: "Session.Event.FileChange.Info" })
+
+  export const Recorded = Event.durable({
+    type: "session.file-change.recorded",
+    ...options,
+    schema: {
+      ...Base,
+      change: Info,
+    },
+  })
+  export type Recorded = typeof Recorded.Type
+}
+
 export const RetryScheduled = Event.durable({
   type: "session.retry.scheduled",
   ...options,
@@ -555,7 +576,7 @@ export const RetryScheduled = Event.durable({
 export type RetryScheduled = typeof RetryScheduled.Type
 
 export namespace Compaction {
-  export const Admitted = Event.durable({
+  export const AdmittedV1 = Event.durable({
     type: "session.compaction.admitted",
     ...options,
     schema: {
@@ -563,9 +584,9 @@ export namespace Compaction {
       inputID: SessionMessage.ID,
     },
   })
-  export type Admitted = typeof Admitted.Type
+  export type AdmittedV1 = typeof AdmittedV1.Type
 
-  export const Started = Event.durable({
+  export const StartedV1 = Event.durable({
     type: "session.compaction.started",
     ...options,
     schema: {
@@ -575,7 +596,7 @@ export namespace Compaction {
       inputID: SessionMessage.ID.pipe(optional),
     },
   })
-  export type Started = typeof Started.Type
+  export type StartedV1 = typeof StartedV1.Type
 
   export const Delta = Event.ephemeral({
     type: "session.compaction.delta",
@@ -586,31 +607,106 @@ export namespace Compaction {
   })
   export type Delta = typeof Delta.Type
 
-  export const Ended = Event.durable({
+  export const EndedV1 = Event.durable({
     type: "session.compaction.ended",
     ...options,
     schema: {
       ...Base,
-      reason: Started.data.fields.reason,
+      reason: StartedV1.data.fields.reason,
       text: Schema.String,
       recent: Schema.String,
       messages: NonNegativeInt.pipe(optional),
       tokens: TokenUsage.Info.pipe(optional),
     },
   })
-  export type Ended = typeof Ended.Type
+  export type EndedV1 = typeof EndedV1.Type
 
-  export const Failed = Event.durable({
+  /** Signals that compaction replaced canonical history without producing another message row. */
+  export const Replaced = Event.durable({
+    type: "session.compaction.replaced",
+    ...options,
+    schema: {
+      ...Base,
+      summaryMessageID: SessionMessage.ID,
+      through: NonNegativeInt,
+      summaryRevision: NonNegativeInt,
+      deletedMessageCount: NonNegativeInt,
+      remainingMessageCount: NonNegativeInt,
+    },
+  })
+  export type Replaced = typeof Replaced.Type
+
+  export const FailedV1 = Event.durable({
     type: "session.compaction.failed",
     ...options,
     schema: {
       ...Base,
-      reason: Started.data.fields.reason,
+      reason: StartedV1.data.fields.reason,
       error: SessionError.Error,
       inputID: SessionMessage.ID.pipe(optional),
     },
   })
+  export type FailedV1 = typeof FailedV1.Type
+
+  const current = {
+    durable: {
+      aggregate: "sessionID",
+      version: 2,
+    },
+  } as const
+
+  export const Admitted = Event.durable({
+    type: "session.compaction.admitted",
+    ...current,
+    schema: { ...Base, jobID: SessionCompaction.ID },
+  })
+  export type Admitted = typeof Admitted.Type
+
+  export const Started = Event.durable({
+    type: "session.compaction.started",
+    ...current,
+    schema: { ...Base, jobID: SessionCompaction.ID },
+  })
+  export type Started = typeof Started.Type
+
+  export const Ended = Event.durable({
+    type: "session.compaction.ended",
+    ...current,
+    schema: {
+      ...Base,
+      jobID: SessionCompaction.ID,
+      revision: NonNegativeInt,
+      boundary: SessionCompaction.Boundary,
+      metrics: SessionCompaction.Metrics,
+    },
+  })
+  export type Ended = typeof Ended.Type
+
+  export const Failed = Event.durable({
+    type: "session.compaction.failed",
+    ...current,
+    schema: {
+      ...Base,
+      jobID: SessionCompaction.ID,
+      code: SessionCompaction.FailureCode,
+      error: SessionError.Error,
+    },
+  })
   export type Failed = typeof Failed.Type
+
+  export const DurableDefinitions = Event.inventory(
+    AdmittedV1,
+    StartedV1,
+    EndedV1,
+    Replaced,
+    FailedV1,
+    Admitted,
+    Started,
+    Ended,
+    Failed,
+  )
+
+  export const LegacyDurableDefinitions = Event.inventory(AdmittedV1, StartedV1, EndedV1, Replaced, FailedV1)
 }
 
 export namespace RevertEvent {
@@ -667,6 +763,7 @@ export const Definitions = Event.inventory(
   Tool.Progress,
   Tool.Success,
   Tool.Failed,
+  FileChange.Recorded,
   RetryScheduled,
   Compaction.Admitted,
   Compaction.Started,
@@ -688,11 +785,18 @@ export const PublicDurable = Schema.Union(PublicDurableDefinitions, { mode: "one
 export type PublicDurableEvent = typeof PublicDurable.Type
 
 // UsageRecorded and ProviderRequestRecorded remain durable for replay/projectors but are excluded from public logs.
-export const DurableDefinitions = Event.inventory(...PublicDurableDefinitions, UsageRecorded, ProviderRequestRecorded)
+export const DurableDefinitions = Event.inventory(
+  ...PublicDurableDefinitions,
+  ...Compaction.LegacyDurableDefinitions,
+  UsageRecorded,
+  ProviderRequestRecorded,
+)
 
-export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" })
-  .pipe(Schema.toTaggedUnion("type"))
-  .annotate({ identifier: "Session.Event.Durable" })
+// Durable replay accepts legacy and current payloads for the same event type.
+// They are distinguished by the persisted durable version rather than `type`.
+export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" }).annotate({
+  identifier: "Session.Event.Durable",
+})
 export type DurableEvent = typeof Durable.Type
 
 const Public = Schema.Union(Definitions, { mode: "oneOf" })

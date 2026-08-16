@@ -11,6 +11,7 @@ import {
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
+import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
 import { PermissionV2 } from "../../permission"
@@ -20,10 +21,11 @@ import { InstructionState } from "../instruction-state"
 import { SessionCompaction } from "../compaction"
 import { SessionCacheDiagnostics } from "../cache-diagnostics"
 import { SessionContext } from "../context"
+import { SessionCompactionJob } from "../compaction-job"
+import { SessionContextPressure } from "../context-pressure"
 import { SessionEvent } from "../event"
 import { SessionPending } from "../pending"
 import { SessionProviderRequest } from "../provider-request"
-import { SessionHistory } from "../history"
 import { SessionModelRequest } from "../model-request"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
@@ -38,7 +40,9 @@ import { llmClient } from "../../effect/app-node-platform"
 import { StepFailedError } from "../error"
 import { toSessionError } from "../to-session-error"
 import { SessionCacheRuntime } from "./cache-runtime"
+import { SessionCompactionGate } from "./compaction-gate"
 import { SessionContinuation } from "./continuation"
+import { SessionProviderState } from "../provider-state"
 import { SessionRunnerRetry } from "./retry"
 import { SessionUsage } from "../usage"
 
@@ -47,9 +51,11 @@ type StepEnd = {
   readonly files?: readonly RelativePath[]
 }
 
-type RequestTrackerState = {
+type AttemptState = {
   current?: SessionProviderRequest.Tracker
+  attempts: number
   continuationFallback?: boolean
+  overflowRecovery?: "pending" | "used"
 }
 
 const layer = Layer.effect(
@@ -61,8 +67,10 @@ const layer = Layer.effect(
     const context = yield* SessionContext.Service
     const modelRequests = yield* SessionModelRequest.Service
     const snapshots = yield* Snapshot.Service
-    const db = (yield* Database.Service).db
-    const compaction = yield* SessionCompaction.Service
+    const database = yield* Database.Service
+    const db = database.db
+    const compactionJobs = yield* SessionCompactionJob.Service
+    const config = yield* Config.Service
     const title = yield* SessionTitle.Service
     const providerRequests = yield* SessionProviderRequest.Service
     const cacheRuntime = yield* SessionCacheRuntime.Service
@@ -107,7 +115,7 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionPending.Delivery | undefined,
       step: number,
-      requestTrackerState: RequestTrackerState,
+      requestTrackerState: AttemptState,
       execution: number,
       assistantMessageID?: SessionMessage.ID,
       terminalResponseRecovery = false,
@@ -130,18 +138,59 @@ const layer = Layer.effect(
           onPromotion?.()
         }
       }
-      const loaded = yield* context.load(selected)
+      const initialContext = yield* context.load(selected)
+      const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
+        modelRequests.prepare({
+          context: loaded,
+          step: currentStep,
+          execution,
+          disableContinuation:
+            fullRebase || requestTrackerState.continuationFallback === true || terminalResponseRecovery,
+          terminalResponseRecovery,
+        })
+      const initialPrepared = yield* prepare(initialContext)
+      const limits = initialContext.model.model.route.defaults.limits
+      const compactionPolicy = SessionContextPressure.policy(yield* config.entries())
+      const failPreflight = (error: SessionError.Error) =>
+        Effect.gen(function* () {
+          if (assistantMessageID !== undefined)
+            yield* events.publish(SessionEvent.Step.Failed, { sessionID, assistantMessageID, error })
+          return yield* new StepFailedError({ error })
+        })
+      if (limits?.context === undefined || limits.output === undefined)
+        return yield* failPreflight({
+          type: "context.limit",
+          message: "The selected model must configure both context and output limits to prove the safe input cap",
+        })
+      const candidate = yield* SessionCompactionGate.ensureWithinLimit({
+        sessionID: initialContext.session.id,
+        policy: compactionPolicy,
+        capabilities: {
+          contextWindowTokens: limits.context,
+          maxOutputTokens: limits.output,
+          contextSafetyMarginTokens: compactionPolicy.contextSafetyMarginTokens,
+        },
+        candidate: { context: initialContext, prepared: initialPrepared },
+        force: requestTrackerState.overflowRecovery === "pending",
+        reload: ({ fullRebase }) =>
+          Effect.gen(function* () {
+            if (fullRebase) yield* continuation.clear(sessionID)
+            const selected = yield* context.select(sessionID)
+            yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
+            const loaded = yield* context.load(selected)
+            return { context: loaded, prepared: yield* prepare(loaded, fullRebase) }
+          }),
+      }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.provideService(SessionCompactionJob.Service, compactionJobs),
+        Effect.catchIf(isContextLimit, failPreflight),
+      )
+      if (requestTrackerState.overflowRecovery === "pending") requestTrackerState.overflowRecovery = "used"
+      const loaded = candidate.context
+      const originalPrepared = candidate.prepared
       const session = loaded.session
       const agent = loaded.agent
       const resolved = loaded.model
-      const model = resolved.model
-      const originalPrepared = yield* modelRequests.prepare({
-        context: loaded,
-        step: currentStep,
-        execution,
-        disableContinuation: requestTrackerState.continuationFallback === true || terminalResponseRecovery,
-        terminalResponseRecovery,
-      })
       let requestTracker = requestTrackerState.current
       if (!requestTracker) {
         requestTracker = yield* providerRequests.next({
@@ -172,6 +221,7 @@ const layer = Layer.effect(
       const effectiveModel = effective.model
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       const ownedToolFibers: Array<Fiber.Fiber<void, ToolOutputStore.Error>> = []
+      const providerStateCaptures: SessionProviderState.CaptureInput[] = []
       let needsContinuation = false
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
@@ -182,6 +232,18 @@ const layer = Layer.effect(
         providerMetadataKey: effectiveModel.route.providerMetadataKey ?? effectiveModel.provider,
         snapshot: startSnapshot,
         assistantMessageID,
+        captureProviderState: (state, selector) => {
+          if (state?.opaqueCompactionItem !== undefined)
+            providerStateCaptures.push({
+              ...selector,
+              sessionID: session.id,
+              provider: effectiveModel.provider,
+              modelID: effective.ref.id,
+              contextRevision: originalPrepared.continuation.fingerprint.contextRevision,
+              state,
+            })
+          return SessionProviderState.redact(state)
+        },
       })
       const publication = Semaphore.makeUnsafe(1)
       // Durable publishes are serialized so tool fibers and step settlement never interleave
@@ -191,6 +253,7 @@ const layer = Layer.effect(
       let overflowFailure: ProviderErrorEvent | undefined
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
+      requestTrackerState.attempts += 1
       const providerStream = llm.stream(prepared.request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
@@ -288,12 +351,12 @@ const layer = Layer.effect(
           (requestTrackerState.continuationFallback === true
             ? "retry-fallback"
             : settlement && settlement.tokens.cache.read > 0
-            ? "stable-hit"
-            : cache?.mechanism === "none"
-              ? "cache-disabled"
-              : cache && !cache.readReported && !cache.writeReported
-                ? "provider-not-reported"
-                : undefined)
+              ? "stable-hit"
+              : cache?.mechanism === "none"
+                ? "cache-disabled"
+                : cache && !cache.readReported && !cache.writeReported
+                  ? "provider-not-reported"
+                  : undefined)
         return Effect.all(
           [
             requestTracker.complete({
@@ -332,25 +395,40 @@ const layer = Layer.effect(
       const publishStepEnd = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>, end: StepEnd) =>
         Effect.gen(function* () {
           const cache = providerCache(settlement)
-          yield* serialized(
-            events.publish(SessionEvent.Step.Ended, {
-              sessionID: session.id,
-              assistantMessageID: yield* publisher.startAssistant(),
-              finish: settlement.finish,
-              ...stepUsage(settlement),
-              contextLimit: effectiveModel.route.defaults.limits?.context,
-              ...(cache === undefined ? {} : { providerCache: cache }),
-              ...end,
-            }),
-          )
           const responseID = settlement.providerState?.responseId
-          if (originalPrepared.continuation.eligible && typeof responseID === "string" && responseID.length > 0)
-            yield* continuation.remember({
-              ...originalPrepared.continuation.fingerprint,
-              responseID,
-              representedMessages: originalPrepared.request.messages.length + 1,
-            })
-          else yield* continuation.clear(session.id)
+          yield* serialized(
+            events.publish(
+              SessionEvent.Step.Ended,
+              {
+                sessionID: session.id,
+                assistantMessageID: yield* publisher.startAssistant(),
+                finish: settlement.finish,
+                ...stepUsage(settlement),
+                contextLimit: effectiveModel.route.defaults.limits?.context,
+                ...(cache === undefined ? {} : { providerCache: cache }),
+                ...end,
+              },
+              {
+                commit: () =>
+                  Effect.gen(function* () {
+                    yield* Effect.forEach(providerStateCaptures, (capture) =>
+                      SessionProviderState.captureInTransaction(db, capture),
+                    )
+                    if (
+                      originalPrepared.continuation.eligible &&
+                      typeof responseID === "string" &&
+                      responseID.length > 0
+                    )
+                      yield* SessionContinuation.rememberInTransaction(db, {
+                        ...originalPrepared.continuation.fingerprint,
+                        responseID,
+                        representedThroughMessageID: originalPrepared.continuation.representedThroughMessageID,
+                        representedMessageCount: originalPrepared.continuation.representedMessageCount,
+                      })
+                  }).pipe(Effect.orDie),
+              },
+            ),
+          )
           yield* completeProviderRequest(settlement)
         })
 
@@ -364,12 +442,34 @@ const layer = Layer.effect(
           const streamInterrupted = stream._tag === "Failure" && Cause.hasInterrupts(stream.cause)
           const streamSettlementFailure =
             streamFailure ?? (stream._tag === "Failure" && !streamInterrupted ? Cause.squash(stream.cause) : undefined)
+          const llmFailure = streamFailure instanceof LLMError ? streamFailure : undefined
+          const contextOverflowFailure =
+            overflowFailure !== undefined || (llmFailure !== undefined && isContextOverflowFailure(llmFailure))
+
+          let overflowLimit: SessionError.Error | undefined
+          if (contextOverflowFailure && !publisher.hasRetryEvidence()) {
+            if (requestTrackerState.overflowRecovery === undefined) {
+              requestTrackerState.overflowRecovery = "pending"
+              return {
+                _tag: "RestartAfterOverflow",
+                step: currentStep,
+                promoted,
+                assistantMessageID: publisher.hasStepStarted() ? yield* publisher.startAssistant() : undefined,
+              } as const
+            }
+            overflowLimit = {
+              type: "context.limit",
+              message: "The provider still rejected the request for context overflow after one compaction rebase",
+            }
+            yield* serialized(publisher.failAssistant(overflowLimit))
+          }
 
           if (
             originalPrepared.continuation.used &&
             !publisher.hasRetryEvidence() &&
             streamFailure instanceof LLMError &&
-            streamFailure.reason._tag === "InvalidRequest"
+            streamFailure.reason._tag === "InvalidRequest" &&
+            isInvalidPreviousResponse(streamFailure.reason.message)
           ) {
             yield* continuation.clear(session.id)
             return {
@@ -383,8 +483,7 @@ const layer = Layer.effect(
           // An unrecovered held-back overflow becomes the step's durable provider error. A
           // thrown LLM failure records the assistant failure unless a provider error was
           // already recorded from the stream. Terminal publication waits for owned tools.
-          if (overflowFailure) yield* publish(overflowFailure)
-          const llmFailure = streamFailure instanceof LLMError ? streamFailure : undefined
+          if (overflowFailure && !overflowLimit) yield* publish(overflowFailure)
           if (llmFailure && !publisher.hasProviderError()) {
             const error = toSessionError(llmFailure)
             if (SessionRunnerRetry.isRetryable(llmFailure) && !publisher.hasRetryEvidence()) {
@@ -499,7 +598,6 @@ const layer = Layer.effect(
           const stepSettlement = publisher.stepSettlement()
           if (stepSettlement && !stepFailure) yield* publishStepEnd(stepSettlement, yield* captureStepEnd())
           if (stepFailure && carriedStepFailure === undefined) {
-            yield* continuation.clear(session.id)
             const end = yield* captureStepEnd()
             const cache = stepSettlement ? providerCache(stepSettlement) : undefined
             yield* serialized(
@@ -512,7 +610,6 @@ const layer = Layer.effect(
             yield* completeProviderRequest(stepSettlement)
           }
           if (!stepSettlement) {
-            yield* continuation.clear(session.id)
             yield* completeProviderRequest(undefined, "provider-not-reported")
           }
 
@@ -528,6 +625,7 @@ const layer = Layer.effect(
             !needsContinuation &&
             stepFailure?.type === "provider.invalid-output" &&
             (yield* SessionPending.has(db, session.id, "steer"))
+          if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
@@ -541,7 +639,8 @@ const layer = Layer.effect(
             step: currentStep,
             promoted,
             terminalSilence:
-              recoverableTerminalSilence || (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
+              recoverableTerminalSilence ||
+              (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
           } as const
         }),
       )
@@ -558,7 +657,7 @@ const layer = Layer.effect(
       let currentStep = step
       let assistantMessageID: SessionMessage.ID | undefined
       let promoted = false
-      const requestTrackerState: RequestTrackerState = {}
+      const requestTrackerState: AttemptState = { attempts: 0 }
       const completeRetryFallback = () =>
         requestTrackerState.current?.complete({
           invalidation: "retry-fallback",
@@ -590,7 +689,7 @@ const layer = Layer.effect(
                 })
               : Effect.void,
           ),
-          Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID), (error) => {
+          Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID, requestTrackerState.attempts), (error) => {
             if (!(error instanceof SessionRunnerRetry.RetryableFailure)) return Effect.fail(error)
             return completeRetryFallback().pipe(
               Effect.andThen(
@@ -615,55 +714,12 @@ const layer = Layer.effect(
           requestTrackerState.continuationFallback = true
           assistantMessageID = attempt.assistantMessageID ?? assistantMessageID
         }
+        if (attempt._tag === "RestartAfterOverflow")
+          assistantMessageID = attempt.assistantMessageID ?? assistantMessageID
         yield* Effect.yieldNow
         currentPromotion = undefined
         currentStep = attempt.step
       }
-    })
-
-    const runPendingCompaction = Effect.fn("SessionRunner.runPendingCompaction")(function* (
-      sessionID: SessionSchema.ID,
-    ) {
-      const pending = yield* SessionPending.compaction(db, sessionID)
-      if (!pending) return
-      const session = yield* getSession(sessionID)
-      yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const compacted = yield* restore(
-            Effect.gen(function* () {
-              const messages = yield* SessionHistory.forModel(db, sessionID)
-              const system = SessionCompaction.available(messages)
-                ? yield* Effect.gen(function* () {
-                    const selected = yield* context.select(sessionID)
-                    yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
-                    return SessionModelRequest.baseSystem(yield* context.load(selected))
-                  })
-                : undefined
-              yield* continuation.clear(sessionID)
-              return yield* compaction.compactManual({
-                session,
-                messages,
-                inputID: pending.id,
-                system,
-              })
-            }),
-          ).pipe(Effect.exit)
-          if (Exit.isSuccess(compacted)) return
-          if (Exit.isFailure(compacted)) {
-            const unsettled = yield* SessionPending.compaction(db, sessionID)
-            if (unsettled)
-              yield* events.publish(SessionEvent.Compaction.Failed, {
-                sessionID,
-                reason: "manual",
-                error: Cause.hasInterruptsOnly(compacted.cause)
-                  ? { type: "aborted", message: "Compaction cancelled" }
-                  : { type: "compaction.failed", message: Cause.pretty(compacted.cause) },
-                inputID: unsettled.id,
-              })
-            yield* Effect.failCause(compacted.cause)
-          }
-        }),
-      )
     })
 
     // Execution lifecycle is published per busy period by SessionExecution, not per drain here.
@@ -674,7 +730,6 @@ const layer = Layer.effect(
       },
       execution: number,
     ) {
-      yield* runPendingCompaction(input.sessionID)
       const hasSteer = yield* SessionPending.has(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionPending.has(db, input.sessionID, "queue")
       if (!input.force && !hasSteer && !hasQueue) return
@@ -715,15 +770,12 @@ const layer = Layer.effect(
             continue
           }
           if (needsContinuation) {
-            yield* runPendingCompaction(input.sessionID)
             promotion = "steer"
             continue
           }
-          yield* runPendingCompaction(input.sessionID)
           promotion = "steer"
           needsContinuation = yield* SessionPending.has(db, input.sessionID, "steer")
         }
-        yield* runPendingCompaction(input.sessionID)
         const hasSteer = yield* SessionPending.has(db, input.sessionID, "steer")
         const hasQueue = hasSteer ? false : yield* SessionPending.has(db, input.sessionID, "queue")
         shouldRun = hasSteer || hasQueue
@@ -736,7 +788,7 @@ const layer = Layer.effect(
       readonly force: boolean
     }) {
       const execution = ++executionGeneration
-      return yield* drainExecution(input, execution).pipe(Effect.ensuring(continuation.clear(input.sessionID)))
+      return yield* drainExecution(input, execution)
     })
 
     return Service.of({ drain })
@@ -754,10 +806,19 @@ export const node = makeLocationNode({
     SessionProviderRequest.node,
     SessionCacheRuntime.node,
     SessionContinuation.node,
+    SessionProviderState.node,
+    SessionCompactionJob.node,
     SessionStore.node,
     SessionCompaction.node,
     SessionTitle.node,
+    Config.node,
     Snapshot.node,
     Database.node,
   ],
 })
+
+const isInvalidPreviousResponse = (message: string) =>
+  /previous[_ ]response(?:_id)?/i.test(message) && /invalid|expired|not found|unknown/i.test(message)
+
+const isContextLimit = (error: unknown): error is SessionError.Error =>
+  typeof error === "object" && error !== null && "type" in error && error.type === "context.limit"

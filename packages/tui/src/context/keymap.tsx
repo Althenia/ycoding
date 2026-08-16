@@ -225,7 +225,7 @@ function createLayer(input: () => KeymapLayer) {
       }),
       bindings: [
         ...grouped.inline.map((command) => ({
-          key: command.bind,
+          key: command.bind.startsWith("ctrl+x ") ? `<leader>${command.bind.slice("ctrl+x ".length)}` : command.bind,
           cmd: () => {
             if (command.enabled === false) return false
             if (typeof command.enabled === "function" && !command.enabled()) return false

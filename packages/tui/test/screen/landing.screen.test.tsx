@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { Global } from "@ycoding-ai/core/global"
-import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { mkdir, rm } from "node:fs/promises"
 import path from "path"
 import { renderScreen } from "./harness"
@@ -64,7 +63,6 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
 
     expect(header).toBeDefined()
     if (!header) return
-    expect(header).toContain("y. ycoding")
     expect(header).toContain("Build")
     expect(header).toContain("Landing Model")
     if (viewport.width >= 120) {
@@ -81,21 +79,21 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
       expect(header).not.toContain("main")
     }
 
-    expect(frame).toContain("y. ycoding")
-    expect(frame).toContain("What should we build?")
-    expect(frame).toContain("Describe a goal, paste an error, or press ⌃p for commands.")
+    expect(frame).toContain("YCoding")
+    expect(frame).toContain("terminal coding agent")
     expect(frame).toContain("Message YCoding…")
     expect(frame).not.toContain("Ask anything")
 
-    for (const hint of ["Enter send", "↓ subagents", "⌃x b sidebar", "⌃p commands"]) {
-      expect(frame).toContain(hint)
-    }
+    expect(frame).toContain("⌃p commands")
+    expect(frame).not.toContain("Enter send")
+    expect(frame).not.toContain("↓ subagents")
+    expect(frame).not.toContain("⌃x b sidebar")
 
     for (const footer of ["main", "goal off", "YOLO off", "subagents 0"]) {
       expect(frame).toContain(footer)
     }
 
-    expect(lines.some((line) => line.includes("╹") || line.includes("▀"))).toBe(false)
+    expect(lines.some((line) => line.includes("╹"))).toBe(false)
     expect(lines.find((line) => line.startsWith("─"))?.length).toBe(viewport.width)
 
     // Penpot board a50fa4ae-966d-8083-8008-651de90a14ca: the composer rule, placeholder
@@ -112,42 +110,34 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     }
 
     expect(rule).toBeLessThan(placeholder)
-    expect(placeholder).toBeLessThan(hints)
-    expect(hints).toBeLessThan(footer)
+    expect(placeholder).toBeLessThan(footer)
+    expect(hints).toBe(-1)
 
     if (viewport.width === DESIGN_VIEWPORT.width) {
-      const heading = lines.findIndex((line) => line.includes("What should we build?"))
-      const description = lines.findIndex((line) => line.includes("Describe a goal, paste an error"))
+      const heading = lines.findIndex((line) => line.includes("YCoding"))
+      const description = lines.findIndex((line) => line.includes("terminal coding agent"))
       const headerRow = lines.findIndex((line) => line.includes("ready"))
 
       expect(headerRow).toBe(1)
-      expect(heading).toBe(29)
-      expect(description).toBe(32)
-      expect(rule).toBe(57)
-      expect(placeholder).toBe(59)
-      expect(hints).toBe(61)
-      expect(footer).toBe(67)
-      expect(header.indexOf("y. ycoding")).toBe(3)
-      expect(header.indexOf("~/landing") - (header.indexOf("y. ycoding") + `y. ycoding v${InstallationVersion}`.length)).toBe(6)
+      expect(heading).toBeGreaterThan(headerRow)
+      expect(description - heading).toBe(3)
+      expect(header.indexOf("~/landing")).toBeGreaterThan(0)
       expect(viewport.width - header.trimEnd().length).toBe(3)
       expect(lines[footer]?.indexOf("main")).toBe(3)
       expect(lines[footer]?.indexOf("goal off")! - (lines[footer]?.indexOf("main")! + "main".length)).toBe(3)
       expect(lines[footer]?.indexOf("YOLO off")! - (lines[footer]?.indexOf("goal off")! + "goal off".length)).toBe(3)
       expect(lines[footer]?.indexOf("subagents 0")! - (lines[footer]?.indexOf("YOLO off")! + "YOLO off".length)).toBe(3)
-      expect(lines[hints]?.indexOf("↓ subagents")! - (lines[hints]?.indexOf("Enter send")! + "Enter send".length)).toBe(3)
-      expect(lines[hints]?.indexOf("⌃x b sidebar")! - (lines[hints]?.indexOf("↓ subagents")! + "↓ subagents".length)).toBe(3)
-      expect(lines[hints]?.indexOf("⌃p commands")! - (lines[hints]?.indexOf("⌃x b sidebar")! + "⌃x b sidebar".length)).toBe(3)
     }
 
-    // The reference places no agent or model row between the placeholder and the hints.
-    for (const line of lines.slice(placeholder + 1, hints)) {
+    // The reference places no agent or model row between the placeholder and the footer.
+    for (const line of lines.slice(placeholder + 1, footer)) {
       expect(line).not.toContain("Landing Model")
     }
 
     // Every hero line is centred on the frame independently, not left-aligned in a block.
     // The native bitmap mark deliberately replaces the frozen text wordmark; it has no stable glyph frame.
-    for (const hero of ["What should we build?", "Describe a goal, paste an error"]) {
-      const line = lines.slice(rule < 0 ? 0 : 0, rule).find((candidate) => candidate.includes(hero))
+    for (const hero of ["YCoding", "terminal coding agent"]) {
+      const line = lines.slice(0, rule).find((candidate) => candidate.trim() === hero)
       expect(line).toBeDefined()
       if (!line) continue
       const start = line.indexOf(line.trim())

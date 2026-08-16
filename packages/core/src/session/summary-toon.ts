@@ -148,6 +148,7 @@ const KEY_LINE = /^\s*(?:"(?:\\.|[^"\\])*"|[^\s":]+)\s*:/
 const TABLE_HEADER = /\[(\d+|\*)\]\s*\{[^}]*\}\s*:\s*$/
 const ROW_LINE = /^\s+(?:"(?:\\.|[^"\\])*"|[^",]+)(?:\s*,\s*(?:"(?:\\.|[^"\\])*"|[^",]+))*\s*$/
 const DASH_LINE = /^\s*-\s*/
+const COMMENT_LINE = /^\s*#/
 const FENCE = /```/
 
 /**
@@ -233,7 +234,7 @@ function findProseLine(input: string): number | undefined {
   let firstContent = true
   let inTable = false
   for (const [index, line] of input.split(/\r?\n/).entries()) {
-    if (!line.trim()) continue
+    if (!line.trim() || COMMENT_LINE.test(line)) continue
     if (firstContent) {
       firstContent = false
       if (!KEY_LINE.test(line)) return index + 1

@@ -12,7 +12,7 @@ export type PartRef = {
 
 export type SessionRow =
   | { type: "message"; messageID: string }
-  | { type: "compaction-queued"; inputID: string }
+  | { type: "compaction"; jobID: string }
   | { type: "guardrail"; requestID: string; reason: string }
   | { type: "subagent"; sessionID: string; agent: string; created: number }
   | { type: "task"; content: string; status: "completed" | "in_progress" }
@@ -59,22 +59,31 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     const messages = data.session.message.list(sessionID())
     const inputs = new Set(data.session.input.list(sessionID()))
     const boundary = revertBoundary()
-    const rows = reduceSessionRows(boundary ? messages.filter((message) => message.id < boundary) : messages, inputs)
+    const rows = reduceSessionRows(
+      (boundary ? messages.filter((message) => message.id < boundary) : messages).filter(
+        (message) => message.type !== "compaction" || !("jobID" in message),
+      ),
+      inputs,
+      data.session.status(sessionID()) === "idle",
+    )
+    rows.push(
+      ...data.session.compaction
+        .list(sessionID())
+        .map((item): SessionRow => ({ type: "compaction", jobID: item.jobID })),
+    )
     const activityBoundary = rows.findLastIndex((row) => {
+      if (row.type === "compaction") return true
       if (row.type !== "message") return false
       return data.session.message.get(sessionID(), row.messageID)?.type === "compaction"
     })
-    if (activity() && activityBoundary !== -1) rows.splice(activityBoundary, 0, ...activityRows(messages))
+    if (activity() && activityBoundary !== -1) rows.push(...activityRows())
     partitionPending(rows, pendingPermissions())
-    const position = rows.findIndex((row) => row.type === "message" && inputs.has(row.messageID))
-    rows.splice(
-      position === -1 ? rows.length : position,
-      0,
-      ...data.session.pending
-        .list(sessionID())
-        .filter((item) => item.type === "compaction")
-        .map((item): SessionRow => ({ type: "compaction-queued", inputID: item.id })),
-    )
+    // Attach a stable unique key so keyed reconcile reuses tail activity rows instead of
+    // rebuilding them positionally when an earlier message row is inserted.
+    rows.forEach((row) => {
+      const message = row.type === "message" ? data.session.message.get(sessionID(), row.messageID) : undefined
+      Object.assign(row, { key: rowKey(row, message) })
+    })
     return rows
   }
 
@@ -86,16 +95,14 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     )
   }
 
-  function activityRows(messages: SessionMessageInfo[]): SessionRow[] {
-    const transcriptTasks = activeTranscriptTasks(messages)
+  function activityRows(): SessionRow[] {
     return [
       ...data.session.guardrail
         .list(sessionID())
         .map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason })),
       ...(data.session.subagent
         .page(sessionID())
-        ?.data
-        .filter((task) => isActiveSubagent(task.state))
+        ?.data.filter((task) => isActiveSubagent(task.state))
         .map(
           (task): SessionRow => ({
             type: "subagent",
@@ -104,12 +111,6 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
             created: task.time.created,
           }),
         ) ?? []),
-      ...(transcriptTasks.length > 0
-        ? transcriptTasks
-        : data.session.todo
-            .get(sessionID())
-            .filter((task) => task.status === "in_progress")
-            .map((task): SessionRow => ({ type: "task", content: task.content, status: "in_progress" }))),
     ]
   }
 
@@ -126,13 +127,13 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     on([sessionID, () => client.connection.status()], ([id, status], previous) => {
       if (previous && previous[0] !== id) data.session.message.evict(previous[0])
       if (status !== "connected") return
-      setRows(reconcile(reduce()))
+      setRows(reconcile(reduce(), { key: "key" }))
       void data.session.pending.sync(id).catch(() => undefined)
       void data.session.diagnostics.sync(id).catch(() => undefined)
       void data.session.message.sync(id).then(
         () => {
           if (sessionID() !== id) return
-          setRows(reconcile(reduce()))
+          setRows(reconcile(reduce(), { key: "key" }))
         },
         () => undefined,
       )
@@ -142,7 +143,7 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   // Re-reduce when the revert boundary changes (stage/clear/commit).
   createEffect(
     on(revertBoundary, () => {
-      setRows(reconcile(reduce()))
+      setRows(reconcile(reduce(), { key: "key" }))
     }),
   )
 
@@ -150,24 +151,21 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     on(
       () => [
         activity(),
+        // The closing assistant footer depends on execution state, so idling must re-reduce.
+        data.session.status(sessionID()),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
         ...(data.session.subagent
           .page(sessionID())
           ?.data.map((task) => `${task.sessionID}:${task.agent}:${task.state}:${task.time.created}`) ?? []),
-        ...data.session.todo.get(sessionID()).map((task) => `${task.content}:${task.status}`),
       ],
-      () => setRows(reconcile(reduce())),
+      () => setRows(reconcile(reduce(), { key: "key" })),
     ),
   )
 
   createEffect(
     on(
-      () =>
-        data.session.pending
-          .list(sessionID())
-          .filter((item) => item.type === "compaction")
-          .map((item) => item.id),
-      () => setRows(reconcile(reduce())),
+      () => data.session.compaction.list(sessionID()).map((item) => `${item.jobID}:${item.status}:${item.messageID}`),
+      () => setRows(reconcile(reduce(), { key: "key" })),
     ),
   )
 
@@ -192,7 +190,7 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
                 ]
               : [],
         ),
-      () => setRows(reconcile(reduce())),
+      () => setRows(reconcile(reduce(), { key: "key" })),
     ),
   )
 
@@ -205,7 +203,9 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
         const index =
           message?.type === "compaction" && pending ? queuedStart(draft) : pending ? draft.length : queuedStart(draft)
         if (!pending) completePrevious(draft, index)
-        draft.splice(index, 0, { type: "message", messageID })
+        const row: SessionRow = { type: "message", messageID }
+        Object.assign(row, { key: rowKey(row, message) })
+        draft.splice(index, 0, row)
       }),
     )
 
@@ -238,13 +238,11 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   const isPending = (messageID: string) => {
     const message = data.session.message.get(sessionID(), messageID)
     if (message?.type === "user" || message?.type === "synthetic") return data.session.input.has(sessionID(), messageID)
-    return message?.type === "compaction" && message.status === "running"
+    return false
   }
 
   const queuedStart = (rows: SessionRow[]) => {
-    const index = rows.findIndex(
-      (row) => row.type === "compaction-queued" || (row.type === "message" && isPending(row.messageID)),
-    )
+    const index = rows.findIndex((row) => row.type === "message" && isPending(row.messageID))
     return index === -1 ? rows.length : index
   }
 
@@ -272,9 +270,6 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   }
   const subscriptions = [
     data.on("session.input.admitted", input),
-    data.on("session.compaction.started", (event) => {
-      if (event.data.sessionID === sessionID()) appendMessage(event.data.inputID ?? event.id.replace(/^evt_/, "msg_"))
-    }),
     data.on("session.instructions.updated", message),
     data.on("session.synthetic", (event) => {
       if (event.data.sessionID === sessionID() && event.data.description?.trim())
@@ -334,9 +329,18 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   return rows
 }
 
-export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>()) {
+export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new Set<string>(), idle = false) {
   const isInput = (message: SessionMessageInfo) => inputs.has(message.id)
-  const pendingCompactions = messages.filter((message) => message.type === "compaction" && message.status === "running")
+  // An idle Session has stopped replying, so its last assistant message is terminal even when that
+  // step settled on a tool call. Without this the conversation ends on a dangling tool row instead
+  // of on YCoding's own block. A Session with no assistant message gets no invented footer.
+  const closing = idle ? messages.findLast((message) => message.type === "assistant")?.id : undefined
+  const pendingCompactions = messages.filter(
+    (message) =>
+      message.type === "compaction" &&
+      (message.status === "running" ||
+        ("jobID" in message && message.status !== "completed" && message.status !== "failed")),
+  )
   const pending = new Set([...pendingCompactions.map((message) => message.id), ...inputs])
   return [
     ...messages.filter((message) => !pending.has(message.id)),
@@ -355,28 +359,17 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
       if ((part.type === "text" || part.type === "reasoning") && !part.text.trim()) return
       append(rows, { messageID: message.id, partID }, part)
     })
-    if ((message.finish && !["tool-calls", "unknown"].includes(message.finish)) || message.error || message.retry) {
+    if (
+      (message.finish && !["tool-calls", "unknown"].includes(message.finish)) ||
+      message.error ||
+      message.retry ||
+      message.id === closing
+    ) {
       completePrevious(rows)
       rows.push({ type: "assistant-footer", messageID: message.id })
     }
     return rows
   }, [])
-}
-
-function activeTranscriptTasks(messages: SessionMessageInfo[]): SessionRow[] {
-  const tool = messages
-    .toReversed()
-    .flatMap((message) => (message.type === "assistant" ? message.content.toReversed() : []))
-    .find((part) => part.type === "tool" && part.name.toLowerCase() === "todowrite")
-  if (tool?.type !== "tool" || typeof tool.state.input === "string") return []
-  const todos = tool.state.input.todos
-  if (!Array.isArray(todos)) return []
-  return todos.flatMap((todo): SessionRow[] => {
-    if (typeof todo !== "object" || todo === null || Array.isArray(todo)) return []
-    if (!("status" in todo) || todo.status !== "in_progress") return []
-    if (!("content" in todo) || typeof todo.content !== "string") return []
-    return [{ type: "task", content: todo.content, status: "in_progress" }]
-  })
 }
 
 export function messageBoundaryIDs(rows: SessionRow[], messages: SessionMessageInfo[]) {
@@ -461,6 +454,34 @@ function partitionPending(rows: SessionRow[], pending: Set<string>) {
 
 function exploration(name: string) {
   return ["read", "glob", "grep"].includes(name.toLowerCase())
+}
+
+function rowKey(row: SessionRow, message?: SessionMessageInfo): string {
+  switch (row.type) {
+    case "message": {
+      const jobID = message?.type === "compaction" && "jobID" in message ? message.jobID : undefined
+      if (typeof jobID === "string") return `compaction:${jobID}`
+      return `message:${row.messageID}`
+    }
+    case "compaction":
+      return `compaction:${row.jobID}`
+    case "guardrail":
+      return `guardrail:${row.requestID}`
+    case "subagent":
+      return `subagent:${row.sessionID}`
+    case "task":
+      // Task activity rows have no runtime producer (activityRows() only emits guardrail and
+      // subagent rows), so `content` is the only stable identity available and cannot collide.
+      return `task:${row.content}`
+    case "part":
+      return `part:${row.ref.messageID}:${row.ref.partID}`
+    case "group": {
+      const first = row.refs[0] ?? (row.kind === "exploration" ? row.pending[0] : undefined)
+      return `group:${row.kind}:${first?.messageID ?? ""}:${first?.partID ?? ""}`
+    }
+    case "assistant-footer":
+      return `assistant-footer:${row.messageID}`
+  }
 }
 
 function hasPart(rows: SessionRow[], ref: PartRef) {

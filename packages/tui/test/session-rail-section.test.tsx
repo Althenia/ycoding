@@ -82,14 +82,16 @@ test("renders expanded when no rail provider is mounted", async () => {
   app.renderer.destroy()
 })
 
-test("keeps the SESSION header separate from its session title", async () => {
+test("renders the session title only inside the section body", async () => {
   const { SessionRailContent } = await import("../src/routes/session/sidebar")
   const app = await mount(() => <SessionRailContent sessionID="ses_0085fc701234567" title="New session — cache audit" />)
   await app.waitForFrame((frame) => frame.includes("New session — cache audit"))
 
   try {
-    const [header] = app.captureCharFrame().split("\n")
-    expect(header).toMatch(/^− SESSION +New session — cache audit$/)
+    const rows = app.captureCharFrame().split("\n")
+    // A long title on the header row squeezed the label down to "S", because the summary never shrinks.
+    expect(rows[0]).toMatch(/^− SESSION *$/)
+    expect(rows.slice(1).join("\n")).toContain("New session — cache audit")
   } finally {
     app.renderer.destroy()
   }
@@ -214,7 +216,6 @@ test("renders compact operational rail summaries from live component state", asy
   try {
     const frame = app.captureCharFrame()
     const expectations = [
-      ["SESSION", "Summary session"],
       ["GOAL", "active"],
       ["AUTONOMY", "YOLO"],
       ["TODO LIST", "1/2 open"],
@@ -399,7 +400,7 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
       setThemeV2(useTheme().themeV2)
       return (
         <RailProvider>
-          <SidebarCacheContent diagnostics={() => diagnostics} cost={() => 9.08} subagentCost={() => 1.24} />
+          <SidebarCacheContent diagnostics={() => diagnostics} cost={() => 9.08} />
         </RailProvider>
       )
     },
@@ -415,7 +416,6 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
       "Cache",
       "SPEND",
       "Total",
-      "· subagents",
       "CACHE",
       "Prefix",
       "Reads",

@@ -107,6 +107,37 @@ test("leader bindings dispatch from real terminal input", async () => {
   }
 })
 
+test("inline leader sequences dispatch from real terminal input", async () => {
+  const calls: string[] = []
+
+  function Harness() {
+    Keymap.createLayer(() => ({
+      commands: [{ bind: "ctrl+x k", title: "Cancel", run: () => void calls.push("cancel") }],
+    }))
+    return <box />
+  }
+
+  const app = await testRender(
+    () => (
+      <ConfigProvider config={createTuiResolvedConfig()}>
+        <Keymap.Provider>
+          <Harness />
+        </Keymap.Provider>
+      </ConfigProvider>
+    ),
+    { kittyKeyboard: true },
+  )
+  app.renderer.start()
+  try {
+    app.mockInput.pressKey("x", { ctrl: true })
+    app.mockInput.pressKey("k")
+    await Bun.sleep(10)
+    expect(calls).toEqual(["cancel"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("plain tab dispatches the default agent cycle command", async () => {
   const calls: string[] = []
 

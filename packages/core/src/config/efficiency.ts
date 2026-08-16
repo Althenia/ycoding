@@ -30,4 +30,7 @@ export class Info extends Schema.Class<Info>("ConfigEfficiency.Info")({
   helper_models: HelperModels.pipe(Schema.optional),
   prompt_cache: PromptCache.pipe(Schema.optional),
   openai_responses_continuation: Schema.Literals(["auto", "on", "off"]).pipe(Schema.optional),
+  openai_responses_state: Schema.Literals(["stored", "stateless"]).pipe(Schema.optional),
 }) {}
+
+export const openAIResponsesState = (info?: Info) => info?.openai_responses_state ?? "stored"

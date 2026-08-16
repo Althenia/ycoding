@@ -16,6 +16,7 @@ import { SkillInstructions } from "../skill/instructions"
 import { AgentNotFoundError } from "./error"
 import { SessionHistory } from "./history"
 import { InstructionEntry } from "./instruction-entry"
+import { SessionLiveState } from "./live-state"
 import { SessionMessage } from "./message"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
@@ -33,6 +34,7 @@ export interface Loaded {
   readonly model: SessionRunnerModel.Resolved
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
+  readonly liveState: SessionLiveState.Snapshot
 }
 
 /**
@@ -59,6 +61,7 @@ const layer = Layer.effect(
     const discovery = yield* InstructionDiscovery.Service
     const entries = yield* InstructionEntry.Service
     const location = yield* Location.Service
+    const liveState = yield* SessionLiveState.Service
     const mcpInstructions = yield* McpInstructions.Service
     const models = yield* SessionRunnerModel.Service
     const plugins = yield* PluginSupervisor.Service
@@ -94,12 +97,14 @@ const layer = Layer.effect(
     const load = Effect.fn("SessionContext.load")(function* (selection: Selection) {
       const model = yield* models.resolve(selection.session)
       const history = yield* SessionHistory.entriesForRunner(db, selection.session.id, selection.instructions)
+      const live = yield* liveState.load(selection.session.id).pipe(Effect.orDie)
       return {
         session: selection.session,
         agent: selection.agent,
         model,
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
+        liveState: live,
       }
     })
 
@@ -117,6 +122,7 @@ export const node = makeLocationNode({
     InstructionDiscovery.node,
     InstructionEntry.node,
     Location.node,
+    SessionLiveState.node,
     McpInstructions.node,
     PluginSupervisor.node,
     ReferenceInstructions.node,

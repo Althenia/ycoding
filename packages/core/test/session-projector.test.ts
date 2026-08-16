@@ -77,13 +77,14 @@ describe("SessionProjector", () => {
       const inputID = SessionMessage.ID.make("msg_manual_compaction")
       yield* SessionPending.admitCompaction(db, events, { id: inputID, sessionID })
 
-      yield* events.publish(SessionEvent.Compaction.Failed, {
+      yield* events.publish(SessionEvent.Compaction.FailedV1, {
         sessionID,
         reason: "auto",
         error: { type: "compaction.failed", message: "Auto compaction failed" },
       })
 
       expect(yield* SessionPending.compaction(db, sessionID)).toMatchObject({ id: inputID })
+      expect(yield* SessionPending.list(db, sessionID)).toEqual([])
     }),
   )
 
@@ -416,7 +417,7 @@ describe("SessionProjector", () => {
         }),
         output: { output: "/project", cursor: 8, size: 8, truncated: false },
       })
-      yield* events.publish(SessionEvent.Compaction.Started, {
+      yield* events.publish(SessionEvent.Compaction.StartedV1, {
         sessionID,
         reason: "manual",
         recent: "recent context",
@@ -441,7 +442,7 @@ describe("SessionProjector", () => {
           .all()
           .pipe(Effect.orDie),
       ).toEqual([{ data: expect.objectContaining({ status: "running", summary: "", recent: "recent context" }) }])
-      yield* events.publish(SessionEvent.Compaction.Ended, {
+      yield* events.publish(SessionEvent.Compaction.EndedV1, {
         sessionID,
         reason: "manual",
         text: "summary",
@@ -488,7 +489,7 @@ describe("SessionProjector", () => {
       expect(
         yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
       ).toMatchObject({
-        agent: "build",
+        agent: build,
         model,
         time_updated: DateTime.toEpochMillis(created),
       })

@@ -193,11 +193,18 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       warnings.push({ type: "unsupported", feature: "stopSequences" })
     }
 
-    const openaiOptions = await parseProviderOptions({
-      provider: "copilot",
-      providerOptions,
-      schema: openaiResponsesProviderOptionsSchema,
-    })
+    const openaiOptions = {
+      ...(await parseProviderOptions({
+        provider: "openai",
+        providerOptions,
+        schema: openaiResponsesProviderOptionsSchema,
+      })),
+      ...(await parseProviderOptions({
+        provider: "copilot",
+        providerOptions,
+        schema: openaiResponsesProviderOptionsSchema,
+      })),
+    }
 
     const { input, warnings: inputWarnings } = await convertToOpenAIResponsesInput({
       prompt,
@@ -840,7 +847,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       {
         canonicalId: string // the item.id from output_item.added
         encryptedContent?: string | null
-        summaryParts: number[]
+        summaryParts: Record<number, "active" | "can-conclude" | "concluded">
       }
     > = {}
 
@@ -963,7 +970,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                 activeReasoning[value.output_index] = {
                   canonicalId: value.item.id,
                   encryptedContent: value.item.encrypted_content,
-                  summaryParts: [0],
+                  summaryParts: { 0: "active" },
                 }
                 currentReasoningOutputIndex = value.output_index
 
@@ -1117,7 +1124,8 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
               } else if (isResponseOutputItemDoneReasoningChunk(value)) {
                 const activeReasoningPart = activeReasoning[value.output_index]
                 if (activeReasoningPart) {
-                  for (const summaryIndex of activeReasoningPart.summaryParts) {
+                  for (const [summaryIndex, status] of Object.entries(activeReasoningPart.summaryParts)) {
+                    if (status === "concluded") continue
                     controller.enqueue({
                       type: "reasoning-end",
                       id: `${activeReasoningPart.canonicalId}:${summaryIndex}`,
@@ -1229,7 +1237,22 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
 
               // the first reasoning start is pushed in isResponseOutputItemAddedReasoningChunk.
               if (activeItem && value.summary_index > 0) {
-                activeItem.summaryParts.push(value.summary_index)
+                for (const [summaryIndex, status] of Object.entries(activeItem.summaryParts)) {
+                  if (status !== "can-conclude") continue
+                  controller.enqueue({
+                    type: "reasoning-end",
+                    id: `${activeItem.canonicalId}:${summaryIndex}`,
+                    providerMetadata: {
+                      copilot: {
+                        itemId: activeItem.canonicalId,
+                        reasoningEncryptedContent: activeItem.encryptedContent ?? null,
+                      },
+                    },
+                  })
+                  activeItem.summaryParts[Number(summaryIndex)] = "concluded"
+                }
+
+                activeItem.summaryParts[value.summary_index] = "active"
 
                 controller.enqueue({
                   type: "reasoning-start",
@@ -1241,6 +1264,13 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                     },
                   },
                 })
+              }
+            } else if (isResponseReasoningSummaryPartDoneChunk(value)) {
+              const activeItem =
+                currentReasoningOutputIndex !== null ? activeReasoning[currentReasoningOutputIndex] : null
+
+              if (activeItem?.summaryParts[value.summary_index] === "active") {
+                activeItem.summaryParts[value.summary_index] = "can-conclude"
               }
             } else if (isResponseReasoningSummaryTextDeltaChunk(value)) {
               const activeItem =
@@ -1545,6 +1575,12 @@ const responseReasoningSummaryPartAddedSchema = z.object({
   summary_index: z.number(),
 })
 
+const responseReasoningSummaryPartDoneSchema = z.object({
+  type: z.literal("response.reasoning_summary_part.done"),
+  item_id: z.string(),
+  summary_index: z.number(),
+})
+
 const responseReasoningSummaryTextDeltaSchema = z.object({
   type: z.literal("response.reasoning_summary_text.delta"),
   item_id: z.string(),
@@ -1564,6 +1600,7 @@ const openaiResponsesChunkSchema = z.union([
   responseCodeInterpreterCallCodeDoneSchema,
   responseAnnotationAddedSchema,
   responseReasoningSummaryPartAddedSchema,
+  responseReasoningSummaryPartDoneSchema,
   responseReasoningSummaryTextDeltaSchema,
   errorChunkSchema,
   z.object({ type: z.string() }).loose(), // fallback for unknown chunks
@@ -1650,6 +1687,12 @@ function isResponseReasoningSummaryPartAddedChunk(
   chunk: z.infer<typeof openaiResponsesChunkSchema>,
 ): chunk is z.infer<typeof responseReasoningSummaryPartAddedSchema> {
   return chunk.type === "response.reasoning_summary_part.added"
+}
+
+function isResponseReasoningSummaryPartDoneChunk(
+  chunk: z.infer<typeof openaiResponsesChunkSchema>,
+): chunk is z.infer<typeof responseReasoningSummaryPartDoneSchema> {
+  return chunk.type === "response.reasoning_summary_part.done"
 }
 
 function isResponseReasoningSummaryTextDeltaChunk(

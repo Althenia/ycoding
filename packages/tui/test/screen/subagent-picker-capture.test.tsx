@@ -76,21 +76,46 @@ test("captures populated subagent picker states at reference terminal dimensions
       expect(lines.join("\n")).toContain("Subagents")
       expect(lines.join("\n")).toContain("ACTIVE")
       expect(lines.join("\n")).toContain("INACTIVE")
-      if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
-        expectAt(lines, 34, 3, "Shell")
-        expectAt(lines, 34, 9, "3")
-        expectAt(lines, 34, 14, "Subagents")
-        expectAt(lines, 34, 25, "2")
-        expectAt(lines, 40, 19, "anthropic/claude-sonnet-5 · 68% hit · 4m02s")
-        expectAt(lines, 43, 19, "anthropic/claude-sonnet-5 · attached · 74% hit · 2m14s")
-        expectAt(lines, 46, 19, "anthropic/claude-haiku-4-5 · 81% hit · 48s")
-        expectAt(lines, 47, 3, "cancelled")
-        expectAt(lines, 48, 19, "anthropic/claude-sonnet-5 · — · 12s")
-        expectAt(lines, 53, 3, "Enter attach")
-        expectAt(lines, 53, 18, "↑↓ move")
-        expectAt(lines, 53, 28, "⌃x k cancel")
-        expectAt(lines, 53, 43, "r answer")
-        expectAt(lines, 53, 54, "Esc close")
+      // Subagents leads the tab strip, and every task owns exactly one row: the status column, the
+      // agent, the description and the metadata share it, with the metadata flush against the
+      // composer's right inset so no column can overlap or push another off the row.
+      const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 45
+      expectAt(lines, tabs, 3, "Subagents")
+      expectAt(lines, tabs, 14, "2")
+      expectAt(lines, tabs, 19, "Shell")
+      expectAt(lines, tabs, 25, "3")
+      const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13, 15, 16] : [50, 52, 54, 55]
+      expectAt(lines, rows[0]!, 3, "? awaiting")
+      expectAt(lines, rows[0]!, 19, "test-triage  · Tria")
+      expectAt(lines, rows[1]!, 3, "running")
+      expectAt(lines, rows[1]!, 19, "docs-sync  · Sync ")
+      expectAt(lines, rows[2]!, 3, "completed")
+      expectAt(lines, rows[2]!, 19, "keymap-audit  · Aud")
+      expectAt(lines, rows[3]!, 3, "cancelled")
+      expectAt(lines, rows[3]!, 19, "bench-run  · Bench")
+      for (const row of rows) expect(lines[row]?.trimEnd().length).toBe(viewport.width - 5)
+      expect(lines[rows[0]!]).toContain("anthropic/claude-sonnet-5")
+      expect(lines[rows[1]!]).toContain("anthropic/claude-sonnet-5")
+      expect(lines[rows[2]!]).toContain("anthropic/claude-haiku-4-5")
+      expect(lines[rows[3]!]).toContain("anthropic/claude-sonnet-5")
+      if (viewport.width === NARROW_VIEWPORT.width) {
+        // Narrow terminals drop whole trailing fields instead of colliding.
+        for (const row of rows) expect(lines[row]).not.toContain("% hit")
+        expect(lines[rows[1]!]).not.toContain("attached")
+      }
+      if (viewport.width !== NARROW_VIEWPORT.width) {
+        expect(lines[rows[0]!]).toContain("anthropic/claude-sonnet-5 · 68% hit · ")
+        expect(lines[rows[1]!]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
+        expect(lines[rows[2]!]).toContain("anthropic/claude-haiku-4-5 · 81% hit · ")
+        expect(lines[rows[3]!]).toContain("anthropic/claude-sonnet-5 · — · ")
+        // Only the awaiting task adds a second row, and it carries the question, never metadata.
+        expectAt(lines, 51, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
+        expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length)
+        expectAt(lines, 64, 3, "Enter attach")
+        expectAt(lines, 64, 18, "↑↓ move")
+        expectAt(lines, 64, 28, "⌃x k cancel")
+        expectAt(lines, 64, 43, "r answer")
+        expectAt(lines, 64, 54, "Esc close")
       }
       await Bun.write(path.resolve(import.meta.dir, `../../../../.aphrodite/renders/subagent-picker-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
     } finally {

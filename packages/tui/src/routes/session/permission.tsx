@@ -430,6 +430,10 @@ export function Prompt<const T extends Record<string, string>>(props: {
   const footer = () =>
     props.footer ??
     (kind === "guardrail" ? <text fg={themeV2.text.subdued}>guardrails apply even in YOLO mode.</text> : undefined)
+  const move = (direction: -1 | 1) => {
+    const index = keys.indexOf(store.selected)
+    setStore("selected", keys[(index + direction + keys.length) % keys.length])
+  }
 
   Keymap.createLayer(() => ({
     mode: "base",
@@ -448,41 +452,37 @@ export function Prompt<const T extends Record<string, string>>(props: {
         bind: "left",
         title: "Previous permission option",
         group: "Permission",
-        run: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx - 1 + keys.length) % keys.length]
-          setStore("selected", next)
-        },
+        run: () => move(-1),
       },
       {
         bind: "h",
         title: "Previous permission option",
         group: "Permission",
-        run: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx - 1 + keys.length) % keys.length]
-          setStore("selected", next)
-        },
+        run: () => move(-1),
+      },
+      {
+        bind: "up",
+        title: "Previous permission option",
+        group: "Permission",
+        run: () => move(-1),
       },
       {
         bind: "right",
         title: "Next permission option",
         group: "Permission",
-        run: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx + 1) % keys.length]
-          setStore("selected", next)
-        },
+        run: () => move(1),
       },
       {
         bind: "l",
         title: "Next permission option",
         group: "Permission",
-        run: () => {
-          const idx = keys.indexOf(store.selected)
-          const next = keys[(idx + 1) % keys.length]
-          setStore("selected", next)
-        },
+        run: () => move(1),
+      },
+      {
+        bind: "down",
+        title: "Next permission option",
+        group: "Permission",
+        run: () => move(1),
       },
       {
         bind: "return",
@@ -565,6 +565,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
               }))}
               width="100%"
               height={2}
+              flexDirection="column"
               onMouseOver={() => setStore("selected", option)}
               onMouseUp={() => {
                 setStore("selected", option)
@@ -575,16 +576,15 @@ export function Prompt<const T extends Record<string, string>>(props: {
                 when={option === store.selected}
                 fallback={
                   <>
-                    <box height={1} paddingLeft={6} paddingRight={3}>
+                    <box height={1} backgroundColor={themeV2.background.surface.offset} />
+                    <box id={`session.${kind}.action.${String(option)}.label`} width="100%" height={1} paddingLeft={6} paddingRight={3}>
                       <text fg={option === "reject" ? themeV2.text.feedback.error.default : themeV2.text.default}>
                         {props.options[option]}
                       </text>
                     </box>
-                    <box height={1} backgroundColor={themeV2.background.surface.offset} />
                   </>
                 }
               >
-                <box id={`session.${kind}.action.${String(option)}.spacer`} height={1} backgroundColor={themeV2.background.surface.offset} />
                 <box
                   id={`session.${kind}.action.${String(option)}.band`}
                   width="100%"
@@ -595,6 +595,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
                 >
                   <text fg={themeV2.text.action.primary.focused}>{props.options[option]}</text>
                 </box>
+                <box id={`session.${kind}.action.${String(option)}.spacer`} height={1} backgroundColor={themeV2.background.surface.offset} />
               </Show>
             </box>
           )}

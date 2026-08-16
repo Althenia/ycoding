@@ -45,7 +45,7 @@ const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
 
 test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
-    "b98e95251a36f743abcb0ca99c6ce8544ce431af3dfbabfb29f148fb2099a3b4",
+    "3537645d5e6210f16f79be6f3b717923d6621ce3a7431e11a5e483f945885fc6",
   )
 })
 
@@ -53,7 +53,7 @@ test("keeps ordinary keys stable while isolating compaction cache scope", () => 
   const normal = SessionRunnerCache.promptCacheNamespace(base)
   const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })
 
-  expect(normal).toBe("b98e95251a36f743abcb0ca99c6ce8544ce431af3dfbabfb29f148fb2099a3b4")
+  expect(normal).toBe("3537645d5e6210f16f79be6f3b717923d6621ce3a7431e11a5e483f945885fc6")
   expect(compaction).not.toBe(normal)
 })
 
@@ -79,7 +79,7 @@ test("canonicalizes object order and preserves JSON array positions", () => {
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {
   expect(namespaceWithSchema({ "10": "ten", "2": "two", "\u{10000}": "astral", "\u{e000}": "bmp" })).toBe(
-    "4fcf6a057b689492b74545701e2b3bc96c26d060d98dc2459459ed61d2e8b6cf",
+    "59ed4c65fe5898614f648ffac4e181dedb2616fcf913d747f419b6178d858c25",
   )
 })
 
@@ -213,7 +213,7 @@ test("different sessions share a prompt cache key but not an OpenRouter session 
   expect(first.providerOptions.openrouter.prompt_cache_key).toBe(second.providerOptions.openrouter.prompt_cache_key)
 })
 
-test("selects hybrid auto or explicit OpenAI caching only for supported direct GPT-5.6 routes", () => {
+test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () => {
   const automatic = SessionRunnerCache.providerOptions({
     ...base,
     sessionID: "ses_openai_auto",
@@ -224,7 +224,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: automatic.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
-  expect(automatic.cache).toEqual({ tools: false, system: true, messages: { tail: Number.MAX_SAFE_INTEGER } })
+  expect(automatic.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const aliased = SessionRunnerCache.providerOptions({
     ...base,
@@ -239,7 +239,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
   expect(aliased.promptCacheKey).toBe(SessionRunnerCache.promptCacheNamespace({ ...base, modelID: "catalog-alias" }))
-  expect(aliased.cache).toEqual({ tools: false, system: true, messages: { tail: Number.MAX_SAFE_INTEGER } })
+  expect(aliased.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const directRoute = SessionRunnerCache.providerOptions({
     ...base,
@@ -252,7 +252,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: directRoute.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
-  expect(directRoute.cache).toEqual({ tools: false, system: true, messages: { tail: Number.MAX_SAFE_INTEGER } })
+  expect(directRoute.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const webSocket = SessionRunnerCache.providerOptions({
     ...base,
@@ -264,7 +264,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: webSocket.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
-  expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: Number.MAX_SAFE_INTEGER } })
+  expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const explicit = SessionRunnerCache.providerOptions({
     ...base,
@@ -276,7 +276,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: explicit.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
-  expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: Number.MAX_SAFE_INTEGER } })
+  expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const legacy = SessionRunnerCache.providerOptions({
     ...base,
@@ -323,7 +323,14 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     routeID: "openai-codex-responses",
     openaiMode: "auto",
   })
-  expect(codexBackend.providerOptions.openai).toEqual({ promptCacheKey: codexBackend.promptCacheKey })
+  expect(codexBackend.providerOptions.openai).toEqual({
+    promptCacheKey: codexBackend.promptCacheKey,
+    providerSessionID: SessionRunnerCache.providerSessionNamespace({
+      projectID: base.projectID,
+      sessionID: "ses_openai_codex",
+      providerID: base.providerID,
+    }),
+  })
   expect(codexBackend.cache).toBeUndefined()
 
   const implicit = SessionRunnerCache.providerOptions({

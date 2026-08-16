@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { CacheHint, LLM, Message, Model, ToolCallPart, ToolResultPart } from "../src"
 import { Auth, LLMClient } from "../src/route"
-import { AmazonBedrock, GoogleVertexMessages, OpenRouter } from "../src/providers"
+import { AmazonBedrock, GoogleVertexMessages, OpenAI, OpenRouter } from "../src/providers"
 import * as AnthropicMessages from "../src/protocols/anthropic-messages"
 import * as Gemini from "../src/protocols/gemini"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -43,6 +43,11 @@ const openai56Model = OpenAIChat.route
   })
   .model({ id: "gpt-5.6" })
 
+const openai56ResponsesModel = OpenAI.configure({
+  baseURL: "https://api.openai.test/v1/",
+  apiKey: "test",
+}).model("gpt-5.6")
+
 const geminiModel = Gemini.route
   .with({
     endpoint: { baseURL: "https://generativelanguage.test/v1beta/" },
@@ -53,7 +58,7 @@ const geminiModel = Gemini.route
 const openrouterModel = OpenRouter.configure({ apiKey: "test" }).model("anthropic/claude-sonnet-4.5")
 
 test("pins the provider-native cache policy revision", () => {
-  expect(CACHE_POLICY_REVISION).toBe("provider-native/v6")
+  expect(CACHE_POLICY_REVISION).toBe("provider-native/v7")
 })
 
 const unknownAnthropicModel = AnthropicMessages.route
@@ -380,11 +385,9 @@ describe("applyCachePolicy", () => {
     expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral", ttlSeconds: 3600 } })
   })
 
-  test("marks all GPT-5.6 Responses user and assistant text across tool-result spans", () => {
+  test("marks GPT-5.6 Responses input boundaries without marking assistant output", () => {
     const request = LLM.request({
-      model: Model.update(openai56Model, {
-        route: openai56Model.route.with({ id: "openai-responses" }),
-      }),
+      model: openai56ResponsesModel,
       messages: [
         Message.user("older user"),
         Message.assistant("first assistant"),
@@ -398,10 +401,81 @@ describe("applyCachePolicy", () => {
 
     const applied = applyCachePolicy(request)
     expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
-    expect(applied.messages[1]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[1]?.content[0]).not.toHaveProperty("cache")
     expect(applied.messages[3]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
-    expect((applied.messages[2]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
-    expect(applied.messages[4]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[2]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[4]?.content[0]).not.toHaveProperty("cache")
+  })
+
+  test("bounds GPT-5.6 explicit candidates while retaining the system anchor and recent rolling anchors", () => {
+    const messages = Array.from({ length: 60 }, (_, index) => [
+      Message.user(`user ${index}`),
+      Message.assistant([ToolCallPart.make({ id: `call_${index}`, name: "lookup", input: {} })]),
+      Message.tool({ id: `call_${index}`, name: "lookup", result: `result ${index}` }),
+    ]).flat()
+    const apply = (mode: "implicit" | "explicit") =>
+      applyCachePolicy(
+        LLM.request({
+          model: Model.update(openai56Model, {
+            route: openai56Model.route.with({ id: "openai-responses" }),
+          }),
+          system: "Stable system",
+          messages,
+          cache: { system: true, messages: { tail: 50 } },
+          providerOptions: { openai: { promptCacheOptions: { mode, ttl: "30m" } } },
+        }),
+      )
+    const marked = (request: ReturnType<typeof apply>) => [
+      ...request.system.filter((part) => part.cache !== undefined).map((part) => part.text),
+      ...request.messages.flatMap((message) =>
+        message.content.flatMap((part) => {
+          if (!("cache" in part) || !part.cache) return []
+          if (part.type === "text") return [part.text]
+          if (part.type === "tool-result") return [String(part.result.value)]
+          return []
+        }),
+      ),
+    ]
+
+    const automatic = marked(apply("implicit"))
+    expect(automatic).toHaveLength(49)
+    expect(automatic[0]).toBe("Stable system")
+    expect(automatic).toContain("result 59")
+    expect(automatic).not.toContain("user 0")
+
+    const explicit = marked(apply("explicit"))
+    expect(explicit).toHaveLength(50)
+    expect(explicit[0]).toBe("Stable system")
+    expect(explicit).toContain("result 59")
+    expect(explicit).not.toContain("user 0")
+  })
+
+  test("bounds pre-marked GPT-5.6 candidates while retaining the system anchor and newest messages", () => {
+    const cache = new CacheHint({ type: "ephemeral" })
+    const applied = applyCachePolicy(
+      LLM.request({
+        model: Model.update(openai56Model, {
+          route: openai56Model.route.with({ id: "openai-responses" }),
+        }),
+        system: { type: "text", text: "Stable system", cache },
+        messages: Array.from({ length: 60 }, (_, index) =>
+          Message.user([{ type: "text", text: `user ${index}`, cache }]),
+        ),
+        cache: "none",
+        providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+      }),
+    )
+    const marked = [
+      ...applied.system.filter((part) => part.cache !== undefined).map((part) => part.text),
+      ...applied.messages.flatMap((message) =>
+        message.content.flatMap((part) => ("cache" in part && part.cache && part.type === "text" ? [part.text] : [])),
+      ),
+    ]
+
+    expect(marked).toHaveLength(50)
+    expect(marked[0]).toBe("Stable system")
+    expect(marked).not.toContain("user 0")
+    expect(marked).toContain("user 59")
   })
 
   test("marks GPT-5.6 Chat user and assistant text inside the raw tail window", () => {

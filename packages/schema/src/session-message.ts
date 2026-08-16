@@ -16,6 +16,7 @@ import { Skill as SkillSchema } from "./skill.js"
 import { Money } from "./money.js"
 import { Snapshot } from "./snapshot.js"
 import { TokenUsage } from "./token-usage.js"
+import { SessionCompaction } from "./session-compaction.js"
 
 export const ID = SessionMessageID
 export type ID = typeof ID.Type
@@ -244,39 +245,98 @@ export const Assistant = Schema.Struct({
 
 const CompactionBase = { type: Schema.tag("compaction"), ...Base }
 
-export interface CompactionRunning extends Schema.Schema.Type<typeof CompactionRunning> {}
-export const CompactionRunning = Schema.Struct({
-  ...CompactionBase,
-  status: Schema.tag("running"),
+const CompactionCurrent = {
+  jobID: SessionCompaction.ID,
+  trigger: SessionCompaction.Trigger,
+  admissionMode: SessionCompaction.AdmissionMode,
+}
+
+const CompactionLegacy = {
   reason: Schema.Literals(["auto", "manual"]),
+}
+
+export interface CompactionRunningV1 extends Schema.Schema.Type<typeof CompactionRunningV1> {}
+export const CompactionRunningV1 = Schema.Struct({
+  ...CompactionBase,
+  ...CompactionLegacy,
+  status: Schema.tag("running"),
   summary: Schema.String,
   recent: Schema.String,
-}).annotate({ identifier: "Session.Message.Compaction.Running" })
+}).annotate({ identifier: "Session.Message.Compaction.RunningV1" })
 
-export interface CompactionCompleted extends Schema.Schema.Type<typeof CompactionCompleted> {}
-export const CompactionCompleted = Schema.Struct({
+export interface CompactionCompletedV1 extends Schema.Schema.Type<typeof CompactionCompletedV1> {}
+export const CompactionCompletedV1 = Schema.Struct({
   ...CompactionBase,
+  ...CompactionLegacy,
   status: Schema.tag("completed"),
-  reason: Schema.Literals(["auto", "manual"]),
   summary: Schema.String,
   recent: Schema.String,
   messages: NonNegativeInt.pipe(optional),
   tokens: TokenUsage.Info.pipe(optional),
+}).annotate({ identifier: "Session.Message.Compaction.CompletedV1" })
+
+export interface CompactionFailedV1 extends Schema.Schema.Type<typeof CompactionFailedV1> {}
+export const CompactionFailedV1 = Schema.Struct({
+  ...CompactionBase,
+  ...CompactionLegacy,
+  status: Schema.tag("failed"),
+  error: SessionError.Error,
+}).annotate({ identifier: "Session.Message.Compaction.FailedV1" })
+
+export interface CompactionPending extends Schema.Schema.Type<typeof CompactionPending> {}
+export const CompactionPending = Schema.Struct({
+  ...CompactionBase,
+  ...CompactionCurrent,
+  status: Schema.tag("pending"),
+  summary: Schema.String.pipe(optional),
+  recent: Schema.String.pipe(optional),
+}).annotate({ identifier: "Session.Message.Compaction.Pending" })
+
+export interface CompactionRunningCurrent extends Schema.Schema.Type<typeof CompactionRunningCurrent> {}
+export const CompactionRunningCurrent = Schema.Struct({
+  ...CompactionBase,
+  ...CompactionCurrent,
+  status: Schema.tag("running"),
+  summary: Schema.String.pipe(optional),
+  recent: Schema.String.pipe(optional),
+}).annotate({ identifier: "Session.Message.Compaction.Running" })
+
+export const CompactionRunning = Schema.Union([CompactionRunningV1, CompactionRunningCurrent], { mode: "oneOf" })
+export type CompactionRunning = typeof CompactionRunning.Type
+
+export interface CompactionCompletedCurrent extends Schema.Schema.Type<typeof CompactionCompletedCurrent> {}
+export const CompactionCompletedCurrent = Schema.Struct({
+  ...CompactionBase,
+  ...CompactionCurrent,
+  status: Schema.tag("completed"),
+  revision: NonNegativeInt,
+  boundary: SessionCompaction.Boundary,
+  metrics: SessionCompaction.Metrics,
+  summary: Schema.String.pipe(optional),
+  recent: Schema.String.pipe(optional),
 }).annotate({ identifier: "Session.Message.Compaction.Completed" })
 
-export interface CompactionFailed extends Schema.Schema.Type<typeof CompactionFailed> {}
-export const CompactionFailed = Schema.Struct({
+export const CompactionCompleted = Schema.Union([CompactionCompletedV1, CompactionCompletedCurrent], { mode: "oneOf" })
+export type CompactionCompleted = typeof CompactionCompleted.Type
+
+export interface CompactionFailedCurrent extends Schema.Schema.Type<typeof CompactionFailedCurrent> {}
+export const CompactionFailedCurrent = Schema.Struct({
   ...CompactionBase,
+  ...CompactionCurrent,
   status: Schema.tag("failed"),
-  reason: Schema.Literals(["auto", "manual"]),
+  code: SessionCompaction.FailureCode,
   error: SessionError.Error,
+  summary: Schema.String.pipe(optional),
+  recent: Schema.String.pipe(optional),
 }).annotate({ identifier: "Session.Message.Compaction.Failed" })
 
-export const Compaction = Schema.Union([CompactionRunning, CompactionCompleted, CompactionFailed]).pipe(
-  Schema.toTaggedUnion("status"),
+export const CompactionFailed = Schema.Union([CompactionFailedV1, CompactionFailedCurrent], { mode: "oneOf" })
+export type CompactionFailed = typeof CompactionFailed.Type
+
+export const Compaction = Schema.Union([CompactionPending, CompactionRunning, CompactionCompleted, CompactionFailed]).pipe(
   Schema.annotate({ identifier: "Session.Message.Compaction" }),
 )
-export type Compaction = CompactionRunning | CompactionCompleted | CompactionFailed
+export type Compaction = typeof Compaction.Type
 
 export const Info = Schema.Union([
   AgentSelected,

@@ -623,6 +623,71 @@ describe("SubagentTool", () => {
     ),
   )
 
+  it.live("cancels a starting managed child", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* SessionV2.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const source = {
+            messageID: SessionMessage.ID.make("msg_starting_cancel_parent"),
+            callID: "call_starting_cancel",
+          }
+          const prepared = yield* SessionOrchestration.preflight(parent, {
+            agent: AgentV2.ID.make("reviewer"),
+            caller: toolIdentity.agent,
+          }).pipe(Effect.provide((yield* LocationServiceMap.Service).get(parent.location)))
+          const ids = SessionOrchestration.identities(parent.id, source.messageID, source.callID)
+          yield* sessions.create({
+            id: ids.childID,
+            parentID: parent.id,
+            title: "starting cancellation",
+            agent: prepared.target.id,
+            model: prepared.resolved.ref,
+          })
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          const events = yield* EventV2.Service
+          yield* events.publish(SessionEvent.Task.Updated, {
+            sessionID: ids.childID,
+            change: {
+              type: "launched",
+              parentID: parent.id,
+              parentAssistantMessageID: source.messageID,
+              toolCallID: source.callID,
+              inputID: ids.inputID,
+              description: "starting cancellation",
+              agent: prepared.target.id,
+              model: prepared.resolved.ref,
+              promptDigest: Hash.sha256("starting cancellation"),
+              background: true,
+              delivery: "steer",
+            },
+          })
+          expect((yield* orchestration.get(parent.id, ids.childID)).state).toBe("starting")
+          const transitions = yield* events.subscribe(SessionEvent.Task.Updated).pipe(
+            Stream.filter((event) => event.data.sessionID === ids.childID),
+            Stream.take(2),
+            Stream.runCollect,
+            Effect.forkScoped({ startImmediately: true }),
+          )
+
+          const cancelled = yield* orchestration.cancel({ parentID: parent.id, childID: ids.childID })
+
+          expect(cancelled.state).toBe("cancelled")
+          expect(Array.from(yield* Fiber.join(transitions)).map((event) => event.data.change.type)).toEqual([
+            "cancel_requested",
+            "cancelled",
+          ])
+        }),
+      ),
+    ),
+  )
+
   it.live("enforces direct-child ownership and lifecycle-gated mailbox controls", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -698,9 +763,7 @@ describe("SubagentTool", () => {
             delivery: "queue",
           })
           expect(
-            (yield* sessions.pending(child.sessionID))
-              .filter((item) => item.type !== "compaction")
-              .map((item) => item.delivery),
+            (yield* sessions.pending(child.sessionID)).map((item) => item.delivery),
           ).toEqual(["steer", "steer", "queue"])
 
           const question = yield* orchestration.question(child.sessionID, "Proceed?", { risk: "low" })

@@ -1,4 +1,5 @@
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { SessionPending } from "@ycoding-ai/schema/session-pending"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { Session } from "@ycoding-ai/schema/session"
@@ -36,6 +37,7 @@ import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { SessionTodo } from "@ycoding-ai/schema/session-todo"
 import { EventLog } from "@ycoding-ai/schema/event-log"
 import { SessionSkillStatus } from "@ycoding-ai/schema/session-skill-status"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
 const ParentIDFilter = Schema.Union([
   Session.ID,
@@ -589,6 +591,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
       ),
     )
     .add(
+      HttpApiEndpoint.get("session.usage", "/api/session/:sessionID/usage", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: ProviderRequest.Summary }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.usage",
+            summary: "Get durable session provider usage",
+            description:
+              "Retrieve provider-request usage and recorded or current-catalog-estimated spend after transcript compaction or when cache diagnostics are unavailable. Each priced model row identifies its cost provenance. Root sessions include their descendant subagent family; child sessions remain scoped to themselves.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.skills", "/api/session/:sessionID/skills", {
         params: { sessionID: Session.ID },
         success: Schema.Struct({ data: Schema.Array(SessionSkillStatus.Info) }),
@@ -665,8 +683,8 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
         params: { sessionID: Session.ID },
-        payload: Schema.Struct({ id: SessionMessage.ID.pipe(Schema.optional) }),
-        success: Schema.Struct({ data: SessionPending.Compaction }),
+        payload: Schema.Struct({ id: SessionCompaction.ID.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: SessionCompaction.Admission }),
         error: [ConflictError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
@@ -741,6 +759,21 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.context",
             summary: "Get session context",
             description: "Retrieve the active context messages for a session (all messages after the last compaction).",
+          }),
+      ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.fileChange.list", "/api/session/:sessionID/file-change", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Array(SessionEvent.FileChange.Info) }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.file-change.list",
+            summary: "List captured file changes",
+            description: "Retrieve durable current file changes for a session and its completed direct children.",
           }),
         ),
     )

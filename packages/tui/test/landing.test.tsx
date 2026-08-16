@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { BoxRenderable, ImageRenderable, TextRenderable, type Renderable } from "@opentui/core"
+import { TextRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
 import { ConfigProvider } from "../src/config"
@@ -54,14 +54,6 @@ function colorFor(app: Awaited<ReturnType<typeof testRender>>, label: string) {
   return app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes(label))?.fg.toInts()
 }
 
-function findImage(node: Renderable): ImageRenderable | undefined {
-  if (node instanceof ImageRenderable) return node
-  return node
-    .getChildren()
-    .flatMap((child) => findImage(child) ?? [])
-    .at(0)
-}
-
 function findText(node: Renderable, text: string): TextRenderable | undefined {
   if (node instanceof TextRenderable && node.plainText.includes(text)) return node
   return node
@@ -70,69 +62,43 @@ function findText(node: Renderable, text: string): TextRenderable | undefined {
     .at(0)
 }
 
-function backgroundAt(app: Awaited<ReturnType<typeof testRender>>, x: number, y: number) {
-  const spans = app.captureSpans().lines[y]?.spans ?? []
-  let column = 0
-  for (const span of spans) {
-    if (x >= column && x < column + span.width) return span.bg.toInts()
-    column += span.width
-  }
-  return undefined
-}
-
 describe("landing", () => {
-  test("renders the native brand image with the YCoding design tokens", async () => {
+  test("renders the transparent five-block mark and requested landing copy with the YCoding design tokens", async () => {
     const app = await renderLanding({ width: DESIGN_VIEWPORT.width })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
 
-    expect(String(findImage(app.renderer.root)?.source)).toEndWith("ycoding-mark-256.png")
+    expect(frame(app).join("\n")).toMatch(/[▀▄█]/)
     expect(frame(app).join("\n")).toContain("What should we build?")
-    expect(frame(app).join("\n")).toContain("Describe a goal, paste an error, or press ⌃p for commands.")
+    expect(frame(app).join("\n")).toContain("Describe a goal, paste an error, or press ^p for commands.")
     expect(colorFor(app, "What should we build?")).toEqual(theme.text.default.toInts())
-    expect(colorFor(app, "Describe a goal")).toEqual(theme.text.subdued.toInts())
+    expect(colorFor(app, "Describe a goal, paste an error, or press ^p for commands.")).toEqual(theme.text.subdued.toInts())
 
     app.renderer.destroy()
   })
 
-  test("uses a terminal-correct transparent mark footprint without moving the hero copy", async () => {
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+  test("keeps the five-block mark above the hero copy", async () => {
     for (const viewport of [NARROW_VIEWPORT, DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
       const app = await renderLanding(viewport)
       try {
-        const image = findImage(app.renderer.root)
         const lines = frame(app)
-        const titleRow = lines.findIndex((line) => line.includes("What should we build?"))
-
-        if (!image || !(image.parent instanceof BoxRenderable)) throw new Error("Landing brand image is missing")
-        await image.loadPromise
-        image.parent.backgroundColor = theme.background.action.destructive.default
-        await app.renderOnce()
-        expect(image.width).toBe(12)
-        expect(image.height).toBe(6)
-        expect(image.image?.info().hasAlpha).toBe(true)
-        expect(image.image?.raw().data[3]).toBe(0)
-        expect(titleRow).toBe(image.y + 8)
-        const background = theme.background.default.toInts()
-        expect([
-          backgroundAt(app, image.x, image.y),
-          backgroundAt(app, image.x + image.width - 1, image.y),
-          backgroundAt(app, image.x, image.y + image.height - 1),
-          backgroundAt(app, image.x + image.width - 1, image.y + image.height - 1),
-        ]).toEqual([background, background, background, background])
-        expect(lines.join("\n")).not.toContain("y. ycoding")
+        const mark = lines.findIndex((line) => /[▀▄█]/.test(line))
+        const title = lines.findIndex((line) => line.includes("What should we build?"))
+        expect(mark).toBeGreaterThanOrEqual(0)
+        expect(title).toBe(mark + 8)
       } finally {
         app.renderer.destroy()
       }
     }
   })
 
-  test("uses the live command-palette keybinding and omits the clause when unbound", async () => {
+  test("keeps the brand lockup independent of command-palette keybindings", async () => {
     const rebound = await renderLanding({ width: DESIGN_VIEWPORT.width, commandList: "ctrl+g" })
     const unbound = await renderLanding({ width: DESIGN_VIEWPORT.width, commandList: [] })
 
-    expect(frame(rebound).join("\n")).toContain("press ⌃g for commands.")
-    expect(frame(unbound).join("\n")).toContain("Describe a goal, paste an error.")
-    expect(frame(unbound).join("\n")).not.toContain("for commands")
+    expect(frame(rebound).join("\n")).toContain("What should we build?")
+    expect(frame(rebound).join("\n")).toContain("Describe a goal, paste an error, or press ^p for commands.")
+    expect(frame(unbound).join("\n")).toContain("What should we build?")
+    expect(frame(unbound).join("\n")).toContain("Describe a goal, paste an error, or press ^p for commands.")
 
     rebound.renderer.destroy()
     unbound.renderer.destroy()

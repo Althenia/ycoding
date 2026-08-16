@@ -13,7 +13,7 @@ import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { ProviderRequestObserver } from "./provider-request-observer"
-import { SessionProviderRequestTable } from "./sql"
+import { SessionProviderRequestTable, SessionUsageTable } from "./sql"
 
 export interface BeginInput {
   readonly sessionID: ProviderRequest.Record["sessionID"]
@@ -77,6 +77,82 @@ const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.In
   reasoning: left.reasoning + right.reasoning,
   cache: { read: left.cache.read + right.cache.read, write: left.cache.write + right.cache.write },
 })
+
+type CostedRecord = ProviderRequest.Record & { readonly costProvenance?: ProviderRequest.CostProvenance }
+
+export function summarize(records: readonly CostedRecord[]): ProviderRequest.Summary {
+  const models = new Map<
+    string,
+    {
+      model: ProviderRequest.Record["model"]
+      requests: number
+      tokens: TokenUsage.Info
+      priced: boolean
+      cost: Money.USD
+      currentCatalog: boolean
+    }
+  >()
+  for (const record of records) {
+    const key = JSON.stringify([record.model.providerID, record.model.id, record.model.variant])
+    const current = models.get(key)
+    if (!current) {
+      models.set(key, {
+        model: record.model,
+        requests: 1,
+        tokens: record.tokens,
+        priced: record.cost !== undefined,
+        cost: record.cost ?? Money.USD.zero,
+        currentCatalog: record.costProvenance === "current_catalog",
+      })
+      continue
+    }
+    current.requests += 1
+    current.tokens = addTokens(current.tokens, record.tokens)
+    current.priced &&= record.cost !== undefined
+    current.cost = Money.USD.make(current.cost + (record.cost ?? 0))
+    current.currentCatalog ||= record.costProvenance === "current_catalog"
+  }
+  const items = Array.from(models.values())
+    .map((item) => ({
+      model: item.model,
+      requests: item.requests,
+      tokens: item.tokens,
+      ...(item.priced ? { cost: item.cost } : {}),
+      ...(item.priced
+        ? { costProvenance: ProviderRequest.CostProvenance.make(item.currentCatalog ? "current_catalog" : "recorded") }
+        : {}),
+    }))
+    .sort(
+      (left, right) =>
+        (left.cost === undefined
+          ? right.cost === undefined
+            ? 0
+            : 1
+          : right.cost === undefined
+            ? -1
+            : right.cost - left.cost) ||
+        left.model.providerID.localeCompare(right.model.providerID) ||
+        left.model.id.localeCompare(right.model.id) ||
+        (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+    )
+  const cost = records.every((record) => record.cost !== undefined)
+    ? Money.USD.make(records.reduce((total, record) => total + (record.cost ?? 0), 0))
+    : undefined
+  const latest = records.at(-1)
+  return {
+    logical: records.length,
+    physical: records.reduce((total, record) => total + record.attempts, 0),
+    helpers: records.reduce((total, record) => total + (record.source === "step" ? 0 : 1), 0),
+    continued: records.reduce((total, record) => total + (record.continuation === "continued" ? 1 : 0), 0),
+    fallback: records.reduce((total, record) => total + (record.continuation === "fallback" ? 1 : 0), 0),
+    ...(cost === undefined ? {} : { cost }),
+    ...(items.length === 0 ? {} : { models: items }),
+    tokens: records.reduce((total, record) => addTokens(total, record.tokens), zeroTokens()),
+    ...(latest === undefined
+      ? {}
+      : { latestInvalidation: latest.invalidation, latestNamespace: latest.promptCacheKey.slice(0, 8) }),
+  }
+}
 
 function readPreviousRequest(
   row:
@@ -163,59 +239,64 @@ const layer = Layer.effect(
         )
 
     const summary: Interface["summary"] = (sessionID) =>
-      list(sessionID).pipe(
-        Effect.map((records) => {
-          const last = records.at(-1)
-          const cost = records.every((record) => record.cost !== undefined)
-            ? Money.USD.make(records.reduce((total, record) => total + (record.cost ?? 0), 0))
-            : undefined
-          const models = [
-            ...Map.groupBy(
-              records,
-              (record) => JSON.stringify([record.model.providerID, record.model.id, record.model.variant]),
-            ).values(),
-          ]
-            .flatMap((group) => {
-              const first = group.at(0)
-              if (!first) return []
-              const groupCost = group.every((record) => record.cost !== undefined)
-                ? Money.USD.make(group.reduce((total, record) => total + (record.cost ?? 0), 0))
-                : undefined
-              return [
-                { model: first.model, requests: group.length, ...(groupCost === undefined ? {} : { cost: groupCost }) },
-              ]
-            })
-            .sort(
-              (left, right) =>
-                (left.cost === undefined
-                  ? right.cost === undefined
-                    ? 0
-                    : 1
-                  : right.cost === undefined
-                    ? -1
-                    : right.cost - left.cost) ||
-                left.model.providerID.localeCompare(right.model.providerID) ||
-                left.model.id.localeCompare(right.model.id) ||
-                (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
-            )
-          return {
-            logical: records.length,
-            physical: records.reduce((total, record) => total + record.attempts, 0),
-            helpers: records.filter((record) => record.source !== "step").length,
-            continued: records.filter((record) => record.continuation === "continued").length,
-            fallback: records.filter((record) => record.continuation === "fallback").length,
-            ...(cost === undefined ? {} : { cost }),
-            ...(models.length === 0 ? {} : { models }),
-            tokens: records.reduce((total, record) => addTokens(total, record.tokens), zeroTokens()),
-            ...(last === undefined
-              ? {}
-              : {
-                  latestInvalidation: last.invalidation,
-                  latestNamespace: last.promptCacheKey.slice(0, 8),
-                }),
-          }
-        }),
-      )
+      Effect.gen(function* () {
+        const [rows, last] = yield* Effect.all([
+          db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie),
+          db
+            .select({ invalidation: SessionProviderRequestTable.invalidation, promptCacheKey: SessionProviderRequestTable.prompt_cache_key })
+            .from(SessionProviderRequestTable)
+            .where(eq(SessionProviderRequestTable.session_id, sessionID))
+            .orderBy(desc(SessionProviderRequestTable.request))
+            .limit(1)
+            .get()
+            .pipe(Effect.orDie),
+        ])
+        const models = rows
+          .map((row) => ({
+            model: row.model,
+            requests: row.logical,
+            tokens: { input: row.input, output: row.output, reasoning: row.reasoning, cache: { read: row.cache_read, write: row.cache_write } },
+            ...(row.cost === null ? {} : { cost: Money.USD.make(row.cost), costProvenance: "recorded" as const }),
+          }))
+          .sort(
+            (left, right) =>
+              (left.cost === undefined
+                ? right.cost === undefined
+                  ? 0
+                  : 1
+                : right.cost === undefined
+                  ? -1
+                  : right.cost - left.cost) ||
+              left.model.providerID.localeCompare(right.model.providerID) ||
+              left.model.id.localeCompare(right.model.id) ||
+              (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+          )
+        const cost = rows.every((row) => row.cost !== null)
+          ? Money.USD.make(rows.reduce((total, row) => total + (row.cost ?? 0), 0))
+          : undefined
+        return {
+          logical: rows.reduce((total, row) => total + row.logical, 0),
+          physical: rows.reduce((total, row) => total + row.physical, 0),
+          helpers: rows.reduce((total, row) => total + row.helpers, 0),
+          continued: rows.reduce((total, row) => total + row.continued, 0),
+          fallback: rows.reduce((total, row) => total + row.fallback, 0),
+          ...(cost === undefined ? {} : { cost }),
+          ...(models.length === 0 ? {} : { models }),
+          tokens: rows.reduce(
+            (total, row) =>
+              addTokens(total, {
+                input: row.input,
+                output: row.output,
+                reasoning: row.reasoning,
+                cache: { read: row.cache_read, write: row.cache_write },
+              }),
+            zeroTokens(),
+          ),
+          ...(last === undefined
+            ? {}
+            : { latestInvalidation: last.invalidation, latestNamespace: last.promptCacheKey.slice(0, 8) }),
+        }
+      })
 
     const next: Interface["next"] = (input) =>
       lock.withPermit(

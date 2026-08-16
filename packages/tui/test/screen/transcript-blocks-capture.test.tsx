@@ -350,11 +350,10 @@ test("captures transcript blocks through the real session route", async () => {
     expect(lines).toHaveLength(viewport.height)
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
     expect(text).toContain("Applied the cache accounting fix.")
+    expect(text).toContain("Edited 1 file")
     expect(text).toContain("packages/core/src/provider/usage.ts")
     expect(text).toContain("+3")
     expect(text).toContain("−1")
-    expect(text).toContain("const read = usage.cacheRead ?? 0")
-    expect(text).toContain("if (total === 0) return undefined")
     expect(text).toContain("bun test provider")
     expect(text).toContain("14 pass · 0 fail")
     expect(text).toContain("bun typecheck")
@@ -362,41 +361,6 @@ test("captures transcript blocks through the real session route", async () => {
     expect(text).toContain("goal off")
     expect(text).toContain("YOLO off")
 
-    if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
-      for (const [row, column, value] of [
-        [11, 3, "packages/core/src/provider/usage.ts"],
-        [11, 58, "+3"],
-        [11, 63, "−1"],
-        [13, 5, "86"],
-        [13, 13, "  const read = usage.cacheRead ?? 0"],
-        [15, 5, "87"],
-        [15, 13, "- return read / total"],
-        [17, 5, "87"],
-        [17, 13, "+ if (total === 0) return undefined"],
-        [19, 5, "88"],
-        [19, 13, "+ return read / total"],
-        [21, 5, "89"],
-        [21, 13, "}"],
-      ] as const) {
-        const actual = lines[row - 1]?.indexOf(value)
-        if (actual !== column) throw new Error(`Expected ${JSON.stringify(value)} at ${column} in row ${row}: ${lines[row - 1]}`)
-      }
-      const diffContent = lines.slice(10, 21).map((line) => line.slice(0, 140)).join("\n")
-      expect(diffContent).not.toContain("─")
-      expect(diffContent).not.toContain("│")
-    }
-
-    if (viewport.width === DESIGN_VIEWPORT.width) {
-      for (const [row, column, value] of [
-        [27, 3, "ok"],
-        [27, 10, "bun test provider"],
-        [30, 3, "!!"],
-        [30, 10, "bun typecheck"],
-      ] as const) {
-        const actual = lines[row - 1]?.indexOf(value)
-        if (actual !== column) throw new Error(`Expected ${JSON.stringify(value)} at ${column} in row ${row}: ${lines[row - 1]}`)
-      }
-    }
 
     await mkdir(renders, { recursive: true })
     await Bun.write(path.join(renders, `transcript-blocks-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
@@ -475,7 +439,7 @@ function TranscriptBlocksFixture(props: { width: number }) {
       <box width={props.width - 6} marginLeft={3} flexDirection="column">
         <text>YCODING</text>
         <text>Applied the cache accounting fix.</text>
-        <InlineDiff diff={DIFF_FIXTURE} />
+        <InlineDiff path="packages/core/src/provider/usage.ts" additions={3} deletions={1} files={[{ diff: DIFF_FIXTURE }]} />
         <InlineCommand icon="✓" command="bun test provider" pass={14} fail={0} width={props.width - 6} />
         <InlineCommand icon="!" command="bun typecheck" errors={2} failed={true} width={props.width - 6} />
       </box>

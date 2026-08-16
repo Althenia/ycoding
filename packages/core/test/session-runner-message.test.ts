@@ -159,7 +159,7 @@ describe("toLLMMessages", () => {
     expect(messages[0]).toMatchObject({ id: id("plan-skill"), content: [{ type: "text", text: "Plan instructions" }] })
     expect(messages[1]).toEqual(
       Message.system(
-        "The active agent is now build. This agent's current instructions and permissions apply. Previous agents' instructions no longer apply unless repeated in the current context.",
+        `The active agent is now ${build}. This agent's current instructions and permissions apply. Previous agents' instructions no longer apply unless repeated in the current context.`,
       ),
     )
     expect(messages[2]).toMatchObject({ id: id("build-prompt"), content: [{ type: "text", text: "Implement the plan" }] })
@@ -232,7 +232,7 @@ describe("toLLMMessages", () => {
     expect(messages.map((message) => message.role)).toEqual(["system", "system", "user", "user", "user", "user"])
     expect(messages[0]).toEqual(
       Message.system(
-        "The active agent is now build. This agent's current instructions and permissions apply. Previous agents' instructions no longer apply unless repeated in the current context.",
+        `The active agent is now ${build}. This agent's current instructions and permissions apply. Previous agents' instructions no longer apply unless repeated in the current context.`,
       ),
     )
     expect(messages[1]).toEqual(Message.system("Updated context\n\nOther context"))

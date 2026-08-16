@@ -37,6 +37,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "openai-responses-websocket": "openai-prefix-cache",
   "github-copilot-chat": "openai-prefix-cache",
   "github-copilot-responses": "openai-prefix-cache",
+  "ai-sdk:@ai-sdk/github-copilot": "openai-prefix-cache",
   [OpenAICodex.routeID]: "openai-prefix-cache",
   "openai-compatible-chat": "openai-prefix-cache",
   "openai-compatible-responses": "openai-prefix-cache",

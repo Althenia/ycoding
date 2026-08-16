@@ -9,8 +9,10 @@ import { useClient } from "../../../context/client"
 import { useTheme } from "../../../context/theme"
 import { Locale } from "../../../util/locale"
 import { Keymap } from "../../../context/keymap"
+import { stringWidth } from "../../../util/string-width"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
+import { railPlacement, railWidth } from "../rail"
 import { useComposerTab } from "./index"
 
 export { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
@@ -135,46 +137,73 @@ export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
 }
 
 export function canCancelSubagent(state: SessionOrchestrationTask["state"]) {
-  return state === "running" || state === "waiting"
+  return state === "starting" || state === "running" || state === "waiting"
 }
 
 export function cancelManagedSubagent(client: CancelClient, parentID: string, childID: string) {
   return client.api.session.subagent.cancel({ parentID, childID })
 }
 
-export function SubagentMetadata(props: {
+/** Status column, longest rendered agent label, and the description floor the metadata may not eat. */
+const STATUS_WIDTH = 16
+const AGENT_WIDTH = 16
+const TITLE_MIN_WIDTH = 8
+/** Composer padding (3 left, 4 right) plus the row's own right padding. */
+const COMPOSER_INSET = 8
+
+/**
+ * The picker row shares its terminal with the docked rail, so the widest row it can own is the
+ * terminal minus the rail and the composer insets. Trailing fields drop whole rather than collide,
+ * and the model truncates only when it cannot fit on its own.
+ */
+export function subagentMetadata(input: {
+  width: number
   model?: string
+  status?: string
   cacheHit?: string
   elapsed?: string
-  status?: string
-  active: boolean
 }) {
+  const budget =
+    input.width -
+    (railPlacement(input.width) === "docked" ? Math.round(railWidth(input.width)) : 0) -
+    COMPOSER_INSET -
+    STATUS_WIDTH -
+    AGENT_WIDTH -
+    TITLE_MIN_WIDTH -
+    4
+  const fields = [input.model, input.status, input.cacheHit, input.elapsed].filter(
+    (value): value is string => Boolean(value),
+  )
+  for (let count = fields.length; count > 1; count--) {
+    const value = fields.slice(0, count).join(" · ")
+    if (stringWidth(value) <= budget) return value
+  }
+  return Locale.truncateWidth(fields[0] ?? "", budget)
+}
+
+export function SubagentMetadata(props: { model?: string; cacheHit?: string; elapsed?: string; status?: string }) {
   const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
-  const telemetry = createMemo(() => {
-    if (dimensions().width < 100) return []
-    if (dimensions().width < 120) return [props.cacheHit].filter((value): value is string => Boolean(value))
-    return [props.cacheHit, props.elapsed].filter((value): value is string => Boolean(value))
-  })
-  const suffix = createMemo(() => [props.status, ...telemetry()].filter((value): value is string => Boolean(value)).join(" · "))
+  const metadata = createMemo(() =>
+    subagentMetadata({
+      width: dimensions().width,
+      model: props.model,
+      status: props.status,
+      cacheHit: props.cacheHit,
+      elapsed: props.elapsed,
+    }),
+  )
 
   return (
-    <box flexDirection="row" paddingLeft={16} flexShrink={0}>
-      <Show when={props.model}>
+    <Show when={metadata()}>
+      {(value) => (
         <box flexShrink={0}>
-          <text fg={themeV2.text.subdued} wrapMode="none" truncate>
-            {props.model}
+          <text fg={themeV2.text.subdued} wrapMode="none">
+            {value()}
           </text>
         </box>
-      </Show>
-      <Show when={suffix()}>
-        {(value) => (
-          <text fg={themeV2.text.subdued} wrapMode="none" flexShrink={0}>
-            {props.model ? ` · ${value()}` : value()}
-          </text>
-        )}
-      </Show>
-    </box>
+      )}
+    </Show>
   )
 }
 
@@ -365,7 +394,7 @@ export function SubagentsTab(props: { sessionID: string }) {
         id: "composer.subagent.interrupt",
         title: "Cancel subagent",
         group: "Composer",
-        bind: "ctrl+x k",
+        bind: "<leader>k",
         run() {
           const entry = selectedEntry()
           if (!entry || !canCancelSubagent(entry.status)) return
@@ -411,58 +440,50 @@ export function SubagentsTab(props: { sessionID: string }) {
                     })
                     return (
                       <>
-                        <box flexDirection="row" minWidth={0} flexGrow={1}>
-                          <box
-                            flexDirection="column"
-                            minWidth={0}
-                            flexGrow={1}
-                            paddingLeft={0}
-                            paddingRight={1}
-                            backgroundColor={active() ? themeV2.background.surface.offset : undefined}
-                            onMouseOver={() => moveTo(entryIndex())}
-                            onMouseUp={() => {
-                              moveTo(entryIndex())
-                              navigate({
-                                type: "session",
-                                sessionID: entry.sessionID,
-                              })
-                            }}
-                          >
-                            <box flexDirection="row" minWidth={0} flexGrow={1}>
-                              <box width={16} flexShrink={0}>
-                                <text fg={statusColor()} wrapMode="none">
-                                  {taskStatusLabel(entry.status)}
-                                </text>
-                              </box>
-                              <box flexShrink={0}>
-                                <text
-                                  fg={
-                                    active()
-                                      ? themeV2.text.feedback.info.default
-                                      : entry.current
-                                        ? themeV2.text.feedback.info.default
-                                        : themeV2.text.default
-                                  }
-                                  attributes={active() ? TextAttributes.BOLD : undefined}
-                                  wrapMode="none"
-                                >
-                                  {entry.agent}
-                                </text>
-                              </box>
-                              <box flexDirection="row" minWidth={1} flexGrow={1} paddingLeft={2}>
-                                <text fg={themeV2.text.subdued} wrapMode="none" truncate>
-                                  {`· ${entry.title}`}
-                                </text>
-                              </box>
-                            </box>
-                            <SubagentMetadata
-                              model={entry.model}
-                              cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
-                              elapsed={dimensions().width >= 100 ? formatSubagentElapsed(entry.startedAt, now()) : undefined}
-                              status={entry.status === "running" ? "attached" : undefined}
-                              active={active()}
-                            />
+                        <box
+                          flexDirection="row"
+                          minWidth={0}
+                          flexGrow={1}
+                          paddingRight={1}
+                          backgroundColor={active() ? themeV2.background.surface.offset : undefined}
+                          onMouseOver={() => moveTo(entryIndex())}
+                          onMouseUp={() => {
+                            moveTo(entryIndex())
+                            navigate({
+                              type: "session",
+                              sessionID: entry.sessionID,
+                            })
+                          }}
+                        >
+                          <box width={STATUS_WIDTH} flexShrink={0}>
+                            <text fg={statusColor()} wrapMode="none">
+                              {taskStatusLabel(entry.status)}
+                            </text>
                           </box>
+                          <box flexShrink={0}>
+                            <text
+                              fg={
+                                active() || entry.current
+                                  ? themeV2.text.feedback.info.default
+                                  : themeV2.text.default
+                              }
+                              attributes={active() ? TextAttributes.BOLD : undefined}
+                              wrapMode="none"
+                            >
+                              {Locale.truncateWidth(entry.agent, AGENT_WIDTH)}
+                            </text>
+                          </box>
+                          <box flexDirection="row" minWidth={0} flexGrow={1} flexShrink={1} paddingLeft={2} paddingRight={2}>
+                            <text fg={themeV2.text.subdued} wrapMode="none" truncate>
+                              {`· ${entry.title}`}
+                            </text>
+                          </box>
+                          <SubagentMetadata
+                            model={entry.model}
+                            cacheHit={formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID))}
+                            elapsed={formatSubagentElapsed(entry.startedAt, now())}
+                            status={entry.status === "running" ? "attached" : undefined}
+                          />
                         </box>
                         <Show when={entry.awaitingInput && entry.detail}>
                           <box paddingLeft={16}>

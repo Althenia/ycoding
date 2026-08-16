@@ -8,6 +8,8 @@ This document describes the operator-facing configuration and terminal behavior 
 
 Agent permissions remain an ordered rule list. A later matching rule overrides an earlier matching rule.
 
+The named built-in execution agents (`TLDR`, `architech`, `god`, `yangi`, `occam`, `omoikane`, `wittgenstein`, and `zeus`) explicitly allow `shell` for `*`. This applies to both primary and subagent modes; a later configured rule or inherited parent deny still takes precedence. The read-only `BTW` advisor continues to require approval for shell commands.
+
 Agent definition files are discovered from the global or project YCoding config directories:
 
 - `~/.config/ycoding/agent/**/*.md`

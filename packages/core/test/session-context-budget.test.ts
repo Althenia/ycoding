@@ -18,23 +18,35 @@ const registry = [
 describe("resolveCapabilities", () => {
   test("derives capabilities from registry limits for a known model", () => {
     expect(
-      SessionContextBudget.resolveCapabilities(registry, ProviderV2.ID.make("anthropic"), ModelV2.ID.make("claude-sonnet-4-5")),
+      SessionContextBudget.resolveCapabilities(
+        registry,
+        ProviderV2.ID.make("anthropic"),
+        ModelV2.ID.make("claude-sonnet-4-5"),
+      ),
     ).toEqual({
       contextWindowTokens: 1_000_000,
       maxOutputTokens: 64_000,
-      contextSafetyMarginTokens: 0,
+      contextSafetyMarginTokens: 4_096,
     })
   })
 
   test("returns undefined when the provider has no such model", () => {
     expect(
-      SessionContextBudget.resolveCapabilities(registry, ProviderV2.ID.make("anthropic"), ModelV2.ID.make("no-such-model")),
+      SessionContextBudget.resolveCapabilities(
+        registry,
+        ProviderV2.ID.make("anthropic"),
+        ModelV2.ID.make("no-such-model"),
+      ),
     ).toBeUndefined()
   })
 
   test("returns undefined when the provider is not in the registry", () => {
     expect(
-      SessionContextBudget.resolveCapabilities(registry, ProviderV2.ID.make("no-such-provider"), ModelV2.ID.make("gpt-4o")),
+      SessionContextBudget.resolveCapabilities(
+        registry,
+        ProviderV2.ID.make("no-such-provider"),
+        ModelV2.ID.make("gpt-4o"),
+      ),
     ).toBeUndefined()
   })
 
@@ -52,12 +64,25 @@ describe("resolveCapabilities", () => {
 describe("safeInputBudget", () => {
   const capabilities = { contextWindowTokens: 128_000, maxOutputTokens: 16_384, contextSafetyMarginTokens: 1_024 }
 
-  test("reserves output tokens and the safety margin by default", () => {
+  test("subtracts the model output limit and safety margin from the context window", () => {
     expect(SessionContextBudget.safeInputBudget(capabilities)).toBe(128_000 - 16_384 - 1_024)
   })
 
-  test("honors an explicit reserved output reservation", () => {
-    expect(SessionContextBudget.safeInputBudget(capabilities, 32_000)).toBe(128_000 - 32_000 - 1_024)
+  test("exposes zero and negative hard input caps without clamping", () => {
+    expect(
+      SessionContextBudget.safeInputBudget({
+        contextWindowTokens: 100,
+        maxOutputTokens: 80,
+        contextSafetyMarginTokens: 20,
+      }),
+    ).toBe(0)
+    expect(
+      SessionContextBudget.safeInputBudget({
+        contextWindowTokens: 100,
+        maxOutputTokens: 80,
+        contextSafetyMarginTokens: 21,
+      }),
+    ).toBe(-1)
   })
 })
 
@@ -85,72 +110,5 @@ describe("countTokens", () => {
   test("delegates to the shared character-based estimate", () => {
     expect(SessionContextBudget.countTokens("a".repeat(40))).toBe(10)
     expect(SessionContextBudget.countTokens("")).toBe(0)
-  })
-})
-
-describe("classifyPressure", () => {
-  test("is normal below the informational threshold", () => {
-    expect(SessionContextBudget.classifyPressure(24, 100)).toBe("normal")
-  })
-
-  test("is informational at exactly 0.25", () => {
-    expect(SessionContextBudget.classifyPressure(25, 100)).toBe("informational")
-  })
-
-  test("is advisory at exactly 0.50", () => {
-    expect(SessionContextBudget.classifyPressure(50, 100)).toBe("advisory")
-  })
-
-  test("is high at exactly 0.75", () => {
-    expect(SessionContextBudget.classifyPressure(75, 100)).toBe("high")
-  })
-
-  test("is critical at exactly 0.90", () => {
-    expect(SessionContextBudget.classifyPressure(90, 100)).toBe("critical")
-  })
-
-  test("is terminal at and above the safe input budget", () => {
-    expect(SessionContextBudget.classifyPressure(100, 100)).toBe("terminal")
-    expect(SessionContextBudget.classifyPressure(120, 100)).toBe("terminal")
-  })
-
-  test("classifies values between each milestone", () => {
-    expect(SessionContextBudget.classifyPressure(49, 100)).toBe("informational")
-    expect(SessionContextBudget.classifyPressure(74, 100)).toBe("advisory")
-    expect(SessionContextBudget.classifyPressure(89, 100)).toBe("high")
-  })
-
-  test("is terminal when the safe limit is not positive", () => {
-    expect(SessionContextBudget.classifyPressure(1, 0)).toBe("terminal")
-    expect(SessionContextBudget.classifyPressure(1, -5)).toBe("terminal")
-  })
-
-  test("honors custom thresholds", () => {
-    expect(
-      SessionContextBudget.classifyPressure(10, 100, {
-        informational: 0.05,
-        advisory: 0.1,
-        high: 0.2,
-        critical: 0.4,
-        terminal: 0.8,
-      }),
-    ).toBe("advisory")
-  })
-})
-
-describe("changed", () => {
-  test("is true only when the pressure level changes", () => {
-    expect(SessionContextBudget.changed("normal", "advisory")).toBe(true)
-    expect(SessionContextBudget.changed("informational", "advisory")).toBe(true)
-    expect(SessionContextBudget.changed("high", "critical")).toBe(true)
-    expect(SessionContextBudget.changed("advisory", "normal")).toBe(true)
-    expect(SessionContextBudget.changed("normal", "normal")).toBe(false)
-  })
-
-  test("is false when the ratio changes within the same level", () => {
-    const before = SessionContextBudget.classifyPressure(30, 100)
-    const after = SessionContextBudget.classifyPressure(40, 100)
-    expect(before).toBe("informational")
-    expect(SessionContextBudget.changed(before, after)).toBe(false)
   })
 })

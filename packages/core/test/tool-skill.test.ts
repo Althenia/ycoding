@@ -142,6 +142,7 @@ describe("SkillTool", () => {
                 resume: unavailable,
                 interrupt: unavailable,
                 synthetic: unavailable,
+                compact: unavailable,
               },
               job: {
                 start: unavailable,

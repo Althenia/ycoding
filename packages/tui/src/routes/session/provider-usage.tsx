@@ -1,4 +1,10 @@
-import type { ModelInfo, ProviderUsageListOutput, SessionCacheDiagnostics, SessionInfo } from "@ycoding-ai/client"
+import type {
+  ModelInfo,
+  ProviderRequestSummary,
+  ProviderUsageListOutput,
+  SessionCacheDiagnostics,
+  SessionInfo,
+} from "@ycoding-ai/client"
 import { CREDIT_TO_USD } from "@ycoding-ai/core/provider-usage/copilot"
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, type Accessor } from "solid-js"
 import { useClient } from "../../context/client"
@@ -59,9 +65,9 @@ export async function loadProviderUsageSnapshots(
 export function providerUsageCommandDefinition(
   snapshots: readonly ProviderUsageSnapshot[],
   run: () => void,
-  hasLocalDiagnostics = false,
+  hasLocalUsage = false,
 ): KeymapCommand | undefined {
-  if (visibleProviderSnapshots(snapshots).length === 0 && !hasLocalDiagnostics) return undefined
+  if (visibleProviderSnapshots(snapshots).length === 0 && !hasLocalUsage) return undefined
   return {
     id: "session.provider-usage",
     title: "Provider Usage",
@@ -95,8 +101,12 @@ export function ProviderUsageCommand() {
     ),
   )
   const diagnostics = createMemo(() => data.session.diagnostics.get(route.sessionID))
+  const usage = createMemo(() => data.session.usage.get(route.sessionID))
 
-  onMount(() => void data.session.diagnostics.sync(route.sessionID).catch(() => undefined))
+  onMount(() => {
+    void data.session.diagnostics.sync(route.sessionID).catch(() => undefined)
+    void data.session.usage.sync(route.sessionID).catch(() => undefined)
+  })
 
   createEffect(
     on(
@@ -128,7 +138,7 @@ export function ProviderUsageCommand() {
       dialog.replace(() => (
         <ProviderUsageDialog sessionID={route.sessionID} providerIDs={ids} initialSnapshots={initial} />
       ))
-    }, providerRequestDiagnostics(diagnostics()) !== undefined),
+    }, providerRequestDiagnostics(diagnostics()) !== undefined || usage() !== undefined),
   )
 
   Keymap.createLayer(() => ({
@@ -151,6 +161,7 @@ export function ProviderUsageDialog(props: {
   const [snapshots, setSnapshots] = createSignal(visibleProviderSnapshots(props.initialSnapshots))
   const [refreshing, setRefreshing] = createSignal(true)
   const diagnostics = createMemo(() => data.session.diagnostics.get(props.sessionID))
+  const usage = createMemo(() => data.session.usage.get(props.sessionID))
   const sessionFamily = createMemo(() => {
     const ids = data.session.family(props.sessionID)
     return ids.length > 0 ? ids : [props.sessionID]
@@ -172,12 +183,14 @@ export function ProviderUsageDialog(props: {
         if (guard.current(token)) setRefreshing(false)
       })
   })
+  createEffect(() => void data.session.usage.sync(props.sessionID).catch(() => undefined))
   onCleanup(() => guard.invalidate())
 
   return (
     <ProviderUsageDialogContent
       snapshots={snapshots}
       diagnostics={diagnostics}
+      usage={usage}
       refreshing={refreshing}
       onClose={() => dialog.clear()}
       sessionFamily={sessionFamily()}
@@ -191,6 +204,7 @@ export function ProviderUsageDialog(props: {
           ?.find((model) => model.providerID === session.model?.providerID && model.id === session.model?.id)
       }}
       getDiagnostics={(sessionID) => data.session.diagnostics.get(sessionID)}
+      getUsage={(sessionID) => data.session.usage.get(sessionID)}
       getStatus={(sessionID) => data.session.status(sessionID)}
     />
   )
@@ -199,6 +213,7 @@ export function ProviderUsageDialog(props: {
 export function ProviderUsageDialogContent(props: {
   snapshots: Accessor<readonly ProviderUsageSnapshot[]>
   diagnostics?: Accessor<SessionCacheDiagnostics | null | undefined>
+  usage?: Accessor<ProviderRequestSummary | undefined>
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
   onClose?: () => void
@@ -207,14 +222,16 @@ export function ProviderUsageDialogContent(props: {
   getSession?: (sessionID: string) => Pick<SessionInfo, "model" | "title"> | undefined
   getModel?: (sessionID: string) => ModelInfo | undefined
   getDiagnostics?: (sessionID: string) => SessionCacheDiagnostics | null | undefined
+  getUsage?: (sessionID: string) => ProviderRequestSummary | undefined
   getStatus?: (sessionID: string) => string
   sessionUsage?: ProviderUsageSessionPresentation
   subagentUsage?: readonly ProviderUsageSubagentPresentation[]
 }) {
   const sessionUsage = createMemo(() =>
     props.sessionUsage ??
-    diagnosticsPresentation(
+    usagePresentation(
       props.diagnostics?.(),
+      props.usage?.(),
       props.sessionID ? formatDiagnosticsModel(props.getSession?.(props.sessionID)?.model) : undefined,
       props.sessionID ? props.getModel?.(props.sessionID) : undefined,
     ),
@@ -225,14 +242,22 @@ export function ProviderUsageDialogContent(props: {
       if (sessionID === props.sessionID) return []
       const diagnostics = props.getDiagnostics?.(sessionID)
       const session = props.getSession?.(sessionID)
-      const usage = diagnosticsPresentation(diagnostics, formatDiagnosticsModel(session?.model), props.getModel?.(sessionID))
+      const usage = usagePresentation(
+        diagnostics,
+        props.getUsage?.(sessionID),
+        formatDiagnosticsModel(session?.model),
+        props.getModel?.(sessionID),
+      )
       if (!usage || !session) return []
       return [{ ...usage, name: session.title }]
     }),
   )
+  const familySpend = createMemo(() => props.usage?.()?.models?.map(spendPresentation))
   const options = createMemo(() => [
-    ...(sessionUsage() ? usageOptions("This session", "session", sessionUsage()!) : []),
-    ...subagentUsage().flatMap((item) => usageOptions("Subagents", `subagent:${item.name}`, item, item.name)),
+    ...(familySpend()?.flatMap((item) => usageOptions("Family spend", `family:${item.model}`, item)) ?? [
+      ...(sessionUsage() ? usageOptions("This session", "session", sessionUsage()!) : []),
+      ...subagentUsage().flatMap((item) => usageOptions("Subagents", `subagent:${item.name}`, item, item.name)),
+    ]),
     ...visibleProviderSnapshots(props.snapshots()).flatMap((snapshot) => providerQuotaOptions(snapshot, props.now?.() ?? Date.now())),
   ])
 
@@ -338,6 +363,28 @@ function diagnosticsPresentation(
   }
 }
 
+function usagePresentation(
+  diagnostics: SessionCacheDiagnostics | null | undefined,
+  usage: ProviderRequestSummary | undefined,
+  model?: string,
+  modelInfo?: ModelInfo,
+): ProviderUsageSessionPresentation | undefined {
+  if (diagnostics?.requests) return diagnosticsPresentation(diagnostics, model, modelInfo)
+  if (usage)
+    return {
+      model: model ?? usage.models?.at(0)?.model.id ?? "Unknown model",
+      hit: "Unreported",
+      input: usage.tokens.input.toLocaleString("en-US"),
+      output: usage.tokens.output.toLocaleString("en-US"),
+      cacheRead: usage.tokens.cache.read.toLocaleString("en-US"),
+      cacheWrite: usage.tokens.cache.write.toLocaleString("en-US"),
+      spent: usage.cost === undefined
+        ? "Not reported"
+        : money(usage.cost),
+    }
+  return diagnosticsPresentation(diagnostics, model, modelInfo)
+}
+
 function metric(tokens: string, credits: string | undefined) {
   return credits === undefined ? tokens : `${tokens}    ${credits}`
 }
@@ -361,5 +408,19 @@ function hitLabel(ratio: number | undefined) {
 }
 
 function money(value: number | undefined) {
-  return value === undefined ? "Unreported" : `$${value.toFixed(2)}`
+  return value === undefined ? "Not reported" : `$${value.toFixed(2)}`
+}
+
+function spendPresentation(spend: NonNullable<ProviderRequestSummary["models"]>[number]): ProviderUsageSessionPresentation {
+  return {
+    model: formatDiagnosticsModel(spend.model) ?? spend.model.id,
+    hit: "Unreported",
+    input: spend.tokens.input.toLocaleString("en-US"),
+    output: spend.tokens.output.toLocaleString("en-US"),
+    cacheRead: spend.tokens.cache.read.toLocaleString("en-US"),
+    cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
+    spent: spend.cost === undefined
+      ? "Not reported"
+      : money(spend.cost),
+  }
 }

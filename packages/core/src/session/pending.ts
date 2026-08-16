@@ -6,6 +6,7 @@ import {
   Compaction,
   Delivery,
   Info,
+  LegacyInfo,
   Message,
   Synthetic,
   SyntheticData,
@@ -24,7 +25,7 @@ import { SessionMessageTable, SessionPendingTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
-export { Compaction, Delivery, Info, Message, Synthetic, SyntheticData, User, UserData }
+export { Compaction, Delivery, Info, LegacyInfo, Message, Synthetic, SyntheticData, User, UserData }
 
 const decodeUser = Schema.decodeUnknownSync(UserData)
 const encodeUser = Schema.encodeSync(UserData)
@@ -44,7 +45,7 @@ export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict
   },
 ) {}
 
-const fromRow = (row: typeof SessionPendingTable.$inferSelect): Info => {
+const fromRow = (row: typeof SessionPendingTable.$inferSelect): LegacyInfo => {
   const base = {
     admittedSeq: row.admitted_seq,
     id: SessionMessage.ID.make(row.id),
@@ -204,7 +205,7 @@ export const admitCompaction = Effect.fn("SessionPending.admitCompaction")(funct
       const pending = yield* compaction(db, input.sessionID)
       if (pending) return pending
       return yield* events
-        .publish(SessionEvent.Compaction.Admitted, {
+        .publish(SessionEvent.Compaction.AdmittedV1, {
           inputID: input.id,
           sessionID: input.sessionID,
         })
@@ -352,7 +353,7 @@ export const list = Effect.fn("SessionPending.list")(function* (db: DatabaseServ
     .orderBy(asc(SessionPendingTable.admitted_seq))
     .all()
     .pipe(Effect.orDie)
-  return rows.map(fromRow)
+  return rows.map(fromRow).filter((entry): entry is Info => entry.type !== "compaction")
 })
 
 export const has = Effect.fn("SessionPending.has")(function* (

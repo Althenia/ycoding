@@ -39,6 +39,17 @@ export function estimatedCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Inf
   )
 }
 
+export function estimatedCatalogCost(
+  costs: ModelV2.Info["cost"],
+  openRouterCosts: ModelV2.Info["cost"],
+  usage: TokenUsage.Info,
+) {
+  const provider = estimatedCost(costs, usage)
+  if (provider !== undefined) return { cost: provider, source: "provider" as const }
+  const openrouter = estimatedCost(openRouterCosts, usage)
+  if (openrouter !== undefined) return { cost: openrouter, source: "openrouter" as const }
+}
+
 export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info) {
   return estimatedCost(costs, usage) ?? Money.USD.zero
 }

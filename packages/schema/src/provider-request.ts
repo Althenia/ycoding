@@ -37,6 +37,9 @@ export type Invalidation = typeof Invalidation.Type
 export const Continuation = Schema.Literals(["full", "continued", "fallback"])
 export type Continuation = typeof Continuation.Type
 
+export const CostProvenance = Schema.Literals(["recorded", "current_catalog"])
+export type CostProvenance = typeof CostProvenance.Type
+
 export const Record = Schema.Struct({
   id: ID,
   sessionID: SessionID,
@@ -52,6 +55,7 @@ export const Record = Schema.Struct({
   attempts: PositiveInt,
   invalidation: Invalidation,
   continuation: Continuation,
+  /** Persisted provider-reported USD cost. */
   cost: Money.USD.pipe(optional),
   tokens: TokenUsage.Info,
   time: DateTimeUtcFromMillis,
@@ -61,9 +65,21 @@ export interface Record extends Schema.Schema.Type<typeof Record> {}
 export const ModelSpend = Schema.Struct({
   model: Model.Ref,
   requests: NonNegativeInt,
-  /** Absent when any request in the group reported no cost, because unreported spend is not zero spend. */
+  /** Raw provider-reported usage aggregated for this exact provider/model/variant. */
+  tokens: TokenUsage.Info,
+  /** Absent when any request in the group has neither persisted nor catalog-estimated cost. */
   cost: Money.USD.pipe(optional),
-}).annotate({ identifier: "ProviderRequest.ModelSpend" })
+  /** Recorded provider billing or a query-time current-catalog estimate; required when cost is present. */
+  costProvenance: CostProvenance.pipe(optional),
+})
+  .check(
+    Schema.makeFilter((value) => (value.cost === undefined) === (value.costProvenance === undefined), {
+      expected: "cost and cost provenance together",
+      meta: { _tag: "isMaxProperties", maxProperties: 5 },
+      arbitrary: { constraint: { maxLength: 5 } },
+    }),
+  )
+  .annotate({ identifier: "ProviderRequest.ModelSpend" })
 export interface ModelSpend extends Schema.Schema.Type<typeof ModelSpend> {}
 
 export const Summary = Schema.Struct({

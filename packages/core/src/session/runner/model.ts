@@ -10,6 +10,7 @@ import * as OpenAICompatibleChat from "@ycoding-ai/ai/protocols/openai-compatibl
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses";
 import { Auth, type AnyRoute } from "@ycoding-ai/ai/route";
 import { Context, Effect, Layer, Schema } from "effect";
+import { Headers } from "effect/unstable/http";
 import { produce } from "immer";
 import { AISDK } from "../../aisdk";
 import { Catalog } from "../../catalog";
@@ -26,6 +27,7 @@ import {
 import { OpenAICodex } from "../../plugin/provider/openai-codex";
 import { ProviderV2 } from "../../provider";
 import { SessionSchema } from "../schema";
+import { createHash } from "node:crypto";
 
 export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelectedError>()(
   "SessionRunnerModel.ModelNotSelectedError",
@@ -90,6 +92,8 @@ export interface Resolved {
   readonly ref: ModelV2.Ref;
   /** Catalog pricing in dollars per million tokens. */
   readonly cost: ModelV2.Info["cost"];
+  /** Digest of the exact non-secret provider connection and catalog identity. */
+  readonly connectionIdentityDigest: string;
 }
 
 export interface Interface {
@@ -119,6 +123,7 @@ export const resolved = (
     ...(variant === undefined ? {} : { variant }),
   }),
   cost,
+  connectionIdentityDigest: digest({ provider: model.provider, model: model.id, route: model.route.id }),
 });
 
 const apiKey = (model: ModelV2.Info, credential?: Credential.Value) => {
@@ -250,10 +255,14 @@ export const fromCatalogModel = (
       });
   });
   const key = source ? undefined : apiKey(resolved, credential);
+  const copilotAnthropic =
+    packageName === "@ai-sdk/anthropic" &&
+    resolved.providerID === ProviderV2.ID.githubCopilot;
   if (
     packageName === "@ai-sdk/anthropic" &&
     credential?.type === "oauth" &&
-    !source
+    !source &&
+    !copilotAnthropic
   )
     return Effect.fail(unsupported(resolved));
 
@@ -280,7 +289,8 @@ export const fromCatalogModel = (
   if (
     ProviderV2.isAISDK(resolved.package) &&
     packageName === "@ai-sdk/anthropic" &&
-    !source
+    !source &&
+    !copilotAnthropic
   ) {
     return Effect.succeed(
       withDefaults(resolved, AnthropicMessages.route)
@@ -406,10 +416,39 @@ const codexModel = (
         account === undefined
           ? Auth.none
           : Auth.headers({ "chatgpt-account-id": account }),
-      ),
+      ).andThen(codexAffinityAuth),
     })
     .model({ id: model.modelID ?? model.id });
 };
+
+const codexAffinityAuth = Auth.custom((input) => {
+  const providerOptions =
+    "providerOptions" in input.request ? input.request.providerOptions : undefined;
+  const openai =
+    isRecord(providerOptions) && isRecord(providerOptions.openai)
+      ? providerOptions.openai
+      : undefined;
+  const promptCacheKey =
+    typeof openai?.promptCacheKey === "string"
+      ? openai.promptCacheKey
+      : undefined;
+  const providerSessionID =
+    typeof openai?.providerSessionID === "string"
+      ? openai.providerSessionID
+      : undefined;
+  if (promptCacheKey === undefined || providerSessionID === undefined)
+    return Effect.succeed(input.headers);
+  return Effect.succeed(
+    Headers.setAll(input.headers, {
+      "session-id": promptCacheKey,
+      "thread-id": providerSessionID,
+      "x-client-request-id": providerSessionID,
+    }),
+  );
+});
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
 
 const unsupported = (model: ModelV2.Info) =>
   new UnsupportedPackageError({
@@ -439,6 +478,7 @@ const layer = Layer.effect(
   Effect.gen(function* () {
     const catalog = yield* Catalog.Service;
     const integrations = yield* Integration.Service;
+    const credentials = yield* Credential.Service;
     const npm = yield* Npm.Service;
     const aisdk = yield* AISDK.Service;
     return Service.of({
@@ -470,6 +510,7 @@ const layer = Layer.effect(
         const credential = connection
           ? yield* integrations.connection.resolve(connection)
           : undefined;
+        const credentialInfo = connection?.type === "credential" ? yield* credentials.get(connection.id) : undefined;
         const model = yield* resolve(
           session,
           selected,
@@ -490,14 +531,43 @@ const layer = Layer.effect(
               : { variant: session.model.variant }),
           }),
           cost: selected.cost,
+          connectionIdentityDigest: digest({
+            provider: selected.providerID,
+            model: selected.id,
+            apiModel: selected.modelID ?? selected.id,
+            variant: session.model?.variant,
+            route: model.route.id,
+            endpoint: normalizeEndpoint(model.route.endpoint.baseURL),
+            organization:
+              typeof selected.settings?.organization === "string" ? selected.settings.organization : undefined,
+            project: typeof selected.settings?.project === "string" ? selected.settings.project : undefined,
+            connection:
+              connection?.type === "credential"
+                ? { type: connection.type, id: connection.id, generation: credentialInfo?.generation ?? 0 }
+                : connection,
+            catalog: {
+              package: selected.package,
+              baseURL: typeof selected.settings?.baseURL === "string" ? normalizeEndpoint(selected.settings.baseURL) : undefined,
+            },
+          }),
         };
       }),
     });
   }),
 );
 
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+const normalizeEndpoint = (value: string | undefined) => {
+  if (!value) return undefined;
+  const url = new URL(value);
+  url.hostname = url.hostname.toLowerCase();
+  url.pathname = url.pathname.replace(/\/$/, "");
+  return url.toString();
+};
+
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Catalog.node, Integration.node, Npm.node, AISDK.node],
+  deps: [Catalog.node, Integration.node, Credential.node, Npm.node, AISDK.node],
 });

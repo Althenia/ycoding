@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import {
   AbsolutePath,
   Agent,
@@ -176,6 +177,7 @@ test("event.subscribe terminates on Effect protocol decode failures", async () =
 
 test("session methods retain decoded Effect inputs and outputs", async () => {
   const logQueries: Array<Record<string, string>> = []
+  let compactBody: unknown
   const httpClient = HttpClient.make((request) => {
     const url = request.url
     if (url.includes("/log")) {
@@ -193,6 +195,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(admission)))
     }
     if (url.endsWith("/compact")) {
+      compactBody = request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined
       return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(compactionAdmission)))
     }
     if (url.includes("/context")) {
@@ -233,7 +236,10 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       text: "Hello",
       resume: false,
     })
-    yield* client.session.compact({ sessionID: Session.ID.make("ses_test") })
+    const compacted = yield* client.session.compact({
+      sessionID: Session.ID.make("ses_test"),
+      id: SessionCompaction.ID.make("cmp_compaction_request"),
+    })
     yield* client.session.wait({ sessionID: Session.ID.make("ses_test") })
     const context = yield* client.session.context({ sessionID: Session.ID.make("ses_test") })
     const log = yield* client.session
@@ -244,7 +250,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       sessionID: Session.ID.make("ses_test"),
       messageID: SessionMessage.ID.make("msg_model"),
     })
-    return { page, active, created, admitted, context, log, message }
+    return { page, active, created, admitted, compacted, context, log, message }
   }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
 
   expect(DateTime.toEpochMillis(result.page.data[0].time.created)).toBe(1_717_171_717_000)
@@ -255,6 +261,16 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
   expect(Object.getPrototypeOf(result.admitted)).toBe(Object.prototype)
   expect(Object.getPrototypeOf(result.admitted.data)).toBe(Object.prototype)
   expect(DateTime.toEpochMillis(result.admitted.timeCreated)).toBe(1_717_171_717_000)
+  expect(result.compacted).toMatchObject({
+    id: "cmp_compaction",
+    sessionID: "ses_test",
+    trigger: "manual",
+    admissionMode: "background",
+    status: "pending",
+  })
+  expect(result.compacted).not.toHaveProperty("type")
+  expect(result.compacted).not.toHaveProperty("summary")
+  expect(compactBody).toEqual({ id: "cmp_compaction_request" })
   expect(result.context).toEqual([])
   expect(logQueries[0]).toEqual({ after: "0" })
   const logged = Array.from(result.log)
@@ -320,10 +336,12 @@ const admission = {
 
 const compactionAdmission = {
   data: {
-    type: "compaction",
-    admittedSeq: 1,
-    id: "msg_compaction",
+    id: "cmp_compaction",
     sessionID: "ses_test",
+    trigger: "manual",
+    admissionMode: "background",
+    status: "pending",
+    requestedThrough: { messageID: "msg_compaction_request", seq: 1 },
     timeCreated: 1_717_171_717_000,
   },
 }

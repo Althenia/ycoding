@@ -21,6 +21,8 @@ export const OpenAIResponseIncludables = [
 export type OpenAIResponseIncludable = (typeof OpenAIResponseIncludables)[number]
 export const OpenAIServiceTiers = ["auto", "default", "flex", "priority"] as const
 export type OpenAIServiceTier = (typeof OpenAIServiceTiers)[number]
+export const OpenAIImageDetails = ["auto", "low", "high", "original"] as const
+export type OpenAIImageDetail = (typeof OpenAIImageDetails)[number]
 
 // `prompt_cache_retention` — models before the GPT-5.6 family only. Deprecated
 // for GPT-5.6 and later, which reject it with a 400.
@@ -68,9 +70,11 @@ const EXTENDED_PROMPT_CACHE_MODELS = new Set([
 const MODEL_SNAPSHOT_SUFFIX = /-\d{4}-\d{2}-\d{2}$/
 
 export const OpenAIReasoningEffort = Schema.String
+export const OpenAIReasoningContext = Schema.Literal("all_turns")
 export const OpenAITextVerbosity = TextVerbosity
 export const OpenAIResponseIncludable = Schema.Literals(OpenAIResponseIncludables)
 export const OpenAIServiceTier = Schema.Literals(OpenAIServiceTiers)
+export const OpenAIImageDetail = Schema.Literals(OpenAIImageDetails)
 export const OpenAIPromptCacheRetention = Schema.Literals(OpenAIPromptCacheRetentions)
 // Only "explicit" is a valid `prompt_cache_breakpoint.mode` — marking a block
 // with any other value is a caller error, not a wire option.
@@ -107,6 +111,9 @@ export const reasoningEffort = (request: LLMRequest): string | undefined => {
 export const reasoningSummary = (request: LLMRequest): "auto" | undefined =>
   options(request)?.reasoningSummary === "auto" ? "auto" : undefined
 
+export const reasoningContext = (request: LLMRequest): "all_turns" | undefined =>
+  options(request)?.reasoningContext === "all_turns" ? "all_turns" : undefined
+
 // Resolve the OpenAI Responses `include` field. Filters out unknown
 // includable values defensively so a typo in upstream config drops the
 // invalid entry instead of poisoning the wire body. An empty array (either
@@ -132,6 +139,16 @@ export const textVerbosity = (request: LLMRequest) => {
 export const serviceTier = (request: LLMRequest) => {
   const value = options(request)?.serviceTier
   return typeof value === "string" && SERVICE_TIERS.has(value) ? (value as OpenAIServiceTier) : undefined
+}
+
+export const imageDetail = (request: LLMRequest): OpenAIImageDetail | undefined => {
+  const value = options(request)?.imageDetail
+  return OpenAIImageDetails.find((detail) => detail === value)
+}
+
+export const invalidImageDetail = (request: LLMRequest) => {
+  const value = options(request)?.imageDetail
+  return value !== undefined && !OpenAIImageDetails.some((detail) => detail === value) ? value : undefined
 }
 
 export const instructions = (request: LLMRequest) => {
@@ -183,20 +200,38 @@ export const isGpt56OrLater = (modelID: string): boolean => {
   return major > 5 || (major === 5 && minor >= 6)
 }
 
+export const supportsOriginalImageDetail = (modelID: string): boolean => {
+  const match = GPT_VERSION.exec(modelID.toLowerCase())
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = match[2] ? Number(match[2]) : 0
+  if (major > 5 || (major === 5 && minor > 4)) return true
+  if (major !== 5 || minor !== 4) return false
+  return !/gpt-5\.4-(mini|nano)(?:$|[-/])/.test(modelID.toLowerCase())
+}
+
 export const DefaultCompactionThreshold = 200_000
 
 const DIRECT_OPENAI_RESPONSE_ROUTES = new Set(["openai-responses", "openai-responses-websocket"])
+
+const supportsDirectGpt56 = (routeID: string, modelID: string) =>
+  DIRECT_OPENAI_RESPONSE_ROUTES.has(routeID) && isGpt56OrLater(modelID)
 
 export const defaultContextManagement = (
   routeID: string,
   modelID: string,
 ): ReadonlyArray<OpenAIContextManagementEntry> | undefined =>
-  DIRECT_OPENAI_RESPONSE_ROUTES.has(routeID) && isGpt56OrLater(modelID)
+  supportsDirectGpt56(routeID, modelID)
     ? [{ type: "compaction", compactThreshold: DefaultCompactionThreshold }]
     : undefined
 
-export const resolvedContextManagement = (request: LLMRequest) =>
-  contextManagement(request) ?? defaultContextManagement(request.model.route.id, request.model.id)
+export const resolvedReasoningContext = (request: LLMRequest) =>
+  supportsDirectGpt56(request.model.route.id, request.model.id) ? reasoningContext(request) : undefined
+
+export const resolvedContextManagement = (request: LLMRequest) => {
+  if (!supportsDirectGpt56(request.model.route.id, request.model.id)) return undefined
+  return contextManagement(request) ?? defaultContextManagement(request.model.route.id, request.model.id)
+}
 
 export const supportsExtendedPromptCacheRetention = (modelID: string): boolean => {
   const normalized = modelID.toLowerCase().split("/").at(-1)?.replace(MODEL_SNAPSHOT_SUFFIX, "")
@@ -205,14 +240,18 @@ export const supportsExtendedPromptCacheRetention = (modelID: string): boolean =
 
 export type PublicOpenAIPromptCacheCapability = "key-only" | "legacy" | "gpt-5.6"
 
+// ChatGPT Codex remains key-only because its models do not accept public inline breakpoints uniformly.
 const PUBLIC_OPENAI_CACHE_ROUTES = new Set(["openai-chat", "openai-responses", "openai-responses-websocket"])
+
+export const supportsPromptCacheBreakpoints = (routeID: string, modelID: string): boolean =>
+  PUBLIC_OPENAI_CACHE_ROUTES.has(routeID) && isGpt56OrLater(modelID)
 
 export const publicPromptCacheCapability = (
   routeID: string,
   modelID: string,
 ): PublicOpenAIPromptCacheCapability => {
   if (!PUBLIC_OPENAI_CACHE_ROUTES.has(routeID)) return "key-only"
-  return isGpt56OrLater(modelID) ? "gpt-5.6" : "legacy"
+  return supportsPromptCacheBreakpoints(routeID, modelID) ? "gpt-5.6" : "legacy"
 }
 
 export * as OpenAIOptions from "./openai-options"

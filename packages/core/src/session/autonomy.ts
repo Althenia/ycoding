@@ -1,10 +1,11 @@
 export * as SessionAutonomy from "./autonomy"
 
-import { eq } from "drizzle-orm"
+import { and, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { Hash } from "../util/hash"
+import { canonicalJSON } from "./context-manifest"
 import { SessionSchema } from "./schema"
 import { SessionTable, SessionTaskTable } from "./sql"
 
@@ -43,6 +44,9 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
+  readonly snapshot: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<{ readonly state: State; readonly sequence: number; readonly digest: string }, NotFoundError>
   readonly isAutonomous: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly setMode: (input: {
     sessionID: SessionSchema.ID
@@ -92,9 +96,7 @@ export function requestsUserInput(value: string) {
   if (!text) return false
   const tail = text.slice(-2_000)
   if (/\?\s*$/.test(tail)) return true
-  return /(?:^|[\n.!?]\s*)(?:please\s+)?(?:choose|select|provide|confirm|clarify|decide)\b[^.!?]*[.!]?\s*$/i.test(
-    tail,
-  )
+  return /(?:^|[\n.!?]\s*)(?:please\s+)?(?:choose|select|provide|confirm|clarify|decide)\b[^.!?]*[.!]?\s*$/i.test(tail)
 }
 
 export function continuationPrompt(goal: Goal, input: { readonly latestAssistantText?: string } = {}) {
@@ -120,30 +122,59 @@ export function continuationPrompt(goal: Goal, input: { readonly latestAssistant
 }
 
 export function make(input: { db: Database.Interface["db"] }): Interface {
-  const load = (sessionID: SessionSchema.ID) =>
+  const snapshot: Interface["snapshot"] = (sessionID) =>
     input.db
-      .select({ autonomy: SessionTable.autonomy })
+      .select({ autonomy: SessionTable.autonomy, sequence: SessionTable.autonomy_revision })
       .from(SessionTable)
       .where(eq(SessionTable.id, sessionID))
       .get()
       .pipe(
         Effect.orDie,
         Effect.flatMap((row) =>
-          row ? Effect.succeed(read(row.autonomy)) : Effect.fail(new NotFoundError({ sessionID })),
+          row
+            ? Effect.succeed({
+                state: read(row.autonomy),
+                sequence: row.sequence,
+                digest: Hash.sha256(canonicalJSON(read(row.autonomy))),
+              })
+            : Effect.fail(new NotFoundError({ sessionID })),
         ),
       )
 
-  const save = (sessionID: SessionSchema.ID, state: State) =>
-    Effect.gen(function* () {
-      yield* load(sessionID)
-      yield* input.db
-        .update(SessionTable)
-        .set({ autonomy: state, time_updated: Date.now() })
-        .where(eq(SessionTable.id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
-      return state
-    })
+  const load = (sessionID: SessionSchema.ID) => snapshot(sessionID).pipe(Effect.map((value) => value.state))
+
+  const mutate = (sessionID: SessionSchema.ID, transition: (state: State) => State | undefined) =>
+    input.db
+      .transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const row = yield* tx
+              .select({ autonomy: SessionTable.autonomy, revision: SessionTable.autonomy_revision })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            if (!row) return yield* new NotFoundError({ sessionID })
+            const state = read(row.autonomy)
+            const next = transition(state)
+            if (!next) return state
+            const updated = yield* tx
+              .update(SessionTable)
+              .set({
+                autonomy: next,
+                autonomy_revision: sql`${SessionTable.autonomy_revision} + 1`,
+                time_updated: Date.now(),
+              })
+              .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.autonomy_revision, row.revision)))
+              .returning({ revision: SessionTable.autonomy_revision })
+              .get()
+              .pipe(Effect.orDie)
+            if (!updated) return yield* Effect.die(new Error(`Concurrent autonomy mutation for ${sessionID}`))
+            return next
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.catchTag("SqlError", Effect.die))
 
   const isAutonomous: Interface["isAutonomous"] = (sessionID) =>
     load(sessionID).pipe(
@@ -164,23 +195,20 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   // Leaving goal mode ends the loop, so the goal survives the switch with a terminal
   // status: callers read it back to report how the run ended.
   const setMode: Interface["setMode"] = ({ sessionID, mode }) =>
-    load(sessionID).pipe(
-      Effect.flatMap((state) =>
-        save(sessionID, {
-          mode,
-          ...(state.goal
-            ? { goal: state.goal.status === "active" ? { ...state.goal, status: "stopped" as const } : state.goal }
-            : {}),
-        }),
-      ),
-    )
+    mutate(sessionID, (state) => ({
+      mode,
+      ...(state.goal
+        ? { goal: state.goal.status === "active" ? { ...state.goal, status: "stopped" as const } : state.goal }
+        : {}),
+    }))
 
   return {
     get: (sessionID) => load(sessionID),
+    snapshot,
     isAutonomous,
     setMode,
     setGoal: ({ sessionID, text, rawText, maxNoProgress = 3 }) =>
-      save(sessionID, {
+      mutate(sessionID, () => ({
         mode: "goal",
         goal: {
           text: text.trim(),
@@ -190,37 +218,31 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
           noProgress: 0,
           maxNoProgress: Math.max(1, Math.trunc(maxNoProgress)),
         },
-      }),
+      })),
     stop: (sessionID) => setMode({ sessionID, mode: "normal" }),
     advance: ({ sessionID, progress, completed = false }) =>
-      load(sessionID).pipe(
-        Effect.flatMap((state) => {
-          const goal = state.goal
-          if (state.mode !== "goal" || !goal || goal.status !== "active") return Effect.succeed(state)
-          // A turn that ends on tool calls carries no assistant text. Absence of text is
-          // neither progress nor repetition, so it leaves the stall counter and the last
-          // digest untouched and only spends an iteration.
-          const digest = progress.trim() ? progressDigest(progress) : undefined
-          const iteration = goal.iteration + 1
-          const noProgress =
-            digest === undefined ? goal.noProgress : goal.lastProgressDigest === digest ? goal.noProgress + 1 : 0
-          const status: GoalStatus = completed
-            ? "completed"
-            : noProgress >= goal.maxNoProgress
-              ? "exhausted"
-              : "active"
-          return save(sessionID, {
-            mode: status === "active" ? "goal" : "normal",
-            goal: {
-              ...goal,
-              status,
-              iteration,
-              noProgress,
-              ...(digest === undefined ? {} : { lastProgressDigest: digest }),
-            },
-          })
-        }),
-      ),
+      mutate(sessionID, (state) => {
+        const goal = state.goal
+        if (state.mode !== "goal" || !goal || goal.status !== "active") return undefined
+        // A turn that ends on tool calls carries no assistant text. Absence of text is
+        // neither progress nor repetition, so it leaves the stall counter and the last
+        // digest untouched and only spends an iteration.
+        const digest = progress.trim() ? progressDigest(progress) : undefined
+        const iteration = goal.iteration + 1
+        const noProgress =
+          digest === undefined ? goal.noProgress : goal.lastProgressDigest === digest ? goal.noProgress + 1 : 0
+        const status: GoalStatus = completed ? "completed" : noProgress >= goal.maxNoProgress ? "exhausted" : "active"
+        return {
+          mode: status === "active" ? "goal" : "normal",
+          goal: {
+            ...goal,
+            status,
+            iteration,
+            noProgress,
+            ...(digest === undefined ? {} : { lastProgressDigest: digest }),
+          },
+        }
+      }),
   }
 }
 

@@ -55,12 +55,6 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
               allExpanded={allExpanded()}
               leftRule
             >
-              <Show when={props.shellSurface}>
-                <PluginSlot
-                  name="sidebar.shells"
-                  input={{ sessionID: props.sessionID, shellSurface: () => Boolean(props.shellSurface) }}
-                />
-              </Show>
               <SessionRailContent sessionID={props.sessionID} title={session().title}>
                 <pluginRuntime.Slot
                   name="sidebar_title"
@@ -107,7 +101,7 @@ export function SessionRailContent(props: { sessionID: string; title: string; ch
   const dimensions = useTerminalDimensions()
 
   return (
-    <RailSection section="session" title="SESSION" summary={props.title}>
+    <RailSection section="session" title="SESSION">
       <box
         gap={railMetrics(dimensions().width).sessionGap}
         paddingRight={1}

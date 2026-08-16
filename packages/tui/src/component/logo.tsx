@@ -1,109 +1,16 @@
-import { BoxRenderable, RGBA, TextAttributes, type ImageRenderable } from "@opentui/core"
-import { createSignal, For, Show, type JSX } from "solid-js"
-import { useTheme } from "../context/theme"
-import { tint } from "../theme/color"
-import { logo, terminal } from "../logo"
-import mark from "../../../../assets/brand/ycoding-mark-256.png" with { type: "file" }
+import { For } from "solid-js"
 
-export function TerminalLogo(props: { fg: RGBA }) {
-  return (
-    <box flexDirection="column">
-      <For each={terminal}>
-        {(line) => (
-          <text fg={props.fg} selectable={false}>
-            {line}
-          </text>
-        )}
-      </For>
-    </box>
-  )
-}
+const MINT = "#67D7A4"
+const LANDING_MARK = ["██        ██", "██        ██", "██▄▄▄   ▄▄██", "██▀▀▀   ▀▀██", "██        ██", "     ██     "]
+const HEADER_MARK = ["▌▐"]
 
-// The bitmap mark needs a real terminal image protocol; ImageRenderable degrades to block glyphs on
-// its own, and the terminal fallback covers hosts where decoding or loading fails outright.
 export function BrandMark(props: { width?: number; height?: number }) {
-  const { themeV2 } = useTheme()
-  const [failed, setFailed] = createSignal(false)
+  const width = props.width ?? 12
+  const height = props.height ?? 6
+  const rows = width === 2 && height === 1 ? HEADER_MARK : LANDING_MARK
   return (
-    <Show when={!failed()} fallback={<TerminalLogo fg={themeV2.text.feedback.success.default} />}>
-      <box width={props.width ?? 12} height={props.height ?? 6} flexShrink={0}>
-        <image
-          source={mark}
-          width={props.width ?? 12}
-          height={props.height ?? 6}
-          fit="fit"
-          renderBefore={function (buffer) {
-            buffer.fillRect(this.x, this.y, this.width, this.height, brandMarkBackground(this, themeV2.background.default))
-          }}
-          onError={() => setFailed(true)}
-        />
-      </box>
-    </Show>
-  )
-}
-
-function brandMarkBackground(image: ImageRenderable, fallback: RGBA) {
-  let parent = image.parent?.parent
-  while (parent) {
-    if (parent instanceof BoxRenderable && parent.backgroundColor.a > 0) return parent.backgroundColor
-    parent = parent.parent
-  }
-  return fallback
-}
-
-export function Logo() {
-  const { themeV2 } = useTheme()
-
-  const renderLine = (line: string, fg: RGBA, bold: boolean): JSX.Element[] => {
-    const shadow = tint(themeV2.background.default, fg, 0.25)
-    const attrs = bold ? TextAttributes.BOLD : undefined
-    return Array.from(line).map((char) => {
-      if (char === "_") {
-        return (
-          <text fg={fg} bg={shadow} attributes={attrs} selectable={false}>
-            {" "}
-          </text>
-        )
-      }
-      if (char === "^") {
-        return (
-          <text fg={fg} bg={shadow} attributes={attrs} selectable={false}>
-            ▀
-          </text>
-        )
-      }
-      if (char === "~") {
-        return (
-          <text fg={shadow} attributes={attrs} selectable={false}>
-            ▀
-          </text>
-        )
-      }
-      if (char === ",") {
-        return (
-          <text fg={shadow} attributes={attrs} selectable={false}>
-            ▄
-          </text>
-        )
-      }
-      return (
-        <text fg={fg} attributes={attrs} selectable={false}>
-          {char}
-        </text>
-      )
-    })
-  }
-
-  return (
-    <box>
-      <For each={logo.left}>
-        {(line, index) => (
-          <box flexDirection="row" gap={1}>
-            <box flexDirection="row">{renderLine(line, themeV2.text.subdued, false)}</box>
-            <box flexDirection="row">{renderLine(logo.right[index()], themeV2.text.default, true)}</box>
-          </box>
-        )}
-      </For>
+    <box width={width} height={height} flexShrink={0} flexDirection="column">
+      <For each={rows}>{(row) => <text fg={MINT} wrapMode="none">{row}</text>}</For>
     </box>
   )
 }

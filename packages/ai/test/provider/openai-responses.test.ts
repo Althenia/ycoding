@@ -324,7 +324,10 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.route).toBe("openai-responses-websocket")
+      expect(prepared.body.store).toBe(true)
+      expect(prepared.body.reasoning).toEqual({ effort: "medium", summary: "auto", context: "all_turns" })
       expect(prepared.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
+      expect(prepared.body.context_management).toEqual([{ type: "compaction", compact_threshold: 200_000 }])
       expect(prepared.body.input).toEqual([
         {
           role: "system",
@@ -353,19 +356,48 @@ describe("OpenAI Responses route", () => {
             openai: {
               promptCacheKey: "copilot-key",
               promptCacheOptions: { mode: "explicit", ttl: "30m" },
+              contextManagement: [{ type: "compaction", compactThreshold: 400_000 }],
+              reasoningContext: "all_turns",
             },
           },
         }),
       )
 
       expect(prepared.route).toBe("github-copilot-responses")
+      expect(prepared.body.store).toBe(false)
       expect(prepared.body.prompt_cache_key).toBe("copilot-key")
       expect(prepared.body.prompt_cache_options).toBeUndefined()
+      expect(prepared.body.reasoning?.context).toBeUndefined()
       expect(prepared.body.context_management).toBeUndefined()
       expect(prepared.body.input).toEqual([
         { role: "system", content: "stable" },
         { role: "user", content: [{ type: "input_text", text: "hi" }] },
       ])
+    }),
+  )
+
+  it.effect("keeps Azure Responses stateless without direct retained reasoning or compaction", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Azure.configure({
+            baseURL: "https://ycoding-test.openai.azure.com/openai/v1/",
+            apiKey: "azure-key",
+            providerOptions: {
+              openai: {
+                reasoningContext: "all_turns",
+                contextManagement: [{ type: "compaction", compactThreshold: 400_000 }],
+              },
+            },
+          }).responses("gpt-5.6"),
+          prompt: "Keep this request stateless.",
+        }),
+      )
+
+      expect(prepared.route).toBe("azure-openai-responses")
+      expect(prepared.body.store).toBe(false)
+      expect(prepared.body.reasoning?.context).toBeUndefined()
+      expect(prepared.body.context_management).toBeUndefined()
     }),
   )
 
@@ -659,6 +691,31 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("lowers configured image detail on local tool-result images", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          id: "req_tool_result_image_detail",
+          model,
+          messages: [
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "read", input: {} })]),
+            Message.tool({
+              id: "call_1",
+              name: "read",
+              resultType: "content",
+              result: [{ type: "file", uri: "data:image/png;base64,AAECAw==", mime: "image/png" }],
+            }),
+          ],
+          providerOptions: { openai: { imageDetail: "high" } },
+        }),
+      )
+
+      expect(expectToolOutput(prepared.body).output).toEqual([
+        { type: "input_image", image_url: "data:image/png;base64,AAECAw==", detail: "high" },
+      ])
+    }),
+  )
+
   it.effect("lowers single-image tool-result content as structured input_image array", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -765,7 +822,7 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(prepared.body.store).toBe(false)
+      expect(prepared.body.store).toBe(true)
       expect(prepared.body.prompt_cache_key).toBe("session_123")
       expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
       expect(prepared.body.reasoning).toEqual({ effort: "high", summary: "auto" })
@@ -843,6 +900,8 @@ describe("OpenAI Responses route", () => {
               promptCacheKey: "request-key",
               promptCacheRetention: "24h",
               promptCacheOptions: { mode: "explicit", ttl: "30m" },
+              contextManagement: [{ type: "compaction", compactThreshold: 400_000 }],
+              reasoningContext: "all_turns",
             },
           },
         }),
@@ -851,11 +910,13 @@ describe("OpenAI Responses route", () => {
       expect(prepared.body.prompt_cache_key).toBe("request-key")
       expect(prepared.body.prompt_cache_retention).toBeUndefined()
       expect(prepared.body.prompt_cache_options).toBeUndefined()
+      expect(prepared.body.reasoning?.context).toBeUndefined()
+      expect(prepared.body.context_management).toBeUndefined()
       expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
     }),
   )
 
-  it.effect("marks an explicit prompt_cache_breakpoint on cached system/user content for gpt-5.6+ only", () =>
+  it.effect("marks cached system/user content on direct GPT-5.6 Luna only", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const preparedLegacy = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -869,7 +930,7 @@ describe("OpenAI Responses route", () => {
 
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6"),
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6-luna"),
           system: { type: "text", text: "static prefix", cache },
           messages: [Message.user([{ type: "text", text: "hi", cache }])],
         }),
@@ -886,35 +947,143 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("marks cached assistant text only on direct GPT-5.6 Responses routes", () =>
+  it.effect("keeps GPT-5.6 Codex requests key-only when inline breakpoints are unsupported", () =>
+    Effect.gen(function* () {
+      const cache = new CacheHint({ type: "ephemeral" })
+      const direct = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6-luna")
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.update(direct, { route: direct.route.with({ id: "openai-codex-responses" }) }),
+          system: { type: "text", text: "static prefix", cache },
+          messages: [Message.user([{ type: "text", text: "hi", cache }])],
+          providerOptions: { openai: { promptCacheKey: "codex-key" } },
+        }),
+      )
+
+      expect(prepared.body.prompt_cache_key).toBe("codex-key")
+      expect(prepared.body.input[0]).toEqual({ role: "system", content: "static prefix" })
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
+    }),
+  )
+
+  it.effect("keeps cached assistant text as output_text on every Responses route", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const direct = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6")
       const compatible = Model.update(direct, { route: direct.route.with({ id: "openai-compatible-responses" }) })
       const models = [
-        { model: direct, marked: true },
-        { model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.5"), marked: false },
-        { model: compatible, marked: false },
-      ] as const
+        direct,
+        Model.update(direct, { route: direct.route.with({ id: "openai-responses-websocket" }) }),
+        Model.update(direct, { route: direct.route.with({ id: "openai-codex-responses" }) }),
+        OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.5"),
+        compatible,
+      ]
 
-      for (const entry of models) {
+      for (const model of models) {
         const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
           LLM.request({
-            model: entry.model,
+            model,
             messages: [Message.assistant({ type: "text", text: "cached assistant", cache })],
           }),
         )
         const input = prepared.body.input[0]
-        if (entry.marked) {
-          expect(input).toEqual({
-            role: "assistant",
-            content: [{ type: "input_text", text: "cached assistant", prompt_cache_breakpoint: { mode: "explicit" } }],
-          })
-          continue
-        }
         expect(input).toEqual({ role: "assistant", content: [{ type: "output_text", text: "cached assistant" }] })
         expect(JSON.stringify(input)).not.toContain("prompt_cache_breakpoint")
       }
+    }),
+  )
+
+  it.effect("marks cached local tool-result text on direct GPT-5.6 Responses routes", () =>
+    Effect.gen(function* () {
+      const cache = new CacheHint({ type: "ephemeral" })
+      const direct = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6")
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: direct,
+          messages: [
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "lookup", input: {} })]),
+            Message.tool(
+              ToolResultPart.make({
+                id: "call_1",
+                name: "lookup",
+                result: "rolling result",
+                resultType: "text",
+                cache,
+              }),
+            ),
+          ],
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+        }),
+      )
+
+      expect(expectToolOutput(prepared.body).output).toEqual([
+        {
+          type: "input_text",
+          text: "rolling result",
+          prompt_cache_breakpoint: { mode: "explicit" },
+        },
+      ])
+
+      const unsupported = [
+        OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.5"),
+        Model.update(direct, { route: direct.route.with({ id: "openai-compatible-responses" }) }),
+      ]
+      for (const unsupportedModel of unsupported) {
+        const unsupportedPrepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+          LLM.request({
+            model: unsupportedModel,
+            messages: [
+              Message.tool(
+                ToolResultPart.make({
+                  id: "call_1",
+                  name: "lookup",
+                  result: "rolling result",
+                  resultType: "text",
+                  cache,
+                }),
+              ),
+            ],
+            providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+          }),
+        )
+        expect(expectToolOutput(unsupportedPrepared.body).output).toBe("rolling result")
+        expect(unsupportedPrepared.body.prompt_cache_options).toBeUndefined()
+        expect(JSON.stringify(unsupportedPrepared.body)).not.toContain("prompt_cache_breakpoint")
+      }
+    }),
+  )
+
+  it.effect("preserves structured media when marking cached local tool-result text", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6"),
+          messages: [
+            Message.tool(
+              ToolResultPart.make({
+                id: "call_1",
+                name: "read",
+                resultType: "content",
+                result: [
+                  { type: "text", text: "Image read successfully" },
+                  { type: "file", uri: "data:image/png;base64,AAECAw==", mime: "image/png" },
+                ],
+                cache: new CacheHint({ type: "ephemeral" }),
+              }),
+            ),
+          ],
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+        }),
+      )
+
+      expect(expectToolOutput(prepared.body).output).toEqual([
+        {
+          type: "input_text",
+          text: "Image read successfully",
+          prompt_cache_breakpoint: { mode: "explicit" },
+        },
+        { type: "input_image", image_url: "data:image/png;base64,AAECAw==" },
+      ])
     }),
   )
 
@@ -1052,12 +1221,8 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("requests encrypted reasoning by default for GPT-5 reasoning models", () =>
+  it.effect("stores direct GPT-5 reasoning responses and requests encrypted state by default", () =>
     Effect.gen(function* () {
-      // The native OpenAI facade configures GPT-5 stateless (store: false) with
-      // reasoningSummary: "auto" by default. Without `include`, a follow-up
-      // turn cannot replay reasoning state, so the facade also opts into
-      // `reasoning.encrypted_content` automatically.
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
           model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.2"),
@@ -1065,13 +1230,13 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
-      expect(prepared.body.store).toBe(false)
+      expect(prepared.body.store).toBe(true)
       expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
       expect(prepared.body.reasoning).toEqual({ effort: "medium", summary: "auto" })
     }),
   )
 
-  it.effect("enables server-side compaction for direct GPT-5.6 Responses models", () =>
+  it.effect("enables stored retained reasoning and server compaction for direct GPT-5.6 Responses models", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.request({
@@ -1080,7 +1245,52 @@ describe("OpenAI Responses route", () => {
         }),
       )
 
+      expect(prepared.body.store).toBe(true)
+      expect(prepared.body.reasoning).toEqual({ effort: "medium", summary: "auto", context: "all_turns" })
       expect(prepared.body.context_management).toEqual([{ type: "compaction", compact_threshold: 200_000 }])
+    }),
+  )
+
+  it.effect("lets direct OpenAI callers explicitly keep GPT-5.6 stateless", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.6"),
+          prompt: "Keep this request stateless.",
+          providerOptions: {
+            openai: {
+              store: false,
+              previousResponseId: "resp_ignored",
+              continuationInputStart: 1,
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.store).toBe(false)
+      expect(prepared.body.previous_response_id).toBeUndefined()
+      expect(prepared.body.include).toEqual(["reasoning.encrypted_content"])
+    }),
+  )
+
+  it.effect("strips retained reasoning and compaction from pre-GPT-5.6 direct models", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.5"),
+          prompt: "Use only supported controls.",
+          providerOptions: {
+            openai: {
+              reasoningContext: "all_turns",
+              contextManagement: [{ type: "compaction", compactThreshold: 400_000 }],
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.store).toBe(true)
+      expect(prepared.body.reasoning?.context).toBeUndefined()
+      expect(prepared.body.context_management).toBeUndefined()
     }),
   )
 
@@ -1487,6 +1697,12 @@ describe("OpenAI Responses route", () => {
 
   it.effect("replays a server compaction item and drops prior stateless history", () =>
     Effect.gen(function* () {
+      const opaque = {
+        type: "compaction" as const,
+        id: "cmp_provider_1",
+        encrypted_content: "encrypted-compaction-state",
+        future_field: { version: 2 },
+      }
       const response = yield* LLMClient.generate(
         LLM.request({
           model,
@@ -1499,7 +1715,7 @@ describe("OpenAI Responses route", () => {
             sseEvents(
               {
                 type: "response.output_item.done",
-                item: { type: "compaction", id: "cmp_1", encrypted_content: "encrypted-compaction-state" },
+                item: opaque,
               },
               { type: "response.completed", response: { id: "resp_1" } },
             ),
@@ -1519,13 +1735,85 @@ describe("OpenAI Responses route", () => {
         {
           type: "reasoning",
           text: "",
-          providerMetadata: {
-            openai: { itemId: "cmp_1", compactionEncryptedContent: "encrypted-compaction-state" },
-          },
+          providerMetadata: { openai: { opaqueCompactionItem: opaque } },
         },
       ])
       expect(prepared.body.input).toEqual([
-        { type: "compaction", id: "cmp_1", encrypted_content: "encrypted-compaction-state" },
+        opaque,
+        { role: "user", content: [{ type: "input_text", text: "After compaction." }] },
+      ])
+    }),
+  )
+
+  it.effect("preserves opaque compaction state across a stored GPT-5.6 continuation", () =>
+    Effect.gen(function* () {
+      const opaque = {
+        type: "compaction" as const,
+        id: "cmp_provider_stored_1",
+        encrypted_content: "encrypted-compaction-state",
+        future_field: { version: 2 },
+      }
+      const stored = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.6")
+      const response = yield* LLMClient.generate(
+        LLM.request({ model: stored, prompt: "Before compaction." }),
+      ).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              { type: "response.output_item.done", item: opaque },
+              { type: "response.completed", response: { id: "resp_stored_1" } },
+            ),
+          ),
+        ),
+      )
+
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: stored,
+          messages: [Message.user("Before compaction."), response.message, Message.user("After compaction.")],
+          providerOptions: { openai: { previousResponseId: "resp_stored_1", continuationInputStart: 2 } },
+        }),
+      )
+
+      expect(response.message.content).toEqual([
+        {
+          type: "reasoning",
+          text: "",
+          providerMetadata: { openai: { opaqueCompactionItem: opaque } },
+        },
+      ])
+      expect(prepared.body.store).toBe(true)
+      expect(prepared.body.previous_response_id).toBe("resp_stored_1")
+      expect(prepared.body.input).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "After compaction." }] },
+      ])
+    }),
+  )
+
+  it.effect("reconstructs legacy stateless compaction metadata when no opaque item exists", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.user("Before compaction."),
+            Message.assistant([
+              {
+                type: "reasoning",
+                text: "",
+                providerMetadata: {
+                  openai: { itemId: "cmp_legacy", compactionEncryptedContent: "encrypted-legacy-state" },
+                },
+              },
+            ]),
+            Message.user("After compaction."),
+          ],
+          providerOptions: { openai: { store: false } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        { type: "compaction", id: "cmp_legacy", encrypted_content: "encrypted-legacy-state" },
         { role: "user", content: [{ type: "input_text", text: "After compaction." }] },
       ])
     }),
@@ -1708,6 +1996,40 @@ describe("OpenAI Responses route", () => {
         { role: "user", content: [{ type: "input_text", text: "Generate a black triangle." }] },
         { role: "user", content: [{ type: "input_image", image_url: "data:image/png;base64,AQID" }] },
         { role: "user", content: [{ type: "input_text", text: "Make it blue." }] },
+      ])
+    }),
+  )
+
+  it.effect("lowers configured image detail on stateless hosted image-generation continuation", () =>
+    Effect.gen(function* () {
+      const imageTool = OpenAI.imageGeneration({ action: "edit" })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.assistant([
+              ToolResultPart.make({
+                id: "ig_1",
+                name: "image_generation",
+                result: {
+                  type: "content",
+                  value: [{ type: "file", uri: "data:image/png;base64,AQID", mime: "image/png" }],
+                },
+                providerExecuted: true,
+                providerMetadata: { openai: { itemId: "ig_1" } },
+              }),
+            ]),
+          ],
+          tools: [imageTool],
+          providerOptions: { openai: { imageDetail: "low" } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,AQID", detail: "low" }],
+        },
       ])
     }),
   )
@@ -2076,6 +2398,104 @@ describe("OpenAI Responses route", () => {
           content: [{ type: "input_image", image_url: "data:image/png;base64,AAECAw==" }],
         },
       ])
+    }),
+  )
+
+  it.effect("lowers configured image detail on user image content", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          id: "req_media_detail",
+          model,
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          providerOptions: { openai: { imageDetail: "high" } },
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,AAECAw==", detail: "high" }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("retains image detail through OpenAI provider option normalization", () =>
+    Effect.gen(function* () {
+      const configuredModel = OpenAI.configure({
+        apiKey: "test",
+        providerOptions: { openai: { imageDetail: "low" } },
+      }).responses("gpt-4.1-mini")
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          id: "req_normalized_media_detail",
+          model: configuredModel,
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,AAECAw==", detail: "low" }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("rejects unsupported image details and original on unsupported models", () =>
+    Effect.gen(function* () {
+      const invalidDetail = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          providerOptions: { openai: { imageDetail: "maximum" } },
+        }),
+      ).pipe(Effect.flip)
+      expect(invalidDetail.reason).toMatchObject({ _tag: "InvalidRequest" })
+
+      const unsupportedOriginal = yield* LLMClient.prepare(
+        LLM.request({
+          model,
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          providerOptions: { openai: { imageDetail: "original" } },
+        }),
+      ).pipe(Effect.flip)
+      expect(unsupportedOriginal.reason).toMatchObject({ _tag: "InvalidRequest" })
+
+      const mini = OpenAIResponses.route.model({ id: "gpt-5.4-mini" })
+      const unsupportedMiniOriginal = yield* LLMClient.prepare(
+        LLM.request({
+          model: mini,
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          providerOptions: { openai: { imageDetail: "original" } },
+        }),
+      ).pipe(Effect.flip)
+      expect(unsupportedMiniOriginal.reason).toMatchObject({ _tag: "InvalidRequest" })
+
+      const originalGpt54 = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAIResponses.route.model({ id: "gpt-5.4" }),
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          providerOptions: { openai: { imageDetail: "original" } },
+        }),
+      )
+      expect(originalGpt54.body.input).toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_image", image_url: "data:image/png;base64,AAECAw==", detail: "original" }],
+        },
+      ])
+
+      const prefixedGpt56 = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAIResponses.route.model({ id: "openai/gpt-5.6" }),
+          messages: [Message.user({ type: "media", mediaType: "image/png", data: "AAECAw==" })],
+          providerOptions: { openai: { imageDetail: "original" } },
+        }),
+      )
+      expect(prefixedGpt56.body.input).toEqual(originalGpt54.body.input)
     }),
   )
 

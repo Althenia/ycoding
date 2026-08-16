@@ -12,6 +12,7 @@ import {
   Project,
   Reference,
   Session,
+  SessionCompaction,
   Workspace,
 } from "../src/index.js"
 import { EventManifest } from "../src/event-manifest.js"
@@ -71,6 +72,42 @@ describe("public event manifest", () => {
     expect(EventManifest.Durable.has("session.step.ended.2")).toBe(false)
   })
 
+  test("defines public compaction jobs without provider-private state", () => {
+    const admission = Schema.decodeUnknownSync(SessionCompaction.Admission)({
+      id: "cmp_01",
+      sessionID: "ses_01",
+      trigger: "manual",
+      admissionMode: "background",
+      status: "pending",
+      requestedThrough: { messageID: "msg_01", seq: 7 },
+      timeCreated: 1,
+    })
+
+    expect(String(admission.id)).toBe("cmp_01")
+    expect(() => Schema.decodeUnknownSync(SessionCompaction.ID)("compaction_01")).toThrow()
+    expect(SessionEvent.Compaction.Started.durable?.version).toBe(2)
+    expect(EventManifest.Latest.get("session.compaction.started")).toBe(SessionEvent.Compaction.Started)
+    expect(EventManifest.Durable.has("session.compaction.started.1")).toBeTrue()
+    expect(EventManifest.Durable.has("session.compaction.started.2")).toBeTrue()
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.Compaction.StartedV1.data)({
+        sessionID: "ses_01",
+        reason: "manual",
+        recent: "legacy context",
+      }),
+    ).toMatchObject({ reason: "manual", recent: "legacy context" })
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.Compaction.Ended.data)({
+        sessionID: "ses_01",
+        jobID: "cmp_01",
+        revision: 2,
+        boundary: { messageID: "msg_01", seq: 7 },
+        metrics: { excludedMessages: 1, excludedParts: 2, inputTokens: 3, retainedTokens: 4 },
+        providerState: { secret: "must-not-be-public" },
+      }),
+    ).not.toHaveProperty("providerState")
+  })
+
   test("excludes removed v1 event types", () => {
     for (const type of [
       "session.updated",
@@ -110,6 +147,7 @@ describe("public event manifest", () => {
         "session.execution.succeeded.1",
         "session.execution.failed.1",
         "session.execution.interrupted.1",
+        "session.file-change.recorded.1",
         "session.instructions.updated.2",
         "session.synthetic.1",
         "session.task.updated.1",
@@ -132,9 +170,14 @@ describe("public event manifest", () => {
         "session.reasoning.ended.1",
         "session.retry.scheduled.1",
         "session.compaction.admitted.1",
+        "session.compaction.admitted.2",
         "session.compaction.started.1",
+        "session.compaction.started.2",
         "session.compaction.ended.1",
+        "session.compaction.ended.2",
+        "session.compaction.replaced.1",
         "session.compaction.failed.1",
+        "session.compaction.failed.2",
         "session.revert.staged.1",
         "session.revert.cleared.1",
         "session.revert.committed.1",
@@ -147,6 +190,7 @@ describe("public event manifest", () => {
     expect(SessionEvent.PublicDurableDefinitions).not.toContain(SessionEvent.ProviderRequestRecorded)
     expect(SessionEvent.DurableDefinitions).toEqual([
       ...SessionEvent.PublicDurableDefinitions,
+      ...SessionEvent.Compaction.LegacyDurableDefinitions,
       SessionEvent.UsageRecorded,
       SessionEvent.ProviderRequestRecorded,
     ])

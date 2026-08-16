@@ -10,6 +10,7 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
+import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
@@ -25,7 +26,7 @@ import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
-import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -175,6 +176,30 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("binds the process-global compaction executor to Location runner drains", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_compaction_execution_binding")
+      yield* seedSessions(database, [sessionID])
+      const compactionExecution = noopCompactionExecution()
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(
+        scope,
+        () =>
+          SessionCompactionExecution.use((bound) =>
+            Effect.sync(() => {
+              expect(bound).toBe(compactionExecution)
+            }),
+          ),
+        undefined,
+        compactionExecution,
+      )
+
+      yield* Context.get(context, SessionExecution.Service).resume(sessionID)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("stops goal continuations after three repeated no-progress responses", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -247,53 +272,58 @@ describe("SessionExecution lifecycle", () => {
   )
 
   for (const state of ["running", "waiting"] as const) {
-    it.effect(`keeps a goal active until a direct ${state} child settles`, () =>
-      Effect.gen(function* () {
-        const database = yield* Database.Service
-        const parentID = SessionV2.ID.make(`ses_goal_${state}_parent`)
-        const childID = SessionV2.ID.make(`ses_goal_${state}_child`)
-        yield* seedSessions(database, [parentID, childID])
-        yield* seedTask(database, { parentID, childID, state })
-        const autonomy = SessionAutonomy.make({ db: database.db })
-        yield* autonomy.setGoal({ sessionID: parentID, text: "Ship the fix" })
+    for (const terminal of ["completed", "failed", "lost"] as const) {
+      it.effect(`continues a goal after a direct ${terminal} child settles from ${state}`, () =>
+        Effect.gen(function* () {
+          const database = yield* Database.Service
+          const parentID = SessionV2.ID.make(`ses_goal_${state}_parent`)
+          const childID = SessionV2.ID.make(`ses_goal_${state}_child`)
+          yield* seedSessions(database, [parentID, childID])
+          yield* seedTask(database, { parentID, childID, state })
+          const autonomy = SessionAutonomy.make({ db: database.db })
+          yield* autonomy.setGoal({ sessionID: parentID, text: "Ship the fix" })
 
-        let drains = 0
-        const scope = yield* Scope.make()
-        const context = yield* buildExecution(scope, () =>
-          Effect.gen(function* () {
-            drains += 1
-            yield* recordAssistant(database, parentID, drains, [
-              { type: "text", text: `Verified. ${SessionAutonomy.CompletionMarker}` },
-            ])
-          }),
-        )
-        const execution = Context.get(context, SessionExecution.Service)
+          let drains = 0
+          const scope = yield* Scope.make()
+          const context = yield* buildExecution(scope, () =>
+            Effect.gen(function* () {
+              drains += 1
+              yield* recordAssistant(database, parentID, drains, [
+                { type: "text", text: `Verified. ${SessionAutonomy.CompletionMarker}` },
+              ])
+            }),
+          )
+          const execution = Context.get(context, SessionExecution.Service)
 
-        yield* execution.resume(parentID)
-        yield* execution.awaitIdle(parentID)
+          yield* execution.resume(parentID)
+          yield* execution.awaitIdle(parentID)
 
-        expect(drains).toBe(1)
-        expect(yield* autonomy.get(parentID)).toMatchObject({ mode: "goal", goal: { status: "active", iteration: 0 } })
-        expect(yield* admittedInputs(database)).toEqual([])
+          expect(drains).toBe(1)
+          expect(yield* autonomy.get(parentID)).toMatchObject({
+            mode: "goal",
+            goal: { status: "active", iteration: 0 },
+          })
+          expect(yield* admittedInputs(database)).toEqual([])
 
-        yield* database.db
-          .update(SessionTaskTable)
-          .set({ state: "completed" })
-          .where(eq(SessionTaskTable.session_id, childID))
-          .run()
-          .pipe(Effect.orDie)
-        yield* execution.wake(parentID)
-        yield* execution.awaitIdle(parentID)
+          yield* database.db
+            .update(SessionTaskTable)
+            .set({ state: terminal })
+            .where(eq(SessionTaskTable.session_id, childID))
+            .run()
+            .pipe(Effect.orDie)
+          yield* execution.wake(parentID)
+          yield* execution.awaitIdle(parentID)
 
-        expect(drains).toBe(2)
-        expect(yield* autonomy.get(parentID)).toMatchObject({
-          mode: "normal",
-          goal: { status: "completed", iteration: 1 },
-        })
-        expect(yield* admittedInputs(database)).toEqual([])
-        yield* Scope.close(scope, Exit.void)
-      }),
-    )
+          expect(drains).toBe(2)
+          expect(yield* autonomy.get(parentID)).toMatchObject({
+            mode: "normal",
+            goal: { status: "completed", iteration: 1 },
+          })
+          expect(yield* admittedInputs(database)).toEqual([])
+          yield* Scope.close(scope, Exit.void)
+        }),
+      )
+    }
   }
 
   it.effect("settles the goal before publishing the terminal execution event", () =>
@@ -514,6 +544,7 @@ function buildExecution(
   scope: Scope.Closeable,
   drain: SessionRunner.Interface["drain"],
   observePublish?: (type: string) => Effect.Effect<void>,
+  compactionExecution = noopCompactionExecution(),
 ) {
   return Effect.gen(function* () {
     const database = yield* Database.Service
@@ -544,9 +575,20 @@ function buildExecution(
         Layer.provide(Layer.succeed(EventV2.Service, events)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(Layer.succeed(SessionAutonomy.Service, autonomy)),
+        Layer.provide(Layer.succeed(SessionCompactionExecution.Service, compactionExecution)),
         Layer.provide(locations),
       ),
       scope,
     )
+  })
+}
+
+function noopCompactionExecution() {
+  return SessionCompactionExecution.Service.of({
+    active: Effect.succeed(new Set()),
+    wake: () => Effect.void,
+    wait: () => Effect.die("unused"),
+    cancel: () => Effect.succeed(undefined),
+    recover: Effect.void,
   })
 }

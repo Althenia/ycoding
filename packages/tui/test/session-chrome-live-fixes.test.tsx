@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { ImageRenderable, type Renderable } from "@opentui/core"
+import { type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
@@ -49,8 +49,14 @@ async function render(view: () => JSX.Element, size: { width: number; height: nu
   return app
 }
 
-function findImage(node: Renderable): ImageRenderable | undefined {
-  if (node instanceof ImageRenderable) return node
+type ImageNode = Renderable & {
+  source: string
+  loadPromise: Promise<unknown>
+  image?: unknown
+}
+
+function findImage(node: Renderable): ImageNode | undefined {
+  if ("source" in node && "loadPromise" in node && "image" in node) return node as ImageNode
   return node
     .getChildren()
     .flatMap((child) => findImage(child) ?? [])
@@ -107,6 +113,7 @@ describe("header brand version", () => {
         expect(String(image?.source)).toEndWith("ycoding-mark-256.png")
         expect(image?.width).toBe(6)
         expect(image?.height).toBe(1)
+        expect(image?.y).toBe(1)
         expect(line).toContain(`v${InstallationVersion}`)
         expect(line).not.toContain("y. ycoding")
         // The brand plus version must not squeeze the identity run or the status out of the strip.
@@ -130,16 +137,16 @@ describe("header brand version", () => {
 })
 
 describe("landing hero", () => {
-  test("mounts the native brand image and falls back after an image error", async () => {
-    const app = await render(() => <LandingHero />, { width: 80, height: 24 }, "What should we build?")
+  test("mounts the native brand image and preserves the sized empty fallback", async () => {
+    const app = await render(() => <LandingHero />, { width: 80, height: 24 }, "terminal coding agent")
 
     const image = findImage(app.renderer.root)
     expect(image).toBeDefined()
     expect(String(image?.source)).toEndWith("ycoding-mark-256.png")
     image!.source = "/missing-ycoding-mark.png"
-    await app.waitForFrame((frame) => frame.includes("█   █"))
+    await app.waitForFrame(() => findImage(app.renderer.root) === undefined)
     expect(findImage(app.renderer.root)).toBeUndefined()
-    expect(app.captureCharFrame()).toContain("█   █")
+    expect(app.captureCharFrame()).not.toContain("█   █")
     app.renderer.destroy()
   })
 })

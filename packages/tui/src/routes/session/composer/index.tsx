@@ -1,7 +1,7 @@
 import { createEffect, createMemo, For, onCleanup, Show, useContext, createContext } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
-import { useTerminalDimensions, type JSX } from "@opentui/solid"
+import { type JSX } from "@opentui/solid"
 import { useTheme } from "../../../context/theme"
 import { Keymap } from "../../../context/keymap"
 import { useData } from "../../../context/data"
@@ -44,7 +44,6 @@ export type ComposerProps = {
 
 export function Composer(props: ComposerProps) {
   const { themeV2 } = useTheme().contextual("elevated")
-  const dimensions = useTerminalDimensions()
   const data = useData()
 
   const [store, setStore] = createStore({
@@ -63,9 +62,6 @@ export function Composer(props: ComposerProps) {
     ),
   )
   const subagents = createMemo(() => data.session.subagent.summary(props.sessionID)?.active ?? 0)
-  const hasActiveContent = createMemo(() =>
-    activeTab()?.id === "shell" ? shells() > 0 : activeTab()?.id === "subagents" ? subagents() > 0 : false,
-  )
 
   // Set active tab when opened
   let defaultTabApplied = false
@@ -135,11 +131,7 @@ export function Composer(props: ComposerProps) {
 
   return (
     <ComposerContext.Provider value={ctx}>
-      <box
-        flexShrink={0}
-        visible={props.open}
-        minHeight={hasActiveContent() ? Math.ceil(dimensions().height / 2) : undefined}
-      >
+      <box flexShrink={0} visible={props.open}>
         <box
           backgroundColor={themeV2.background.default}
           paddingLeft={3}
@@ -159,10 +151,13 @@ export function Composer(props: ComposerProps) {
               >
                 <box flexDirection="row">
                   <For each={tabList()}>
-                    {(tab) => {
+                    {(tab, index) => {
                       const isActive = createMemo(() => store.active === tab.id)
                       return (
                         <>
+                          <Show when={index() > 0}>
+                            <box width={4} />
+                          </Show>
                           <text
                             fg={isActive() ? themeV2.text.feedback.success.default : themeV2.text.subdued}
                             attributes={isActive() ? TextAttributes.BOLD : undefined}
@@ -170,14 +165,13 @@ export function Composer(props: ComposerProps) {
                           >
                             {tab.label}
                           </text>
-                          <Show when={tab.id === "shell"}>
-                            <box width={1} />
-                            <text fg={themeV2.text.feedback.info.default}>{shells()}</text>
-                            <box width={4} />
-                          </Show>
                           <Show when={tab.id === "subagents"}>
                             <box width={2} />
                             <text fg={themeV2.text.feedback.warning.default}>{subagents()}</text>
+                          </Show>
+                          <Show when={tab.id === "shell"}>
+                            <box width={1} />
+                            <text fg={themeV2.text.feedback.info.default}>{shells()}</text>
                           </Show>
                         </>
                       )
@@ -186,8 +180,8 @@ export function Composer(props: ComposerProps) {
                 </box>
               </Show>
             </box>
-            <ShellTab sessionID={props.sessionID} />
             <SubagentsTab sessionID={props.sessionID} />
+            <ShellTab sessionID={props.sessionID} />
             <box flexDirection="row" flexShrink={0}>
               <For each={footerHints()}>
                 {(hint) => (

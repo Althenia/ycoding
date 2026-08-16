@@ -31,6 +31,18 @@ const tasks = [
     time: { created: 1, updated: 2 },
   },
 ] as const
+const permission = {
+  id: "permission_composer_blocked",
+  sessionID,
+  action: "shell",
+  resources: ["git status"],
+  metadata: {},
+}
+let submittedPrompt: string | undefined
+
+function submittedText(): string | undefined {
+  return submittedPrompt
+}
 
 function isPromptBody(value: unknown): value is { id: string; text: string; delivery?: "steer" | "queue" } {
   return (
@@ -52,6 +64,7 @@ async function route(url: URL, request: Request) {
   if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
     const body: unknown = await request.json()
     if (!isPromptBody(body)) return json({ error: "invalid prompt" }, { status: 400 })
+    submittedPrompt = body.text
     return json({
       data: {
         id: body.id,
@@ -75,6 +88,18 @@ async function route(url: URL, request: Request) {
         tokens: { uncachedInput: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
         cache: { eligible: 0, hitRatio: 0.61, mechanism: "unreported", readReported: false, writeReported: false },
         requests: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens: session.tokens },
+      },
+    })
+  if (url.pathname === `/api/session/${sessionID}/usage`)
+    return json({
+      data: {
+        logical: 0,
+        physical: 0,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        cost: 0,
+        tokens: session.tokens,
       },
     })
   if (url.pathname === "/api/session/ses_subagent_live_fixes/diagnostics")
@@ -147,6 +172,11 @@ async function route(url: URL, request: Request) {
   return undefined
 }
 
+async function permissionRoute(url: URL, request: Request) {
+  if (url.pathname === `/api/session/${sessionID}/permission`) return json({ location, data: [permission] })
+  return route(url, request)
+}
+
 async function waitForFrameText(screen: { frame(): string }, text: string) {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (screen.frame().includes(text)) return
@@ -158,6 +188,26 @@ async function waitForFrameText(screen: { frame(): string }, text: string) {
 function composerRuleRow(lines: string[], contentRow: number) {
   return lines.findLastIndex((line, index) => index < contentRow && line.includes("─"))
 }
+
+test("keeps the composer subagent picker hidden during a permission review", async () => {
+  const screen = await renderScreen({
+    width: 220,
+    height: 69,
+    args: { sessionID },
+    route: permissionRoute,
+    settle: "Permission required",
+  })
+  try {
+    expect(screen.frame()).toContain("bash wants to run")
+    screen.input.pressKey("ARROW_DOWN")
+    await Bun.sleep(100)
+    expect(screen.frame()).toContain("Permission required")
+    expect(screen.frame()).not.toContain("Subagents")
+    expect(screen.frame()).not.toContain("reviewer")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("insets the input, caps natural wrapping at six rows, and keeps autocomplete above the rule", async () => {
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
@@ -235,6 +285,27 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
   }
 })
 
+test("submits virtualized large pastes at full length without blocking the composer", async () => {
+  const pasted = Array.from({ length: 12 }, (_, index) => `large-paste-line-${index}-${"x".repeat(80)}`).join("\n")
+  submittedPrompt = undefined
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText(pasted)
+    await waitForFrameText(screen, "[Pasted ~12 lines]")
+    expect(screen.frame()).not.toContain("large-paste-line-0-")
+
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+    const submitted = submittedText()
+    if (submitted === undefined) throw new Error("large paste was not submitted")
+    expect(submitted).toBe(pasted)
+  } finally {
+    await screen.dispose()
+  }
+})
+
 test("stacks the full-width subagent picker above the prompt with legible model metadata", async () => {
   const width = 220
   const screen = await renderScreen({ width, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
@@ -259,7 +330,8 @@ test("stacks the full-width subagent picker above the prompt with legible model 
 
     expect(tabs).toBeLessThan(prompt)
     expect(lines[tabs]).not.toContain("Prompt")
-    expect(lines[tabs]?.indexOf("Shell")).toBe(3)
+    expect(lines[tabs]?.indexOf("Subagents")).toBe(3)
+    expect(lines[tabs]?.indexOf("Subagents")).toBeLessThan(lines[tabs]!.indexOf("Shell"))
     expect(row).toBeGreaterThan(tabs)
     expect(frame).toContain("openai/gpt-5.6-terra#high")
     expect(frame).toContain("attached")

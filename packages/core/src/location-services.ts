@@ -6,7 +6,6 @@ import { CommandV2 } from "./command"
 import { Config } from "./config"
 import { LayerNode } from "./effect/layer-node"
 import { Node } from "./effect/app-node"
-import { EventV2 } from "./event"
 import { FileMutation } from "./file-mutation"
 import { FileSystem } from "./filesystem"
 import { FileSystemSearch } from "./filesystem/search"
@@ -41,9 +40,11 @@ import { SessionHelperPolicy } from "./session/helper-policy"
 import { SessionGenerateNode } from "./session/generate-node"
 import { InstructionEntry } from "./session/instruction-entry"
 import { SessionInstructions } from "./session/instructions"
+import { SessionLiveState } from "./session/live-state"
 import { SessionContinuation } from "./session/runner/continuation"
 import { SessionRunnerLLM } from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
+import { SessionProviderState } from "./session/provider-state"
 import { SessionTitle } from "./session/title"
 import { SessionTodo } from "./session/todo"
 import { SkillV2 } from "./skill"
@@ -99,6 +100,7 @@ const locationServiceNodes = [
   ReadToolFileSystem.node,
   McpTool.node,
   SessionInstructions.node,
+  SessionLiveState.node,
   SessionRunnerModel.node,
   SessionHelperPolicy.node,
   SessionCompaction.node,
@@ -107,6 +109,7 @@ const locationServiceNodes = [
   SessionTitle.node,
   SessionTodo.node,
   Snapshot.node,
+  SessionProviderState.node,
   SessionContinuation.node,
   SessionRunnerLLM.node,
   Vcs.node,

@@ -159,6 +159,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.usage",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.usage(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.autonomy.get",
         Effect.fn(function* (ctx) {
           return {
@@ -683,8 +700,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.CompactionConflictError", (error) =>
                 Effect.fail(
                   new ConflictError({
-                    message: `Compaction input ID conflicts with an existing durable record: ${error.inputID}`,
-                    resource: error.inputID,
+                    message: `Compaction job ID conflicts with an existing durable record: ${error.jobID}`,
+                    resource: error.jobID,
                   }),
                 ),
               ),
@@ -849,6 +866,12 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               }),
             ),
           }
+        }),
+      )
+      .handle(
+        "session.fileChange.list",
+        Effect.fn(function* (ctx) {
+          return { data: yield* session.fileChanges(ctx.params.sessionID).pipe(Effect.catchTag("Session.NotFoundError", mapSessionNotFound)) }
         }),
       )
       .handle(

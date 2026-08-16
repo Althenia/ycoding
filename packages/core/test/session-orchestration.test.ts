@@ -70,6 +70,60 @@ const launch = (background = true) =>
   })
 
 describe("Session orchestration projection", () => {
+  it.effect("snapshots direct-child versions with a durable membership fence", () =>
+    Effect.gen(function* () {
+      yield* seed
+      const db = (yield* Database.Service).db
+      const initial = yield* SessionOrchestration.snapshot(db, parentID)
+      expect(initial).toEqual({
+        sequence: 0,
+        digest: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      })
+
+      yield* launch()
+      const launched = yield* SessionOrchestration.snapshot(db, parentID)
+      expect(launched.sequence).toBe(1)
+      expect(launched.digest).not.toBe(initial.digest)
+
+      yield* update({ type: "started" })
+      const started = yield* SessionOrchestration.snapshot(db, parentID)
+      expect(started.sequence).toBe(2)
+      expect(started.digest).not.toBe(launched.digest)
+
+      expect(
+        yield* Effect.exit(
+          update({
+            type: "question_answered",
+            answer: { questionID: SessionOrchestrationSchema.QuestionID.make("qst_missing"), text: "no" },
+          }),
+        ),
+      ).toMatchObject({ _tag: "Failure" })
+      expect(yield* SessionOrchestration.snapshot(db, parentID)).toEqual(started)
+
+      yield* update({ type: "progressed", progress: { text: "halfway", time: 3 } })
+      expect((yield* SessionOrchestration.snapshot(db, parentID)).sequence).toBe(3)
+
+      yield* (yield* EventV2.Service).publish(SessionEvent.Deleted, { sessionID: childID })
+      const deleted = yield* SessionOrchestration.snapshot(db, parentID)
+      expect(deleted).toEqual({ sequence: 4, digest: initial.digest })
+
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: childID,
+          project_id: Project.ID.global,
+          parent_id: parentID,
+          directory: "/project",
+          title: childID,
+        })
+        .run()
+      yield* launch()
+      const relaunched = yield* SessionOrchestration.snapshot(db, parentID)
+      expect(relaunched).toEqual({ sequence: 5, digest: launched.digest })
+      expect(relaunched).not.toEqual(launched)
+    }),
+  )
+
   it.effect("projects launch, running state, and bounded progress without waking the parent", () =>
     Effect.gen(function* () {
       yield* seed
@@ -194,6 +248,7 @@ describe("Session orchestration projection", () => {
       expect(
         yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get(),
       ).toMatchObject({ state: "running", question_id: null, revision: 14 })
+      expect((yield* SessionOrchestration.snapshot(db, parentID)).sequence).toBe(15)
     }),
   )
 
@@ -237,6 +292,7 @@ describe("Session orchestration projection", () => {
         (yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get())
           ?.attempt_started,
       ).toBe(true)
+      expect((yield* SessionOrchestration.snapshot(db, parentID)).sequence).toBe(2)
       yield* events.publish(SessionEvent.Step.Ended, {
         sessionID: childID,
         assistantMessageID,
@@ -248,6 +304,7 @@ describe("Session orchestration projection", () => {
         (yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.session_id, childID)).get())
           ?.attempt_started,
       ).toBe(false)
+      expect((yield* SessionOrchestration.snapshot(db, parentID)).sequence).toBe(2)
     }),
   )
 })
@@ -293,22 +350,25 @@ describe("Session orchestration helpers", () => {
       yield* db
         .insert(SessionTaskTable)
         .values(
-          rows.map(([id, state, updated], index) => ({
-            session_id: SessionSchema.ID.make(id),
-            parent_id: pageParentID,
-            parent_assistant_message_id: SessionMessage.ID.make(`msg_page_${index}`),
-            tool_call_id: `call_page_${index}`,
-            input_id: SessionMessage.ID.make(`msg_page_input_${index}`),
-            description: id,
-            agent: AgentV2.ID.make("build"),
-            model,
-            prompt_digest: `digest_${index}`,
-            background: true,
-            delivery: "steer",
-            state,
-            time_created: index,
-            time_updated: updated,
-          } satisfies typeof SessionTaskTable.$inferInsert)),
+          rows.map(
+            ([id, state, updated], index) =>
+              ({
+                session_id: SessionSchema.ID.make(id),
+                parent_id: pageParentID,
+                parent_assistant_message_id: SessionMessage.ID.make(`msg_page_${index}`),
+                tool_call_id: `call_page_${index}`,
+                input_id: SessionMessage.ID.make(`msg_page_input_${index}`),
+                description: id,
+                agent: AgentV2.ID.make("build"),
+                model,
+                prompt_digest: `digest_${index}`,
+                background: true,
+                delivery: "steer",
+                state,
+                time_created: index,
+                time_updated: updated,
+              }) satisfies typeof SessionTaskTable.$inferInsert,
+          ),
         )
         .run()
 
@@ -346,10 +406,12 @@ describe("Session orchestration helpers", () => {
         cursor: second.cursor.previous,
       })
       expect(roundTrip.data.map((task) => task.sessionID)).toEqual(first.data.map((task) => task.sessionID))
-      expect((yield* Effect.exit(SessionOrchestration.page(db, { parentID: SessionSchema.ID.make("ses_missing") })))._tag).toBe(
-        "Failure",
-      )
-      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.parent_id, pageParentID)).all()).toHaveLength(12)
+      expect(
+        (yield* Effect.exit(SessionOrchestration.page(db, { parentID: SessionSchema.ID.make("ses_missing") })))._tag,
+      ).toBe("Failure")
+      expect(
+        yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.parent_id, pageParentID)).all(),
+      ).toHaveLength(12)
     }),
   )
 

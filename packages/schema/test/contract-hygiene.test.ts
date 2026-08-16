@@ -243,6 +243,19 @@ describe("contract hygiene", () => {
     ).not.toHaveProperty("summary")
   })
 
+  test("keeps legacy pending compaction outside current pending inputs", () => {
+    const legacy = {
+      admittedSeq: 1,
+      id: "msg_legacy_compaction",
+      sessionID: "ses_legacy",
+      timeCreated: 1,
+      type: "compaction",
+    }
+
+    expect(() => Schema.decodeUnknownSync(SessionPending.Info)(legacy)).toThrow()
+    expect(Schema.decodeUnknownSync(SessionPending.LegacyInfo)(legacy)).toMatchObject({ type: "compaction" })
+  })
+
   test("keeps revert state current-only", () => {
     const revert = Schema.decodeUnknownSync(Session.Revert)({
       messageID: "msg_current",

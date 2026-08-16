@@ -19,6 +19,7 @@ import { EventV2 } from "../event"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { PermissionV2 } from "../permission"
 import { Hash } from "../util/hash"
+import { canonicalJSON } from "./context-manifest"
 import { Context, Effect, Layer, Schema } from "effect"
 import { SqlError } from "effect/unstable/sql/SqlError"
 import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
@@ -172,6 +173,33 @@ export const page = Effect.fn("SessionOrchestration.page")(function* (
             next: nextCursor,
           },
         }
+      }),
+    )
+    .pipe(Effect.catchTag("SqlError", Effect.die))
+})
+
+export const snapshot = Effect.fn("SessionOrchestration.snapshot")(function* (
+  db: DatabaseService,
+  parentID: SessionSchema.ID,
+) {
+  return yield* db
+    .transaction(() =>
+      Effect.gen(function* () {
+        const parent = yield* db
+          .select({ sequence: SessionTable.orchestration_revision })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, parentID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!parent) return yield* new SessionV2.NotFoundError({ sessionID: parentID })
+        const versions = yield* db
+          .select({ sessionID: SessionTaskTable.session_id, revision: SessionTaskTable.revision })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.parent_id, parentID))
+          .orderBy(asc(SessionTaskTable.session_id))
+          .all()
+          .pipe(Effect.orDie)
+        return { sequence: parent.sequence, digest: Hash.sha256(canonicalJSON(versions)) }
       }),
     )
     .pipe(Effect.catchTag("SqlError", Effect.die))
@@ -353,10 +381,7 @@ export interface Interface {
     childID: SessionSchema.ID,
     text: string,
     data?: Schema.Json,
-  ) => Effect.Effect<
-    { readonly question: Question; readonly autoAnswered: boolean },
-    TaskNotFoundError | ConflictError
-  >
+  ) => Effect.Effect<{ readonly question: Question; readonly autoAnswered: boolean }, TaskNotFoundError | ConflictError>
   readonly settle: (
     childID: SessionSchema.ID,
     result:
@@ -643,7 +668,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const row = yield* owned(input.parentID, input.childID)
             if (row.state === "cancelled") return taskFromRow(row)
-            if (row.state !== "running" && row.state !== "waiting")
+            if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting")
               return yield* new ConflictError({ message: `Cannot cancel task in ${row.state}` })
             yield* publish(input.childID, { type: "cancel_requested" })
             yield* execution.interrupt(input.childID)
@@ -699,35 +724,33 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
-            if (
-              yield* autonomy
-                .isAutonomous(childID)
-                .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
-            ) {
-              yield* sessions.synthetic({
-                id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
-                sessionID: childID,
-                text: `Parent answer:\n${JSON.stringify({
-                  questionID: question.id,
-                  text: SessionAutonomy.AutomaticAnswer,
-                })}`,
-                description: "Autonomous subagent answer",
-                metadata: {
-                  source: "subagent_parent",
-                  parentID: row.parent_id,
-                  childID,
-                  kind: "answer",
-                  questionID: question.id,
-                },
-                delivery: "steer",
-                resume: false,
-              }).pipe(
-                Effect.mapError((error) =>
-                  error._tag === "Session.NotFoundError"
-                    ? new TaskNotFoundError({ childID })
-                    : new ConflictError({ message: `Conflicting autonomous answer for ${question.id}` }),
-                ),
-              )
+            if (yield* autonomy.isAutonomous(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
+              yield* sessions
+                .synthetic({
+                  id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
+                  sessionID: childID,
+                  text: `Parent answer:\n${JSON.stringify({
+                    questionID: question.id,
+                    text: SessionAutonomy.AutomaticAnswer,
+                  })}`,
+                  description: "Autonomous subagent answer",
+                  metadata: {
+                    source: "subagent_parent",
+                    parentID: row.parent_id,
+                    childID,
+                    kind: "answer",
+                    questionID: question.id,
+                  },
+                  delivery: "steer",
+                  resume: false,
+                })
+                .pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "Session.NotFoundError"
+                      ? new TaskNotFoundError({ childID })
+                      : new ConflictError({ message: `Conflicting autonomous answer for ${question.id}` }),
+                  ),
+                )
               yield* execution.wake(childID)
               return { question, autoAnswered: true }
             }

@@ -5,10 +5,10 @@ import { Catalog } from "@ycoding-ai/core/catalog"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
-import { copilotFetch, GithubCopilotPlugin } from "@ycoding-ai/core/plugin/provider/github-copilot"
+import { copilotFetch, GithubCopilotPlugin, syncModels } from "@ycoding-ai/core/plugin/provider/github-copilot"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { Integration } from "@ycoding-ai/core/integration"
-import type { LanguageModelV3 } from "@ai-sdk/provider"
+import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
 
@@ -40,6 +40,44 @@ function fakeSelectorSdk(calls: string[]) {
 }
 
 describe("GithubCopilotPlugin", () => {
+  it.effect("removes existing Copilot models when model discovery fails", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      yield* catalog.transform((catalog) => {
+        catalog.provider.update(ProviderV2.ID.githubCopilot, (provider) => {
+          provider.settings = { apiKey: "test" }
+        })
+        catalog.model.update(ProviderV2.ID.githubCopilot, ModelV2.ID.make("gpt-5.6-terra"), (model) => {
+          model.enabled = true
+          model.status = "active"
+        })
+      })
+      yield* catalog.transform((catalog) =>
+        syncModels(
+          {
+            provider: {
+              get: (providerID) => catalog.provider.get(ProviderV2.ID.make(providerID)),
+            },
+            model: {
+              remove: (providerID, modelID) =>
+                catalog.model.remove(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID)),
+              update: (providerID, modelID, update) =>
+                catalog.model.update(ProviderV2.ID.make(providerID), ModelV2.ID.make(modelID), update),
+            },
+          },
+          undefined,
+          "failed-discovery",
+        ),
+      )
+
+      expect(
+        yield* catalog.model.available().pipe(
+          Effect.map((models) => models.some((model) => model.id === "gpt-5.6-terra")),
+        ),
+      ).toBe(false)
+    }),
+  )
+
   it.effect("registers GitHub Copilot device OAuth", () =>
     Effect.gen(function* () {
       yield* addPlugin()
@@ -234,6 +272,48 @@ describe("GithubCopilotPlugin", () => {
         options: { endpoint: "chat" },
       })
       expect(calls).toEqual(["responses:mai-code-1-flash-picker", "chat:gpt-5"])
+    }),
+  )
+
+  it.effect("omits maxOutputTokens from Copilot GPT requests", () =>
+    Effect.gen(function* () {
+      const aisdk = yield* AISDK.Service
+      const requests: LanguageModelV3CallOptions[] = []
+      yield* addPlugin()
+      const result = yield* aisdk.runLanguage({
+        model: ModelV2.Info.make({
+          ...ModelV2.Info.empty(ProviderV2.ID.githubCopilot, ModelV2.ID.make("gpt-5")),
+          modelID: ModelV2.ID.make("gpt-5"),
+          package: "aisdk:test-provider",
+          settings: { endpoint: "responses" },
+        }),
+        sdk: {
+          responses: (id: string) => {
+            const language: LanguageModelV3 = {
+              modelId: id,
+              provider: "responses",
+              specificationVersion: "v3",
+              supportedUrls: {},
+              doGenerate: async () => {
+                throw new Error("Not used by this test")
+              },
+              doStream: async (options: LanguageModelV3CallOptions) => {
+                requests.push(options)
+                return { stream: new ReadableStream() }
+              },
+            }
+            return language
+          },
+        },
+        options: { endpoint: "responses" },
+      })
+      yield* Effect.promise(() =>
+        required(result.language).doStream({
+          prompt: [{ role: "user", content: [{ type: "text", text: "Hello" }] }],
+          maxOutputTokens: 16_384,
+        }),
+      )
+      expect(requests[0]?.maxOutputTokens).toBeUndefined()
     }),
   )
 

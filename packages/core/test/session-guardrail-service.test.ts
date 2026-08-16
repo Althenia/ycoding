@@ -23,7 +23,7 @@ import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -85,12 +85,13 @@ function harness(input?: {
       publish: (definition, data) => {
         const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
         if (gated) replyGated = true
-        return (gated
-          ? Effect.promise(async () => {
-              input.replyGate!.entered.resolve()
-              await input.replyGate!.release.promise
-            })
-          : Effect.void
+        return (
+          gated
+            ? Effect.promise(async () => {
+                input.replyGate!.entered.resolve()
+                await input.replyGate!.release.promise
+              })
+            : Effect.void
         ).pipe(
           Effect.as({
             id: EventV2.ID.create(),
@@ -168,76 +169,129 @@ const autonomousRuntime = testEffect(
   ),
 )
 
-autonomousRuntime.effect("requires an explicit guardrail reply while permissions auto-approve in yolo and goal modes", () =>
+exact.it.effect("snapshots the root-family state across pending-review ABA transitions", () =>
   Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    yield* db
-      .insert(ProjectTable)
-      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-    yield* db
-      .insert(SessionTable)
-      .values({
-        id: autonomousSessionID,
-        project_id: Project.ID.global,
-        directory: "/project",
-        title: "Guardrail autonomy invariant",
-        agent: "guardrail-autonomy-test",
-      })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-    const agents = yield* AgentV2.Service
-    yield* agents.transform((editor) =>
-      editor.update(AgentV2.ID.make("guardrail-autonomy-test"), (agent) => {
-        agent.permissions = []
-      }),
-    )
-    const autonomy = yield* SessionAutonomy.Service
-    const events = yield* EventV2.Service
-    const permission = yield* PermissionV2.Service
-    const guardrail = yield* SessionGuardrail.Service
+    const service = yield* SessionGuardrail.Service
+    const initial = yield* service.snapshot(parentID)
+    expect(yield* service.snapshot(parentID)).toEqual(initial)
 
-    for (const mode of ["yolo", "goal"] as const) {
-      yield* mode === "goal"
-        ? autonomy.setGoal({ sessionID: autonomousSessionID, text: "Finish safely" })
-        : autonomy.setMode({ sessionID: autonomousSessionID, mode })
-      expect(yield* autonomy.get(autonomousSessionID)).toMatchObject({ mode })
-      expect(
-        yield* permission.ask({
-          sessionID: autonomousSessionID,
-          action: "read",
-          resources: ["src/index.ts"],
-        }),
-      ).toMatchObject({ effect: "allow" })
-      expect(yield* permission.forSession(autonomousSessionID)).toEqual([])
+    const pending = yield* waitForRequest(service, { ...destructive, sessionID: childID })
+    const added = yield* service.snapshot(parentID)
+    expect(added.sequence).toBeGreaterThan(initial.sequence)
+    expect(added.digest).not.toBe(initial.digest)
+    expect(yield* service.snapshot(childID)).toEqual(added)
 
-      const asked = yield* Deferred.make<void>()
-      const unsubscribe = yield* events.listen((event) =>
-        event.type === Guardrail.Event.Asked.type
-          ? Deferred.succeed(asked, undefined).pipe(Effect.asVoid)
-          : Effect.void,
-      )
-      yield* Effect.addFinalizer(() => unsubscribe)
-      const fiber = yield* guardrail.assert({
-        ...destructive,
-        sessionID: autonomousSessionID,
-      }).pipe(Effect.forkScoped)
-      yield* Deferred.await(asked).pipe(Effect.timeout("1 second"))
-      const request = (yield* guardrail.forSession(autonomousSessionID))[0]
-      if (!request) yield* Effect.die("guardrail request was not retained")
-      expect(yield* guardrail.forSession(autonomousSessionID)).toContainEqual(request)
-      yield* guardrail.reply({
-        sessionID: autonomousSessionID,
-        requestID: request.id,
-        reply: "once",
-      })
-      const reservation = yield* Fiber.join(fiber)
-      yield* reservation.release
-    }
+    yield* service.reply({ sessionID: childID, requestID: pending.request.id, reply: "reject" })
+    const exit = yield* Fiber.await(pending.fiber)
+    expect(Exit.isFailure(exit)).toBe(true)
+    const removed = yield* service.snapshot(parentID)
+    expect(removed.sequence).toBeGreaterThan(added.sequence)
+    expect(removed.sequence).toBeGreaterThan(initial.sequence)
+    expect(removed.digest).toBe(initial.digest)
   }),
+)
+
+exact.it.effect("serializes root-family mutations without holding the fence across human review", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const scope = yield* Scope.Scope
+    const entered = yield* Deferred.make<void>()
+    const release = yield* Deferred.make<void>()
+    const fenced = yield* service
+      .withSnapshot(parentID, () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))))
+      .pipe(Effect.forkScoped)
+    yield* Deferred.await(entered).pipe(Effect.timeout("500 millis"))
+    const denied = yield* service
+      .assert({ ...destructive, sessionID: childID, resources: ["rm -rf /"] })
+      .pipe(Effect.forkIn(scope, { startImmediately: true }))
+    yield* Effect.yieldNow
+    expect(denied.pollUnsafe()).toBeUndefined()
+
+    yield* Deferred.succeed(release, undefined)
+    yield* Fiber.join(fenced).pipe(Effect.timeout("500 millis"))
+    expect(Exit.isFailure(yield* Fiber.await(denied).pipe(Effect.timeout("500 millis")))).toBe(true)
+
+    const pending = yield* waitForRequest(service, { ...destructive, sessionID: childID })
+    yield* service.withSnapshot(parentID, () => Effect.void).pipe(Effect.timeout("100 millis"))
+    yield* service.reply({ sessionID: childID, requestID: pending.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber).pipe(Effect.timeout("500 millis")))).toBe(true)
+  }),
+)
+
+autonomousRuntime.effect(
+  "requires an explicit guardrail reply while permissions auto-approve in yolo and goal modes",
+  () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: autonomousSessionID,
+          project_id: Project.ID.global,
+          directory: "/project",
+          title: "Guardrail autonomy invariant",
+          agent: "guardrail-autonomy-test",
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("guardrail-autonomy-test"), (agent) => {
+          agent.permissions = []
+        }),
+      )
+      const autonomy = yield* SessionAutonomy.Service
+      const events = yield* EventV2.Service
+      const permission = yield* PermissionV2.Service
+      const guardrail = yield* SessionGuardrail.Service
+
+      for (const mode of ["yolo", "goal"] as const) {
+        yield* mode === "goal"
+          ? autonomy.setGoal({ sessionID: autonomousSessionID, text: "Finish safely" })
+          : autonomy.setMode({ sessionID: autonomousSessionID, mode })
+        expect(yield* autonomy.get(autonomousSessionID)).toMatchObject({ mode })
+        expect(
+          yield* permission.ask({
+            sessionID: autonomousSessionID,
+            action: "read",
+            resources: ["src/index.ts"],
+          }),
+        ).toMatchObject({ effect: "allow" })
+        expect(yield* permission.forSession(autonomousSessionID)).toEqual([])
+
+        const asked = yield* Deferred.make<void>()
+        const unsubscribe = yield* events.listen((event) =>
+          event.type === Guardrail.Event.Asked.type
+            ? Deferred.succeed(asked, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        )
+        yield* Effect.addFinalizer(() => unsubscribe)
+        const fiber = yield* guardrail
+          .assert({
+            ...destructive,
+            sessionID: autonomousSessionID,
+          })
+          .pipe(Effect.forkScoped)
+        yield* Deferred.await(asked).pipe(Effect.timeout("1 second"))
+        const request = (yield* guardrail.forSession(autonomousSessionID))[0]
+        if (!request) yield* Effect.die("guardrail request was not retained")
+        expect(yield* guardrail.forSession(autonomousSessionID)).toContainEqual(request)
+        yield* guardrail.reply({
+          sessionID: autonomousSessionID,
+          requestID: request.id,
+          reply: "once",
+        })
+        const reservation = yield* Fiber.join(fiber)
+        yield* reservation.release
+      }
+    }),
 )
 
 describe("SessionGuardrail reusable approvals", () => {
@@ -348,10 +402,7 @@ interruptedReply.it.effect("settles the guarded operation when the winning reply
 const changingRule = harness({
   entries: [new Config.Directory({ type: "directory", path: AbsolutePath.make("/global") })],
   documents: new Map([
-    [
-      "/global/guardrails/review.md",
-      markdown({ id: "first-rule", decision: "ask", resource: "deploy exact" }),
-    ],
+    ["/global/guardrails/review.md", markdown({ id: "first-rule", decision: "ask", resource: "deploy exact" })],
   ]),
 })
 
@@ -433,9 +484,10 @@ const lexical = harness({
 lexical.it.effect("uses locale-independent lexical file order for equal-priority rules", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
-    expect(
-      yield* service.evaluate({ sessionID: parentID, action: "shell", resources: ["echo exact"] }),
-    ).toMatchObject({ decision: "deny", ruleIDs: ["uppercase-deny"] })
+    expect(yield* service.evaluate({ sessionID: parentID, action: "shell", resources: ["echo exact"] })).toMatchObject({
+      decision: "deny",
+      ruleIDs: ["uppercase-deny"],
+    })
   }),
 )
 

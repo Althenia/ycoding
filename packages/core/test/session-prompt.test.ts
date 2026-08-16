@@ -982,17 +982,24 @@ describe("SessionV2.pending", () => {
     }),
   )
 
-  it.effect("lists an unhandled compaction barrier until it settles", () =>
+  it.effect("does not list a rejected compaction request as pending work", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
 
-      const barrier = yield* session.compact({ sessionID })
-      expect(yield* session.pending(sessionID)).toMatchObject([{ id: barrier.id, type: "compaction" }])
+      const input = yield* session.synthetic({
+        sessionID,
+        text: "Queued completion",
+        delivery: "queue",
+        resume: false,
+      })
+      expect(yield* session.compact({ sessionID }).pipe(Effect.flip)).toMatchObject({
+        _tag: "Session.CompactionConflictError",
+      })
 
-      yield* SessionPending.settleCompaction(db, { sessionID })
-      expect(yield* session.pending(sessionID)).toEqual([])
+      expect(yield* session.pending(sessionID)).toMatchObject([
+        { id: input.id, type: "synthetic", delivery: "queue" },
+      ])
     }),
   )
 })

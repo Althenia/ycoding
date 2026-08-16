@@ -15,6 +15,8 @@ import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Context, Effect, Layer } from "effect"
 import type { AgentV2 } from "../agent"
 import { Config } from "../config"
+import { ConfigEfficiency } from "../config/efficiency"
+import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
 import { PluginHooks } from "../plugin/hooks"
@@ -30,6 +32,7 @@ import { toLLMMessages } from "./runner/to-llm-message"
 import { SessionContinuation } from "./runner/continuation"
 import { Hash } from "../util/hash"
 import { SessionMessage } from "./message"
+import { SessionProviderState } from "./provider-state"
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -64,6 +67,8 @@ interface Prepared {
     readonly fingerprint: SessionContinuation.Fingerprint
     readonly eligible: boolean
     readonly used: boolean
+    readonly representedThroughMessageID?: SessionMessage.ID
+    readonly representedMessageCount: number
   }
   readonly resolveToolCall: (name: string) => ToolCallResolution
 }
@@ -123,6 +128,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const config = yield* Config.Service
       const cacheRuntime = yield* SessionCacheRuntime.Service
       const continuation = yield* SessionContinuation.Service
+      const providerState = yield* SessionProviderState.Service
+      const db = (yield* Database.Service).db
 
       const prepare = Effect.fn("SessionModelRequest.prepare")(function* (input: PrepareInput) {
         const session = input.context.session
@@ -130,16 +137,28 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const resolved = input.model ?? input.context.model
         const model = resolved.model
         const providerMetadataKey = model.route.providerMetadataKey ?? model.provider
+        const efficiencyInfo = Config.latest(yield* config.entries(), "efficiency")
+        const responsesState = ConfigEfficiency.openAIResponsesState(efficiencyInfo)
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
         const terminalResponseRecovery = input.terminalResponseRecovery === true
         const toolsDisabled = terminalResponseRecovery || stepLimitReached
         const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [])
         const executableTools = toolsDisabled ? undefined : yield* registry.materialize(permissions)
         const system = baseSystem(input.context)
-        const history = toLLMMessages(input.context.messages, resolved.ref, providerMetadataKey)
+        const materialized = yield* providerState.materialize({
+          sessionID: session.id,
+          provider: model.provider,
+          modelID: resolved.ref.id,
+          stateless: responsesState === "stateless",
+        })
+        const loweredHistory = input.context.messages.map((message) =>
+          toLLMMessages([message], resolved.ref, providerMetadataKey, materialized),
+        )
+        const history = loweredHistory.flat()
         const messages = [
           ...(stepLimitReached && !terminalResponseRecovery ? [...history, Message.assistant(MAX_STEPS_PROMPT)] : history),
           ...(input.messages ?? []),
+          input.context.liveState.rendered,
         ]
         const toolDefinitions = executableTools?.definitions ?? []
         const toolsByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]))
@@ -175,7 +194,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           system: contextEvent.system,
           tools: hookedTools,
         }
-        const efficiencyInfo = Config.latest(yield* config.entries(), "efficiency")
         const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
         const ttl = yield* cacheRuntime.policy({
           namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
@@ -191,12 +209,17 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           openaiMode: efficiency.openaiMode,
           openaiExtendedRetention: efficiency.openaiExtendedRetention,
         })
+        const directOpenAIResponses =
+          model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
         const baseRequest = LLM.request({
           model,
           http: {
             headers: SessionModelHeaders.make(session, options),
           },
-          providerOptions: cache.providerOptions,
+          providerOptions: mergeProviderOptions(
+            cache.providerOptions,
+            directOpenAIResponses ? { openai: { store: responsesState === "stored" } } : undefined,
+          ),
           cache: cache.cache,
           system: contextEvent.system,
           messages: contextEvent.messages,
@@ -224,21 +247,35 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           ...semanticOpenAI
         } = effectiveOpenAI
         const continuationMode = efficiencyInfo?.openai_responses_continuation ?? "auto"
+        const authority = directOpenAIResponses
+          ? yield* SessionContinuation.captureAuthority(db, session.id).pipe(Effect.orDie)
+          : { generation: 0, contextRevision: 0 }
+        const volatileStart = contextEvent.messages.findLastIndex((message) => message.volatile !== true) + 1
+        const stableMessages = contextEvent.messages.slice(0, volatileStart)
+        const volatileMessages = contextEvent.messages.slice(volatileStart)
+        const representedMessageCount = input.context.messages.length
+        const representedThroughMessageID = input.context.messages.at(-1)?.id
         const continuationFingerprint: SessionContinuation.Fingerprint = {
           sessionID: session.id,
-          execution: input.execution ?? 0,
+          contextRevision: authority.contextRevision,
+          continuationGeneration: authority.generation,
+          provider: model.provider,
           routeID: model.route.id,
-          model: resolved.ref,
+          modelID: resolved.ref.id,
+          variant: resolved.ref.variant,
+          connectionIdentityDigest: resolved.connectionIdentityDigest,
+          representedThroughMessageID,
+          representedMessageCount,
           promptCacheKey: cache.promptCacheKey,
-          systemDigest: Hash.sha256(
+          instructionsDigest: Hash.sha256(
             SessionRunnerCache.canonicalJson(
               fingerprintValue({
                 system: baseRequest.system,
-                updates: baseRequest.messages.filter((message) => message.role === "system"),
+                updates: stableMessages.filter((message) => message.role === "system"),
               }),
             ),
           ),
-          toolDigest: cache.toolDigest,
+          toolsDigest: cache.toolDigest,
           optionsDigest: Hash.sha256(
             SessionRunnerCache.canonicalJson(
               fingerprintValue({
@@ -251,33 +288,38 @@ export const layer = (options?: SessionModelHeaders.Options) =>
               }),
             ),
           ),
+          volatileContextDigest: Hash.sha256(
+            SessionRunnerCache.canonicalJson(fingerprintValue(volatileMessages)),
+          ),
         }
         const eligible =
-          input.execution !== undefined &&
+          directOpenAIResponses &&
           continuationMode !== "off" &&
+          responsesState === "stored" &&
           OpenAIOptions.store(effectiveRequest) === true &&
-          SessionContinuation.isResponsesRoute(model.route.id)
-        if (input.disableContinuation === true || terminalResponseRecovery) yield* continuation.clear(session.id)
-        let state =
-          input.execution === undefined || input.disableContinuation === true || terminalResponseRecovery
+          !terminalResponseRecovery
+        const state =
+          !eligible || input.disableContinuation === true
             ? undefined
             : yield* continuation.select({
                 ...continuationFingerprint,
                 mode: continuationMode,
                 store: OpenAIOptions.store(effectiveRequest) === true,
+                completeMessageIDs: input.context.messages.map((message) => message.id),
               })
-        if (state && state.representedMessages >= baseRequest.messages.length) {
-          yield* continuation.clear(session.id)
-          state = undefined
-        }
+        const continuationInputStart = state
+          ? loweredHistory.slice(0, state.representedMessageCount).reduce((count, messages) => count + messages.length, 0) + 1
+          : 0
+        const continuedMessages = state ? stableMessages : contextEvent.messages
         const request =
           state === undefined
             ? baseRequest
             : LLMRequest.update(baseRequest, {
+                messages: continuedMessages,
                 providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
                   openai: {
                     previousResponseId: state.responseID,
-                    continuationInputStart: state.representedMessages,
+                    continuationInputStart,
                   },
                 }),
               })
@@ -288,8 +330,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         // from that input rather than re-reading the constructed request.
         const inputIDs = [
           ...new Set(
-            contextEvent.messages
-              .slice(state?.representedMessages ?? 0)
+            request.messages
+              .slice(continuationInputStart)
               .flatMap((message) =>
                 message.role === "user" && message.id && userMessageIDs.has(SessionMessage.ID.make(message.id))
                   ? [SessionMessage.ID.make(message.id)]
@@ -322,6 +364,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             fingerprint: continuationFingerprint,
             eligible: terminalResponseRecovery ? false : eligible,
             used: state !== undefined,
+            representedThroughMessageID,
+            representedMessageCount,
           },
           cache: {
             promptCacheKey: cache.promptCacheKey,
@@ -340,7 +384,15 @@ export function configured(options?: SessionModelHeaders.Options) {
   return makeLocationNode({
     service: Service,
     layer: layer(options),
-    deps: [PluginHooks.node, ToolRegistry.node, Config.node, SessionCacheRuntime.node, SessionContinuation.node],
+    deps: [
+      PluginHooks.node,
+      ToolRegistry.node,
+      Config.node,
+      Database.node,
+      SessionCacheRuntime.node,
+      SessionContinuation.node,
+      SessionProviderState.node,
+    ],
   })
 }
 

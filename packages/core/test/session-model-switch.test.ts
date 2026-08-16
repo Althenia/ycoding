@@ -4,6 +4,7 @@ import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -93,11 +94,19 @@ const promptCatalog = Layer.mock(Catalog.Service, {
 })
 
 let efficiencyConfig: ConfigEfficiency.Info | undefined
+let compactionConfig: readonly ConfigCompaction.Info[] = []
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
     entries: () =>
       Effect.succeed([
+        ...compactionConfig.map(
+          (compaction) =>
+            new Config.Document({
+              type: "document",
+              info: new Config.Info({ compaction }),
+            }),
+        ),
         new Config.Document({
           type: "document",
           info: new Config.Info({ ...(efficiencyConfig === undefined ? {} : { efficiency: efficiencyConfig }) }),
@@ -166,18 +175,11 @@ const pluginSupervisor = Layer.succeed(
   PluginSupervisor.Service,
   PluginSupervisor.Service.of({ flush: Effect.void }),
 )
-// The summarizer worker is mid-flight on SessionCompaction; this harness pins the runner's
-// boundary with a stub that never compacts, because these tests exercise model switches, not
-// compaction. Each layer that needs compaction is replaced below.
-const failedOutcome = { status: "failed", error: { type: "compaction.failed", message: "stub" } } as const
+// Model switches do not generate compaction manifests.
 const compaction = Layer.succeed(
   SessionCompaction.Service,
   SessionCompaction.Service.of({
-    required: () => false,
-    compact: () => Effect.succeed(failedOutcome),
-    compactManual: () => Effect.succeed(failedOutcome),
-    summarize: () =>
-      Effect.fail({ type: "summarize.failed", message: "stub" } as const),
+    manifest: () => Effect.die("unused"),
   }),
 )
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
@@ -400,7 +402,7 @@ describe("SessionV2.switchModel context validation", () => {
     }),
   )
 
-  it.effect("blocks a switch to a smaller-context model that does not fit", () =>
+  it.effect("uses the default 4,096-token compaction safety margin when blocking a switch", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
@@ -417,11 +419,72 @@ describe("SessionV2.switchModel context validation", () => {
       if (outcome.status !== "blocked") throw new Error("Expected a blocked switch, got a switch")
       expect(outcome.currentModel).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
       expect(outcome.targetModel).toMatchObject({ id: "claude-haiku-4-5", providerID: "anthropic" })
-      expect(outcome.targetSafeInputTokens).toBe(64_000 - 8_192)
+      expect(outcome.targetSafeInputTokens).toBe(64_000 - 8_192 - 4_096)
       expect(outcome.currentContextTokens).toBeGreaterThan(outcome.targetSafeInputTokens)
       expect(outcome.requiredReductionTokens).toBe(outcome.currentContextTokens - outcome.targetSafeInputTokens)
       expect(outcome.reason).toBe("context-window-exceeded")
-      expect(outcome).not.toHaveProperty("maximumSafeSummaryBoundary")
+      expect(outcome.maximumSafeSummaryBoundary).toBe(messageID(sessionID, SessionMessage.ID.make("msg_u1")))
+    }),
+  )
+
+  it.effect("uses the resolved default keep-recent setting when offering an advisory boundary", () =>
+    Effect.gen(function* () {
+      compactionConfig = []
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({
+        sessionID,
+        summary: "x".repeat(250_000),
+        posts: ["msg_p0", "msg_p1", "msg_p2", "msg_p3", "msg_p4"].map((id) => ({
+          id: SessionMessage.ID.make(id),
+          text: "post-switch context",
+        })),
+      })
+
+      const outcome = yield* session.switchModel({ sessionID, model: haiku })
+
+      expect(outcome).toMatchObject({
+        status: "blocked",
+        maximumSafeSummaryBoundary: messageID(sessionID, SessionMessage.ID.make("msg_p4")),
+      })
+    }),
+  )
+
+  it.effect("uses the last configured compaction safety margin when blocking a switch", () =>
+    Effect.gen(function* () {
+      compactionConfig = [
+        new ConfigCompaction.Info({ context_safety_margin_tokens: 1_024 }),
+        new ConfigCompaction.Info({ context_safety_margin_tokens: 2_048 }),
+      ]
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
+
+      const outcome = yield* session.switchModel({ sessionID, model: haiku })
+
+      expect(outcome).toMatchObject({
+        status: "blocked",
+        targetSafeInputTokens: 64_000 - 8_192 - 2_048,
+      })
+    }),
+  )
+
+  it.effect("retains the mandatory default safety margin when compaction advice is disabled", () =>
+    Effect.gen(function* () {
+      compactionConfig = [new ConfigCompaction.Info({ advisory: false })]
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
+
+      const outcome = yield* session.switchModel({ sessionID, model: haiku })
+
+      expect(outcome).toMatchObject({
+        status: "blocked",
+        targetSafeInputTokens: 64_000 - 8_192 - 4_096,
+      })
     }),
   )
 

@@ -1,116 +1,231 @@
 import { expect } from "bun:test"
-import { Effect } from "effect"
-import { ModelV2 } from "@ycoding-ai/core/model"
-import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Context, Effect, Layer } from "effect"
+import { Database } from "@ycoding-ai/core/database/database"
+import { ProjectTable } from "@ycoding-ai/core/project/sql"
+import { ProjectV2 } from "@ycoding-ai/core/project"
 import { SessionContinuation } from "@ycoding-ai/core/session/runner/continuation"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
-import { it } from "./lib/effect"
+import { SessionContextRevisionTable, SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { testEffect } from "./lib/effect"
 
 const sessionID = SessionSchema.ID.make("ses_continuation")
-const fingerprint: SessionContinuation.Fingerprint = {
+const otherSessionID = SessionSchema.ID.make("ses_continuation_other")
+const representedMessageID = SessionMessage.ID.make("msg_represented")
+const completeMessageIDs = [
+  SessionMessage.ID.make("msg_first"),
+  SessionMessage.ID.make("msg_second"),
+  representedMessageID,
+]
+const digest = (value: string) => value.repeat(64).slice(0, 64)
+const fingerprint = {
   sessionID,
-  execution: 1,
   routeID: "openai-responses",
-  model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("gpt-5.6") }),
+  provider: "openai",
+  modelID: "gpt-5.6",
+  contextRevision: 0,
+  continuationGeneration: 0,
+  connectionIdentityDigest: digest("1"),
+  representedThroughMessageID: representedMessageID,
+  representedMessageCount: 3,
   promptCacheKey: "cache-key",
-  systemDigest: "system-digest",
-  toolDigest: "tool-digest",
-  optionsDigest: "options-digest",
+  instructionsDigest: digest("2"),
+  toolsDigest: digest("3"),
+  optionsDigest: digest("4"),
+  volatileContextDigest: digest("5"),
 }
+const state = { ...fingerprint, responseID: "resp_1" }
 
-it.effect("selects only stored OpenAI Responses state in an enabled mode", () =>
+const it = testEffect(Database.layer({ path: ":memory:" })).effect
+
+it("survives a new service instance backed by the same SQLite database", () =>
   Effect.gen(function* () {
-    const continuation = yield* SessionContinuation.Service
-    const state = { ...fingerprint, responseID: "resp_1", representedMessages: 3 }
-    yield* continuation.remember(state)
+    yield* seedSessions()
+    const first = yield* makeContinuation()
+    yield* first.remember(state)
 
-    expect(yield* continuation.select({ ...fingerprint, mode: "auto", store: true })).toEqual(state)
-    expect(yield* continuation.select({ ...fingerprint, mode: "on", store: true })).toEqual(state)
-    expect(yield* continuation.select({ ...fingerprint, mode: "off", store: true })).toBeUndefined()
+    const restarted = yield* makeContinuation()
+    expect(yield* restarted.select(selectInput({ ...fingerprint, mode: "auto", store: true }))).toEqual(state)
+  }),
+)
+
+it("allows only the two direct OpenAI Responses routes", () =>
+  Effect.gen(function* () {
+    yield* seedSessions()
+    const continuation = yield* makeContinuation()
+
+    for (const routeID of ["openai-responses", "openai-responses-websocket"]) {
+      const routeState = { ...state, routeID, responseID: `resp_${routeID}` }
+      yield* continuation.remember(routeState)
+      expect(yield* continuation.select(selectInput({ ...routeState, mode: "on", store: true }))).toEqual(routeState)
+    }
+
+    for (const routeID of [
+      "openai-chat",
+      "openai-codex-responses",
+      "github-copilot-responses",
+      "ai-sdk:@ai-sdk/github-copilot",
+    ]) {
+      const routeState = { ...state, routeID, responseID: `resp_${routeID}` }
+      yield* continuation.remember(routeState)
+      expect(yield* continuation.select(selectInput({ ...routeState, mode: "on", store: true }))).toBeUndefined()
+    }
+  }),
+)
+
+it("does not reuse state when storage or continuation reuse is disabled", () =>
+  Effect.gen(function* () {
+    yield* seedSessions()
+    const continuation = yield* makeContinuation()
 
     yield* continuation.remember(state)
-    expect(yield* continuation.select({ ...fingerprint, mode: "auto", store: false })).toBeUndefined()
+    expect(yield* continuation.select(selectInput({ ...fingerprint, mode: "off", store: true }))).toBeUndefined()
 
-    yield* continuation.remember(state)
+    yield* continuation.remember({ ...state, continuationGeneration: 1 })
     expect(
-      yield* continuation.select({ ...fingerprint, routeID: "openai-chat", mode: "on", store: true }),
+      yield* continuation.select(
+        selectInput({ ...fingerprint, continuationGeneration: 1, mode: "on", store: false }),
+      ),
     ).toBeUndefined()
-  }).pipe(Effect.provide(SessionContinuation.layer())),
+  }),
 )
 
-it.effect("keeps Responses continuation available on the ChatGPT Codex backend", () =>
+it("rejects every request fingerprint mismatch", () =>
   Effect.gen(function* () {
-    const continuation = yield* SessionContinuation.Service
-    const codex = {
-      ...fingerprint,
-      routeID: "openai-codex-responses",
-      responseID: "resp_codex",
-      representedMessages: 3,
-    }
-    yield* continuation.remember(codex)
-
-    expect(yield* continuation.select({ ...codex, mode: "auto", store: true })).toEqual(codex)
-  }).pipe(Effect.provide(SessionContinuation.layer())),
-)
-
-it.effect("keeps Responses continuation available on the GitHub Copilot backend", () =>
-  Effect.gen(function* () {
-    const continuation = yield* SessionContinuation.Service
-    const copilot = {
-      ...fingerprint,
-      routeID: "github-copilot-responses",
-      responseID: "resp_copilot",
-      representedMessages: 3,
-    }
-    yield* continuation.remember(copilot)
-
-    expect(yield* continuation.select({ ...copilot, mode: "auto", store: true })).toEqual(copilot)
-  }).pipe(Effect.provide(SessionContinuation.layer())),
-)
-
-it.effect("clears state after any request fingerprint mismatch", () =>
-  Effect.gen(function* () {
-    const continuation = yield* SessionContinuation.Service
-    const state = { ...fingerprint, responseID: "resp_1", representedMessages: 3 }
-    const mismatches: ReadonlyArray<SessionContinuation.Fingerprint> = [
-      { ...fingerprint, execution: 2 },
-      { ...fingerprint, routeID: "openai-responses-websocket" },
-      {
-        ...fingerprint,
-        model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("gpt-5.5") }),
-      },
-      { ...fingerprint, promptCacheKey: "other-cache" },
-      { ...fingerprint, systemDigest: "other-system" },
-      { ...fingerprint, toolDigest: "other-tools" },
-      { ...fingerprint, optionsDigest: "other-options" },
+    yield* seedSessions()
+    const mismatches = [
+      { connectionIdentityDigest: digest("6") },
+      { routeID: "openai-responses-websocket" },
+      { modelID: "gpt-5.5" },
+      { contextRevision: 1 },
+      { promptCacheKey: "other-cache" },
+      { instructionsDigest: digest("7") },
+      { toolsDigest: digest("8") },
+      { optionsDigest: digest("9") },
+      { volatileContextDigest: digest("a") },
     ]
 
     for (const mismatch of mismatches) {
+      const continuation = yield* makeContinuation()
       yield* continuation.remember(state)
-      expect(yield* continuation.select({ ...mismatch, mode: "on", store: true })).toBeUndefined()
-      expect(yield* continuation.select({ ...fingerprint, mode: "on", store: true })).toBeUndefined()
+      expect(
+        yield* continuation.select(selectInput({ ...fingerprint, ...mismatch, mode: "on", store: true })),
+      ).toBeUndefined()
     }
-  }).pipe(Effect.provide(SessionContinuation.layer())),
+  }),
 )
 
-it.effect("clear removes only the selected Session continuation", () =>
+it("rejects a continuation whose complete-message boundary no longer matches", () =>
   Effect.gen(function* () {
-    const continuation = yield* SessionContinuation.Service
-    const otherSessionID = SessionSchema.ID.make("ses_continuation_other")
-    const first = { ...fingerprint, responseID: "resp_1", representedMessages: 3 }
-    const second = {
-      ...fingerprint,
-      sessionID: otherSessionID,
-      responseID: "resp_2",
-      representedMessages: 4,
-    }
-    yield* continuation.remember(first)
-    yield* continuation.remember(second)
-    yield* continuation.clear(sessionID)
+    yield* seedSessions()
+    const continuation = yield* makeContinuation()
+    yield* continuation.remember(state)
 
-    expect(yield* continuation.select({ ...fingerprint, mode: "on", store: true })).toBeUndefined()
     expect(
-      yield* continuation.select({ ...fingerprint, sessionID: otherSessionID, mode: "on", store: true }),
-    ).toEqual(second)
-  }).pipe(Effect.provide(SessionContinuation.layer())),
+      yield* continuation.select({
+        ...fingerprint,
+        mode: "on",
+        store: true,
+        completeMessageIDs: [
+          completeMessageIDs[0]!,
+          representedMessageID,
+          completeMessageIDs[1]!,
+        ],
+      }),
+    ).toBeUndefined()
+  }),
 )
+
+it("durably fences a stale settlement after context invalidation", () =>
+  Effect.gen(function* () {
+    yield* seedSessions()
+    const beforeInvalidation = yield* makeContinuation()
+    yield* beforeInvalidation.remember(state)
+    yield* insertContextRevision(1)
+
+    const invalidator = yield* makeContinuation()
+    yield* invalidator.invalidateForContextRevision(sessionID, 1)
+
+    const staleSettlement = yield* makeContinuation()
+    yield* staleSettlement.remember({ ...state, responseID: "resp_stale" })
+
+    const afterRestart = yield* makeContinuation()
+    expect(
+      yield* afterRestart.select(selectInput({
+        ...fingerprint,
+        contextRevision: 1,
+        continuationGeneration: 1,
+        mode: "on",
+        store: true,
+      })),
+    ).toBeUndefined()
+
+    const fresh = {
+      ...state,
+      contextRevision: 1,
+      continuationGeneration: 1,
+      responseID: "resp_fresh",
+    }
+    yield* afterRestart.remember(fresh)
+    expect(yield* afterRestart.select(selectInput({ ...fresh, mode: "on", store: true }))).toEqual(fresh)
+  }),
+)
+
+it("clear removes only the selected Session and fences its in-flight state", () =>
+  Effect.gen(function* () {
+    yield* seedSessions()
+    const continuation = yield* makeContinuation()
+    const other = { ...state, sessionID: otherSessionID, responseID: "resp_2" }
+    yield* continuation.remember(state)
+    yield* continuation.remember(other)
+    yield* continuation.clear(sessionID)
+    yield* continuation.remember({ ...state, responseID: "resp_stale" })
+
+    expect(
+      yield* continuation.select(
+        selectInput({ ...fingerprint, continuationGeneration: 1, mode: "on", store: true }),
+      ),
+    ).toBeUndefined()
+    expect(yield* continuation.select(selectInput({ ...other, mode: "on", store: true }))).toEqual(other)
+  }),
+)
+
+function makeContinuation() {
+  return Layer.build(SessionContinuation.layer()).pipe(
+    Effect.map((context) => Context.get(context, SessionContinuation.Service)),
+  )
+}
+
+function seedSessions() {
+  return Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const projectID = ProjectV2.ID.make("project-continuation")
+    yield* db.insert(ProjectTable).values([{ id: projectID, worktree: AbsolutePath.make("/tmp"), sandboxes: [] }])
+    yield* db.insert(SessionTable).values([
+      { id: sessionID, project_id: projectID, directory: "/tmp", title: "Continuation" },
+      { id: otherSessionID, project_id: projectID, directory: "/tmp", title: "Other" },
+    ])
+    yield* db.insert(SessionContextRevisionTable).values([
+      { session_id: sessionID, revision: 0, time_created: 0 },
+      { session_id: otherSessionID, revision: 0, time_created: 0 },
+    ])
+  })
+}
+
+function selectInput<T extends SessionContinuation.Fingerprint & { readonly mode: "auto" | "on" | "off"; readonly store: boolean }>(
+  input: T,
+) {
+  return { ...input, completeMessageIDs }
+}
+
+function insertContextRevision(revision: number) {
+  return Database.Service.use(({ db }) =>
+    db.insert(SessionContextRevisionTable).values({
+      session_id: sessionID,
+      revision,
+      parent_revision: revision - 1,
+      time_created: revision,
+    }),
+  )
+}

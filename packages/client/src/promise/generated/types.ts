@@ -70,13 +70,7 @@ export type SkillConflicts = { skills: Array<string>; instructions: Array<string
 
 export type SessionPendingSyntheticData = { text: string; description?: string; metadata?: { [x: string]: JsonValue } }
 
-export type SessionPendingCompaction = {
-  admittedSeq: number
-  id: string
-  sessionID: string
-  timeCreated: number
-  type: "compaction"
-}
+export type SessionCompactionBoundary = { messageID: string; seq: number }
 
 export type SessionMessageArtifactProvenance = {
   scopeID: string
@@ -129,16 +123,51 @@ export type ToolFileContent = { type: "file"; uri: string; mime: string; name?: 
 
 export type SessionStructuredError = { type: string; message: string }
 
+export type SessionMessageCompactionPending = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  admissionMode: "background" | "mandatory"
+  status: "pending"
+  summary?: string
+  recent?: string
+}
+
+export type SessionMessageCompactionRunningV1 = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  reason: "auto" | "manual"
+  status: "running"
+  summary: string
+  recent: string
+}
+
 export type SessionMessageCompactionRunning = {
   type: "compaction"
   id: string
   metadata?: { [x: string]: JsonValue }
   time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  admissionMode: "background" | "mandatory"
   status: "running"
-  reason: "auto" | "manual"
-  summary: string
-  recent: string
+  summary?: string
+  recent?: string
 }
+
+export type SessionCompactionMetrics = {
+  excludedMessages: number
+  excludedParts: number
+  inputTokens: number
+  retainedTokens: number
+}
+
+export type SessionEventFileChangeInfo = { path: string; patch: string; additions: number; deletions: number }
 
 export type InstructionEntryKey = string
 
@@ -473,15 +502,44 @@ export type ProviderRequest = {
 
 export type PermissionV2Rule = { action: string; resource: string; effect: PermissionV2Effect }
 
-export type ProviderRequestModelSpend = { model: ModelRef; requests: number; cost?: MoneyUSD }
+export type ProviderRequestSummary = {
+  logical: number
+  physical: number
+  helpers: number
+  continued: number
+  fallback: number
+  cost?: MoneyUSD
+  models?: Array<{
+    model: ModelRef
+    requests: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+  }>
+  tokens: TokenUsageInfo
+  latestInvalidation?:
+    | "first-request"
+    | "compaction-reset"
+    | "model-switched"
+    | "model-variant-switched"
+    | "stable-hit"
+    | "prefix-changed"
+    | "system-prefix-changed"
+    | "tool-prefix-changed"
+    | "below-minimum"
+    | "provider-not-reported"
+    | "cache-disabled"
+    | "retry-fallback"
+  latestNamespace?: string
+}
 
-export type SessionMessageCompactionCompleted = {
+export type SessionMessageCompactionCompletedV1 = {
   type: "compaction"
   id: string
   metadata?: { [x: string]: JsonValue }
   time: { created: number }
-  status: "completed"
   reason: "auto" | "manual"
+  status: "completed"
   summary: string
   recent: string
   messages?: number
@@ -689,9 +747,9 @@ export type SessionCompactionAdmitted = {
   created: number
   metadata?: { [x: string]: any }
   type: "session.compaction.admitted"
-  durable: { aggregateID: string; seq: number; version: 1 }
+  durable: { aggregateID: string; seq: number; version: 2 }
   location?: LocationRef
-  data: { sessionID: string; inputID: string }
+  data: { sessionID: string; jobID: string }
 }
 
 export type SessionCompactionStarted = {
@@ -699,26 +757,9 @@ export type SessionCompactionStarted = {
   created: number
   metadata?: { [x: string]: any }
   type: "session.compaction.started"
-  durable: { aggregateID: string; seq: number; version: 1 }
+  durable: { aggregateID: string; seq: number; version: 2 }
   location?: LocationRef
-  data: { sessionID: string; reason: "auto" | "manual"; recent: string; inputID?: string }
-}
-
-export type SessionCompactionEnded = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  type: "session.compaction.ended"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: {
-    sessionID: string
-    reason: "auto" | "manual"
-    text: string
-    recent: string
-    messages?: number
-    tokens?: TokenUsageInfo
-  }
+  data: { sessionID: string; jobID: string }
 }
 
 export type SessionRevertCleared = {
@@ -1171,6 +1212,16 @@ export type SessionPendingSynthetic = {
   delivery: "steer" | "queue"
 }
 
+export type SessionCompactionAdmission = {
+  id: string
+  sessionID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  admissionMode: "background" | "mandatory"
+  status: "pending"
+  requestedThrough: SessionCompactionBoundary
+  timeCreated: number
+}
+
 export type SessionMessageAgentSelected = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -1204,14 +1255,36 @@ export type LLMToolContent = ToolTextContent | ToolFileContent
 
 export type SessionMessageAssistantRetry = { attempt: number; at: number; error: SessionStructuredError }
 
+export type SessionMessageCompactionFailedV1 = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  reason: "auto" | "manual"
+  status: "failed"
+  error: SessionStructuredError
+}
+
 export type SessionMessageCompactionFailed = {
   type: "compaction"
   id: string
   metadata?: { [x: string]: JsonValue }
   time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  admissionMode: "background" | "mandatory"
   status: "failed"
-  reason: "auto" | "manual"
+  code:
+    | "cancelled"
+    | "superseded"
+    | "invalid_manifest"
+    | "protected_state_changed"
+    | "context_limit_unresolved"
+    | "migration_failed"
+    | "provider_failed"
   error: SessionStructuredError
+  summary?: string
+  recent?: string
 }
 
 export type SessionExecutionFailed = {
@@ -1239,9 +1312,63 @@ export type SessionCompactionFailed = {
   created: number
   metadata?: { [x: string]: any }
   type: "session.compaction.failed"
+  durable: { aggregateID: string; seq: number; version: 2 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    jobID: string
+    code:
+      | "cancelled"
+      | "superseded"
+      | "invalid_manifest"
+      | "protected_state_changed"
+      | "context_limit_unresolved"
+      | "migration_failed"
+      | "provider_failed"
+    error: SessionStructuredError
+  }
+}
+
+export type SessionMessageCompactionCompleted = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  admissionMode: "background" | "mandatory"
+  status: "completed"
+  revision: number
+  boundary: SessionCompactionBoundary
+  metrics: SessionCompactionMetrics
+  summary?: string
+  recent?: string
+}
+
+export type SessionCompactionEnded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.compaction.ended"
+  durable: { aggregateID: string; seq: number; version: 2 }
+  location?: LocationRef
+  data: {
+    sessionID: string
+    jobID: string
+    revision: number
+    boundary: SessionCompactionBoundary
+    metrics: SessionCompactionMetrics
+  }
+}
+
+export type SessionFileChangeRecorded = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.file-change.recorded"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; reason: "auto" | "manual"; error: SessionStructuredError; inputID?: string }
+  data: { sessionID: string; change: SessionEventFileChangeInfo }
 }
 
 export type InstructionEntryInfo = { key: InstructionEntryKey; value: JsonValue }
@@ -1783,29 +1910,21 @@ export type ProjectArtifactApiMetrics = {
 
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
-export type ProviderRequestSummary = {
-  logical: number
-  physical: number
-  helpers: number
-  continued: number
-  fallback: number
-  cost?: MoneyUSD
-  models?: Array<ProviderRequestModelSpend>
-  tokens: TokenUsageInfo
-  latestInvalidation?:
-    | "first-request"
-    | "compaction-reset"
-    | "model-switched"
-    | "model-variant-switched"
-    | "stable-hit"
-    | "prefix-changed"
-    | "system-prefix-changed"
-    | "tool-prefix-changed"
-    | "below-minimum"
-    | "provider-not-reported"
-    | "cache-disabled"
-    | "retry-fallback"
-  latestNamespace?: string
+export type SessionCacheDiagnostics = {
+  model: ModelRef
+  context: { total: number; limit?: number; remaining?: number; percent?: number }
+  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
+  cache: {
+    eligible: number
+    hitRatio?: number
+    mechanism: SessionCacheMechanism
+    readReported: boolean
+    writeReported: boolean
+    minimumTokens?: number
+    belowMinimum?: boolean
+  }
+  estimatedCost?: MoneyUSD
+  requests?: ProviderRequestSummary
 }
 
 export type SessionRevertStaged = {
@@ -1950,8 +2069,12 @@ export type SessionToolSuccess = {
 }
 
 export type SessionMessageCompaction =
+  | SessionMessageCompactionPending
+  | SessionMessageCompactionRunningV1
   | SessionMessageCompactionRunning
+  | SessionMessageCompactionCompletedV1
   | SessionMessageCompactionCompleted
+  | SessionMessageCompactionFailedV1
   | SessionMessageCompactionFailed
 
 export type GuardrailStatus1 = {
@@ -2153,23 +2276,6 @@ export type ProjectArtifactAgentDefinition = {
   permissions: PermissionV2Ruleset
 }
 
-export type SessionCacheDiagnostics = {
-  model: ModelRef
-  context: { total: number; limit?: number; remaining?: number; percent?: number }
-  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  cache: {
-    eligible: number
-    hitRatio?: number
-    mechanism: SessionCacheMechanism
-    readReported: boolean
-    writeReported: boolean
-    minimumTokens?: number
-    belowMinimum?: boolean
-  }
-  estimatedCost?: MoneyUSD
-  requests?: ProviderRequestSummary
-}
-
 export type SessionPendingUser = {
   admittedSeq: number
   id: string
@@ -2228,7 +2334,7 @@ export type ProjectArtifactDefinition =
   | ProjectArtifactAgentDefinition
   | ProjectArtifactPluginDefinition
 
-export type SessionPendingInfo = SessionPendingUser | SessionPendingSynthetic | SessionPendingCompaction
+export type SessionPendingInfo = SessionPendingUser | SessionPendingSynthetic
 
 export type SessionPendingMessage = SessionPendingUserMessage | SessionPendingSyntheticMessage
 
@@ -2351,6 +2457,7 @@ export type SessionEventPublicDurable =
   | SessionToolProgress
   | SessionToolSuccess
   | SessionToolFailed
+  | SessionFileChangeRecorded
   | SessionRetryScheduled
   | SessionCompactionAdmitted
   | SessionCompactionStarted
@@ -2407,6 +2514,7 @@ export type V2Event =
   | SessionToolProgress
   | SessionToolSuccess
   | SessionToolFailed
+  | SessionFileChangeRecorded
   | SessionRetryScheduled
   | SessionCompactionAdmitted
   | SessionCompactionStarted
@@ -3419,6 +3527,10 @@ export type SessionSkillInput = {
 
 export type SessionSkillOutput = void
 
+export type SessionUsageInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionUsageOutput = { data: ProviderRequestSummary }["data"]
+
 export type SessionSkillsInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionSkillsOutput = {
@@ -3523,7 +3635,7 @@ export type SessionCompactInput = {
   readonly id?: { readonly id?: string | undefined }["id"]
 }
 
-export type SessionCompactOutput = { data: SessionPendingCompaction }["data"]
+export type SessionCompactOutput = { data: SessionCompactionAdmission }["data"]
 
 export type SessionWaitInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
@@ -3548,6 +3660,10 @@ export type SessionRevertCommitOutput = void
 export type SessionContextInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionContextOutput = { data: Array<SessionMessageInfo> }["data"]
+
+export type SessionFileChangeListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionFileChangeListOutput = { data: Array<SessionEventFileChangeInfo> }["data"]
 
 export type SessionPendingListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 

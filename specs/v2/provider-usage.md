@@ -109,6 +109,18 @@ GET /api/provider/:providerID/usage
 
 Both operations accept the Location query. `refresh=true` requests a source refresh. The response contains normalized snapshots only and never exposes credential IDs, access tokens, API keys, refresh tokens, account emails, or raw provider payloads.
 
+## Durable session usage
+
+Session-local provider-request usage is separate from provider quota and credit snapshots. Core derives one durable aggregate per Session and provider/model/variant from `session.provider.request.recorded` events, including logical requests, physical attempts, helper calls, continuation/fallback counts, raw token categories, and cost.
+
+```text
+GET /api/session/:sessionID/usage
+```
+
+The operation is Location-scoped and returns the Session aggregate even after transcript compaction or when the latest-step diagnostics are unavailable. A root Session aggregates its complete child family, while a child Session remains scoped to its own records. It exposes only the bounded latest cache invalidation reason and namespace prefix; it never exposes prompt content, full cache keys, instruction digests, credentials, or raw provider payloads. A priced model row carries `costProvenance`: `recorded` for durable provider cost or `current_catalog` for a query-time estimate. Historical records without durable cost resolve first against the current Location provider catalog, then against the current OpenRouter master catalog for the same model and variant. If neither catalog prices a request, the affected model and Session costs are absent rather than zero.
+
+Raw request projections and aggregates are retained for current, recently updated, and locally active Sessions. A startup and hourly cleanup removes only those derived projections when a Session has been inactive for more than 30 days. Durable events and transcript rows are never pruned by usage cleanup.
+
 ## TUI presentation
 
 - The `Provider Usage` command is hidden until a currently running Session in the current root/subagent family has a non-unsupported usage snapshot.
@@ -119,5 +131,6 @@ Both operations accept the Location query. `refresh=true` requests a source refr
 - Values below 70% use normal styling, 70–89% warning styling, and 90% or higher error styling.
 - Near resets use relative duration; later resets use a concrete local timestamp.
 - Unknown values render as `Not reported`.
+- Spend amounts render without a provenance label; `costProvenance` remains available to API consumers and does not claim historical billing.
 - Claude Pro/Max and ChatGPT Plus/Pro labels are shown only when reported by the credential or provider account contract; missing tiers are not inferred from quota windows.
 - Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, and additional named windows render only when present in the normalized snapshot.

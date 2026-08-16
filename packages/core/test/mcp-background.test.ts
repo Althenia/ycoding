@@ -109,6 +109,7 @@ const runtime = Layer.effect(
                 Effect.as(synthetic),
               )
             : Effect.succeed(synthetic),
+        compact: unavailable,
       },
       job: jobs,
       orchestration: {

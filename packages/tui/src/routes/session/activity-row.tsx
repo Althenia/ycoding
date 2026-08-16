@@ -95,14 +95,19 @@ export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
 
 export function SessionActivityRow(props: {
   row: ActivityRow
+  /** Whether the Session is executing. An idle Session must not animate a live indicator. */
+  running?: boolean
   width?: number
   onGuardrail?: (requestID: string) => void
   onSubagent?: (sessionID: string) => void
 }) {
   const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
+  // A todo stays in_progress after the Session goes idle, so the row's own status cannot drive the
+  // spinner: it kept animating on an idle Session and read as stuck work.
   const running = () =>
-    props.row.type === "subagent" || (props.row.type === "task" && props.row.status === "in_progress")
+    props.row.type === "subagent" ||
+    (props.row.type === "task" && props.row.status === "in_progress" && props.running === true)
   const markerColor = () => {
     if (props.row.type === "guardrail") return themeV2.text.feedback.warning.default
     if (props.row.type === "subagent") return themeV2.text.feedback.info.default

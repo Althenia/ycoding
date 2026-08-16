@@ -1,7 +1,8 @@
 import { describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { DateTime, Effect } from "effect"
 import { Session } from "@ycoding-ai/schema/session"
-import { ListAnchor } from "@ycoding-ai/schema/session-orchestration"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
+import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { testEffect } from "./lib/effect"
 
@@ -9,20 +10,17 @@ const cell = PluginRuntime.makeCell()
 const it = testEffect(PluginRuntime.layerWithCell(cell))
 
 describe("PluginRuntime", () => {
-  it.effect("forwards bounded orchestration pages through its cell", () =>
+  it.effect("forwards compaction admission through its cell", () =>
     Effect.gen(function* () {
       const unavailable = () => Effect.die(new Error("unused"))
       const expected = {
-        data: [],
-        summary: { total: 11, active: 4, running: 2, waiting: 1 },
-        cursor: {
-          next: ListAnchor.make({
-            rank: 4,
-            updated: 1,
-            sessionID: Session.ID.make("ses_child"),
-            direction: "next",
-          }),
-        },
+        id: SessionCompaction.ID.make("cmp_plugin_runtime"),
+        sessionID: Session.ID.make("ses_parent"),
+        trigger: "advised" as const,
+        admissionMode: "background" as const,
+        status: "pending" as const,
+        requestedThrough: { messageID: SessionMessage.ID.make("msg_boundary"), seq: 1 },
+        timeCreated: DateTime.makeUnsafe(0),
       }
       cell.runtime = {
         session: {
@@ -35,6 +33,7 @@ describe("PluginRuntime", () => {
           resume: unavailable,
           interrupt: unavailable,
           synthetic: unavailable,
+          compact: () => Effect.succeed(expected),
         },
         job: {
           start: unavailable,
@@ -48,7 +47,7 @@ describe("PluginRuntime", () => {
           get: unavailable,
           launch: unavailable,
           list: unavailable,
-          page: () => Effect.succeed(expected),
+          page: unavailable,
           send: unavailable,
           answer: unavailable,
           cancel: unavailable,
@@ -64,7 +63,12 @@ describe("PluginRuntime", () => {
       }
 
       const runtime = yield* PluginRuntime.Service
-      expect(yield* runtime.orchestration.page({ parentID: Session.ID.make("ses_parent") })).toBe(expected)
+      expect(
+        yield* runtime.session.compact({
+          sessionID: Session.ID.make("ses_parent"),
+          trigger: "advised",
+        }),
+      ).toBe(expected)
     }),
   )
 })

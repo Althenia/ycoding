@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test";
-import { LLM, Model } from "@ycoding-ai/ai";
+import { LLM, Message, Model } from "@ycoding-ai/ai";
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy";
+import type { OpenAIResponsesBody } from "@ycoding-ai/ai/protocols/openai-responses";
 import { LLMClient } from "@ycoding-ai/ai/route";
 import { DateTime, Effect } from "effect";
 import { Money } from "@ycoding-ai/schema/money";
@@ -587,7 +588,25 @@ describe("SessionRunnerModel", () => {
           metadata: { accountID: "acct_123" },
         }),
       );
-      const request = LLM.request({ model: resolved, prompt: "Hello" });
+      const cache = SessionRunnerCache.providerOptions({
+        projectID: "project",
+        directory: "/repo",
+        providerID: "test-provider",
+        modelID: "test-model",
+        apiModelID: resolved.id,
+        variant: "default",
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: [],
+        system: [],
+        tools: [],
+        sessionID: "ses_codex_affinity",
+        routeID: resolved.route.id,
+      });
+      const request = LLM.request({
+        model: resolved,
+        prompt: "Hello",
+        providerOptions: cache.providerOptions,
+      });
       const headers = yield* resolved.route.auth.apply({
         request,
         method: "POST",
@@ -602,13 +621,22 @@ describe("SessionRunnerModel", () => {
       });
       expect(headers.authorization).toBe("Bearer chatgpt-token");
       expect(headers["chatgpt-account-id"]).toBe("acct_123");
+      expect(headers["session-id"]).toBe(cache.promptCacheKey);
+      expect(headers["thread-id"]).toBe(
+        SessionRunnerCache.providerSessionNamespace({
+          projectID: "project",
+          sessionID: "ses_codex_affinity",
+          providerID: "test-provider",
+        }),
+      );
+      expect(headers["x-client-request-id"]).toBe(headers["thread-id"]);
     }),
   );
 
-  it.effect("keeps GPT-5.6 ChatGPT Codex cache requests key-only", () =>
+  it.effect("keeps GPT-5.6 Codex caching key-only without unsupported breakpoints", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
-        model(ProviderV2.aisdk("@ai-sdk/openai"), { modelID: "gpt-5.6-sol" }),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), { modelID: "gpt-5.6-luna" }),
         Credential.OAuth.make({
           type: "oauth",
           methodID: Integration.MethodID.make("chatgpt-browser"),
@@ -621,7 +649,7 @@ describe("SessionRunnerModel", () => {
         projectID: "project",
         directory: "/repo",
         providerID: "openai",
-        modelID: "gpt-5.6-sol",
+        modelID: "gpt-5.6-luna",
         apiModelID: resolved.id,
         variant: "default",
         policyRevision: CACHE_POLICY_REVISION,
@@ -632,10 +660,11 @@ describe("SessionRunnerModel", () => {
         routeID: resolved.route.id,
         openaiMode: "auto",
       });
-      const prepared = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare<OpenAIResponsesBody>(
         LLM.request({
           model: resolved,
-          prompt: "Hello",
+          system: "Stable system",
+          messages: [Message.user("Hello"), Message.assistant("Cached assistant")],
           providerOptions: cache.providerOptions,
           cache: cache.cache,
         }),
@@ -643,6 +672,16 @@ describe("SessionRunnerModel", () => {
 
       expect(prepared.body).toMatchObject({ prompt_cache_key: cache.promptCacheKey });
       expect(prepared.body).not.toHaveProperty("prompt_cache_options");
+      expect(prepared.body).not.toHaveProperty("prompt_cache_retention");
+      expect(prepared.body.input[0]).toEqual({ role: "system", content: "Stable system" });
+      expect(prepared.body.input[1]).toEqual({
+        role: "user",
+        content: [{ type: "input_text", text: "Hello" }],
+      });
+      expect(prepared.body.input[2]).toEqual({
+        role: "assistant",
+        content: [{ type: "output_text", text: "Cached assistant" }],
+      });
       expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint");
     }),
   );
@@ -1007,6 +1046,55 @@ describe("SessionRunnerModel", () => {
           id: "gemini-api-model",
           provider: "test-provider",
         });
+    }),
+  );
+
+  it.effect(
+    "loads GitHub Copilot Anthropic Messages models through the AISDK loader",
+    () =>
+      Effect.gen(function* () {
+        const fallback = yield* SessionRunnerModel.fromCatalogModel(
+          model(ProviderV2.aisdk("@ai-sdk/openai"), {
+            settings: { baseURL: "https://openai.example/v1" },
+          }),
+        );
+        let runtime: ModelV2.Info | undefined;
+        const catalog = ModelV2.Info.make({
+          ...model(ProviderV2.aisdk("@ai-sdk/anthropic"), {
+            modelID: "claude-sonnet-5",
+            settings: { baseURL: "https://copilot.example/v1" },
+          }),
+          providerID: ProviderV2.ID.githubCopilot,
+        });
+
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(
+          catalog,
+          Credential.OAuth.make({
+            type: "oauth",
+            methodID: Integration.MethodID.make("device"),
+            access: "copilot-oauth-token",
+            refresh: "copilot-oauth-token",
+            expires: Number.MAX_SAFE_INTEGER,
+          }),
+          {
+            loadAISDK: (input) =>
+              Effect.sync(() => {
+                runtime = input;
+                return fallback;
+              }),
+          },
+        );
+
+        expect(runtime).toMatchObject({
+          providerID: "github-copilot",
+          modelID: "claude-sonnet-5",
+          package: "aisdk:@ai-sdk/anthropic",
+          settings: {
+            baseURL: "https://copilot.example/v1",
+            apiKey: "copilot-oauth-token",
+          },
+        });
+        expect(resolved).toBe(fallback);
       }),
   );
 

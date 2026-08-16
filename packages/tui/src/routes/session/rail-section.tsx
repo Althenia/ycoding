@@ -102,7 +102,7 @@ export function RailSection(
   createEffect(() => rail?.attend(props.section, Boolean(props.attention)))
 
   return (
-    <box flexShrink={0}>
+    <box width="100%" flexShrink={0}>
       <box
         width="100%"
         flexDirection="row"

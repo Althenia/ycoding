@@ -49,6 +49,50 @@ it.effect("persists modes in the current autonomy column", () =>
   }),
 )
 
+it.effect("snapshots autonomy state with a durable ABA fence", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    const initial = yield* service.snapshot(sessionID)
+    expect(initial).toEqual({
+      state: { mode: "normal" },
+      sequence: 0,
+      digest: "fa76e6a145e80d3ef8d955abd5a17426feba569df832d2cf6af7dbd5b86c5240",
+    })
+
+    expect(yield* service.advance({ sessionID, progress: "ignored" })).toEqual(initial.state)
+    expect(yield* service.snapshot(sessionID)).toEqual(initial)
+
+    yield* service.setMode({ sessionID, mode: "yolo" })
+    const changed = yield* service.snapshot(sessionID)
+    expect(changed.sequence).toBe(1)
+    expect(changed.digest).not.toBe(initial.digest)
+
+    yield* service.setMode({ sessionID, mode: "normal" })
+    expect(yield* service.snapshot(sessionID)).toEqual({
+      state: initial.state,
+      sequence: 2,
+      digest: initial.digest,
+    })
+  }),
+)
+
+it.effect("serializes concurrent state-dependent autonomy advances", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    yield* service.setGoal({ sessionID, text: "Ship the fix" })
+
+    yield* Effect.all(
+      [service.advance({ sessionID, progress: "first" }), service.advance({ sessionID, progress: "second" })],
+      { concurrency: "unbounded" },
+    )
+
+    expect(yield* service.snapshot(sessionID)).toMatchObject({
+      state: { mode: "goal", goal: { iteration: 2, status: "active" } },
+      sequence: 3,
+    })
+  }),
+)
+
 it.effect("persists the original text alongside an active goal", () =>
   Effect.gen(function* () {
     const service = yield* setup
@@ -254,8 +298,8 @@ it.effect("answers a free-text assistant question on the user's behalf before co
     expect(prompt).toContain("The assistant is waiting for user input.")
     expect(prompt).toContain("Latest assistant request: Which database should I use?")
     expect(prompt).toContain("Answer it on the user's behalf")
-    expect(SessionAutonomy.continuationPrompt(goal, { latestAssistantText: "Implemented the migration." })).not.toContain(
-      "The assistant is waiting for user input.",
-    )
+    expect(
+      SessionAutonomy.continuationPrompt(goal, { latestAssistantText: "Implemented the migration." }),
+    ).not.toContain("The assistant is waiting for user input.")
   }),
 )

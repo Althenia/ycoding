@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, mock, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
-import type { SessionMessageInfo, SessionPendingInfo, YCodingEvent } from "@ycoding-ai/client"
+import type { SessionAutonomyState, SessionMessageInfo, SessionPendingInfo, SessionTodoInfo, YCodingEvent } from "@ycoding-ai/client"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Global } from "@ycoding-ai/core/global"
 import { Effect, FileSystem } from "effect"
@@ -30,7 +30,7 @@ const session = {
 const patch = [
   "--- a/packages/core/src/provider/usage.ts",
   "+++ b/packages/core/src/provider/usage.ts",
-  "@@ -42,3 +42,5 @@",
+  "@@ -42,2 +42,4 @@",
   " const usage = normalize(raw)",
   "-const stale = usage.cached",
   "+const fresh = usage.cacheRead",
@@ -56,6 +56,12 @@ const guardrailRequest = {
   reason: "write outside workspace",
   standard: true,
 }
+
+const yoloGoal: SessionAutonomyState = {
+  mode: "yolo",
+  goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+}
+const yoloTodos: SessionTodoInfo[] = [{ content: "Yolo sidebar todo", status: "in_progress", priority: "medium" }]
 
 const transcript = [
   { id: "msg_user", type: "user", text: "Inspect cache telemetry callers", time: { created: 1 } },
@@ -352,6 +358,17 @@ const longBubbleTranscript = [
   },
 ] as SessionMessageInfo[]
 
+const oversizedMarkdownPrompt = Array.from(
+  { length: 40 },
+  (_, index) =>
+    `## Section ${String(index + 1).padStart(2, "0")} ${"preview ".repeat(12)}\n\n- Preserve the transcript's visible ordering while this pasted Markdown prompt describes a bounded rendering preview.\n- Keep the entire canonical prompt available from message actions without mounting every wrapped line.\n\n`,
+).join("")
+
+const oversizedPromptTranscript = [
+  { id: "msg_user_oversized", type: "user", text: oversizedMarkdownPrompt, time: { created: 1 } },
+  { id: "msg_user_followup", type: "user", text: "Follow-up prompt remains visible", time: { created: 2 } },
+] as SessionMessageInfo[]
+
 const receiptTranscript = [
   { id: "msg_user_sent", type: "user", text: "Promoted bubble", time: { created: 1 } },
   { id: "msg_user_read", type: "user", text: "Consumed bubble", time: { created: 2, consumed: 3 } },
@@ -430,7 +447,13 @@ const subagentNotificationTranscript = [
   },
 ] as SessionMessageInfo[]
 
-function routeFor(messages: SessionMessageInfo[], guardrails: unknown[] = [], pending: SessionPendingInfo[] = []) {
+function routeFor(
+  messages: SessionMessageInfo[],
+  guardrails: unknown[] = [],
+  pending: SessionPendingInfo[] = [],
+  autonomy: SessionAutonomyState = { mode: "normal" },
+  todos: SessionTodoInfo[] = [],
+) {
   return (url: URL) => {
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
@@ -444,7 +467,6 @@ function routeFor(messages: SessionMessageInfo[], guardrails: unknown[] = [], pe
     if (
       [
         `/api/session/${sessionID}/permission`,
-        `/api/session/${sessionID}/todo`,
         `/api/session/${sessionID}/skills`,
         "/api/shell",
         "/api/mcp",
@@ -457,6 +479,8 @@ function routeFor(messages: SessionMessageInfo[], guardrails: unknown[] = [], pe
       ].includes(url.pathname)
     )
       return json({ location, data: [] })
+    if (url.pathname === `/api/session/${sessionID}/todo`) return json({ location, data: todos })
+    if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ location, data: autonomy })
     if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
     if (url.pathname === `/api/session/${sessionID}/guardrail`)
       return json({
@@ -485,6 +509,18 @@ function routeFor(messages: SessionMessageInfo[], guardrails: unknown[] = [], pe
             fallback: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
           },
+        },
+      })
+    if (url.pathname === `/api/session/${sessionID}/usage`)
+      return json({
+        data: {
+          logical: 0,
+          physical: 0,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          cost: 0,
+          tokens: session.tokens,
         },
       })
     if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
@@ -570,7 +606,40 @@ test("derives pending, running, terminal, cancelled, and overridden tool lifecyc
   ).toMatchObject({ label: "cancelled", status: "cancelled · 2m14s", variant: "warning" })
 })
 
-test("renders every transcript row on one marker/label grid with symmetric compaction rules", async () => {
+test("does not mount TodoWrite tasks in the transcript", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(transcript),
+    settle: "project_index",
+  })
+
+  try {
+    expect(screen.frame()).not.toContain("Fix shared cache accounting")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(transcript, [], [], yoloGoal, yoloTodos),
+    settle: "Yolo sidebar todo",
+  })
+
+  try {
+    const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
+    const lines = screen.lines()
+    expect(lines.some((line) => line.includes("Yolo sidebar todo") && line.indexOf("Yolo sidebar todo") < railStart)).toBe(false)
+    expect(lines.some((line) => line.includes("Yolo sidebar todo") && line.indexOf("Yolo sidebar todo") >= railStart)).toBe(true)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps non-subagent activity rows on one marker/label grid with symmetric compaction rules", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
@@ -587,28 +656,23 @@ test("renders every transcript row on one marker/label grid with symmetric compa
     const thought = lineOf("Thought")
     const explored = lineOf("Explored")
     const tool = lineOf("project_search")
-    const subagent = lineOf("subagent")
     const guardrail = lineOf("guardrail")
-    const task = lineOf("Fix shared cache accounting")
     const running = lineOf("project_index")
 
     // Marker column 3 for every activity class.
     expect(thought.indexOf("ok")).toBe(3)
     expect(explored.indexOf("ok")).toBe(3)
     expect(tool.indexOf("ok")).toBe(3)
-    expect(subagent.indexOf("◦")).toBe(3)
     expect(guardrail.indexOf("!!")).toBe(3)
-    expect(task.indexOf("..")).toBe(3)
     expect(running.indexOf("..")).toBe(3)
 
     // Label column 10 for every activity class.
     expect(thought.indexOf("Thought")).toBe(10)
     expect(explored.indexOf("Explored")).toBe(10)
     expect(tool.indexOf("project_search")).toBe(10)
-    expect(subagent.indexOf("subagent")).toBe(10)
     expect(guardrail.indexOf("guardrail")).toBe(10)
-    expect(task.indexOf("Fix shared cache accounting")).toBe(10)
     expect(running.indexOf("project_index")).toBe(10)
+    expect(lines.some((line) => line.includes("subagent docs-sync") && line.indexOf("subagent docs-sync") < railStart)).toBe(false)
 
     // Running rows carry an animated spinner between the marker and the label column.
     expect(SPINNER_FRAMES.some((frame) => running.slice(0, 10).includes(frame))).toBe(true)
@@ -709,7 +773,7 @@ test("renders subagent notifications as compact safe activity rows", async () =>
   try {
     const lines = screen.lines()
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
-    const row = lines.find((line) => line.includes("subagent") && line.indexOf("subagent") < railStart) ?? ""
+    const row = lines.find((line) => line.includes("subagent") && line.includes("completed") && line.indexOf("subagent") < railStart) ?? ""
     const rowIndex = lines.indexOf(row)
 
     expect(row.indexOf("◦")).toBe(3)
@@ -724,7 +788,7 @@ test("renders subagent notifications as compact safe activity rows", async () =>
   }
 }, 60_000)
 
-test("renders file edit results on the board diff grid with a visible running patch", async () => {
+test("collapses file edit results before expanding the board diff grid", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
@@ -736,16 +800,23 @@ test("renders file edit results on the board diff grid with a visible running pa
     const lines = screen.lines()
     const railStart = DESIGN_VIEWPORT.width - railWidth(DESIGN_VIEWPORT.width)
     const rowOf = (text: string) => lines.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
-    const header = lines[rowOf("docs/runtime.md")] ?? ""
+    const header = lines[rowOf("Edited 2 files")] ?? ""
 
-    // Board 13: the edited path sits at the transcript's content column with its counts right of it.
-    expect(header.indexOf("docs/runtime.md")).toBe(3)
-    expect(header).toContain("+1")
-    expect(header).toContain("−1")
-    expect(header.indexOf("+1")).toBeLessThan(header.indexOf("−1"))
+    expect(header.indexOf("Edited 2 files")).toBe(10)
+    const edited = lines[rowOf("docs/runtime.md")] ?? ""
+    expect(edited.indexOf("docs/runtime.md")).toBe(12)
+    expect(edited).toContain("+1")
+    expect(edited).toContain("−1")
+    expect(screen.frame()).not.toContain("Old cache note")
 
-    const removed = transcriptSlice(lines[rowOf("- Old cache note")] ?? "", DESIGN_VIEWPORT.width)
-    const added = transcriptSlice(lines[rowOf("+ Current cache note")] ?? "", DESIGN_VIEWPORT.width)
+    await screen.mouse.click(12, rowOf("docs/runtime.md"))
+    await waitForFrame(() => screen.frame(), "+ Current cache note")
+    const expanded = screen.lines()
+    const expandedRowOf = (text: string) =>
+      expanded.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
+
+    const removed = transcriptSlice(expanded[expandedRowOf("- Old cache note")] ?? "", DESIGN_VIEWPORT.width)
+    const added = transcriptSlice(expanded[expandedRowOf("+ Current cache note")] ?? "", DESIGN_VIEWPORT.width)
 
     // Board 13: line number column 5, diff content column 13, no surrounding frame.
     expect(removed.search(/\d/)).toBe(5)
@@ -754,6 +825,7 @@ test("renders file edit results on the board diff grid with a visible running pa
     expect(removed).not.toContain("│")
     expect(added).not.toContain("│")
     expect(screen.colorOf("+ Current cache note")).not.toEqual(screen.colorOf("- Old cache note"))
+    expect(screen.frame()).not.toContain("const fresh = usage.cacheRead")
 
     // The in-progress row is identified by its marker rather than a label, so the assertion holds
     // whichever presentation the patch tool resolves to. The requirement is that a running row is
@@ -799,6 +871,35 @@ test("renders intrinsic rounded user bubbles without crossing their border at su
   })
 }, 60_000)
 
+test("bounds a pasted multi-section Markdown user prompt without delaying later transcript rows", async () => {
+  const screen = await renderScreen({
+    ...NARROW_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(oversizedPromptTranscript),
+    settle: "Follow-up prompt remains visible",
+  })
+
+  try {
+    const lines = () => screen.lines().map((line) => transcriptSlice(line, NARROW_VIEWPORT.width))
+    const scroll = async (direction: "up" | "down") => {
+      for (let index = 0; index < 12; index++) await screen.mouse.scroll(8, 12, direction)
+      await Bun.sleep(100)
+    }
+
+    expect(lines().some((line) => line.includes("Follow-up prompt remains visible"))).toBe(true)
+    await scroll("up")
+    const before = bubbleBounds(lines(), "## Section 01")
+    await scroll("down")
+    await scroll("up")
+    const after = bubbleBounds(lines(), "## Section 01")
+
+    expect(before.bottom - before.top + 1).toBeLessThanOrEqual(6)
+    expect({ ...after, top: 0, bottom: 0 }).toEqual({ ...before, top: 0, bottom: 0 })
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("renders only truthful icon receipts at the lower-right of outbound user bubbles", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
@@ -813,10 +914,12 @@ test("renders only truthful icon receipts at the lower-right of outbound user bu
     const read = bubbleBounds(lines, "Consumed bubble")
     const pending = bubbleBounds(lines, "Queued bubble")
     const receipt = (bubble: ReturnType<typeof bubbleBounds>, glyph: string) => {
-      const line = bubble.body.at(-1) ?? ""
-      expect(line.slice(bubble.left + 1, bubble.right).trim()).toBe(glyph)
-      expect(line.lastIndexOf(glyph) + glyph.length).toBe(bubble.right - 1)
-      return lines.indexOf(line)
+      const row = lines.findIndex((line, index) => index > bubble.bottom && line.includes(glyph))
+      const line = lines[row] ?? ""
+      expect(row).toBeGreaterThan(bubble.bottom)
+      expect(line).toContain(glyph)
+      expect(bubble.body.join("\n")).not.toContain(glyph)
+      return row
     }
 
     const pendingRow = receipt(pending, "◷")
@@ -914,6 +1017,8 @@ function bubbleBounds(lines: string[], text: string) {
   const left = lines[top].indexOf("╭")
   const right = lines[top].lastIndexOf("╮")
   return {
+    top,
+    bottom,
     left,
     right,
     width: right - left + 1,

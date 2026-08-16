@@ -91,15 +91,6 @@ function View(props: { context: Plugin.Context; sessionID: string; shellSurface?
 export default Plugin.define({
   id: "internal:sidebar-shells",
   setup(context) {
-    context.ui.slot("sidebar.content", (props) => (
-      <Show when={!props.shellSurface?.()}>
-        <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />
-      </Show>
-    ))
-    context.ui.slot("sidebar.shells", (props) => (
-      <Show when={props.shellSurface?.()}>
-        <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />
-      </Show>
-    ))
+    context.ui.slot("sidebar.content", (props) => <View context={context} sessionID={props.sessionID} shellSurface={props.shellSurface} />)
   },
 })

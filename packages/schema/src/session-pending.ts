@@ -64,13 +64,21 @@ export const Synthetic = Schema.Struct({
 }).annotate({ identifier: "SessionPending.Synthetic" })
 
 export interface Compaction extends Schema.Schema.Type<typeof Compaction> {}
+/** Legacy pending compaction rows decode during migration; new jobs use SessionCompaction.Admission. */
 export const Compaction = Schema.Struct({
   ...Admitted,
   type: Schema.tag("compaction"),
 }).annotate({ identifier: "SessionPending.Compaction" })
 
-export const Info = Schema.Union([User, Synthetic, Compaction]).pipe(
+export const Info = Schema.Union([User, Synthetic]).pipe(
   Schema.toTaggedUnion("type"),
   Schema.annotate({ identifier: "SessionPending.Info" }),
 )
 export type Info = typeof Info.Type
+
+/** Migration-only decoder for pending rows persisted before compaction jobs. */
+export const LegacyInfo = Schema.Union([User, Synthetic, Compaction]).pipe(
+  Schema.toTaggedUnion("type"),
+  Schema.annotate({ identifier: "SessionPending.LegacyInfo" }),
+)
+export type LegacyInfo = typeof LegacyInfo.Type

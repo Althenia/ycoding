@@ -119,6 +119,9 @@ test("derives provider cache mechanisms from the executed route", () => {
   expect(SessionCacheDiagnostics.mechanism("ai-sdk:@ai-sdk/amazon-bedrock", model("amazon-bedrock"), tokens)).toBe(
     "bedrock-cache-point",
   )
+  expect(SessionCacheDiagnostics.mechanism("ai-sdk:@ai-sdk/github-copilot", model("github-copilot"), tokens)).toBe(
+    "openai-prefix-cache",
+  )
   expect(SessionCacheDiagnostics.mechanism("gemini", model("google"), tokens)).toBe("gemini-prefix-cache")
 })
 

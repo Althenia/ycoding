@@ -67,7 +67,7 @@ describe("LocationServiceMap", () => {
     ),
   )
 
-  itWithSdk.live("waits for explorer activation to complete", () =>
+  itWithSdk.live("waits for default agent activation to complete", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -100,13 +100,13 @@ describe("LocationServiceMap", () => {
             Effect.timeout("1 second"),
           )
 
-          const explorer = yield* Effect.gen(function* () {
+          const god = yield* Effect.gen(function* () {
             const agents = yield* AgentV2.Service
-            return yield* agents.resolve("explore")
+            return yield* agents.resolve()
           }).pipe(Effect.provide(context))
 
-          expect(explorer).toBeDefined()
-          expect(explorer?.permissions.length).toBeGreaterThan(0)
+          expect(god).toMatchObject({ id: AgentV2.ID.make("god"), mode: "primary" })
+          expect(god?.permissions.length).toBeGreaterThan(0)
         }),
       ),
     ),
@@ -547,7 +547,7 @@ describe("LocationServiceMap", () => {
               // Tool plugins register during the forked PluginSupervisor boot; wait for
               // every expected tool rather than relying on batch ordering.
               const expected = [
-                "conversation_summarize",
+                "conversation_compact",
                 "edit",
                 "glob",
                 "grep",

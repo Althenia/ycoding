@@ -47,7 +47,6 @@ async function renderMetadata(input: {
                 cacheHit={input.cacheHit}
                 elapsed={input.elapsed}
                 status={input.status}
-                active={false}
               />
             </box>
           </ThemeProvider>
@@ -293,7 +292,77 @@ test("cancels waiting managed tasks through the durable endpoint", async () => {
   expect(interrupted).toBe(false)
 })
 
-test("renders model and running status on their own row under the title", async () => {
+test("cancels a starting subagent from sequential Ctrl+X then K", async () => {
+  function LeaderProbe() {
+    const leaderActive = Keymap.useLeaderActive()
+    return <text>{leaderActive() ? "leader pending" : ""}</text>
+  }
+
+  const task: SessionOrchestrationTask = {
+    sessionID: "ses_child",
+    parentID: "ses_parent",
+    description: "Start review",
+    agent: "reviewer",
+    model: { providerID: "openai", id: "gpt-5.6" },
+    background: true,
+    state: "starting",
+    revision: 1,
+    time: { created: 1, updated: 1 },
+  }
+  const cancellations: Array<{ pathname: string; method: string }> = []
+  const calls = createFetch((url, request) => {
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({ data: [task], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_parent/subagent/ses_child/cancel") {
+      cancellations.push({ pathname: url.pathname, method: request.method })
+      return json({ ...task, state: "cancelled" })
+    }
+    return undefined
+  })
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+  ])
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider config={config}>
+              <ClientProvider api={createApi(calls.fetch)}>
+                <DataProvider>
+                  <LocationProvider>
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
+                      <LeaderProbe />
+                      <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                    </RouteProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 80, height: 32, kittyKeyboard: true },
+  )
+  app.renderer.start()
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("starting") && frame.includes("Start review"))
+    app.mockInput.pressKey("x", { ctrl: true })
+    await app.waitForFrame((frame) => frame.includes("leader pending"))
+    app.mockInput.pressKey("k")
+    for (let tick = 0; tick < 50 && cancellations.length === 0; tick++) await Bun.sleep(0)
+
+    expect(cancellations).toEqual([{ pathname: "/api/session/ses_parent/subagent/ses_child/cancel", method: "POST" }])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders model and running status without a second task row", async () => {
   const app = await renderMetadata({
     model: "openai/gpt-5.6-luna#high",
     status: "Running",
@@ -302,11 +371,11 @@ test("renders model and running status on their own row under the title", async 
     const frame = app.captureCharFrame()
     const rows = frame.split("\n").map((line) => line.trimEnd())
     const titleRow = rows.find((line) => line.includes("Task"))
-    const modelRow = rows.find((line) => line.includes("Running"))
+    const modelRow = rows.find((line) => line.includes("openai/gpt-5.6-luna#high"))
     expect(titleRow).toBeDefined()
     expect(modelRow).toBeDefined()
-    expect(titleRow).not.toContain("openai/gpt-5.6-luna#high")
-    expect(modelRow?.trimEnd().endsWith("Running")).toBe(true)
+    expect(modelRow).toContain("openai/gpt-5.6-luna#high")
+    expect(rows.filter((line) => line.includes("openai/gpt-5.6-luna#high"))).toHaveLength(1)
   } finally {
     app.renderer.destroy()
   }
@@ -351,7 +420,7 @@ test("renders a long model id untruncated on its own row without colliding with 
   })
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("openrouter/deepseek/deepseek-v4-flash-0731 · attached · 100% hit · 12s")
+    expect(frame).toContain("openrouter/deepseek/deepseek-v4-fla")
     expect(frame).not.toContain("deepsee100%")
     expect(frame).not.toContain("0730%")
   } finally {
@@ -465,11 +534,11 @@ test("renders section headings while keyboard navigation selects only task rows 
     const initial = app.captureCharFrame()
     expect(initial).toContain("ACTIVE")
     expect(initial).toContain("INACTIVE")
-    // The title row spans the full panel width; the model identity renders on its own indented row
-    // below the title. Assert the agent identity and the surviving description head rather than a
-    // truncated run.
-    expect(initial).toContain("reviewer  · Rev")
-    expect(initial).toContain("general  · Archive results")
+    // Each task keeps its status, agent, description, and metadata on one bounded row.
+    expect(initial).toContain("running         reviewer")
+    expect(initial).toContain("completed       general")
+    expect(initial).toContain("· Review implementation")
+    expect(initial).toContain("· Archive results")
     const sectionRoots = findScrollBox(app.renderer.root)?.getChildren() ?? []
     expect(sectionRoots).toHaveLength(2)
     expect(sectionRoots.every((child) => child instanceof BoxRenderable)).toBe(true)

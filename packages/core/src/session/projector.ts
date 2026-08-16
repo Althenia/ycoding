@@ -18,25 +18,41 @@ import { InstructionState } from "./instruction-state"
 import {
   SessionPendingTable,
   SessionMessageTable,
+  SessionFileChangeTable,
   SessionProviderRequestTable,
+  SessionUsageTable,
   SessionTable,
   SessionTaskNotificationTable,
   SessionTaskTable,
 } from "./sql"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
+import { SessionContextState } from "./context-state"
 
 type DatabaseService = Database.Interface["db"]
 type CurrentDurableEvent = Extract<SessionEvent.Event, { readonly durable: object }>
-type MessageEvent = Exclude<
-  CurrentDurableEvent,
-  | typeof SessionEvent.Created.Type
-  | typeof SessionEvent.Forked.Type
-  | typeof SessionEvent.Deleted.Type
-  | typeof SessionEvent.InstructionsUpdated.Type
-  | typeof SessionEvent.Task.Updated.Type
-  | typeof SessionEvent.ProviderRequestRecorded.Type
->
+type LegacyCompactionEvent =
+  | typeof SessionEvent.Compaction.AdmittedV1.Type
+  | typeof SessionEvent.Compaction.StartedV1.Type
+  | typeof SessionEvent.Compaction.EndedV1.Type
+  | typeof SessionEvent.Compaction.FailedV1.Type
+type MessageEvent =
+  | Exclude<
+      CurrentDurableEvent,
+      | typeof SessionEvent.Created.Type
+      | typeof SessionEvent.Forked.Type
+      | typeof SessionEvent.Deleted.Type
+      | typeof SessionEvent.InstructionsUpdated.Type
+      | typeof SessionEvent.Task.Updated.Type
+      | typeof SessionEvent.ProviderRequestRecorded.Type
+      | typeof SessionEvent.FileChange.Recorded.Type
+      | typeof SessionEvent.Compaction.Replaced.Type
+      | typeof SessionEvent.Compaction.Admitted.Type
+      | typeof SessionEvent.Compaction.Started.Type
+      | typeof SessionEvent.Compaction.Ended.Type
+      | typeof SessionEvent.Compaction.Failed.Type
+    >
+  | LegacyCompactionEvent
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Info)
 const encodeMessage = Schema.encodeSync(SessionMessage.Info)
@@ -260,6 +276,7 @@ const projectFork = Effect.fn("SessionProjector.projectFork")(function* (
     cursor = rows.at(-1)!.seq
   }
   yield* EventV2.reserveSequence(db, event.data.sessionID, event.data.parentSeq)
+  yield* SessionContextState.initialize(db, event.data.sessionID, DateTime.toEpochMillis(event.created))
   yield* InstructionState.rebuild(db, event.data.sessionID)
 })
 
@@ -439,6 +456,21 @@ function insertMessage(db: DatabaseService, event: SessionEvent.DurableEvent, me
 
 class TaskProjectionConflict extends Error {}
 
+const incrementOrchestrationRevision = (db: DatabaseService, parentID: SessionSchema.ID) =>
+  Effect.gen(function* () {
+    const updated = yield* db
+      .update(SessionTable)
+      .set({
+        orchestration_revision: sql`${SessionTable.orchestration_revision} + 1`,
+        time_updated: sql`${SessionTable.time_updated}`,
+      })
+      .where(eq(SessionTable.id, parentID))
+      .returning({ parentID: SessionTable.id })
+      .get()
+      .pipe(Effect.orDie)
+    if (!updated) return yield* Effect.die(new TaskProjectionConflict(`Task parent does not exist: ${parentID}`))
+  })
+
 const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
   db: DatabaseService,
   event: typeof SessionEvent.Task.Updated.Type,
@@ -471,6 +503,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
       .get()
       .pipe(Effect.orDie)
     if (!stored) return yield* Effect.die(new TaskProjectionConflict("Task launch identity already exists"))
+    yield* incrementOrchestrationRevision(db, change.parentID)
     return
   }
 
@@ -483,12 +516,17 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
   if (!task) return yield* Effect.die(new TaskProjectionConflict("Task does not exist"))
   const revision = task.revision + 1
   const update = (value: Partial<typeof SessionTaskTable.$inferInsert>) =>
-    db
-      .update(SessionTaskTable)
-      .set({ ...value, revision, time_updated: time })
-      .where(and(eq(SessionTaskTable.session_id, event.data.sessionID), eq(SessionTaskTable.revision, task.revision)))
-      .run()
-      .pipe(Effect.orDie)
+    Effect.gen(function* () {
+      const stored = yield* db
+        .update(SessionTaskTable)
+        .set({ ...value, revision, time_updated: time })
+        .where(and(eq(SessionTaskTable.session_id, event.data.sessionID), eq(SessionTaskTable.revision, task.revision)))
+        .returning({ sessionID: SessionTaskTable.session_id })
+        .get()
+        .pipe(Effect.orDie)
+      if (!stored) return yield* Effect.die(new TaskProjectionConflict("Task revision changed during projection"))
+      yield* incrementOrchestrationRevision(db, task.parent_id)
+    })
   const notify = (type: SessionOrchestration.NotificationType, excerpt?: string) =>
     db
       .insert(SessionTaskNotificationTable)
@@ -575,7 +613,7 @@ const projectTask = Effect.fn("SessionProjector.projectTask")(function* (
     return
   }
   if (change.type === "cancel_requested") {
-    if (task.state !== "running" && task.state !== "waiting") return yield* conflict()
+    if (task.state !== "starting" && task.state !== "running" && task.state !== "waiting") return yield* conflict()
     yield* update({ state: "cancelling" })
     return
   }
@@ -647,6 +685,7 @@ const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+        yield* SessionContextState.initialize(db, event.data.sessionID, event.data.created)
         if (event.data.location.workspaceID) {
           yield* db
             .update(WorkspaceTable)
@@ -675,7 +714,16 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.Deleted, (event) =>
-      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
+      Effect.gen(function* () {
+        const task = yield* db
+          .select({ parentID: SessionTaskTable.parent_id })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.session_id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
+        if (task) yield* incrementOrchestrationRevision(db, task.parentID)
+      }),
     )
     yield* events.project(SessionEvent.AgentSelected, (event) =>
       db
@@ -706,30 +754,73 @@ const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.UsageRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
     yield* events.project(SessionEvent.ProviderRequestRecorded, (event) =>
-      db
-        .insert(SessionProviderRequestTable)
-        .values({
-          id: event.data.id,
-          session_id: event.data.sessionID,
-          input_id: event.data.inputID,
-          source: event.data.source,
-          agent: event.data.agent,
-          model: event.data.model,
-          route_id: event.data.routeID,
-          prompt_cache_key: event.data.promptCacheKey,
-          system_digest: event.data.systemDigest,
-          tool_digest: event.data.toolDigest,
-          request: event.data.request,
-          attempts: event.data.attempts,
-          invalidation: event.data.invalidation,
-          continuation: event.data.continuation,
-          cost: event.data.cost,
-          tokens: event.data.tokens,
-          time_created: DateTime.toEpochMillis(event.data.time),
-        })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie),
+      Effect.gen(function* () {
+        const stored = yield* db
+          .insert(SessionProviderRequestTable)
+          .values({
+            id: event.data.id,
+            session_id: event.data.sessionID,
+            input_id: event.data.inputID,
+            source: event.data.source,
+            agent: event.data.agent,
+            model: event.data.model,
+            route_id: event.data.routeID,
+            prompt_cache_key: event.data.promptCacheKey,
+            system_digest: event.data.systemDigest,
+            tool_digest: event.data.toolDigest,
+            request: event.data.request,
+            attempts: event.data.attempts,
+            invalidation: event.data.invalidation,
+            continuation: event.data.continuation,
+            cost: event.data.cost,
+            tokens: event.data.tokens,
+            time_created: DateTime.toEpochMillis(event.data.time),
+          })
+          .onConflictDoNothing()
+          .returning({ id: SessionProviderRequestTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!stored) return
+        yield* db
+          .insert(SessionUsageTable)
+          .values({
+            session_id: event.data.sessionID,
+            model_key: JSON.stringify([event.data.model.providerID, event.data.model.id, event.data.model.variant]),
+            model: event.data.model,
+            logical: 1,
+            physical: event.data.attempts,
+            helpers: event.data.source === "step" ? 0 : 1,
+            continued: event.data.continuation === "continued" ? 1 : 0,
+            fallback: event.data.continuation === "fallback" ? 1 : 0,
+            cost: event.data.cost ?? null,
+            input: event.data.tokens.input,
+            output: event.data.tokens.output,
+            reasoning: event.data.tokens.reasoning,
+            cache_read: event.data.tokens.cache.read,
+            cache_write: event.data.tokens.cache.write,
+          })
+          .onConflictDoUpdate({
+            target: [SessionUsageTable.session_id, SessionUsageTable.model_key],
+            set: {
+              logical: sql`${SessionUsageTable.logical} + 1`,
+              physical: sql`${SessionUsageTable.physical} + ${event.data.attempts}`,
+              helpers: sql`${SessionUsageTable.helpers} + ${event.data.source === "step" ? 0 : 1}`,
+              continued: sql`${SessionUsageTable.continued} + ${event.data.continuation === "continued" ? 1 : 0}`,
+              fallback: sql`${SessionUsageTable.fallback} + ${event.data.continuation === "fallback" ? 1 : 0}`,
+              cost:
+                event.data.cost === undefined
+                  ? null
+                  : sql`case when ${SessionUsageTable.cost} is null then null else ${SessionUsageTable.cost} + ${event.data.cost} end`,
+              input: sql`${SessionUsageTable.input} + ${event.data.tokens.input}`,
+              output: sql`${SessionUsageTable.output} + ${event.data.tokens.output}`,
+              reasoning: sql`${SessionUsageTable.reasoning} + ${event.data.tokens.reasoning}`,
+              cache_read: sql`${SessionUsageTable.cache_read} + ${event.data.tokens.cache.read}`,
+              cache_write: sql`${SessionUsageTable.cache_write} + ${event.data.tokens.cache.write}`,
+            },
+          })
+          .run()
+          .pipe(Effect.orDie)
+      }),
     )
     yield* events.project(SessionEvent.Forked, (event) => projectFork(db, event))
     yield* events.project(SessionEvent.InputPromoted, (event) =>
@@ -778,7 +869,7 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.InputConsumed, (event) => run(db, event))
-    yield* events.project(SessionEvent.Compaction.Admitted, (event) =>
+    yield* events.project(SessionEvent.Compaction.AdmittedV1, (event) =>
       Effect.gen(function* () {
         if (event.durable === undefined)
           return yield* Effect.die(new Error("Durable Session event is missing aggregate sequence"))
@@ -831,11 +922,36 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Progress, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Success, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.FileChange.Recorded, (event) => {
+      if (event.durable === undefined)
+        return Effect.die(new Error("Durable Session event is missing aggregate sequence"))
+      return db
+        .insert(SessionFileChangeTable)
+        .values({
+          session_id: event.data.sessionID,
+          path: event.data.change.path,
+          patch: event.data.change.patch,
+          additions: event.data.change.additions,
+          deletions: event.data.change.deletions,
+          latest_seq: event.durable.seq,
+        })
+        .onConflictDoUpdate({
+          target: [SessionFileChangeTable.session_id, SessionFileChangeTable.path],
+          set: {
+            patch: event.data.change.patch,
+            additions: sql`${SessionFileChangeTable.additions} + ${event.data.change.additions}`,
+            deletions: sql`${SessionFileChangeTable.deletions} + ${event.data.change.deletions}`,
+            latest_seq: event.durable.seq,
+          },
+        })
+        .run()
+        .pipe(Effect.orDie)
+    })
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.RetryScheduled, (event) => run(db, event))
-    yield* events.project(SessionEvent.Compaction.Started, (event) => run(db, event))
-    yield* events.project(SessionEvent.Compaction.Ended, (event) =>
+    yield* events.project(SessionEvent.Compaction.StartedV1, (event) => run(db, event))
+    yield* events.project(SessionEvent.Compaction.EndedV1, (event) =>
       Effect.gen(function* () {
         yield* run(db, event)
         yield* InstructionState.advanceEpoch(db, event.data.sessionID, event.durable.seq)
@@ -845,7 +961,13 @@ const layer = Layer.effectDiscard(
           yield* SessionPending.settleCompaction(db, { sessionID: event.data.sessionID })
       }),
     )
-    yield* events.project(SessionEvent.Compaction.Failed, (event) =>
+    yield* events.project(SessionEvent.Compaction.Ended, (event) =>
+      InstructionState.advanceEpoch(db, event.data.sessionID, event.durable.seq),
+    )
+    // Replacement is a durable transcript-reload signal. The committed summary already occupies
+    // its historical boundary, so projecting this event must not append a second compaction row.
+    yield* events.project(SessionEvent.Compaction.Replaced, () => Effect.void)
+    yield* events.project(SessionEvent.Compaction.FailedV1, (event) =>
       Effect.gen(function* () {
         yield* run(db, event)
         if (event.durable === undefined)

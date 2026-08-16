@@ -12,7 +12,7 @@ import { SessionOrchestration } from "../session/orchestration"
 export interface Interface {
   readonly session: Pick<
     SessionV2.Interface,
-    "get" | "create" | "messages" | "prompt" | "generate" | "command" | "resume" | "interrupt" | "synthetic"
+    "get" | "create" | "messages" | "prompt" | "generate" | "command" | "resume" | "interrupt" | "synthetic" | "compact"
   >
   readonly job: Pick<Job.Interface, "start" | "wait" | "block" | "background" | "cancel">
   readonly orchestration: SessionOrchestration.Interface
@@ -57,6 +57,7 @@ export const layerWithCell = (cell: Cell) =>
         resume: (sessionID) => require(cell, (runtime) => runtime.session.resume(sessionID)),
         interrupt: (sessionID) => require(cell, (runtime) => runtime.session.interrupt(sessionID)),
         synthetic: (input) => require(cell, (runtime) => runtime.session.synthetic(input)),
+        compact: (input) => require(cell, (runtime) => runtime.session.compact(input)),
       },
       job: {
         start: (input) => require(cell, (runtime) => runtime.job.start(input)),

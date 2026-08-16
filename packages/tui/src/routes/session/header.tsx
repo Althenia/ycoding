@@ -6,12 +6,13 @@ import { Keymap } from "../../context/keymap"
 import { LocalContext } from "../../context/local"
 import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
-import { BrandMark } from "../../component/logo"
 import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
+import { BrandMark } from "../../component/logo"
+import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
-export type SessionHeaderState =
+export type SessionHeaderOperationalState =
   // Penpot's resting frame displays the existing working state with its elapsed value.
   | { type: "ready" }
   | { type: "working"; elapsed?: number; startedAt?: number }
@@ -20,7 +21,16 @@ export type SessionHeaderState =
   | { type: "waiting"; count: number }
   | { type: "awaiting-input"; count: number; elapsed?: number }
   | { type: "provider-error"; code?: number }
-  | { type: "yolo" }
+  | { type: "retrying"; attempt: number; at: number }
+
+export type SessionHeaderState =
+  | SessionHeaderOperationalState
+  | { type: "autonomy"; mode: "yolo" | "goal"; state: SessionHeaderOperationalState }
+
+type SessionHeaderTimedState = Extract<
+  SessionHeaderOperationalState,
+  { type: "working" } | { type: "thinking" } | { type: "tool-running" }
+>
 
 export type SessionHeaderSegmentKey = "path" | "branch" | "agent" | "model" | "variant"
 
@@ -30,6 +40,9 @@ export type SessionHeaderIdentity = {
   agent?: string
   model?: string
   variant?: string
+  pendingAgent?: string
+  pendingModel?: string
+  pendingVariant?: string
 }
 
 type ResolvedSessionHeaderIdentity = SessionHeaderIdentity & { runningShells?: number }
@@ -59,20 +72,37 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
   return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
 }
 
-export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, subagent = false) {
+export function pendingModelVariant(
+  current: Pick<SessionHeaderIdentity, "model" | "variant">,
+  pending: Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">,
+) {
+  if (!pending.pendingModel) return
+  if (current.model === pending.pendingModel && current.variant === pending.pendingVariant) return
+  return `→ ${pending.pendingModel}${pending.pendingVariant ? ` · ${pending.pendingVariant}` : ""}`
+}
+
+function pendingAgent(current: string | undefined, pending: string | undefined) {
+  return pending && current?.toLocaleLowerCase() !== pending.toLocaleLowerCase() ? `→ ${pending}` : undefined
+}
+
+export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, now = Date.now()): string {
+  if (state.type === "autonomy") {
+    const autonomy = state.mode === "yolo" ? "YOLO · auto-approve" : "Goal · autonomous"
+    return `${autonomy} · ${headerStatusLabel(state.state, width, runningShells, now)}`
+  }
+  if (state.type === "retrying") return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
   if (state.type === "working" || state.type === "thinking" || state.type === "tool-running" || state.type === "awaiting-input") {
     // One rule for every surface: the design writes sub-minute working time with a decimal
     // ("4.1s", "8.4s") and anything longer as "2m14s". formatDuration floors to whole seconds, so
     // it alone cannot express the decimal form.
     const elapsed = state.elapsed === undefined ? undefined : state.elapsed < 60 ? `${state.elapsed.toFixed(1)}s` : formatDuration(state.elapsed)
-    if (state.type === "working") return elapsed ? (width < 120 ? elapsed : `working ${elapsed}`) : "working"
+    if (state.type === "working") return elapsed ? (width < 120 ? elapsed : `cooking ${elapsed}`) : "cooking"
     if (state.type === "thinking") return elapsed ? `thinking · ${elapsed}` : "thinking"
     if (state.type === "tool-running") return elapsed ? `tool running · ${elapsed}` : "tool running"
     return elapsed ? `? awaiting input · ${elapsed}` : "? awaiting input"
   }
   if (state.type === "waiting") return `waiting · ${state.count} subagent${state.count === 1 ? "" : "s"}`
   if (state.type === "provider-error") return state.code ? `provider error \u00b7 ${state.code}` : "provider error"
-  if (state.type === "yolo") return "YOLO \u00b7 auto-approve"
   if (runningShells) return `${runningShells} shell${runningShells === 1 ? "" : "s"} running`
   return "ready"
 }
@@ -85,13 +115,13 @@ export function Header(
   const shortcuts = Keymap.useShortcuts()
   const leaderActive = Keymap.useLeaderActive()
   const [now, setNow] = createSignal(Date.now())
-  const timed = createMemo(() =>
-    props.state.type === "working" || props.state.type === "thinking" || props.state.type === "tool-running"
-      ? props.state
-      : undefined,
-  )
+  const operational = createMemo(() => (props.state.type === "autonomy" ? props.state.state : props.state))
+  const timed = createMemo<SessionHeaderTimedState | undefined>(() => {
+    const current = operational()
+    if (current.type === "working" || current.type === "thinking" || current.type === "tool-running") return current
+  })
   createEffect(() => {
-    if (timed()?.startedAt === undefined) return
+    if (timed()?.startedAt === undefined && operational().type !== "retrying") return
     setNow(Date.now())
     const timer = setInterval(() => setNow(Date.now()), 100)
     onCleanup(() => clearInterval(timer))
@@ -99,9 +129,21 @@ export function Header(
   const state = createMemo<SessionHeaderState>(() => {
     const active = timed()
     if (!active?.startedAt) return props.state
-    return { ...active, elapsed: Math.max(0, (now() - active.startedAt) / 1000) }
+    const elapsed = { ...active, elapsed: Math.max(0, (now() - active.startedAt) / 1000) }
+    if (props.state.type === "autonomy") return { ...props.state, state: elapsed }
+    return elapsed
   })
   const identity = createMemo(() => resolveIdentity(props))
+  const pending = createMemo(() => {
+    if (props.subagent) return []
+    return [
+      pendingAgent(identity().agent, props.pendingAgent),
+      pendingModelVariant(
+        { model: identity().model, variant: identity().variant },
+        { pendingModel: props.pendingModel, pendingVariant: props.pendingVariant },
+      ),
+    ].filter((value): value is string => !!value)
+  })
   const segments = createMemo(() =>
     headerSegments({
       width: dimensions().width,
@@ -113,11 +155,16 @@ export function Header(
     }),
   )
   const statusColor = createMemo(() => {
-    if (state().type === "provider-error" || state().type === "yolo")
+    const current = state()
+    const active = current.type === "autonomy" ? current.state : current
+    if (current.type === "autonomy")
+      return current.mode === "yolo" ? themeV2.text.feedback.error.default : themeV2.text.feedback.success.default
+    if (active.type === "provider-error")
       return themeV2.text.feedback.error.default
-    if (state().type === "awaiting-input") return themeV2.text.feedback.warning.default
-    if (state().type === "tool-running" || state().type === "waiting") return themeV2.text.feedback.info.default
-    if (state().type === "working" || state().type === "thinking")
+    if (active.type === "retrying") return themeV2.text.feedback.warning.default
+    if (active.type === "awaiting-input") return themeV2.text.feedback.warning.default
+    if (active.type === "tool-running" || active.type === "waiting") return themeV2.text.feedback.info.default
+    if (active.type === "working" || active.type === "thinking")
       return props.subagent ? themeV2.text.feedback.info.default : themeV2.text.feedback.success.default
     return themeV2.text.subdued
   })
@@ -126,6 +173,7 @@ export function Header(
   const segmentColor = (key: SessionHeaderSegmentKey) => {
     if (key === "path") return themeV2.text.subdued
     if (key === "branch") return themeV2.text.feedback.info.default
+    if (key === "model") return themeV2.text.subdued
     if (key === "variant") return themeV2.text.feedback.success.default
     // The agent carries its own configured colour, so the header names it the way every other
     // agent affordance does instead of rendering it as plain default ink.
@@ -163,7 +211,7 @@ export function Header(
           when={props.subagent}
           fallback={
             <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-              <BrandMark width={6} height={1} />
+              <BrandMark width={2} height={1} />
               <text fg={themeV2.text.subdued} wrapMode="none">v{InstallationVersion}</text>
             </box>
           }
@@ -193,10 +241,19 @@ export function Header(
               </>
             )}
           </For>
+          <For each={pending()}>{(value) => <span style={{ fg: themeV2.text.subdued }}> {"·"} {value}</span>}</For>
         </text>
-        <text fg={statusColor()} wrapMode="none" flexShrink={0}>
-          {headerStatusLabel(state(), dimensions().width, identity().runningShells, props.subagent)}
-        </text>
+        <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
+          <Show when={operational().type === "working" && !props.subagent}>
+            <Spinner color={statusColor()} frames={DOT_TRAIL_FRAMES} interval={160} />
+          </Show>
+          <Show when={operational().type === "retrying"}>
+            <text fg={themeV2.text.feedback.error.default} wrapMode="none">{getGlyph("failed").glyph}</text>
+          </Show>
+          <text fg={statusColor()} wrapMode="none">
+            {headerStatusLabel(state(), dimensions().width, identity().runningShells, now())}
+          </text>
+        </box>
       </box>
     </>
   )

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import type { ProviderUsageListOutput, SessionCacheDiagnostics, SessionInfo } from "@ycoding-ai/client"
+import type { ProviderRequestSummary, ProviderUsageListOutput, SessionCacheDiagnostics, SessionInfo } from "@ycoding-ai/client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import {
@@ -77,7 +77,7 @@ test("loads each provider once and removes unsupported results", async () => {
   expect(result.map((item) => item.providerID)).toEqual(["anthropic"])
 })
 
-test("defines the command for provider quota or local request diagnostics", () => {
+test("defines the command for provider quota or local durable request usage", () => {
   const run = () => undefined
   expect(providerUsageCommandDefinition([], run)).toBeUndefined()
   expect(providerUsageCommandDefinition([snapshot("hidden", "unsupported")], run)).toBeUndefined()
@@ -185,37 +185,20 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
     { width: 60, height: 40 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Provider Usage"))
+  await app.waitForFrame((frame) => frame.includes("Provider usage"))
 
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("Claude Max")
-    expect(frame).toContain("#######---")
     expect(frame).toContain("68% used")
     expect(frame).toContain("Session")
-    expect(frame).toContain("All models")
-    expect(frame).toContain("Extra usage")
-    expect(frame).toContain("Codex Pro")
-    expect(frame).toContain("Weekly")
-    expect(frame).toContain("Spark weekly")
-    expect(frame).toContain("resets in 2h 17m")
-    expect(frame).toContain("openrouter")
-    expect(frame.match(/Usage unavailable/g)?.length).toBe(1)
-    expect(frame).not.toContain("hidden")
-    expect(frame).toContain("YCoding requests")
-    expect(frame).toContain("Logical requests")
-    expect(frame).toContain("Transport attempts")
-    expect(frame).toContain("Helpers")
-    expect(frame).toContain("Continued")
-    expect(frame).toContain("Fallbacks")
-    expect(frame).toContain("Raw cache read")
-    expect(frame).toContain("18.2k tokens")
-    expect(frame).toContain("Estimated cost")
-    expect(frame).toContain("$0.0421")
-    expect(frame).toContain("Last invalidation")
-    expect(frame).toContain("Tool prefix changed")
-    expect(frame).toContain("Namespace")
-    expect(frame).toContain("a1b2c3d4")
+    expect(frame).toContain("This session")
+    expect(frame).toContain("Raw input")
+    expect(frame).toContain("Raw output")
+    expect(frame).toContain("Cache read")
+    expect(frame).toContain("Cache write")
+    expect(frame).toContain("18,200")
+    expect(frame).toContain("$0.01")
   } finally {
     app.renderer.destroy()
   }
@@ -262,11 +245,133 @@ test("renders unavailable local pricing without inventing zero cost", async () =
     { width: 60, height: 24 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("YCoding requests"))
+  await app.waitForFrame((frame) => frame.includes("This session"))
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Estimated cost unavailable")
+    expect(frame).toContain("custom/custom")
     expect(frame).not.toContain("$0.00")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders durable request usage after diagnostics request details are compacted", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+    import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"),
+    import("../../../src/ui/toast"),
+  ])
+  const usage: ProviderRequestSummary = {
+    logical: 2,
+    physical: 2,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    tokens: { input: 12_000, output: 900, reasoning: 0, cache: { read: 18_200, write: 1_200 } },
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <ProviderUsageDialogContent
+                    snapshots={() => []}
+                    usage={() => usage}
+                    sessionID="ses_compacted"
+                    getSession={() => ({ model: { providerID: "openai", id: "gpt-5.6" }, title: "Compacted" })}
+                  />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 60, height: 40 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Raw input"))
+
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("12,000")
+    expect(frame).toContain("900")
+    expect(frame).toContain("18,200")
+    expect(frame).toContain("1,200")
+    expect(frame).toContain("Unreported")
+    expect(frame).not.toContain("$0.00")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders family spend by provider, model, and variant without catalog provenance text", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+    import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"),
+    import("../../../src/ui/toast"),
+  ])
+  const usage: ProviderRequestSummary = {
+    logical: 3,
+    physical: 3,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    tokens: { input: 1_100, output: 60, reasoning: 0, cache: { read: 300, write: 0 } },
+    models: [
+      {
+        model: { providerID: "anthropic", id: "claude-sonnet-4-5", variant: "thinking" },
+        requests: 2,
+        tokens: { input: 1_000, output: 40, reasoning: 0, cache: { read: 300, write: 0 } },
+        cost: 1.25,
+        costProvenance: "recorded",
+      },
+      {
+        model: { providerID: "openai", id: "gpt-5.6-terra", variant: "high" },
+        requests: 1,
+        tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 0.02,
+        costProvenance: "current_catalog",
+      },
+    ],
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <ProviderUsageDialogContent snapshots={() => []} usage={() => usage} />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 80, height: 60 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Family spend"))
+
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("anthropic/claude-sonnet-4-5#thinking")
+    expect(frame).toContain("$1.25")
+    expect(frame).toContain("openai/gpt-5.6-terra#high")
+    expect(frame).toContain("$0.02")
+    expect(frame).not.toContain("Estimated (current catalog)")
+    expect(frame).not.toContain("This session")
+    expect(frame).not.toContain("Subagents")
   } finally {
     app.renderer.destroy()
   }

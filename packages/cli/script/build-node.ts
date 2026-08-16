@@ -10,7 +10,6 @@ import { Script } from "@ycoding-ai/script"
 import pkg from "../package.json"
 import { modelsData } from "./generate"
 import { collectNodeAssets, copyNodeAssets, hashNodeAssets, seaAssetMap } from "./node-assets"
-import { buildOpentuiNative } from "./opentui-native"
 import { mainConfig } from "../vite.node.config"
 import { nodeExecArgv, nodeTarget, type NodeTarget } from "../src/node/target"
 import { NODE_BINARY, platformBinary } from "../src/binary"
@@ -52,7 +51,6 @@ if (!bundleOnly && targets.some((target) => target.platform === "darwin" && targ
 
 process.chdir(dir)
 if (!skipInstall) run(process.execPath, ["install", "--os=*", "--cpu=*"])
-buildOpentuiNative(targets.some((target) => target.platform !== process.platform || target.arch !== process.arch))
 if (!bundleOnly) await rm(outdir, { recursive: true, force: true })
 const builder =
   !bundleOnly || targets.some((target) => target.platform === process.platform && target.arch === process.arch)

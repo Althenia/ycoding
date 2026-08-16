@@ -24,22 +24,16 @@ export const landingPlaceholder = { normal: ["Message YCoding…"] }
 
 export function LandingHero() {
   const { themeV2 } = useTheme()
-  const shortcut = Keymap.useShortcut("command.palette.show")
-  const description = createMemo(() => {
-    const value = shortcut()
-    if (!value) return "Describe a goal, paste an error."
-    return `Describe a goal, paste an error, or press ${value.replaceAll("ctrl+", "⌃")} for commands.`
-  })
 
   return (
     <box alignItems="center" flexShrink={0}>
       <box flexDirection="column" alignItems="center" gap={2}>
-        <BrandMark width={12} height={6} />
+        <BrandMark />
         <text fg={themeV2.text.default} selectable={false}>
           What should we build?
         </text>
         <text fg={themeV2.text.subdued} selectable={false}>
-          {description()}
+          Describe a goal, paste an error, or press ^p for commands.
         </text>
       </box>
     </box>

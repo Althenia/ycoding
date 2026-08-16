@@ -383,8 +383,11 @@ const lowerToolMessages = Effect.fn("OpenAIChat.lowerToolMessages")(function* (m
       continue
     }
     const content: ReadonlyArray<ToolContent> = part.result.value
-    const text = content.filter((item) => item.type === "text").map((item) => item.text)
-    messages.push({ role: "tool", tool_call_id: part.id, content: text.join("\n") })
+    messages.push({
+      role: "tool",
+      tool_call_id: part.id,
+      content: ProviderShared.joinText(content.filter((item) => item.type === "text")),
+    })
     const files = content.filter((item) => item.type === "file")
     images.push(
       ...(yield* Effect.forEach(files, (item) =>
@@ -405,8 +408,7 @@ const lowerMessage = Effect.fn("OpenAIChat.lowerMessage")(function* (
 })
 
 const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: LLMRequest) {
-  const supportsBreakpoints =
-    OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6"
+  const supportsBreakpoints = OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)
 
   const systemCacheHint = request.system.find((part) => part.cache !== undefined)?.cache
   const system: OpenAIChatMessage[] =

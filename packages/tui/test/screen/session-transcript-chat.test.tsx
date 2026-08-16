@@ -157,6 +157,18 @@ function route(url: URL) {
         },
       },
     })
+  if (url.pathname === `/api/session/${sessionID}/usage`)
+    return json({
+      data: {
+        logical: 0,
+        physical: 0,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        cost: 0,
+        tokens: session.tokens,
+      },
+    })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
   if (url.pathname === "/api/model")
     return json({
@@ -201,15 +213,14 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     const textRow = rowOf(collapsed, "I inspected the typed transcript data.")
     const ordinaryRow = rowOf(collapsed, "project_search")
     const errorRow = rowOf(collapsed, "http_request")
-    const subagentRow = rowOf(collapsed, "subagent")
     const shellRow = rowOf(collapsed, "bun test transcript")
 
     expect(collapsed[assistantRow]?.indexOf("YCODING")).toBe(3)
     expect(collapsed[textRow]?.indexOf("I inspected the typed transcript data.")).toBe(3)
     expect(collapsed[ordinaryRow]?.indexOf("ok")).toBe(3)
     expect(collapsed[errorRow]?.indexOf("!!")).toBe(3)
-    expect(collapsed[subagentRow]?.indexOf("◦")).toBe(3)
     expect(collapsed[shellRow]?.indexOf("ok")).toBe(3)
+    expect(collapsed.some((line) => line.includes("subagent review") && line.indexOf("subagent review") < railStart)).toBe(false)
     expect(collapsed.join("\n")).not.toContain("Request")
     expect(collapsed.join("\n")).not.toContain("Response")
     expectSafe(collapsed.join("\n"))
@@ -227,9 +238,9 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     expect(providerIdentityRow).toBeLessThan(providerFailureRow)
     expect(providerFailureRow).toBeLessThan(providerMetadataRow)
     expect(screen.colorOf("Provider request failed.")).not.toEqual(screen.colorOf("Claude Opus 5"))
-    expect(collapsed[providerIdentityRow]).not.toContain("│")
-    expect(collapsed[providerFailureRow]).not.toContain("│")
-    expect(collapsed[providerMetadataRow]).not.toContain("│")
+    expect(collapsed[providerIdentityRow]?.slice(0, railStart)).not.toContain("│")
+    expect(collapsed[providerFailureRow]?.slice(0, railStart)).not.toContain("│")
+    expect(collapsed[providerMetadataRow]?.slice(0, railStart)).not.toContain("│")
 
     await screen.mouse.click(4, ordinaryRow)
     await waitFor(screen.frame, "Request")

@@ -1496,7 +1496,7 @@ export function Prompt(props: PromptProps) {
     const extmarkStart = currentOffset
     const extmarkEnd = extmarkStart + promptOffsetWidth(virtualText)
 
-    input.insertText(virtualText + " ")
+    input.insertText(virtualText)
 
     const extmarkId = input.extmarks.create({
       start: extmarkStart,

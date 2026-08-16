@@ -18,9 +18,14 @@ describe("Credential", () => {
         value: Credential.Key.make({ type: "key", key: "secret" }),
       })
 
+      expect(created.generation).toBe(0)
       expect(yield* credentials.list(integrationID)).toEqual([created])
       yield* credentials.update(created.id, { label: "Personal" })
-      expect((yield* credentials.list(integrationID))[0]?.label).toBe("Personal")
+      expect((yield* credentials.list(integrationID))[0]).toMatchObject({ label: "Personal", generation: 0 })
+      yield* credentials.update(created.id, { value: Credential.Key.make({ type: "key", key: "secret" }) })
+      expect((yield* credentials.list(integrationID))[0]?.generation).toBe(0)
+      yield* credentials.update(created.id, { value: Credential.Key.make({ type: "key", key: "rotated" }) })
+      expect((yield* credentials.list(integrationID))[0]?.generation).toBe(1)
 
       const replacement = yield* credentials.create({
         integrationID,

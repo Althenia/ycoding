@@ -27,6 +27,7 @@ export class RetryableFailure extends Data.TaggedError(
  * the choice is only between waiting and reporting.
  */
 export const RETRY_AFTER_CEILING_MS = 120_000;
+export const MAX_ATTEMPTS = 10;
 
 const reasonRetryAfterMs = (reason: LLMError["reason"]) =>
   reason._tag === "RateLimit" || reason._tag === "ProviderInternal"
@@ -62,18 +63,23 @@ const retryAfter = (failure: RetryableFailure) =>
 export const schedule = (
   events: EventV2.Interface,
   sessionID: SessionSchema.ID,
+  attemptsBeforeRetry: number,
 ) =>
-  Schedule.max([Schedule.exponential("2 seconds"), Schedule.recurs(4)]).pipe(
+  Schedule.max([
+    Schedule.exponential("2 seconds"),
+    Schedule.recurs(Math.max(0, MAX_ATTEMPTS - attemptsBeforeRetry - 1)),
+  ]).pipe(
     Schedule.setInputType<RetryableFailure | SessionRunner.RunError>(),
     Schedule.passthrough,
     Schedule.while(({ input }) => input instanceof RetryableFailure),
     Schedule.modifyDelay(({ input: failure, duration: delay }) => {
       const minimum =
         failure instanceof RetryableFailure ? retryAfter(failure) : undefined;
+      const exponential = Duration.min(delay, Duration.millis(RETRY_AFTER_CEILING_MS));
       return Effect.succeed(
         minimum === undefined
-          ? delay
-          : Duration.max(delay, Duration.millis(minimum)),
+          ? exponential
+          : Duration.max(exponential, Duration.millis(minimum)),
       );
     }),
     Schedule.tap((metadata) =>
@@ -81,7 +87,7 @@ export const schedule = (
         ? events.publish(SessionEvent.RetryScheduled, {
             sessionID,
             assistantMessageID: metadata.input.assistantMessageID,
-            attempt: metadata.attempt + 1,
+            attempt: attemptsBeforeRetry + metadata.attempt + 1,
             at: metadata.now + Duration.toMillis(metadata.duration),
             error: metadata.input.error,
           })

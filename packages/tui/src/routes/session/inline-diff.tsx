@@ -34,47 +34,83 @@ export function parseInlineDiff(diff: string) {
   }
 }
 
-export function InlineDiff(props: {
+export type InlineDiffFile = {
   path?: string
   diff: string
   additions?: number
   deletions?: number
-  wrapMode?: "word" | "none"
-}) {
-  const { themeV2 } = useTheme()
+}
 
-  const parsed = createMemo(() => parseInlineDiff(props.diff))
-  const path = createMemo(
-    () =>
-      props.path ??
-      [parsed()?.patch.newFileName, parsed()?.patch.oldFileName]
+export type InlineDiffGroup = {
+  path: string
+  additions: number
+  deletions: number
+  files: InlineDiffFile[]
+}
+
+/**
+ * Path and change counts a file's diff reports, preferring the tool's own structured values and
+ * falling back to the patch itself. Shared so the collapsed summary and the expanded diff can never
+ * disagree about what a file changed.
+ */
+export function inlineDiffSummary(file: InlineDiffFile) {
+  const parsed = parseInlineDiff(file.diff)
+  const lines = parsed?.lines ?? []
+  return {
+    path:
+      file.path ??
+      [parsed?.patch.newFileName, parsed?.patch.oldFileName]
         .find((item) => item && item !== "/dev/null")
         ?.replace(/^[ab]\//, "") ??
       "unknown",
-  )
-  const hunkLines = createMemo(() => parsed()?.lines ?? [])
+    additions: file.additions ?? lines.filter((line) => line.kind === "added").length,
+    deletions: file.deletions ?? lines.filter((line) => line.kind === "removed").length,
+    lines,
+  }
+}
 
-  const additions = createMemo(() => props.additions ?? hunkLines().filter((l) => l.kind === "added").length)
-  const deletions = createMemo(() => props.deletions ?? hunkLines().filter((l) => l.kind === "removed").length)
+export function inlineDiffGroups(files: InlineDiffFile[]): InlineDiffGroup[] {
+  const groups = new Map<string, InlineDiffGroup>()
+  return files.flatMap((file) => {
+    const summary = inlineDiffSummary(file)
+    const group = groups.get(summary.path)
+    if (group) {
+      group.additions += summary.additions
+      group.deletions += summary.deletions
+      group.files.push(file)
+      return []
+    }
+    const next = { path: summary.path, additions: summary.additions, deletions: summary.deletions, files: [file] }
+    groups.set(next.path, next)
+    return [next]
+  })
+}
+
+export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"; heading?: boolean }) {
+  const { themeV2 } = useTheme()
+
+  const hunkLines = createMemo(() => props.files.flatMap((file) => inlineDiffSummary(file).lines))
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={2} paddingBottom={3} gap={1} flexShrink={0}>
-      <box width="100%" flexDirection="row">
-        <text width={55} flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.default}>
-          {path()}
-        </text>
-        <Show when={additions() > 0}>
-          <text flexShrink={0} fg={themeV2.diff.text.added} attributes={TextAttributes.BOLD}>
-            +{additions()}
+      <Show when={props.heading !== false}>
+        <box width="100%" flexDirection="row">
+          <text width={55} flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.default}>
+            {props.path}
           </text>
-        </Show>
-        <box width={3} flexShrink={0} />
-        <Show when={deletions() > 0}>
-          <text flexShrink={0} fg={themeV2.diff.text.removed} attributes={TextAttributes.BOLD}>
-            −{deletions()}
-          </text>
-        </Show>
-      </box>
+          <Show when={props.additions > 0}>
+            <text flexShrink={0} fg={themeV2.diff.text.added} attributes={TextAttributes.BOLD}>
+              +{props.additions}
+            </text>
+          </Show>
+          <box width={3} flexShrink={0} />
+          <Show when={props.deletions > 0}>
+            <text flexShrink={0} fg={themeV2.diff.text.removed} attributes={TextAttributes.BOLD}>
+              −{props.deletions}
+            </text>
+          </Show>
+        </box>
+      </Show>
       <For each={hunkLines()}>
         {(item) => (
           <text

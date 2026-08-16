@@ -120,6 +120,11 @@ describe("SessionSummaryToon", () => {
     expect(result).toBeInstanceOf(SessionSummaryToon.CodeFenceError)
   })
 
+  test("accepts decoder-valid TOON comments", () => {
+    const input = "# durable checkpoint\n" + SessionSummaryToon.encode(sample)
+    expect(SessionSummaryToon.parse(input, options)).toEqual(sample)
+  })
+
   test("rejects leading prose outside the TOON document", () => {
     const input = "Here is the conversation memory:\n" + SessionSummaryToon.encode(sample)
     const result = SessionSummaryToon.parse(input, options)

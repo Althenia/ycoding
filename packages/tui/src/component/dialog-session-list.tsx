@@ -101,7 +101,7 @@ export function DialogSessionList(props: {
     const pinnedSet = new Set(pinned)
     const slotByID = new Map(local.session.slots().map((sessionID, index) => [sessionID, index + 1]))
 
-    const option = (session: SessionInfo, category: string, secondLine = false) => {
+    const option = (session: SessionInfo, category: string) => {
       const directory = session.location.directory
       const messageCount = props.messageCounts?.[session.id]
       const footer = messageCount === undefined
@@ -113,11 +113,10 @@ export function DialogSessionList(props: {
       const deleting = toDelete() === session.id
       return {
         title: deleting ? `Press ${shortcuts.get("session.delete")} again to confirm` : session.title,
-        titleView: secondLine ? <>{`\n${session.title}`}</> : undefined,
         description: relativeTime(session.time.updated, props.now ?? Date.now()),
         value: session.id,
         category,
-        footer: secondLine && footer ? `\n${footer}` : footer,
+        footer,
         bg: deleting ? theme.error : undefined,
         gutter: data.session.family(session.id).some((id) => data.session.status(id) === "running")
           ? () => <Spinner />
@@ -129,7 +128,7 @@ export function DialogSessionList(props: {
 
     const remaining = sessions()
       .filter((session) => !session.parentID && !pinnedSet.has(session.id))
-      .map((session, index) => option(session, "Recent", index === 0))
+      .map((session) => option(session, "Recent"))
 
     return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, "Pinned")), ...remaining]
   })

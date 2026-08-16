@@ -1,3 +1,4 @@
+import type { LanguageModelV3, LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import type { IntegrationOAuthMethodRegistration } from "@ycoding-ai/plugin/effect/integration"
 import { Effect, Option, Schema, Semaphore, Stream } from "effect"
 import { Catalog } from "../../catalog"
@@ -168,31 +169,7 @@ export const GithubCopilotPlugin = define({
     yield* ctx.integration.transform((draft) => {
       draft.method.update(oauth)
     })
-    yield* ctx.catalog.transform((evt) => {
-      const item = evt.provider.get(ProviderV2.ID.githubCopilot)
-      if (!item) return
-      if (loaded.models) {
-        for (const id of item.models.keys()) {
-          if (!loaded.models.has(ModelV2.ID.make(id))) evt.model.remove(item.provider.id, id)
-        }
-        for (const [id, model] of loaded.models) {
-          evt.model.update(item.provider.id, id, (draft) => Object.assign(draft, structuredClone(model)))
-        }
-      } else if (loaded.baseURL) {
-        for (const id of item.models.keys()) {
-          evt.model.update(item.provider.id, id, (model) => {
-            model.settings = ProviderV2.mergeOverlay(model.settings, { baseURL: loaded.baseURL })
-          })
-        }
-      }
-      if (item.models.has(ModelV2.ID.make("gpt-5-chat-latest"))) {
-        evt.model.update(item.provider.id, ModelV2.ID.make("gpt-5-chat-latest"), (model) => {
-          // This chat-only alias conflicts with the Copilot GPT-5 Responses route,
-          // so hide it only for Copilot rather than for every provider catalog.
-          model.enabled = false
-        })
-      }
-    })
+    yield* ctx.catalog.transform((evt) => syncModels(evt, loaded.models, loaded.baseURL))
     const refresh = () => loading.withPermit(load().pipe(Effect.andThen(ctx.catalog.reload())))
     yield* events.subscribe(Integration.Event.ConnectionUpdated).pipe(
       Stream.filter((event) => event.data.integrationID === Integration.ID.make("github-copilot")),
@@ -227,24 +204,72 @@ export const GithubCopilotPlugin = define({
       "language",
       Effect.fn(function* (evt) {
         if (evt.model.providerID !== ProviderV2.ID.githubCopilot) return
+        const id = evt.model.modelID ?? evt.model.id
         if (evt.sdk.responses === undefined && evt.sdk.chat === undefined) {
           evt.language = evt.sdk.languageModel(evt.model.modelID ?? evt.model.id)
           return
         }
-        if (evt.options.endpoint === "responses" && evt.sdk.responses) {
-          evt.language = evt.sdk.responses(evt.model.modelID ?? evt.model.id)
-          return
-        }
-        if (evt.options.endpoint === "chat" && evt.sdk.chat) {
-          evt.language = evt.sdk.chat(evt.model.modelID ?? evt.model.id)
-          return
-        }
-        const id = evt.model.modelID ?? evt.model.id
-        evt.language = shouldUseResponses(id) ? evt.sdk.responses(id) : evt.sdk.chat(id)
+        const language = (() => {
+          if (evt.options.endpoint === "responses" && evt.sdk.responses) return evt.sdk.responses(id)
+          if (evt.options.endpoint === "chat" && evt.sdk.chat) return evt.sdk.chat(id)
+          return shouldUseResponses(id) ? evt.sdk.responses(id) : evt.sdk.chat(id)
+        })()
+        evt.language = id.includes("gpt") ? withoutMaxOutputTokens(language) : language
       }),
     )
   }),
 } satisfies PluginInternal.InternalPlugin)
+
+function withoutMaxOutputTokens(language: LanguageModelV3): LanguageModelV3 {
+  return new Proxy(language, {
+    get(target, property, receiver) {
+      if (property === "doGenerate") {
+        return (options: LanguageModelV3CallOptions) =>
+          target.doGenerate({ ...options, maxOutputTokens: undefined })
+      }
+      if (property === "doStream") {
+        return (options: LanguageModelV3CallOptions) =>
+          target.doStream({ ...options, maxOutputTokens: undefined })
+      }
+      return Reflect.get(target, property, receiver)
+    },
+  })
+}
+
+export function syncModels(
+  catalog: CopilotCatalog,
+  models: Map<ModelV2.ID, ModelV2.Info> | undefined,
+  baseURL: string | undefined,
+) {
+  const item = catalog.provider.get(ProviderV2.ID.githubCopilot)
+  if (!item) return
+  if (models) {
+    for (const id of item.models.keys()) {
+      if (!models.has(ModelV2.ID.make(id))) catalog.model.remove(item.provider.id, id)
+    }
+    for (const [id, model] of models) {
+      catalog.model.update(item.provider.id, id, (draft) => Object.assign(draft, structuredClone(model)))
+    }
+  } else if (baseURL) {
+    for (const id of item.models.keys()) catalog.model.remove(item.provider.id, id)
+  }
+  if (!item.models.has(ModelV2.ID.make("gpt-5-chat-latest"))) return
+  catalog.model.update(item.provider.id, ModelV2.ID.make("gpt-5-chat-latest"), (model) => {
+    model.enabled = false
+  })
+}
+
+type CopilotCatalog = {
+  provider: {
+    get: (providerID: string) =>
+      | { provider: { id: string }; models: ReadonlyMap<string, unknown> }
+      | undefined
+  }
+  model: {
+    remove: (providerID: string, modelID: string) => void
+    update: (providerID: string, modelID: string, update: (model: { enabled: boolean }) => void) => void
+  }
+}
 
 function normalizeDomain(input: string) {
   return input.replace(/^https?:\/\//, "").replace(/\/$/, "")

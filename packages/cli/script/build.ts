@@ -5,7 +5,6 @@ import path from "path"
 import { Script } from "@ycoding-ai/script"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { modelsData } from "./generate"
-import { buildOpentuiNative } from "./opentui-native"
 import { BUN_BINARY } from "../src/binary"
 
 const dir = path.resolve(import.meta.dirname, "..")
@@ -53,8 +52,6 @@ const targets = singleFlag
       return item.abi === undefined
     })
   : allTargets
-
-buildOpentuiNative(targets.some((item) => item.os !== process.platform || item.arch !== process.arch))
 
 for (const item of targets) {
   const target = [

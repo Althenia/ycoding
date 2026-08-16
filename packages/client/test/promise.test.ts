@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { SessionCompaction } from "@ycoding-ai/schema"
 import { isSessionNotFoundError, isUnauthorizedError, YCoding } from "../src/promise/index"
 
 test("exposes every standard HTTP API group", () => {
@@ -684,7 +685,8 @@ test("session methods use the public HTTP contract", async () => {
     delivery: "queue",
     resume: false,
   })
-  await client.session.compact({ sessionID: "ses_test" })
+  const compactionID = SessionCompaction.ID.make("cmp_compaction_request")
+  const compacted = await client.session.compact({ sessionID: "ses_test", id: compactionID })
   await client.session.wait({ sessionID: "ses_test" })
   const context = await client.session.context({ sessionID: "ses_test" })
   const log = []
@@ -698,6 +700,15 @@ test("session methods use the public HTTP contract", async () => {
   expect(admitted.id).toBe("msg_test")
   expect(generated.text).toBe("A transient answer")
   expect(synthetic).toMatchObject({ type: "synthetic", data: { text: "Completed" }, delivery: "queue" })
+  expect(compacted).toMatchObject({
+    id: expect.stringMatching(/^cmp_/),
+    sessionID: "ses_test",
+    trigger: "manual",
+    admissionMode: "background",
+    status: "pending",
+  })
+  expect(compacted).not.toHaveProperty("summary")
+  expect(compacted).not.toHaveProperty("type")
   expect(context).toEqual([])
   expect(log).toEqual([modelSwitchedEvent, synced])
   expect(message).toEqual(modelSwitchedMessage)
@@ -730,6 +741,9 @@ test("session methods use the public HTTP contract", async () => {
     delivery: "queue",
     resume: false,
   })
+  const compactBody = requests.find((request) => request.url.endsWith("/compact"))?.init?.body
+  if (typeof compactBody !== "string") throw new Error("Expected JSON compaction request body")
+  expect(JSON.parse(compactBody)).toEqual({ id: compactionID })
 })
 
 test("middleware errors remain declared client errors", async () => {
@@ -811,10 +825,12 @@ const syntheticAdmission = {
 
 const compactionAdmission = {
   data: {
-    type: "compaction",
-    admittedSeq: 1,
-    id: "msg_compaction",
+    id: "cmp_compaction",
     sessionID: "ses_test",
+    trigger: "manual",
+    admissionMode: "background",
+    status: "pending",
+    requestedThrough: { messageID: "msg_compaction_request", seq: 1 },
     timeCreated: 1_717_171_717_000,
   },
 }

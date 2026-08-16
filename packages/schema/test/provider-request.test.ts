@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 
 const decode = Schema.decodeUnknownSync(ProviderRequest.Record)
+const decodeSpend = Schema.decodeUnknownSync(ProviderRequest.ModelSpend)
 
 const record = {
   id: "prq_123",
@@ -42,4 +43,18 @@ test("rejects unknown sources and non-positive counters", () => {
 test("decodes cache reset invalidation reasons", () => {
   for (const invalidation of ["compaction-reset", "model-switched", "model-variant-switched"] as const)
     expect(decode({ ...record, invalidation }).invalidation).toBe(invalidation)
+})
+
+test("requires cost provenance for priced model spend", () => {
+  const spend = {
+    model: record.model,
+    requests: 1,
+    tokens: record.tokens,
+    cost: record.cost,
+  }
+  expect(() => decodeSpend(spend)).toThrow()
+  expect(() => decodeSpend({ ...spend, cost: undefined, costProvenance: "recorded" })).toThrow()
+  expect(decodeSpend({ ...spend, costProvenance: "recorded" }).costProvenance).toBe("recorded")
+  expect(decodeSpend({ ...spend, costProvenance: "current_catalog" }).costProvenance).toBe("current_catalog")
+  expect(decodeSpend({ model: record.model, requests: 1, tokens: record.tokens })).not.toHaveProperty("costProvenance")
 })
