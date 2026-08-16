@@ -1,7 +1,7 @@
 # Architecture
 
 * [Package Architecture and Dependency Direction](architecture.md) - The YCoding repository enforces explicit package boundaries, directed dependencies, and state scopes driven by a TUI-only product identity.
-* [Provider Integration and Cache](provider-integration.md) - Provider integration optimizes cost and cache reuse without changing semantic behavior, with stable prompt prefixes, cache controls, normalized usage reporting, and session diagnostics.
+* [Provider Integration and Cache](provider-integration.md) - Provider integration optimizes cost and cache reuse without changing semantic behavior, with stable prompt prefixes, cache controls, and normalized usage reporting.
 
 # Repository Preference
 

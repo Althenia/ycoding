@@ -216,6 +216,19 @@ export type ProviderV2Info = {
   body?: { [x: string]: JsonValue }
 }
 
+export type ProviderUsageStatus = "available" | "stale" | "unsupported" | "unauthorized" | "error"
+
+export type ProviderUsageSource =
+  | "provider_api"
+  | "local_client_rpc"
+  | "response_headers"
+  | "provider_internal_api"
+  | "local_session"
+
+export type ProviderUsageStability = "stable" | "client_contract" | "observed" | "best_effort"
+
+export type ProviderUsageUnit = "percent" | "usd" | "requests" | "tokens" | "count"
+
 export type IntegrationWhen = { key: string; op: "eq" | "neq"; value: string }
 
 export type IntegrationCommandMethod = { id: string; type: "command"; label: string; command: Array<string> }
@@ -3600,6 +3613,77 @@ export type ProviderGetInput = {
 export type ProviderGetOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
   data: ProviderV2Info
+}
+
+export type ProviderUsageListInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["location"]
+  readonly refresh?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["refresh"]
+}
+
+export type ProviderUsageListOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: Array<{
+    providerID: string
+    label: string
+    status: ProviderUsageStatus
+    source: ProviderUsageSource
+    stability: ProviderUsageStability
+    updatedAt: number
+    windows: Array<{
+      id: string
+      label: string
+      unit: ProviderUsageUnit
+      used?: number
+      limit?: number
+      remaining?: number
+      unlimited?: boolean
+      resetAt?: number
+      periodSeconds?: number
+    }>
+    message?: string
+  }>
+}
+
+export type ProviderUsageGetInput = {
+  readonly providerID: { readonly providerID: string }["providerID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["location"]
+  readonly refresh?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly refresh?: boolean | undefined
+  }["refresh"]
+}
+
+export type ProviderUsageGetOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: {
+    providerID: string
+    label: string
+    status: ProviderUsageStatus
+    source: ProviderUsageSource
+    stability: ProviderUsageStability
+    updatedAt: number
+    windows: Array<{
+      id: string
+      label: string
+      unit: ProviderUsageUnit
+      used?: number
+      limit?: number
+      remaining?: number
+      unlimited?: boolean
+      resetAt?: number
+      periodSeconds?: number
+    }>
+    message?: string
+  }
 }
 
 export type IntegrationListInput = {

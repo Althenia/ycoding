@@ -5,15 +5,13 @@ import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { mcpSummary } from "../../mcp-presentation"
 
 export function Footer() {
   const { themeV2 } = useTheme()
   const data = useData()
   const route = useRoute()
-  const mcp = createMemo(
-    () => (data.location.mcp.server.list() ?? []).filter((x) => x.status.status === "connected").length,
-  )
-  const mcpError = createMemo(() => (data.location.mcp.server.list() ?? []).some((x) => x.status.status === "failed"))
+  const mcp = createMemo(() => mcpSummary(data.location.mcp.server.list() ?? []))
   const permissions = createMemo(() => {
     if (route.data.type !== "session") return []
     return data.session.permission.list(route.data.sessionID) ?? []
@@ -67,17 +65,26 @@ export function Footer() {
                 {permissions().length > 1 ? "s" : ""}
               </text>
             </Show>
-            <Show when={mcp()}>
+            <Show when={mcp().configured > 0}>
               <text fg={themeV2.text.default}>
                 <Switch>
-                  <Match when={mcpError()}>
+                  <Match when={mcp().attention > 0}>
                     <span style={{ fg: themeV2.text.feedback.error.default }}>⊙ </span>
                   </Match>
+                  <Match when={mcp().pending > 0}>
+                    <span style={{ fg: themeV2.text.feedback.warning.default }}>⊙ </span>
+                  </Match>
                   <Match when={true}>
-                    <span style={{ fg: themeV2.text.feedback.success.default }}>⊙ </span>
+                    <span
+                      style={{
+                        fg: mcp().connected > 0 ? themeV2.text.feedback.success.default : themeV2.text.subdued,
+                      }}
+                    >
+                      ⊙{" "}
+                    </span>
                   </Match>
                 </Switch>
-                {mcp()} MCP
+                {mcp().label}
               </text>
             </Show>
             <text fg={themeV2.text.subdued}>/status</text>

@@ -1,12 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import {
-  resolve,
-  ConfigProvider,
-  useConfig,
-  type Interface,
-} from "../src/config"
+import { resolve, ConfigProvider, useConfig, type Interface } from "../src/config"
 
 test("resolves nested config and keybind defaults", () => {
   const config = resolve(
@@ -28,6 +23,7 @@ test("resolves nested config and keybind defaults", () => {
 
   expect(resolve({}, { terminalSuspend: true }).attention.enabled).toBe(true)
   expect(resolve({ attention: { enabled: false } }, { terminalSuspend: true }).attention.enabled).toBe(false)
+  expect(resolve({ terminal: { copy_on_select: true } }, { terminalSuspend: true }).terminal?.copy_on_select).toBe(true)
 })
 
 test("provides config and its host interface", async () => {

@@ -418,8 +418,9 @@ function RejectPrompt(props: {
   )
 }
 
-function Prompt<const T extends Record<string, string>>(props: {
+export function Prompt<const T extends Record<string, string>>(props: {
   title: string
+  kind?: "permission" | "guardrail"
   semanticLabel?: string
   instance: string
   header?: JSX.Element
@@ -431,6 +432,7 @@ function Prompt<const T extends Record<string, string>>(props: {
 }) {
   const { themeV2 } = useTheme().contextual("elevated")
   const dimensions = useTerminalDimensions()
+  const kind = props.kind ?? "permission"
   const keys = Object.keys(props.options) as (keyof T)[]
   const [store, setStore] = createStore({
     selected: keys[0],
@@ -527,7 +529,7 @@ function Prompt<const T extends Record<string, string>>(props: {
 
   const content = () => (
     <box
-      id="session.permission"
+      id={`session.${kind}`}
       ref={SimulationSemantics.bind(() => ({
         instance: props.instance,
         role: "dialog",
@@ -578,11 +580,11 @@ function Prompt<const T extends Record<string, string>>(props: {
         alignItems={narrow() ? "flex-start" : "center"}
       >
         <box
-          id="session.permission.actions"
+          id={`session.${kind}.actions`}
           ref={SimulationSemantics.bind(() => ({
             instance: props.instance,
             role: "listbox",
-            label: "Permission choices",
+            label: kind === "guardrail" ? "Guardrail choices" : "Permission choices",
           }))}
           flexDirection="row"
           gap={1}
@@ -591,7 +593,7 @@ function Prompt<const T extends Record<string, string>>(props: {
           <For each={keys}>
             {(option) => (
               <box
-                id={`session.permission.action.${String(option)}`}
+                id={`session.${kind}.action.${String(option)}`}
                 ref={SimulationSemantics.bind(() => ({
                   instance: props.instance,
                   role: "option",

@@ -18,6 +18,8 @@ type Renderer = {
 
 type SelectionKeyEvent = {
   ctrl?: boolean
+  meta?: boolean
+  super?: boolean
   name: string
   preventDefault: () => void
   stopPropagation: () => void
@@ -48,11 +50,15 @@ export function handleSelectionKey(
   toast: Toast,
   event: SelectionKeyEvent,
   clipboard: ClipboardService,
+  platform: NodeJS.Platform,
 ) {
   const selection = renderer.getSelection()
   if (!selection) return
 
-  if (event.ctrl && event.name === "c") {
+  const copyKey =
+    event.name === "c" && (platform === "darwin" ? Boolean(event.meta || event.super) : Boolean(event.ctrl))
+
+  if (copyKey) {
     if (!copy(renderer, toast, clipboard)) {
       renderer.clearSelection()
       return

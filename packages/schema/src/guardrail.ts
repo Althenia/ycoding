@@ -42,7 +42,6 @@ export const Rule = Schema.Struct({
   resources: NonEmptyStrings,
   reason: Schema.String.check(Schema.isNonEmpty()),
   priority: Schema.Int,
-  persistent: Schema.Boolean.pipe(optional),
 }).annotate({ identifier: "Guardrail.Rule" })
 
 export const Ruleset = Schema.Array(Rule).annotate({ identifier: "Guardrail.Ruleset" })

@@ -130,3 +130,10 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     mock.restore()
   }
 })
+
+test("passive mouse selection never writes to the clipboard", async () => {
+  const source = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
+  expect(source).not.toContain("MouseButton.RIGHT")
+  expect(source).not.toContain("onMouseUp={\n        copyOnSelectEnabled()")
+  expect(source).toContain("Selection.handleSelectionKey")
+})

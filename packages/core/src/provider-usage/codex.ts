@@ -69,25 +69,22 @@ export interface NormalizeInput {
 
 export function normalize(input: NormalizeInput) {
   const root = unwrap(input.response)
-  const global = object(root.rateLimits ?? root.rate_limits ?? root.rateLimit ?? root.rate_limit ?? root)
-  const plan = accountType(global) ?? accountType(root)
+  const global = object(root.rateLimits ?? root.rate_limits ?? root)
   const byID = object(root.rateLimitsByLimitId ?? root.rate_limits_by_limit_id, false) ?? {}
   const windows = [
     ...snapshotWindows(global, string(global.limitId ?? global.limit_id) ?? "codex", false),
     ...Object.entries(byID).flatMap(([id, value]) => snapshotWindows(object(value), id, true)),
-    ...additionalWindows(root.additionalRateLimits ?? root.additional_rate_limits),
     ...resetCreditWindows(root.rateLimitResetCredits ?? root.rate_limit_reset_credits),
   ]
-  const message = statusMessage(global) ?? statusMessage(root)
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
-    label: plan && !input.label.toLowerCase().includes(plan.toLowerCase()) ? `${input.label} ${plan}` : input.label,
+    label: input.label,
     status: "available",
     source: input.source,
     stability: input.stability,
     updatedAt: Math.max(0, Math.trunc(input.updatedAt)),
     windows,
-    ...(message === undefined ? {} : { message }),
+    ...(planMessage(global) === undefined ? {} : { message: planMessage(global) }),
   })
 }
 
@@ -106,20 +103,8 @@ export function accountHeaders(value: Credential.OAuth) {
 function snapshotWindows(value: Record<string, unknown>, limitID: string, named: boolean) {
   const label = limitLabel(limitID)
   return [
-    ...rateWindow(
-      value.primary ?? value.primaryWindow ?? value.primary_window,
-      `${limitID}-primary`,
-      named ? `${label} 5-hour` : "5-hour",
-      "primary",
-      named,
-    ),
-    ...rateWindow(
-      value.secondary ?? value.secondaryWindow ?? value.secondary_window,
-      `${limitID}-secondary`,
-      named ? `${label} weekly` : "Weekly",
-      "secondary",
-      named,
-    ),
+    ...rateWindow(value.primary, `${limitID}-primary`, named ? `${label} 5-hour` : "5-hour", "primary", named),
+    ...rateWindow(value.secondary, `${limitID}-secondary`, named ? `${label} weekly` : "Weekly", "secondary", named),
     ...creditWindows(value.credits, `${limitID}-credits`, named ? `${label} credits` : "Credits"),
     ...individualLimitWindows(value.individualLimit ?? value.individual_limit, limitID, label, named),
   ]
@@ -130,19 +115,9 @@ function rateWindow(value: unknown, id: string, preferredLabel: string, kind: st
   const item = object(value)
   const used = percent(item.usedPercent ?? item.used_percent, `${id}.usedPercent`)
   if (used === undefined) return []
-  const durationMinutes = nonNegative(
-    item.windowDurationMins ?? item.window_duration_mins,
-    `${id}.windowDurationMins`,
-    false,
-  )
-  const durationSeconds = nonNegative(
-    item.limitWindowSeconds ?? item.limit_window_seconds,
-    `${id}.limitWindowSeconds`,
-    false,
-  )
-  const duration = durationMinutes ?? (durationSeconds === undefined ? undefined : durationSeconds / 60)
-  const resetAt = reset(item.resetsAt ?? item.resets_at ?? item.resetAt ?? item.reset_at, `${id}.resetsAt`)
-  const label = windowLabel(id, preferredLabel, kind, named, duration)
+  const duration = nonNegative(item.windowDurationMins ?? item.window_duration_mins, `${id}.windowDurationMins`, false)
+  const resetAt = reset(item.resetsAt ?? item.resets_at, `${id}.resetsAt`)
+  const label = named && !knownDuration(duration, kind) ? `${limitLabel(id.replace(/-(primary|secondary)$/, ""))} ${kind}` : preferredLabel
   return [
     new ProviderUsage.Window({
       id: safeID(id),
@@ -153,19 +128,6 @@ function rateWindow(value: unknown, id: string, preferredLabel: string, kind: st
       ...(duration === undefined ? {} : { periodSeconds: Math.trunc(duration * 60) }),
     }),
   ]
-}
-
-function additionalWindows(value: unknown) {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((item, index) => {
-    if (!record(item)) return []
-    const limits = object(item.rateLimit ?? item.rate_limit ?? item, false)
-    if (!limits) return []
-    const id =
-      string(item.limitId ?? item.limit_id ?? item.limitName ?? item.limit_name ?? item.meteredFeature ?? item.metered_feature) ??
-      `additional-${index + 1}`
-    return snapshotWindows(limits, id, true)
-  })
 }
 
 function creditWindows(value: unknown, id: string, label: string) {
@@ -222,26 +184,19 @@ function unwrap(value: unknown) {
   return object(root.result, false) ?? root
 }
 
-function statusMessage(value: Record<string, unknown>) {
+function planMessage(value: Record<string, unknown>) {
+  const plan = string(value.planType ?? value.plan_type)
   const reached = string(value.rateLimitReachedType ?? value.rate_limit_reached_type)
   const spend = boolean(value.spendControlReached ?? value.spend_control_reached)
-  const items = [reached ? `Reached: ${reached}` : undefined, spend ? "Spend control reached" : undefined]
+  const items = [plan ? `Plan: ${plan}` : undefined, reached ? `Reached: ${reached}` : undefined, spend ? "Spend control reached" : undefined]
     .filter((item): item is string => item !== undefined)
   return items.length ? items.join(" · ") : undefined
 }
 
-function accountType(value: Record<string, unknown>) {
-  const plan = string(value.planType ?? value.plan_type)?.toLowerCase()
-  if (plan === "plus") return "Plus"
-  if (plan === "pro") return "Pro"
-  return undefined
-}
-
-function windowLabel(id: string, fallback: string, kind: string, named: boolean, duration: number | undefined) {
-  const prefix = named ? `${limitLabel(id.replace(/-(primary|secondary)$/, ""))} ` : ""
-  if (duration === 300) return `${prefix}5-hour`
-  if (duration === 10080) return named ? `${prefix}weekly` : "Weekly"
-  return named ? `${prefix}${kind}` : fallback
+function knownDuration(value: number | undefined, kind: string) {
+  if (kind === "primary") return value === 300
+  if (kind === "secondary") return value === 10080
+  return false
 }
 
 function limitLabel(value: string) {

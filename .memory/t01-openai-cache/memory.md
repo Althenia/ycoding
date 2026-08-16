@@ -1,3 +1,0 @@
-- Direct GPT-5.6 Responses cache candidates are capped at 50 total; implicit mode reserves one for OpenAI, and a system marker reserves one explicit slot. Old manual message hints are pruned before lowering.
-- Final focused validation: AI cache/Responses tests 139 pass, Core cache tests 13 pass; AI/Core typechecks, AI build, root lint, Effect-pattern lint, and `git diff --check` pass.
-- Runtime smoke was not run because the required `ycoding-dev` skill is unavailable.

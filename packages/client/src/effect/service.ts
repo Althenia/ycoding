@@ -1,6 +1,8 @@
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { Effect, FileSystem, Option, Schedule, Schema } from "effect"
 import { spawn, type ChildProcess } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { readFileSync, rmSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type { DiscoverOptions, Endpoint, EnsureOptions, StopOptions } from "../service.js"
@@ -20,6 +22,7 @@ export type Info = import("../service.js").Info
 type Contender = {
   readonly child: ChildProcess
   readonly error: () => Error | undefined
+  readonly startupErrorFile?: string
 }
 
 // Read-only lookup: registration file plus health check and version gate.
@@ -67,15 +70,23 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
   const spawnContender = Effect.gen(function* () {
     const [command, ...args] = options.command ?? ["ycoding", "serve", "--service"]
     if (command === undefined) return yield* Effect.fail(new Error("Missing service command"))
+    const startupErrorFile = options.startupErrorFile ? `${options.startupErrorFile}.${randomUUID()}` : undefined
     return yield* Effect.try({
       try: () => {
-        const child = spawn(command, args, { detached: true, stdio: "ignore" })
+        const child = spawn(command, args, {
+          detached: true,
+          stdio: "ignore",
+          env:
+            startupErrorFile === undefined
+              ? process.env
+              : { ...process.env, YCODING_SERVICE_STARTUP_ERROR_FILE: startupErrorFile },
+        })
         let error: Error | undefined
         child.once("error", (cause) => {
           error = new Error("Failed to start server", { cause })
         })
         child.unref()
-        return { child, error: () => error }
+        return { child, error: () => error, startupErrorFile }
       },
       catch: (cause) => new Error("Failed to start server", { cause }),
     })
@@ -110,7 +121,10 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
       ownerHeld = true
       spawnDelay = Math.min(spawnDelay * 2, 30_000)
     }
-    finished.forEach((item) => contenders.delete(item))
+    finished.forEach((item) => {
+      cleanupContender(item)
+      contenders.delete(item)
+    })
     // Keep one candidate plus one lock probe so a pre-lock stall cannot block recovery.
     if (contenders.size < 2 && Date.now() - lastSpawn >= spawnDelay) {
       yield* announce("missing")
@@ -123,6 +137,7 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
       until: Option.isSome,
       schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(120)]),
     }),
+    Effect.ensuring(Effect.sync(() => contenders.forEach(cleanupContender))),
   )
   if (Option.isNone(found))
     return yield* Effect.fail(new Error("Timed out waiting for the background service to start"))
@@ -132,11 +147,26 @@ export const ensure = Effect.fn("service.ensure")(function* (options: EnsureOpti
 function contenderFailure(contender: Contender) {
   const error = contender.error()
   if (error !== undefined) return error
+  const detail = readStartupError(contender.startupErrorFile)
   if (contender.child.exitCode !== null && contender.child.exitCode !== 0)
-    return new Error(`Server process exited with code ${contender.child.exitCode}`)
+    return new Error(detail ?? `Server process exited with code ${contender.child.exitCode}`)
   if (contender.child.signalCode !== null)
-    return new Error(`Server process terminated by ${contender.child.signalCode}`)
+    return new Error(detail ?? `Server process terminated by ${contender.child.signalCode}`)
   return undefined
+}
+
+function readStartupError(file?: string) {
+  if (file === undefined) return undefined
+  try {
+    return readFileSync(file, "utf8").trim() || undefined
+  } catch {
+    return undefined
+  }
+}
+
+function cleanupContender(contender: Contender) {
+  if (contender.startupErrorFile === undefined) return
+  rmSync(contender.startupErrorFile, { force: true })
 }
 
 function contenderFinished(contender: Contender) {

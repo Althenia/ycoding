@@ -7,7 +7,6 @@ import { Schema } from "effect"
 export interface NormalizeHeadersInput {
   readonly providerID: ProviderV2.ID
   readonly label: string
-  readonly subscriptionType?: string
   readonly observedAt: number
   readonly headers: Headers | Readonly<Record<string, string>>
 }
@@ -15,7 +14,6 @@ export interface NormalizeHeadersInput {
 export interface NormalizeOAuthInput {
   readonly providerID: ProviderV2.ID
   readonly label: string
-  readonly subscriptionType?: string
   readonly updatedAt: number
   readonly response: unknown
 }
@@ -26,8 +24,8 @@ export class RequestError extends Schema.TaggedErrorClass<RequestError>()("Claud
 }) {}
 
 export interface LoadOAuthInput extends Omit<NormalizeOAuthInput, "response"> {
-  readonly resolve: () => Promise<{ readonly accessToken: string; readonly subscriptionType?: string } | null>
-  readonly refresh: () => Promise<{ readonly accessToken: string; readonly subscriptionType?: string } | null>
+  readonly resolve: () => Promise<{ readonly accessToken: string } | null>
+  readonly refresh: () => Promise<{ readonly accessToken: string } | null>
   readonly request: (accessToken: string) => Promise<{
     readonly status: number
     readonly retryAfter?: number
@@ -38,14 +36,10 @@ export interface LoadOAuthInput extends Omit<NormalizeOAuthInput, "response"> {
 export async function loadOAuth(input: LoadOAuthInput) {
   const current = await input.resolve()
   if (!current) throw new RequestError({ status: 401 })
-  let account = current
   let response = await input.request(current.accessToken)
   if (response.status === 401) {
     const refreshed = await input.refresh()
-    if (refreshed && refreshed.accessToken !== current.accessToken) {
-      account = refreshed
-      response = await input.request(refreshed.accessToken)
-    }
+    if (refreshed && refreshed.accessToken !== current.accessToken) response = await input.request(refreshed.accessToken)
   }
   if (response.status < 200 || response.status >= 300)
     throw new RequestError({
@@ -55,7 +49,6 @@ export async function loadOAuth(input: LoadOAuthInput) {
   return normalizeOAuth({
     providerID: input.providerID,
     label: input.label,
-    subscriptionType: account.subscriptionType ?? input.subscriptionType,
     updatedAt: input.updatedAt,
     response: response.body,
   })
@@ -70,7 +63,7 @@ export function normalizeHeaders(input: NormalizeHeadersInput) {
   ]
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
-    label: accountLabel(input.label, input.subscriptionType),
+    label: input.label,
     status: "available",
     source: "response_headers",
     stability: "observed",
@@ -84,8 +77,6 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
   const windows = Object.entries(input.response).flatMap(([key, value]) => {
     if (key === "extra_usage") return extraUsage(value)
     if (key !== "five_hour" && key !== "seven_day" && !key.startsWith("seven_day_")) return []
-    // Claude reports every known bucket and sets the inactive ones to null.
-    if (value === null || value === undefined) return []
     if (!record(value)) throw new Error(`Invalid Claude usage bucket: ${key}`)
     const used = percentage(value.utilization, key, false)
     if (used === undefined) return []
@@ -100,40 +91,14 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
       }),
     ]
   })
-  const seen = new Set(windows.map((window) => window.id))
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
-    label: accountLabel(input.label, input.subscriptionType),
+    label: input.label,
     status: "available",
     source: "provider_internal_api",
     stability: "best_effort",
     updatedAt: Math.max(0, Math.trunc(input.updatedAt)),
-    windows: [...windows, ...scopedWindows(input.response.limits).filter((window) => !seen.has(window.id))],
-  })
-}
-
-/**
- * Newer accounts report per-model weekly lanes only through `limits`, where the legacy
- * `seven_day_<model>` buckets stay null.
- */
-function scopedWindows(value: unknown) {
-  if (!Array.isArray(value)) return []
-  return value.flatMap((entry) => {
-    if (!record(entry) || entry.kind !== "weekly_scoped" || !record(entry.scope)) return []
-    const model = record(entry.scope.model) ? entry.scope.model.display_name : undefined
-    if (typeof model !== "string" || !model.trim()) return []
-    const used = percentage(entry.percent, "limits.percent", false)
-    if (used === undefined) return []
-    const resetAt = reset(entry.resets_at, "limits.resets_at")
-    return [
-      new ProviderUsage.Window({
-        id: `seven-day-${model.trim().toLowerCase().replaceAll(" ", "-")}`,
-        label: `${model.trim()} weekly`,
-        unit: "percent",
-        used,
-        ...(resetAt === undefined ? {} : { resetAt }),
-      }),
-    ]
+    windows,
   })
 }
 
@@ -202,16 +167,10 @@ function extraUsage(value: unknown) {
 }
 
 function bucketLabel(key: string) {
-  if (key === "five_hour") return "Session"
-  if (key === "seven_day") return "All models"
+  if (key === "five_hour") return "5-hour"
+  if (key === "seven_day") return "Weekly"
   const model = key.slice("seven_day_".length)
   return `${model.charAt(0).toUpperCase()}${model.slice(1).replaceAll("_", " ")} weekly`
-}
-
-function accountLabel(label: string, subscriptionType: string | undefined) {
-  const normalized = subscriptionType?.trim().toLowerCase()
-  const accountType = normalized === "pro" ? "Pro" : normalized === "max" ? "Max" : undefined
-  return accountType && !label.toLowerCase().includes(accountType.toLowerCase()) ? `${label} ${accountType}` : label
 }
 
 function percentage(value: unknown, field: string, ratio: boolean) {

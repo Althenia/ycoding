@@ -60,6 +60,7 @@ import { DialogFork } from "./dialog-fork"
 import { DialogTimeline } from "./dialog-timeline"
 import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
+import { ProviderUsageCommand } from "./provider-usage"
 import { SubagentFooter } from "./subagent-footer"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
@@ -71,6 +72,7 @@ import { projectedPromptInput } from "../../prompt/codec"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
+import { GuardrailPrompt } from "./guardrail"
 import { FormPrompt } from "./form"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
@@ -168,6 +170,10 @@ export function Session() {
       (sessionID) => data.session.permission.list(sessionID) ?? [],
     )
   })
+  const guardrails = createMemo(() => {
+    if (session()?.parentID) return []
+    return data.session.guardrail.list(route.sessionID)
+  })
   const forms = createMemo(() => {
     const global = data.session.form.list("global", location()) ?? []
     if (session()?.parentID) return global
@@ -179,7 +185,7 @@ export function Session() {
     open: false,
     tab: undefined as string | undefined,
   })
-  const disabled = createMemo(() => permissions().length > 0 || forms().length > 0)
+  const disabled = createMemo(() => guardrails().length > 0 || permissions().length > 0 || forms().length > 0)
 
   const pending = createMemo(() => {
     const completed = messages().findLast((x) => x.type === "assistant" && x.time.completed)?.id
@@ -321,6 +327,7 @@ export function Session() {
       await Promise.all([
         data.session.sync(sessionID),
         data.session.permission.sync(sessionID),
+        data.session.guardrail.sync(sessionID),
         data.session.form.sync(sessionID),
       ])
       const info = data.session.get(sessionID)
@@ -1030,6 +1037,7 @@ export function Session() {
       }}
     >
       <SessionMemoryCommand sessionID={route.sessionID} />
+      <ProviderUsageCommand />
       <box flexDirection="row" flexGrow={1} minHeight={0}>
         <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
           <Show when={session()}>
@@ -1095,6 +1103,14 @@ export function Session() {
               />
               <Switch>
                 <Match when={composer.open || (!!session()?.parentID && forms().length === 0)}>{null}</Match>
+                <Match when={guardrails().length > 0}>
+                  <Show when={guardrails()[0]?.id} keyed>
+                    {(_) => {
+                      const request = guardrails()[0]
+                      return request ? <GuardrailPrompt request={request} /> : null
+                    }}
+                  </Show>
+                </Match>
                 <Match when={permissions().length > 0}>
                   <Show when={permissions()[0]?.id} keyed>
                     {(_) => {

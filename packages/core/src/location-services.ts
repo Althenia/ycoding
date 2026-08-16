@@ -26,6 +26,7 @@ import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginSupervisor } from "./plugin/supervisor"
 import { ProjectCopy } from "./project/copy"
+import { ProviderUsageV2 } from "./provider-usage"
 import { ProjectArtifactSource } from "./project-artifact/source"
 import { Pty } from "./pty"
 import { QuestionV2 } from "./question"
@@ -65,6 +66,7 @@ const locationServiceNodes = [
   Catalog.node,
   AISDK.node,
   PluginV2.node,
+  ProviderUsageV2.node,
   PluginSupervisor.node,
   ProjectCopy.node,
   ProjectCopy.refreshNode,

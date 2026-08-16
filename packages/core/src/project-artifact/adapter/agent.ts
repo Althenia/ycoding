@@ -76,15 +76,13 @@ function renderPermissions(rules: Permission.Ruleset) {
 }
 
 function property(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object" || !(key in value)) return undefined
-  return value[key as keyof typeof value]
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
+  return Object.prototype.hasOwnProperty.call(value, key) ? Reflect.get(value, key) : undefined
 }
 
 function field(value: unknown, key: string) {
-  if (!value || typeof value !== "object" || !(key in value) || typeof value[key as keyof typeof value] !== "string") {
-    return undefined
-  }
-  return value[key as keyof typeof value]
+  const result = property(value, key)
+  return typeof result === "string" ? result : undefined
 }
 
 function requiredField(value: unknown, key: string) {

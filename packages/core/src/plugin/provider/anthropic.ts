@@ -1,4 +1,5 @@
 import { define } from "@ycoding-ai/plugin/effect/plugin";
+import { ProviderUsage } from "@ycoding-ai/schema/provider-usage";
 import { Effect, Semaphore, Stream } from "effect";
 import { join } from "node:path";
 import { Credential } from "../../credential";
@@ -6,6 +7,8 @@ import { EventV2 } from "../../event";
 import { Global } from "../../global";
 import { Integration } from "../../integration";
 import { ProviderV2 } from "../../provider";
+import { ProviderUsageV2 } from "../../provider-usage";
+import { ClaudeUsage } from "../../provider-usage/claude";
 import {
   createClaudeCodeCredentialStore,
   createClaudeCodeFetch,
@@ -96,6 +99,7 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
         onEvent,
       });
       const credentials = yield* Credential.Service;
+      const providerUsage = yield* ProviderUsageV2.Service;
       const events = yield* EventV2.Service;
       yield* Effect.forEach(
         yield* credentials.list(Integration.ID.make("anthropic")),
@@ -298,8 +302,29 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
             evt.options.fetch = createClaudeCodeFetch({
               fetch: upstream,
               credentials: () => store.resolve(source),
-              reload: () => store.reload(source),
+              reload: () => store.refresh(source),
               onEvent,
+              onResponse: async (response) => {
+                const snapshot = ClaudeUsage.normalizeHeaders({
+                  providerID: ProviderV2.ID.make("anthropic"),
+                  label: "Claude",
+                  observedAt: Date.now(),
+                  headers: response.headers,
+                });
+                if (snapshot.windows.length === 0) return;
+                await Effect.runPromise(
+                  providerUsage.observe(
+                    new ProviderUsage.Observation({
+                      providerID: snapshot.providerID,
+                      label: snapshot.label,
+                      source: snapshot.source,
+                      stability: snapshot.stability,
+                      observedAt: snapshot.updatedAt,
+                      windows: snapshot.windows,
+                    }),
+                  ),
+                );
+              },
             });
           }
           const mod = yield* Effect.promise(() => import("@ai-sdk/anthropic"));

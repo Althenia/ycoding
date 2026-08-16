@@ -207,6 +207,8 @@ describe("SubagentTool", () => {
           prompt: "p".repeat(64 * 1024 + 1),
         }),
       ).toThrow()
+      expect(SubagentTool.description).toContain("Do not mention subagent status unless the user explicitly asks")
+      expect(SubagentTool.description).not.toContain("you will be notified when they finish")
     }),
   )
 
@@ -464,9 +466,9 @@ describe("SubagentTool", () => {
   it.effect("sends progress prompts every ten minutes until interrupted", () =>
     Effect.gen(function* () {
       const prompts: string[] = []
-      const fiber = yield* SubagentTool.repeatProgress(Effect.sync(() => prompts.push(SubagentTool.progressPrompt))).pipe(
-        Effect.forkScoped,
-      )
+      const fiber = yield* SubagentTool.repeatProgress(
+        Effect.sync(() => prompts.push(SubagentTool.progressPrompt)),
+      ).pipe(Effect.forkScoped)
 
       yield* TestClock.adjust("10 minutes")
       expect(prompts).toEqual(["Report current status, blockers, and ETA."])
@@ -747,39 +749,33 @@ describe("SubagentTool", () => {
           expect((yield* orchestration.resume({ parentID: parent.id, childID: child.sessionID })).state).toBe("running")
           yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: "done" })
           expect(
-            (
-              yield* orchestration.send({
-                parentID: parent.id,
-                childID: child.sessionID,
-                messageID: SessionMessage.ID.make("msg_completed_reuse"),
-                text: "completed",
-                delivery: "steer",
-              })
-            ).state,
+            (yield* orchestration.send({
+              parentID: parent.id,
+              childID: child.sessionID,
+              messageID: SessionMessage.ID.make("msg_completed_reuse"),
+              text: "completed",
+              delivery: "steer",
+            })).state,
           ).toBe("running")
           yield* orchestration.settle(child.sessionID, { type: "failed", error: "failed" })
           expect(
-            (
-              yield* orchestration.send({
-                parentID: parent.id,
-                childID: child.sessionID,
-                messageID: SessionMessage.ID.make("msg_failed_reuse"),
-                text: "failed",
-                delivery: "steer",
-              })
-            ).state,
+            (yield* orchestration.send({
+              parentID: parent.id,
+              childID: child.sessionID,
+              messageID: SessionMessage.ID.make("msg_failed_reuse"),
+              text: "failed",
+              delivery: "steer",
+            })).state,
           ).toBe("running")
           yield* orchestration.settle(child.sessionID, { type: "lost" })
           expect(
-            (
-              yield* orchestration.send({
-                parentID: parent.id,
-                childID: child.sessionID,
-                messageID: SessionMessage.ID.make("msg_lost_reuse"),
-                text: "lost",
-                delivery: "steer",
-              })
-            ).state,
+            (yield* orchestration.send({
+              parentID: parent.id,
+              childID: child.sessionID,
+              messageID: SessionMessage.ID.make("msg_lost_reuse"),
+              text: "lost",
+              delivery: "steer",
+            })).state,
           ).toBe("running")
         }),
       ),
@@ -937,19 +933,27 @@ describe("SubagentTool", () => {
 
           const unstarted = yield* launch("recover_unstarted")
           expect(executionWakes.filter((id) => id === unstarted.sessionID)).toHaveLength(1)
-           yield* orchestration.recover
-           expect(executionWakes.filter((id) => id === unstarted.sessionID)).toHaveLength(2)
+          yield* orchestration.recover
+          expect(executionWakes.filter((id) => id === unstarted.sessionID)).toHaveLength(2)
 
           const terminalPending = yield* launch("recover_terminal_pending")
           const db = (yield* Database.Service).db
-          yield* db.delete(SessionPendingTable).where(eq(SessionPendingTable.session_id, terminalPending.sessionID)).run()
+          yield* db
+            .delete(SessionPendingTable)
+            .where(eq(SessionPendingTable.session_id, terminalPending.sessionID))
+            .run()
           yield* orchestration.settle(terminalPending.sessionID, { type: "completed", excerpt: "done" })
           yield* sessions.synthetic({
             id: SessionMessage.ID.make("msg_recover_terminal_1"),
             sessionID: terminalPending.sessionID,
             text: "admitted before task reactivation",
             description: "Parent subagent message",
-            metadata: { source: "subagent_parent", parentID: parent.id, childID: terminalPending.sessionID, kind: "message" },
+            metadata: {
+              source: "subagent_parent",
+              parentID: parent.id,
+              childID: terminalPending.sessionID,
+              kind: "message",
+            },
             delivery: "steer",
             resume: false,
           })
@@ -958,7 +962,12 @@ describe("SubagentTool", () => {
             sessionID: terminalPending.sessionID,
             text: "second admitted input",
             description: "Parent subagent message",
-            metadata: { source: "subagent_parent", parentID: parent.id, childID: terminalPending.sessionID, kind: "message" },
+            metadata: {
+              source: "subagent_parent",
+              parentID: parent.id,
+              childID: terminalPending.sessionID,
+              kind: "message",
+            },
             delivery: "queue",
             resume: false,
           })
@@ -967,7 +976,7 @@ describe("SubagentTool", () => {
           expect(executionWakes.filter((id) => id === terminalPending.sessionID)).toHaveLength(2)
           expect((yield* orchestration.get(parent.id, terminalPending.sessionID)).state).toBe("running")
 
-           const inFlight = yield* launch("recover_inflight")
+          const inFlight = yield* launch("recover_inflight")
           const assistantMessageID = SessionMessage.ID.make("msg_inflight_assistant")
           yield* EventV2.Service.use((events) =>
             events.publish(SessionEvent.Step.Started, {
@@ -1195,18 +1204,18 @@ describe("SubagentTool", () => {
           const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
           yield* waitForTool(registry, SubagentTool.name)
 
-          expect(
-            yield* executeTool(registry, {
-              sessionID: parent.id,
-              ...toolIdentity,
-              call: {
-                type: "tool-call",
-                id: "call-subagent-failure",
-                name: SubagentTool.name,
-                input: { agent: "reviewer", description: "fail review", prompt: "please fail" },
-              },
-            }),
-          ).toMatchObject({ type: "text", value: expect.stringContaining("working in the background") })
+          const launch = yield* executeTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-failure",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "fail review", prompt: "please fail" },
+            },
+          })
+          expect(launch).toMatchObject({ type: "text", value: expect.stringContaining("Subagent launched") })
+          expect(launch).toMatchObject({ type: "text", value: expect.not.stringContaining("notify the user") })
         }),
       ),
     ),

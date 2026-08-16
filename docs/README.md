@@ -20,15 +20,18 @@ A plan, deleted package, stale generated file, or upstream page does not overrid
 
 ## Index
 
-| Document | Purpose |
-| --- | --- |
-| [`product-direction.md`](./product-direction.md) | TUI-only product scope, priorities, and compatibility policy. |
-| [`architecture.md`](./architecture.md) | Active package graph, ownership, runtime flow, and constraints. |
-| [`runtime.md`](./runtime.md) | Implemented Session, autonomy, subagent, skill, artifact, cache, and transcript behavior. |
-| [`ycoding-migration.md`](./ycoding-migration.md) | Canonical YCoding identifiers and external-provider exceptions. |
-| [`upstream-differences.md`](./upstream-differences.md) | Historical upstream attribution and maintained divergence ledger. |
-| [`../specs/v2/README.md`](../specs/v2/README.md) | Detailed cross-module contracts and accepted decisions. |
-| [`../AGENTS.md`](../AGENTS.md) | Mandatory contributor and coding-agent invariants. |
+| Document                                               | Purpose                                                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| [`product-direction.md`](./product-direction.md)       | TUI-only product scope, priorities, and compatibility policy.                                          |
+| [`architecture.md`](./architecture.md)                 | Active package graph, ownership, runtime flow, and constraints.                                        |
+| [`runtime.md`](./runtime.md)                           | Implemented Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior. |
+| [`configuration.md`](./configuration.md)               | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.         |
+| [`repository-resources.md`](./repository-resources.md) | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules. |
+| [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md) | Operator configuration for agent permissions, custom guardrails, caps, and provider quota sources. |
+| [`ycoding-migration.md`](./ycoding-migration.md)       | Canonical YCoding identifiers and external-provider exceptions.                                        |
+| [`upstream-differences.md`](./upstream-differences.md) | Historical upstream attribution and maintained divergence ledger.                                      |
+| [`../specs/v2/README.md`](../specs/v2/README.md)       | Detailed cross-module contracts and accepted decisions.                                                |
+| [`../AGENTS.md`](../AGENTS.md)                         | Mandatory contributor and coding-agent invariants.                                                     |
 
 ## Documentation placement
 
@@ -40,15 +43,17 @@ Temporary implementation plans belong under an explicitly temporary planning dir
 
 ## Required updates
 
-| Change | Required documentation |
-| --- | --- |
-| Product scope or release surface | `product-direction.md` and root `README.md` |
-| Package ownership or dependency direction | `architecture.md` and root `AGENTS.md` |
-| Session, autonomy, subagent, skill, artifact, cache, or transcript behavior | `runtime.md` |
-| Public HTTP operation or Schema | relevant `specs/v2` contract and regenerated Client output |
-| Product identity, path, environment, or provider exception | `ycoding-migration.md` |
-| Historical upstream divergence | `upstream-differences.md` |
-| Contributor invariant or verification requirement | root or package-level `AGENTS.md` |
+| Change                                                                             | Required documentation                                     |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Product scope or release surface                                                   | `product-direction.md` and root `README.md`                |
+| Package ownership or dependency direction                                          | `architecture.md` and root `AGENTS.md`                     |
+| Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                               |
+| Public HTTP operation or Schema                                                    | relevant `specs/v2` contract and regenerated Client output |
+| Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration | `configuration.md`                                         |
+| Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery | `repository-resources.md`                                  |
+| Product identity, path, environment, or provider exception                         | `ycoding-migration.md`                                     |
+| Historical upstream divergence                                                     | `upstream-differences.md`                                  |
+| Contributor invariant or verification requirement                                  | root or package-level `AGENTS.md`                          |
 
 ## Status language
 

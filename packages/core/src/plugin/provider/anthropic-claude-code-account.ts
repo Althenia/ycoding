@@ -30,6 +30,7 @@ export interface ClaudeCodeCredentialStore {
   readonly accounts: () => Promise<ClaudeCodeAccount[]>;
   readonly resolve: (source: string) => Promise<ClaudeCodeCredentials | null>;
   readonly reload: (source: string) => Promise<ClaudeCodeCredentials | null>;
+  readonly refresh: (source: string) => Promise<ClaudeCodeCredentials | null>;
 }
 
 export interface ClaudeCodeRequestEvent {
@@ -277,7 +278,7 @@ export function createClaudeCodeCredentialStore(input: {
     return credentials;
   };
 
-  const refresh = async (source: string, current: ClaudeCodeCredentials) => {
+  const refreshCurrent = async (source: string, current: ClaudeCodeCredentials) => {
     const active = refreshing.get(source);
     if (active) return active;
     const operation = (async () => {
@@ -345,7 +346,7 @@ export function createClaudeCodeCredentialStore(input: {
       return null;
     }
     if (fresh(current)) return remember(source, current);
-    return refresh(source, current);
+    return refreshCurrent(source, current);
   };
 
   return {
@@ -362,6 +363,19 @@ export function createClaudeCodeCredentialStore(input: {
     },
     resolve,
     reload,
+    refresh: async (source) => {
+      let current: ClaudeCodeCredentials | null;
+      try {
+        current = (await input.source.read(source)) ?? cache.get(source)?.credentials ?? null;
+      } catch {
+        current = cache.get(source)?.credentials ?? null;
+      }
+      if (!current) {
+        cache.delete(source);
+        return null;
+      }
+      return refreshCurrent(source, current);
+    },
   };
 }
 

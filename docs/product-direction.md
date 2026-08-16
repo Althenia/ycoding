@@ -38,7 +38,7 @@ The runtime supports three explicit modes:
 - `yolo`: autonomous execution under the configured permission policy;
 - `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
 
-Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings. Completion claims require verification evidence.
+Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Guardrail reviews are never auto-approved by autonomous mode. Completion claims require verification evidence.
 
 ### 5. Durable background orchestration
 
@@ -57,7 +57,8 @@ Customization is a product capability. Supported domains include:
 - TUI slots;
 - MCP servers and tools;
 - project and global artifacts;
-- model providers.
+- model providers;
+- Session guardrails and provider-usage sources.
 
 Project artifacts provide managed scope, lifecycle, validation, provenance, and rollback for reusable agent behavior.
 
@@ -65,7 +66,7 @@ Project artifacts provide managed scope, lifecycle, validation, provenance, and 
 
 Provider integration optimizes cost and cache reuse without changing semantic behavior.
 
-Priorities include stable prompt prefixes, provider-specific cache controls, accurate cache telemetry, normalized usage, bounded retries, and explicit incompatibility handling. A cache optimization is incomplete if it lowers correctness or hides provider errors.
+Priorities include stable prompt prefixes, provider-specific cache controls, accurate cache telemetry, normalized usage and quota reporting, bounded retries, and explicit incompatibility handling. A cache optimization is incomplete if it lowers correctness or hides provider errors. Provider-usage diagnostics must not block model execution or expose credentials.
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 

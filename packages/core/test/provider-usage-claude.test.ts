@@ -8,8 +8,7 @@ describe("ClaudeUsage", () => {
   test("normalizes unified response headers as live percentages", () => {
     const snapshot = ClaudeUsage.normalizeHeaders({
       providerID,
-      label: "Claude",
-      subscriptionType: "pro",
+      label: "Claude Pro",
       observedAt: 100,
       headers: new Headers({
         "anthropic-ratelimit-unified-5h-utilization": "0.42",
@@ -22,7 +21,6 @@ describe("ClaudeUsage", () => {
     })
 
     expect(snapshot).toMatchObject({
-      label: "Claude Pro",
       status: "available",
       source: "response_headers",
       stability: "observed",
@@ -37,8 +35,7 @@ describe("ClaudeUsage", () => {
   test("normalizes OAuth windows, model lanes, and extra usage credits", () => {
     const snapshot = ClaudeUsage.normalizeOAuth({
       providerID,
-      label: "Claude",
-      subscriptionType: "max",
+      label: "Claude Max",
       updatedAt: 100,
       response: {
         five_hour: { utilization: 86, resets_at: "2026-07-28T00:00:00Z" },
@@ -49,65 +46,15 @@ describe("ClaudeUsage", () => {
     })
 
     expect(snapshot).toMatchObject({
-      label: "Claude Max",
       source: "provider_internal_api",
       stability: "best_effort",
       windows: [
-        { id: "five-hour", label: "Session", used: 86 },
-        { id: "seven-day", label: "All models", used: 27 },
+        { id: "five-hour", used: 86 },
+        { id: "seven-day", used: 27 },
         { id: "seven-day-sonnet", label: "Sonnet weekly", used: 45 },
         { id: "extra-usage", unit: "usd", used: 56.66, limit: 100, remaining: 43.34 },
       ],
     })
-  })
-
-  test("skips inactive OAuth buckets reported as null", () => {
-    const snapshot = ClaudeUsage.normalizeOAuth({
-      providerID,
-      label: "Claude",
-      updatedAt: 100,
-      response: {
-        five_hour: { utilization: 14, resets_at: "2026-08-01T16:10:00Z" },
-        seven_day: { utilization: 76, resets_at: "2026-08-04T18:00:00Z" },
-        seven_day_oauth_apps: null,
-        seven_day_opus: null,
-        seven_day_sonnet: null,
-        extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
-      },
-    })
-
-    expect(snapshot.status).toBe("available")
-    expect(snapshot.windows.map((window) => window.id)).toEqual(["five-hour", "seven-day"])
-  })
-
-  test("adds scoped model lanes reported through the limits array", () => {
-    const snapshot = ClaudeUsage.normalizeOAuth({
-      providerID,
-      label: "Claude",
-      updatedAt: 100,
-      response: {
-        five_hour: { utilization: 14, resets_at: "2026-08-01T16:10:00Z" },
-        seven_day: { utilization: 76, resets_at: "2026-08-04T18:00:00Z" },
-        seven_day_opus: null,
-        limits: [
-          { kind: "session", group: "session", percent: 14, resets_at: "2026-08-01T16:10:00Z", scope: null },
-          { kind: "weekly_all", group: "weekly", percent: 76, resets_at: "2026-08-04T18:00:00Z", scope: null },
-          {
-            kind: "weekly_scoped",
-            group: "weekly",
-            percent: 0,
-            resets_at: null,
-            scope: { model: { id: null, display_name: "Fable" }, surface: null },
-          },
-        ],
-      },
-    })
-
-    expect(snapshot.windows).toMatchObject([
-      { id: "five-hour", label: "Session", used: 14 },
-      { id: "seven-day", label: "All models", used: 76 },
-      { id: "seven-day-fable", label: "Fable weekly", used: 0 },
-    ])
   })
 
   test("lets newer live headers replace overlapping OAuth windows", () => {

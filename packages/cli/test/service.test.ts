@@ -19,11 +19,13 @@ import os from "node:os"
 import path from "node:path"
 import { ServiceConfig } from "../src/services/service-config"
 
-test("managed service ports are stable per installation channel", () => {
-  expect(ServiceConfig.defaultPort("latest")).toBe(0xc0de)
-  expect(ServiceConfig.defaultPort("local")).toBe(0xc0df)
+test("managed service ports are stable and namespaced to YCoding", () => {
+  expect(ServiceConfig.defaultPort("latest")).toBe(43_094)
+  expect(ServiceConfig.defaultPort("local")).toBe(26_378)
+  expect(ServiceConfig.defaultPort("main")).toBe(29_706)
   expect(ServiceConfig.defaultPort("preview-a")).toBe(ServiceConfig.defaultPort("preview-a"))
   expect(ServiceConfig.defaultPort("preview-a")).not.toBe(ServiceConfig.defaultPort("preview-b"))
+  expect(ServiceConfig.defaultPort("main")).not.toBe(45_430)
 })
 
 test("local channel stores service config with the local service filename", async () => {
@@ -282,7 +284,10 @@ test("concurrent service processes elect one server", async () => {
       ),
     )
     const loserOutput = errors.filter(Boolean).join("\n")
-    expect(losers.map((process) => process.exitCode), loserOutput).toEqual(losers.map(() => 0))
+    expect(
+      losers.map((process) => process.exitCode),
+      loserOutput,
+    ).toEqual(losers.map(() => 0))
     expect(loserOutput).not.toContain("database is locked")
     expect(winner.exitCode).toBe(null)
     expect(new URL(info.url).port).toBe(String(port))
@@ -379,7 +384,9 @@ test("unrelated managed port occupancy reports an actionable conflict", async ()
     expect(await contender.exited).not.toBe(0)
     const output = (await new Response(contender.stdout).text()) + (await new Response(contender.stderr).text())
     expect(output).toContain(`Managed service port ${port} on 127.0.0.1 is already in use by another process`)
-    expect(output).toContain("ycoding service set port <port>")
+    expect(output).toContain("Set `port` in service-local.json under the YCoding config directory")
+    expect(output).toContain("ycoding --standalone")
+    expect(output).not.toContain("ycoding service set")
     expect(await Bun.file(registration).exists()).toBe(false)
   } finally {
     listener.stop(true)

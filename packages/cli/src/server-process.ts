@@ -102,9 +102,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
           },
           config: {
             directory: process.env.YCODING_CONFIG_DIR,
-            project: !truthy(
-              process.env.YCODING_CONFIG_PROJECT_DISABLE ?? process.env.YCODING_DISABLE_PROJECT_CONFIG,
-            ),
+            project: !truthy(process.env.YCODING_CONFIG_PROJECT_DISABLE ?? process.env.YCODING_DISABLE_PROJECT_CONFIG),
             file: process.env.YCODING_CONFIG,
             content: process.env.YCODING_CONFIG_CONTENT,
           },
@@ -112,9 +110,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
             gitbash: process.env.YCODING_GIT_BASH_PATH,
           },
           fs: {
-            filewatcher: !truthy(
-              process.env.YCODING_FILEWATCHER_DISABLE ?? process.env.YCODING_DISABLE_FILEWATCHER,
-            ),
+            filewatcher: !truthy(process.env.YCODING_FILEWATCHER_DISABLE ?? process.env.YCODING_DISABLE_FILEWATCHER),
             fff:
               process.env.YCODING_DISABLE_FFF === undefined
                 ? process.platform !== "win32"
@@ -141,7 +137,8 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
                 : Effect.fail(
                     new Error(
                       `Managed service port ${port} on ${hostname} is already in use by another process. ` +
-                        "Configure another port with `ycoding service set port <port>` and start the service again.",
+                        `Set \`port\` in ${ServiceConfig.filename()} under the YCoding config directory, ` +
+                        "or start with `ycoding --standalone`.",
                       { cause: error },
                     ),
                   ),

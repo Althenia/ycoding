@@ -15,7 +15,7 @@ Provider usage is a read-only Location-scoped service that normalizes quota, cre
 
 A snapshot includes:
 
-- provider ID and safe display label, including a normalized provider-reported account type when available;
+- provider ID and safe display label;
 - availability status;
 - source and stability classification;
 - update time;
@@ -73,16 +73,6 @@ Without a usable app-server snapshot, a ChatGPT OAuth credential may use the pro
 
 Primary, secondary, credit, reset-credit, and every additional named limit ID are preserved. Known Spark IDs render as Spark; unknown future IDs receive a sanitized display label instead of being discarded.
 
-Codex window labels follow the reported duration rather than assuming `primary` always means five hours or `secondary` always means weekly. This preserves weekly-only Plus/Pro account responses and separately reported Spark weekly windows.
-
-### GitHub Copilot
-
-Copilot uses its existing OAuth credential with no configuration key. Account routing follows the reported `access_type_sku`.
-
-Seats on token-based billing read the organization AI-credit billing summary and expose exactly one window: the monthly quota in AI-credit units, carrying used credits and the monthly reset parsed from the user-status quota reset date. GitHub reports no monthly AI-credit entitlement, so that window has no limit and therefore no progress bar; the limit is never inferred from spend, plan, or catalog prices. A remembered organization is re-discovered when it stops returning AI-credit data.
-
-Other seats keep the legacy entitlement path, whose lanes report a percentage of a reported entitlement and remain raw counts rather than AI credits. Their display labels follow current provider terminology, while the payload keys stay as GitHub reports them.
-
 ## Cache and precedence
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
@@ -117,31 +107,13 @@ GET /api/provider/:providerID/usage
 
 Both operations accept the Location query. `refresh=true` requests a source refresh. The response contains normalized snapshots only and never exposes credential IDs, access tokens, API keys, refresh tokens, account emails, or raw provider payloads.
 
-## Durable session usage
-
-Session-local provider-request usage is separate from provider quota and credit snapshots. Core derives one durable aggregate per Session and provider/model/variant from `session.provider.request.recorded` events, including logical requests, physical attempts, helper calls, continuation/fallback counts, raw token categories, and cost. Each raw provider-request record may carry `cacheReadReported`: `true` means the provider explicitly reported cache-read usage, including an explicit zero; `false` means it did not report cache-read usage; absence is historical unknown. Cache-adaptation folds measure only explicit `true` records and preserve missing or historical telemetry as unmeasured.
-
-```text
-GET /api/session/:sessionID/usage
-```
-
-The operation is Location-scoped and returns the Session aggregate even after transcript compaction or when the latest-step diagnostics are unavailable. A root Session aggregates its complete child family, while a child Session remains scoped to its own records. It exposes only the bounded latest cache invalidation reason and namespace prefix; it never exposes prompt content, full cache keys, instruction digests, credentials, or raw provider payloads. A priced model row carries `costProvenance`: `recorded` for durable provider cost or `current_catalog` for a query-time estimate. Historical records without durable cost resolve first against the current Location provider catalog, then against the current OpenRouter master catalog for the same model and variant. If neither catalog prices a request, the affected model and Session costs are absent rather than zero.
-
-Raw request projections and aggregates are retained for current, recently updated, and locally active Sessions. A startup and hourly cleanup removes only those derived projections when a Session has been inactive for more than 30 days. Durable events and transcript rows are never pruned by usage cleanup.
-
 ## TUI presentation
 
 - The `Provider Usage` command is hidden until a currently running Session in the current root/subagent family has a non-unsupported usage snapshot.
 - Provider IDs are deduplicated across parallel running Sessions; account-level percentages are never added or averaged.
 - Unsupported providers are omitted. Unauthorized and error snapshots render `Usage unavailable`.
 - Spark and other named lanes render as separate windows within their provider section.
-- A window renders a ten-character ASCII progress bar (`#` used and `-` unused) only when a ratio is derivable: a `percent` window reporting `used`, or any window reporting both `used` and a positive `limit`. Windows with no denominator, and `unlimited` windows, render their value as text. A denominator is never inferred.
-- OpenRouter `daily`, `weekly`, and `monthly` windows report spend without a limit of their own and borrow the same snapshot's `key` USD limit as their denominator. The borrow is scoped to OpenRouter windows within one snapshot and never crosses providers or snapshots. When the key reports no limit, those windows stay text.
-- Bar values below 70% use normal styling, 70–89% warning styling, and 90% or higher error styling.
-- Each window renders its own reset beside its value, so Codex 5-hour, weekly, and Spark lanes, and Claude session and weekly lanes, each show a distinct reset. There is no aggregated reset row. Near resets use relative duration, later resets use a concrete local timestamp, and a window with no reported reset shows none.
+- Percent windows use ten terminal cells.
+- Values below 70% use normal styling, 70–89% warning styling, and 90% or higher error styling.
+- Near resets use relative duration; later resets use a concrete local timestamp.
 - Unknown values render as `Not reported`.
-- The usage section leads with a `Total` row built from the Session-family summary's own top-level token and cost totals, so it covers every model regardless of the per-model breakdown beneath it. It is not re-summed from the model rows.
-- Usage rows align their values in a common right-hand column, and long model identifiers, session titles, and subagent titles wrap onto a detail row instead of being truncated.
-- Spend amounts render without a provenance label; `costProvenance` remains available to API consumers and does not claim historical billing.
-- Claude Pro/Max and ChatGPT Plus/Pro labels are shown only when reported by the credential or provider account contract; missing tiers are not inferred from quota windows.
-- Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, and additional named windows render only when present in the normalized snapshot.

@@ -2059,6 +2059,83 @@ test("adds and dismisses permission requests from live events", async () => {
   }
 })
 
+test("hydrates and updates root-family guardrail reviews", async () => {
+  const events = createEventStream()
+  const initial = {
+    id: "grq_initial",
+    rootSessionID: "ses_root",
+    sessionID: "ses_child",
+    action: "shell",
+    resources: ["git reset --hard"],
+    ruleIDs: ["standard.review.git-destructive"],
+    reason: "Destructive Git operation",
+    standard: true,
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_root/guardrail/request") return json({ data: [initial] })
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+
+  function Probe() {
+    data = useData()
+    client = useClient()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await wait(() => client.connection.status() === "connected")
+    await data.session.guardrail.sync("ses_root")
+    expect(data.session.guardrail.list("ses_root")).toEqual([initial])
+
+    emitEvent(events, {
+      id: "evt_guardrail_asked_1",
+      created: 0,
+      type: "guardrail.asked",
+      data: {
+        id: "grq_live",
+        rootSessionID: "ses_root",
+        sessionID: "ses_child_2",
+        action: "shell",
+        resources: ["npm publish"],
+        ruleIDs: ["standard.review.release"],
+        reason: "Package publishing",
+        standard: true,
+      },
+    })
+    await wait(() => data.session.guardrail.list("ses_root").length === 2)
+
+    emitEvent(events, {
+      id: "evt_guardrail_replied_1",
+      created: 0,
+      type: "guardrail.replied",
+      data: {
+        rootSessionID: "ses_root",
+        sessionID: "ses_child",
+        requestID: "grq_initial",
+        reply: "once",
+      },
+    })
+    await wait(() => data.session.guardrail.list("ses_root").length === 1)
+    expect(data.session.guardrail.list("ses_root")[0]?.id).toBe("grq_live")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("reconciles active session permissions when the event stream reconnects", async () => {
   const events = createEventStream()
   let requests = [

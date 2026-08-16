@@ -1,7 +1,7 @@
 # Session Guardrails, Subagent Shell Permissions, and Provider Usage
 
 **Status:** Accepted design
-**Date:** 2026-07-27  
+**Date:** 2026-07-27
 **Branch:** `agent-guardrails`
 
 ## Summary

@@ -142,6 +142,7 @@ terminal input
   -> Server handler
   -> Location resolution
   -> Core service
+  -> effective permission and Session guardrail mediation
   -> durable admission or state transition
   -> process-local execution wake
   -> provider request through AI
@@ -155,7 +156,9 @@ Prompt admission and provider execution are separate. A prompt is admitted durab
 
 ## Location scope
 
-Models, providers, tools, permissions, instructions, filesystem access, plugins, and related services are resolved through a Location. Session execution resolves the Session's Location when a drain starts.
+Models, providers, provider usage, tools, permissions, Session guardrails, instructions, filesystem access, plugins, and related services are resolved through a Location. Session execution resolves the Session's Location when a drain starts.
+
+`SessionGuardrail` is Location-scoped but evaluates by Session ID. It resolves the root Session through `SessionStore`, shares counters across that family, and mediates mutation immediately before side effects. `ProviderUsage` is Location-scoped and resolves credentials through the existing credential service; it returns normalized, cached snapshots without becoming part of model execution.
 
 ## Event flow
 
@@ -168,11 +171,12 @@ The TUI applies events to a bounded Solid store and reconciles canonical Client 
 | Scope | Examples | Owner |
 | --- | --- | --- |
 | Process-global | execution coordinator, application service nodes | Core process runtime |
-| Location | models, providers, tools, plugins, permissions, filesystem, instructions | Core Location services |
+| Location | models, providers, provider usage, tools, plugins, permissions, guardrail policy, filesystem, instructions | Core Location services |
 | Session durable | messages, pending prompts, autonomy, orchestration, compaction | Core database and event history |
 | Project durable | project artifacts and project configuration | Core project-artifact store |
 | Global durable | global project artifacts and shared artifact state | Core project-artifact store |
-| UI resident | hot messages, one expanded archive page, dialogs, scroll state | TUI only |
+| Process-local Session-family safety | pending guardrail reviews and running shell/subagent/review reservations | Core `SessionGuardrail` service |
+| UI resident | hot messages, one expanded archive page, guardrail/provider snapshots, dialogs, scroll state | TUI only |
 
 ## Generated and tool-owned content
 
@@ -191,3 +195,5 @@ The TUI applies events to a bounded Solid store and reconciles canonical Client 
 - Durable state remains replayable; caches and projections remain rebuildable.
 - TUI pagination may release payloads but preserves stable placeholders and canonical reload.
 - Project artifacts use their validated lifecycle instead of writing directly into source directories.
+- Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.
+- Provider usage failures remain isolated from Session startup and model execution.

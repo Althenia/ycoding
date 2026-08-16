@@ -1,6 +1,7 @@
 import HomeFooter from "../feature-plugins/home/footer"
 import SidebarContext from "../feature-plugins/sidebar/context"
 import SidebarFooter from "../feature-plugins/sidebar/footer"
+import SidebarGuardrails from "../feature-plugins/sidebar/guardrails"
 import SidebarLsp from "../feature-plugins/sidebar/lsp"
 import SidebarMcp from "../feature-plugins/sidebar/mcp"
 import SidebarTodo from "../feature-plugins/sidebar/todo"
@@ -12,6 +13,7 @@ export const builtins = [
   Notifications,
   HomeFooter,
   SidebarContext,
+  SidebarGuardrails,
   SidebarMcp,
   SidebarTodo,
   SidebarLsp,

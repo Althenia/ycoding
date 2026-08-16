@@ -6,7 +6,7 @@
 - The default branch is `main`.
 - The runtime is V2 only. Do not restore V1 session, configuration, plugin, SDK, package, event, or TUI compatibility paths unless the user explicitly requests a migration design.
 - The TUI is the only product, release, and behavior surface. Do not restore desktop, web, console, or website packages.
-- Durable sessions, explicit autonomy, durable background subagents, session skills, project artifacts, and provider-efficient caching are current product contracts.
+- Durable sessions, explicit autonomy, durable background subagents, session skills, project artifacts, Session-wide guardrails, provider-efficient caching, and normalized provider usage are current product contracts.
 - Historical upstream material is isolated in `docs/upstream-differences.md`. It never overrides current code, tests, Schema, Protocol, or root `docs`.
 
 Read [`docs/README.md`](./docs/README.md), [`docs/product-direction.md`](./docs/product-direction.md), and the relevant package-level `AGENTS.md` before changing cross-package behavior.
@@ -35,6 +35,8 @@ Update documentation in the same change when behavior changes.
 - Product direction or supported surfaces: update root `README.md` and `docs/product-direction.md`.
 - Package ownership or dependency direction: update `docs/architecture.md`.
 - Session, autonomy, subagent, skill, project-artifact, cache, or transcript behavior: update `docs/runtime.md`.
+- Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration: update `docs/configuration.md`.
+- Agent, command, skill, plugin, hook, tool, theme, instruction, or repository-resource discovery: update `docs/repository-resources.md`.
 - Externally visible behavior that differs from upstream: update `docs/upstream-differences.md`.
 - Public API or schema: update the relevant `specs/v2` contract and regenerate clients/OpenAPI through the owning command.
 - Contributor invariants or required verification: update this file or the relevant package `AGENTS.md`.
@@ -230,6 +232,8 @@ const table = sqliteTable("session", {
 - No-progress accounting uses the normalized progress digest. A tool-only turn with no assistant text spends an iteration without counting as repeated progress.
 - Subagents are durable child Sessions and always launch in the background. Do not add a synchronous result path disguised by the deprecated `background` input.
 - Preserve parent-child ownership, permission ceilings, explicit agent selection, and the configured nesting bound.
+- Session guardrails apply to the root Session family independently from tool permissions. `yolo`, `goal`, and permission auto-approval must never auto-answer guardrail reviews.
+- Guardrail reviews expose one-time approval or rejection only. Do not add a persistent bypass for standard or custom guardrail matches.
 - TeamView is volatile context appended after stable history. It must not receive a cache breakpoint or destabilize the provider-cache prefix.
 - TUI subagent indicators must rehydrate from durable state after reconnect or restart. Requiring the user to enter each child session to rebuild counts is a defect.
 
@@ -253,9 +257,12 @@ const table = sqliteTable("session", {
 - Timeline selection follows option identity, not list index, because archive expansion and new events reorder options.
 - Archived messages must render through the same typed transcript components as hot messages when expanded.
 
-## Provider cache behavior
+## Provider cache and usage behavior
 
-- Separate provider prompt caching, TUI cache diagnostics, and project-artifact reuse. Do not label them as one cache layer.
+- Separate provider prompt caching, TUI cache diagnostics, project-artifact reuse, and provider quota reporting. Do not label them as one cache layer.
+- Provider-usage refresh is read-only and best effort. It must never block Session startup or model execution.
+- Preserve source and stability labels. Unknown quota values are absent and render as unreported; never coerce them to zero.
+- Never expose provider credentials, credential IDs, account emails, arbitrary response headers, or raw usage payloads through Protocol, logs, events, or TUI state.
 - Preserve stable model-visible prefixes before optimizing cache placement.
 - Gate model-family-specific wire fields. GPT-5.6+ uses its explicit prompt-cache options and breakpoints; pre-5.6 requests use compatible retention fields.
 - Preserve Anthropic cache-control placement across direct and compatible provider routes.

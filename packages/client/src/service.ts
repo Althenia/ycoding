@@ -30,6 +30,8 @@ export type EnsureOptions = DiscoverOptions & {
   readonly command?: ReadonlyArray<string>
   /** Called once before spawning a new service process. */
   readonly onStart?: (reason: EnsureReason, previousVersion?: string) => void
+  /** Base path used for bounded child startup diagnostics. */
+  readonly startupErrorFile?: string
 }
 
 /** Options used to stop the local YCoding service. */

@@ -25,10 +25,12 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 
 ## Current contracts
 
-| Document                | Job                                                                                     |
-| ----------------------- | --------------------------------------------------------------------------------------- |
-| [Session](./session.md) | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
-| [Tools](./tools.md)     | Explain tool construction, registration, execution, and settlement laws.                |
+| Document                                  | Job                                                                                     |
+| ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| [Session](./session.md)                   | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
+| [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.   |
+| [Provider usage](./provider-usage.md)     | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
+| [Tools](./tools.md)                       | Explain tool construction, registration, execution, and settlement laws.                |
 
 ## Decisions and proposals
 

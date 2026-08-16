@@ -77,7 +77,12 @@ The active workspace is explicitly limited to the packages required by the termi
 
 ## Configuration and repository extensions
 
-YCoding uses the `ycoding` executable, `YCODING_*` environment variables, `.ycoding` repository configuration, and `ycoding.json` or `ycoding.jsonc` configuration files. Migration behavior and intentional external-provider exceptions are documented in [`docs/ycoding-migration.md`](./docs/ycoding-migration.md).
+YCoding uses the `ycoding` executable, `YCODING_*` environment variables, `.ycoding` repository resources, and `ycoding.json` or `ycoding.jsonc` runtime configuration files.
+
+- [`docs/configuration.md`](./docs/configuration.md) documents runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.
+- [`docs/repository-resources.md`](./docs/repository-resources.md) documents agents, commands, skills, plugins, hooks, tools, themes, instructions, references, and discovery precedence.
+- [`docs/guardrails-and-provider-usage.md`](./docs/guardrails-and-provider-usage.md) documents subagent shell permissions, Session guardrails, custom rule files, and provider quota/credit sources.
+- [`docs/ycoding-migration.md`](./docs/ycoding-migration.md) documents identity migration and intentional external-provider exceptions.
 
 ## Upstream attribution
 

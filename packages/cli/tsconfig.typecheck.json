@@ -1,6 +1,0 @@
-{
-  "$schema": "https://json.schemastore.org/tsconfig",
-  "extends": "./tsconfig.json",
-  // The CLI pulls in TUI sources, so it needs the TUI's ambient asset declarations too.
-  "include": ["**/*", "../tui/src/image.d.ts"]
-}

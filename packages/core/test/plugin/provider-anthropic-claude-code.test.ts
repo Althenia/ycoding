@@ -211,6 +211,28 @@ describe("Claude Code credentials", () => {
     })
   })
 
+  test("forces a direct OAuth refresh even while the cached access token is still valid", async () => {
+    let requests = 0
+    const current = credentials("current", 100_000)
+    const source: ClaudeCodeCredentialSource = {
+      list: async () => [],
+      read: async () => current,
+      write: async () => true,
+      refreshWithCli: async () => undefined,
+    }
+    const request = Object.assign(
+      async () => {
+        requests += 1
+        return Response.json({ access_token: "rotated", expires_in: 36_000 })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    const store = createClaudeCodeCredentialStore({ source, fetch: request, now: () => 1_000 })
+
+    expect((await store.refresh("file"))?.accessToken).toBe("rotated")
+    expect(requests).toBe(1)
+  })
+
   test("falls back to Claude CLI refresh when direct OAuth refresh fails", async () => {
     let reads = 0
     let cliRefreshes = 0
@@ -490,6 +512,33 @@ describe("Claude Code request translation", () => {
     })
   })
 
+  test("reports final response headers without changing the response", async () => {
+    const utilization: Array<string | null> = []
+    const fetcher = createClaudeCodeFetch({
+      fetch: Object.assign(
+        async () =>
+          Response.json(
+            { type: "message", content: [{ type: "text", text: "ok" }] },
+            { headers: { "anthropic-ratelimit-unified-5h-utilization": "0.42" } },
+          ),
+        { preconnect: fetch.preconnect },
+      ),
+      credentials: async () => credentials("paid", Date.now() + 3_600_000),
+      reload: async () => null,
+      onResponse: (response) => {
+        utilization.push(response.headers.get("anthropic-ratelimit-unified-5h-utilization"))
+      },
+    })
+
+    const response = await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hello" }] }),
+    })
+
+    expect(utilization).toEqual(["0.42"])
+    expect(await response.json()).toEqual({ type: "message", content: [{ type: "text", text: "ok" }] })
+  })
+
   test("does not upgrade cache TTL from subscription metadata", async () => {
     let sent: unknown
     const fetcher = createClaudeCodeFetch({
@@ -702,6 +751,47 @@ describe("Claude Code request translation", () => {
     )
 
     expect(await response.text()).toContain('"name": "lookup"')
+  })
+
+  test("observes the final raw response without changing its status, headers, or body", async () => {
+    const observed: Array<{ status: number; utilization: string | null; body: string }> = []
+    const fetcher = createClaudeCodeFetch({
+      fetch: Object.assign(
+        async () =>
+          new Response('{"type":"message","content":[]}', {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "anthropic-ratelimit-unified-5h-utilization": "0.42",
+            },
+          }),
+        { preconnect: fetch.preconnect },
+      ),
+      credentials: async () => credentials("token", Date.now() + 60_000),
+      reload: async () => null,
+      onResponse: async (response) => {
+        const copy = response.clone()
+        observed.push({
+          status: copy.status,
+          utilization: copy.headers.get("anthropic-ratelimit-unified-5h-utilization"),
+          body: await copy.text(),
+        })
+      },
+    })
+
+    const response = await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ model: "claude-opus-5", messages: [] }),
+    })
+
+    expect(observed).toHaveLength(1)
+    expect(observed[0]).toEqual({
+      status: 200,
+      utilization: "0.42",
+      body: '{"type":"message","content":[]}',
+    })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe('{"type":"message","content":[]}')
   })
 
   test("redacts nested credentials and token-shaped values from diagnostics", () => {

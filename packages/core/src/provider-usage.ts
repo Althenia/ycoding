@@ -11,26 +11,17 @@ import { Provider } from "@ycoding-ai/schema/provider"
 import { Context, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Global } from "./global"
-import { InstallationVersion } from "./installation/version"
 import {
   createClaudeCodeCredentialStore,
   createSystemClaudeCodeCredentialSource,
 } from "./plugin/provider/anthropic-claude-code-account"
-import { CopilotUsage } from "./provider-usage/copilot"
 import { ClaudeUsage } from "./provider-usage/claude"
 import { CodexUsage } from "./provider-usage/codex"
-import { MetaUsage } from "./provider-usage/meta"
 import { OpenAIUsage } from "./provider-usage/openai"
 import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { ProviderUsageCache } from "./provider-usage/cache"
 
 const minute = 60_000
-
-// Org login whose billing summary last reported Copilot AI-credit usage, per
-// provider. Steady-state refresh then makes one summary call per cycle and
-// re-discovers through /user/orgs only after the remembered org stops
-// answering or the refresh for another reason reports nothing.
-const copilotOrgLogins = new Map<Provider.ID, string>()
 
 export interface GetInput {
   readonly providerID: Provider.ID
@@ -183,8 +174,6 @@ const layer = Layer.effect(
           anthropic: (input) => claudeOAuth(http, claude, input),
           openrouter: (input) => openRouter(http, input),
           openai: (input) => openAI(http, input, providerUsage?.codex_app_server),
-          meta: (input) => meta(http, input),
-          "github-copilot": (input) => githubCopilot(http, input),
         },
         ttlMs: { anthropic: 5 * minute },
       }),
@@ -260,72 +249,6 @@ const openRouter = (http: HttpClient.HttpClient, input: AdapterInput) =>
     return OpenRouterUsage.mergeCredits(snapshot, credits)
   })
 
-const githubCopilot = (http: HttpClient.HttpClient, input: AdapterInput) =>
-  Effect.gen(function* () {
-    const credential = input.credential.value
-    if (credential.type !== "oauth")
-      return yield* Effect.fail(new Error("GitHub Copilot usage requires an OAuth credential"))
-    const enterpriseUrl =
-      typeof credential.metadata?.enterpriseUrl === "string" ? credential.metadata.enterpriseUrl : undefined
-    if (enterpriseUrl)
-      return new ProviderUsage.Snapshot({
-        providerID: input.providerID,
-        label: input.label,
-        status: "unsupported",
-        source: "provider_api",
-        stability: "stable",
-        updatedAt: input.updatedAt,
-        windows: [],
-        message: "GitHub Copilot usage reporting supports github.com accounts",
-      })
-    const result = yield* Effect.tryPromise({
-      try: () =>
-        CopilotUsage.load({
-          providerID: input.providerID,
-          label: input.label,
-          updatedAt: input.updatedAt,
-          matchedOrg: copilotOrgLogins.get(input.providerID),
-          request: (path) => Effect.runPromise(copilotJson(http, "https://api.github.com", credential.refresh, path)),
-        }),
-      catch: (cause) =>
-        cause instanceof CopilotUsage.RequestError
-          ? new RequestError({
-              status: cause.status,
-              ...(cause.retryAfter === undefined ? {} : { retryAfter: cause.retryAfter }),
-            })
-          : new Error("GitHub Copilot usage refresh failed"),
-    })
-    if (result.matchedOrg === undefined) copilotOrgLogins.delete(input.providerID)
-    else copilotOrgLogins.set(input.providerID, result.matchedOrg)
-    return result.snapshot
-  })
-
-const copilotJson = Effect.fnUntraced(function* (
-  http: HttpClient.HttpClient,
-  origin: string,
-  token: string,
-  path: string,
-) {
-  const response = yield* http
-    .execute(
-      HttpClientRequest.get(`${origin}${path}`).pipe(
-        HttpClientRequest.acceptJson,
-        HttpClientRequest.setHeader("Authorization", `token ${token}`),
-        HttpClientRequest.setHeaders({
-          "User-Agent": `ycoding/${InstallationVersion}`,
-          "Editor-Version": `ycoding/${InstallationVersion}`,
-          "Editor-Plugin-Version": `ycoding/${InstallationVersion}`,
-          "X-GitHub-Api-Version": "2025-04-01",
-        }),
-      ),
-    )
-    .pipe(Effect.mapError(() => new RequestError({})))
-  return {
-    status: response.status,
-    body: yield* response.json.pipe(Effect.catch(() => Effect.succeed(null))),
-  }
-})
-
 const openAI = (
   http: HttpClient.HttpClient,
   input: AdapterInput,
@@ -388,36 +311,6 @@ const openAI = (
       input.credential.value.key,
     )
     return OpenAIUsage.normalize({
-      providerID: input.providerID,
-      label: input.label,
-      updatedAt: input.updatedAt,
-      weekStart,
-      monthStart,
-      usage,
-      costs,
-    })
-  })
-
-const meta = (http: HttpClient.HttpClient, input: AdapterInput) =>
-  Effect.gen(function* () {
-    if (input.credential.value.type !== "key")
-      return yield* Effect.fail(new Error("Meta usage requires an API key credential"))
-    const now = new Date(input.updatedAt)
-    const weekStart = utcWeekStart(now)
-    const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1000
-    const end = Math.floor(now.getTime() / 1000)
-    const query = `start_time=${Math.min(weekStart, monthStart)}&end_time=${end}&bucket_width=1d&limit=31`
-    const usage = yield* pages(
-      http,
-      `https://api.llama.com/v1/organization/usage/completions?${query}`,
-      input.credential.value.key,
-    )
-    const costs = yield* pages(
-      http,
-      `https://api.llama.com/v1/organization/costs?${query}`,
-      input.credential.value.key,
-    )
-    return MetaUsage.normalize({
       providerID: input.providerID,
       label: input.label,
       updatedAt: input.updatedAt,

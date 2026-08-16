@@ -15,6 +15,8 @@ import { SessionStore } from "./store"
 import { SessionGuardrailCounter } from "./guardrail-counter"
 import { SessionGuardrailMatch } from "./guardrail-match"
 
+export const RequestID = Guardrail.RequestID
+
 export interface EvaluateInput {
   readonly sessionID: Session.ID
   readonly action: string
@@ -137,7 +139,7 @@ export const layer = Layer.effect(
       const files = yield* fs
         .scan("*.md", { cwd: directory, absolute: true, dot: false, symlink: false })
         .pipe(Effect.catch(() => Effect.succeed([])))
-      const results = yield* Effect.forEach(files.toSorted(), (file) =>
+      const results = yield* Effect.forEach(files.toSorted((left, right) => left.localeCompare(right)), (file) =>
         fs.readFileStringSafe(file).pipe(
           Effect.map((content): LoadResult => {
             if (content === undefined) return { type: "invalid", path: file }
@@ -264,9 +266,10 @@ export const layer = Layer.effect(
       })
       if (input.reply === "reject") {
         yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
-        return
+        return yield* Effect.void
       }
       yield* Deferred.succeed(item.deferred, undefined)
+      return yield* Effect.void
     })
 
     const forSession = Effect.fn("SessionGuardrail.forSession")(function* (sessionID: Session.ID) {

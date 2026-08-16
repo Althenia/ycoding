@@ -110,6 +110,10 @@ import type {
   ProviderListOutput,
   ProviderGetInput,
   ProviderGetOutput,
+  ProviderUsageListInput,
+  ProviderUsageListOutput,
+  ProviderUsageGetInput,
+  ProviderUsageGetOutput,
   IntegrationListInput,
   IntegrationListOutput,
   IntegrationGetInput,
@@ -1143,6 +1147,32 @@ export function make(options: ClientOptions) {
             query: { location: input["location"] },
             successStatus: 200,
             declaredStatuses: [404, 503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+    },
+    providerUsage: {
+      list: (input?: ProviderUsageListInput, requestOptions?: RequestOptions) =>
+        request<ProviderUsageListOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/usage`,
+            query: { location: input?.["location"], refresh: input?.["refresh"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      get: (input: ProviderUsageGetInput, requestOptions?: RequestOptions) =>
+        request<ProviderUsageGetOutput>(
+          {
+            method: "GET",
+            path: `/api/provider/${encodeURIComponent(input.providerID)}/usage`,
+            query: { location: input["location"], refresh: input["refresh"] },
+            successStatus: 200,
+            declaredStatuses: [503, 401, 400],
             empty: false,
           },
           requestOptions,

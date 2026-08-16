@@ -69,7 +69,8 @@ export const renderTeamView = (tasks: ReadonlyArray<Task>, maxBytes = TeamViewBy
       if (a.time.updated !== b.time.updated) return b.time.updated - a.time.updated
       return String(a.sessionID).localeCompare(String(b.sessionID))
     })
-  const prefix = "Current direct subagent TeamView (JSON data):\n"
+  const prefix =
+    "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n"
   const children = new Array<Task>()
   for (const task of sorted) {
     const view = TeamView.make({
@@ -182,9 +183,7 @@ export interface Interface {
     childID: SessionSchema.ID,
   ) => Effect.Effect<Task, SessionV2.NotFoundError | NotFoundError | ForbiddenError>
   readonly launch: (input: LaunchInput) => Effect.Effect<Task, LaunchError>
-  readonly list: (
-    parentID: SessionSchema.ID,
-  ) => Effect.Effect<ReadonlyArray<Task>, SessionV2.NotFoundError>
+  readonly list: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Task>, SessionV2.NotFoundError>
   readonly send: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
@@ -207,10 +206,7 @@ export interface Interface {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
   }) => Effect.Effect<Task, ControlError>
-  readonly progress: (
-    childID: SessionSchema.ID,
-    text: string,
-  ) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
+  readonly progress: (childID: SessionSchema.ID, text: string) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
   readonly question: (
     childID: SessionSchema.ID,
     text: string,
@@ -223,9 +219,7 @@ export interface Interface {
       | { readonly type: "failed"; readonly error: string; readonly excerpt?: string }
       | { readonly type: "lost"; readonly excerpt?: string },
   ) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
-  readonly background: (
-    childID: SessionSchema.ID,
-  ) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
+  readonly background: (childID: SessionSchema.ID) => Effect.Effect<Task, TaskNotFoundError | ConflictError>
   readonly teamView: (
     parentID: SessionSchema.ID,
   ) => Effect.Effect<ReturnType<typeof renderTeamView>, SessionV2.NotFoundError>
@@ -432,13 +426,15 @@ const layer = Layer.effect(
                 Effect.mapError((error) =>
                   error._tag === "Session.NotFoundError"
                     ? error
-                  : new ConflictError({ message: `Conflicting parent message for ${input.childID}` }),
+                    : new ConflictError({ message: `Conflicting parent message for ${input.childID}` }),
                 ),
               )
             const pending = yield* db
               .select({ id: SessionPendingTable.id })
               .from(SessionPendingTable)
-              .where(and(eq(SessionPendingTable.id, input.messageID), eq(SessionPendingTable.session_id, input.childID)))
+              .where(
+                and(eq(SessionPendingTable.id, input.messageID), eq(SessionPendingTable.session_id, input.childID)),
+              )
               .get()
               .pipe(Effect.orDie)
             if (terminalStates.has(row.state)) {
@@ -551,9 +547,7 @@ const layer = Layer.effect(
             if (row.state !== "running" || row.question_id !== null)
               return yield* new ConflictError({ message: `Cannot ask a question in ${row.state}` })
             const question = Question.make({
-              id: QuestionID.make(
-                `qst_${Hash.sha256(`${childID}\0${row.revision}\0${text}`).slice(0, 24)}`,
-              ),
+              id: QuestionID.make(`qst_${Hash.sha256(`${childID}\0${row.revision}\0${text}`).slice(0, 24)}`),
               text: truncateUtf8(text, 8 * 1024),
               data,
               time: Date.now(),

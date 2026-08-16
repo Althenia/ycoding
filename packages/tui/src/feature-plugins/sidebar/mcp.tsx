@@ -1,6 +1,7 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { mcpStatusPresentation, type McpTone } from "../../mcp-presentation"
 
 function View(props: { context: Plugin.Context; sessionID: string }) {
   const [open, setOpen] = createSignal(true)
@@ -18,12 +19,10 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
       ).length,
   )
 
-  const dot = (status: string) => {
-    if (status === "connected") return themeV2.text.feedback.success.default
-    if (status === "failed") return themeV2.text.feedback.error.default
-    if (status === "disabled") return themeV2.text.subdued
-    if (status === "needs_auth") return themeV2.text.feedback.warning.default
-    if (status === "needs_client_registration") return themeV2.text.feedback.error.default
+  const color = (tone: McpTone) => {
+    if (tone === "success") return themeV2.text.feedback.success.default
+    if (tone === "warning") return themeV2.text.feedback.warning.default
+    if (tone === "error") return themeV2.text.feedback.error.default
     return themeV2.text.subdued
   }
 
@@ -51,7 +50,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
                 <text
                   flexShrink={0}
                   style={{
-                    fg: dot(item.status.status),
+                    fg: color(mcpStatusPresentation(item.status.status).tone),
                   }}
                 >
                   •
@@ -59,14 +58,10 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
                 <text fg={themeV2.text.default} wrapMode="word">
                   {item.name}{" "}
                   <span style={{ fg: themeV2.text.subdued }}>
-                    <Switch fallback={item.status.status}>
-                      <Match when={item.status.status === "connected"}>Connected</Match>
+                    <Switch fallback={mcpStatusPresentation(item.status.status).label}>
                       <Match when={item.status.status === "failed"}>
                         <i>{item.status.status === "failed" ? item.status.error : undefined}</i>
                       </Match>
-                      <Match when={item.status.status === "disabled"}>Disabled</Match>
-                      <Match when={item.status.status === "needs_auth"}>Needs auth</Match>
-                      <Match when={item.status.status === "needs_client_registration"}>Needs client ID</Match>
                     </Switch>
                   </span>
                 </text>

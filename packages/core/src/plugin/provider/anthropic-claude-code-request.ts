@@ -259,6 +259,7 @@ export function createClaudeCodeFetch(input: {
   readonly sessionID?: string
   readonly requestID?: () => string
   readonly onEvent?: (event: ClaudeCodeRequestEvent) => void
+  readonly onResponse?: (response: Response) => void | Promise<void>
 }) {
   const run = async (
     request: FetchInput,
@@ -303,6 +304,11 @@ export function createClaudeCodeFetch(input: {
       input.onEvent?.({ event: "beta-excluded", data: { beta } })
       const current = (await input.credentials()) ?? latest
       response = await run(request, init, current, excluded)
+    }
+    try {
+      await input.onResponse?.(response)
+    } catch {
+      input.onEvent?.({ event: "response-observer-failed" })
     }
     return transformClaudeCodeResponse(response)
   }

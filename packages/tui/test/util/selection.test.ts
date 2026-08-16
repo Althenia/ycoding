@@ -47,10 +47,10 @@ test("Ctrl+C copies an active selection outside macOS", async () => {
   expect(result).toEqual({ writes: ["selected"], cleared: 1, prevented: 1, stopped: 1 })
 })
 
-test("Ctrl+C copies an active selection on macOS instead of reaching app exit", async () => {
+test("Ctrl+C remains available to normal commands on macOS", async () => {
   const result = harness({ selected: "selected", platform: "darwin", event: { name: "c", ctrl: true } })
   await Bun.sleep(0)
-  expect(result).toEqual({ writes: ["selected"], cleared: 1, prevented: 1, stopped: 1 })
+  expect(result).toEqual({ writes: [], cleared: 1, prevented: 0, stopped: 0 })
 })
 
 test("Escape clears an active selection without copying", async () => {

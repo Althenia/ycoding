@@ -7,6 +7,7 @@ import type {
   AgentInfo,
   CommandInfo,
   FormInfo,
+  GuardrailRequestListOutput,
   IntegrationInfo,
   LocationRef,
   LocationGetOutput,
@@ -124,6 +125,7 @@ type Store = {
     todo: Record<string, SessionTodoInfo[]>
     input: Record<string, string[]>
     permission: Record<string, PermissionV2Request[]>
+    guardrail: Record<string, GuardrailRequestListOutput>
     // Pending forms keyed by owner: a session ID or the temporary "global" elicitation sentinel.
     form: Record<string, FormWithLocation[]>
   }
@@ -496,6 +498,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         todo: {},
         input: {},
         permission: {},
+        guardrail: {},
         form: {},
       },
       project: {
@@ -894,6 +897,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       sync.invalidate(`session.message:${sessionID}`)
       sync.invalidate(`session.diagnostics:${sessionID}`)
       sync.invalidate(`session.permission:${sessionID}`)
+      sync.invalidate(`session.guardrail:${sessionID}`)
       sync.invalidate(`session.form:${sessionID}:`)
       setStore(
         "session",
@@ -913,6 +917,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           }
           delete draft.input[sessionID]
           delete draft.permission[sessionID]
+          delete draft.guardrail[sessionID]
+          for (const [rootID, requests] of Object.entries(draft.guardrail)) {
+            const next = requests.filter((request) => request.sessionID !== sessionID)
+            if (next.length === 0) delete draft.guardrail[rootID]
+            else draft.guardrail[rootID] = next
+          }
           delete draft.form[sessionID]
           for (const [rootID, family] of Object.entries(draft.family)) {
             const next = family.filter((id) => id !== sessionID)
@@ -1537,6 +1547,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             ),
           )
           break
+        case "guardrail.asked":
+          if (store.session.guardrail[event.data.rootSessionID]?.some((request) => request.id === event.data.id)) break
+          setStore("session", "guardrail", event.data.rootSessionID, [
+            ...(store.session.guardrail[event.data.rootSessionID] ?? []),
+            event.data,
+          ])
+          break
+        case "guardrail.replied":
+          setStore(
+            "session",
+            "guardrail",
+            event.data.rootSessionID,
+            (store.session.guardrail[event.data.rootSessionID] ?? []).filter(
+              (request) => request.id !== event.data.requestID,
+            ),
+          )
+          break
         case "form.created":
           if (store.session.form[event.data.form.sessionID]?.some((form) => form.id === event.data.form.id)) break
           setStore("session", "form", event.data.form.sessionID, [
@@ -1883,6 +1910,21 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.permission:${sessionID}`)
+          },
+        },
+        guardrail: {
+          list(sessionID: string) {
+            return store.session.guardrail[resolveRoot(sessionID)] ?? []
+          },
+          sync(sessionID: string) {
+            return sync.run(`session.guardrail:${sessionID}`, async () => {
+              const requests = await client.api.guardrail.request.list({ sessionID })
+              const rootID = requests[0]?.rootSessionID ?? resolveRoot(sessionID)
+              setStore("session", "guardrail", rootID, reconcile(requests))
+            })
+          },
+          invalidate(sessionID: string) {
+            sync.invalidate(`session.guardrail:${sessionID}`)
           },
         },
         form: {

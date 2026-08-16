@@ -29,6 +29,7 @@ import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
+import { ConfigProviderUsage } from "./config/provider-usage"
 import { ConfigReference } from "./config/reference"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigVariable } from "./config/variable"
@@ -124,6 +125,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
     description: "Ordered plugin enablement directives and external package declarations",
   }),
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
+  provider_usage: ConfigProviderUsage.Info.pipe(Schema.optional).annotate({
+    description: "Read-only provider quota sources and optional local client bridges",
+  }),
   experimental: ConfigExperimental.Info.pipe(Schema.optional),
 }) {}
 

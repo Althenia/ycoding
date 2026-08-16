@@ -55,6 +55,25 @@ Terminal goal states are:
 
 A tool-only turn with no assistant text spends an iteration but does not increment the no-progress counter. The TUI refreshes autonomy when session execution reaches a terminal event so displayed progress is not one iteration stale.
 
+## Session guardrails
+
+Guardrails are a root-Session-family safety boundary independent of agent permissions and autonomy mode.
+
+Current behavior:
+
+- recognized catastrophic shell commands are denied before process creation;
+- recognized high-impact shell and mutation actions create a distinct human review;
+- guardrail reviews remain reviews in `normal`, `yolo`, and `goal` modes and are not affected by TUI permission auto-approve;
+- direct Session shell, tool shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation use the same service boundary;
+- running shell, running subagent, and pending review caps are shared by the root Session family and release on settlement or interruption;
+- custom rules load from the global YCoding config `guardrails` directory;
+- malformed enabled custom files produce a visible invalid-file count and fail closed with review for mutation actions;
+- pending reviews rehydrate through the canonical Session guardrail API and live events, including reviews initiated by child Sessions.
+
+The TUI labels this blocker **Session guardrail review** and offers only one-time approval or rejection. Permission approval does not bypass guardrails, and guardrail approval does not widen an agent permission denial.
+
+Operator configuration is documented in [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md).
+
 ## Subagents
 
 Subagents are durable child sessions.
@@ -66,8 +85,11 @@ Current behavior:
 - The child runs a configured non-primary agent with fresh context.
 - The parent receives lifecycle state and completion or failure notification.
 - Parent TeamView context is injected as a volatile message after durable history so changing child state does not destabilize the provider-cache prefix.
+- TeamView is model-facing coordination data, not user-facing narration. The parent keeps launch, running, completed, failed, and total bookkeeping silent unless the user explicitly asks for subagent status.
+- A child failure may still be reported when it blocks the requested outcome, but not as routine orchestration bookkeeping.
 - Running children receive a status, blocker, and ETA request every ten minutes.
 - The effective permission policy limits which subagents are available.
+- Configured and managed subagents can use shell according to ordered agent permission rules; empty managed-agent rules resolve to safe defaults with shell requiring approval.
 - Nested subagents are bounded by `experimental.subagent_depth`; the default depth is one.
 - Session restart and TUI rehydration use durable orchestration state rather than requiring the user to open every child chat.
 
@@ -193,6 +215,22 @@ The runtime preserves provider-reported cache reads, writes, creation detail, me
 
 The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost.
 
+## Provider quota and credit diagnostics
+
+Provider usage is a read-only Location service separate from Session-local token and cost telemetry.
+
+- OpenRouter uses documented current-key data and optional management-credit data.
+- OpenAI organization usage uses documented usage and cost endpoints when an explicitly marked admin credential is available.
+- Claude subscription state combines live unified response headers with a cached OAuth usage snapshot for cold start and model-specific buckets.
+- Codex and Spark preserve global and named limit lanes from a configured app-server client contract, with a ChatGPT OAuth backend fallback.
+- snapshots are cached by provider and credential identity; concurrent refreshes are deduplicated;
+- a failed refresh retains the last valid snapshot as `stale`;
+- provider failures never block Session execution;
+- unknown amounts remain absent and render as `Not reported`, not zero;
+- Protocol and TUI state contain normalized values only, not credential values or provider response bodies.
+
+The Session sidebar shows the active provider first, separates Spark and other named lanes, displays freshness and stability, and uses ten-cell progress bars for reported percentages.
+
 ## Terminal release behavior
 
 The TUI is the only release surface and currently includes:
@@ -201,10 +239,10 @@ The TUI is the only release surface and currently includes:
 - normal, yolo, and goal mode controls;
 - subagent tabs, status, notifications, and navigation;
 - session skills and project artifacts;
-- permission and form prompts;
+- distinct guardrail, permission, and form prompts;
 - MCP and provider connection flows;
 - prompt file, agent, command, skill, and reference autocomplete;
-- cache, context, memory, and cost diagnostics;
+- cache, context, memory, cost, provider quota, and guardrail diagnostics;
 - theme and keymap customization;
 - bounded archived transcript expansion.
 

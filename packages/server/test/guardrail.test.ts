@@ -12,7 +12,7 @@ import {
 const parentID = SessionV2.ID.make("ses_guardrail_parent")
 const childID = SessionV2.ID.make("ses_guardrail_child")
 const unrelatedID = SessionV2.ID.make("ses_guardrail_unrelated")
-const requestID = "grq_guardrail_test" as SessionGuardrail.ReplyInput["requestID"]
+const requestID = SessionGuardrail.RequestID.create("grq_guardrail_test")
 
 type GuardrailStatus = Effect.Success<ReturnType<SessionGuardrail.Interface["status"]>>
 type GuardrailRequest = Effect.Success<ReturnType<SessionGuardrail.Interface["forSession"]>>[number]

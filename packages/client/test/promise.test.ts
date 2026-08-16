@@ -16,6 +16,7 @@ test("exposes every standard HTTP API group", () => {
     "model",
     "generate",
     "provider",
+    "providerUsage",
     "integration",
     "mcp",
     "credential",
@@ -51,6 +52,37 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
+  expect(Object.keys(client.providerUsage)).toEqual(["list", "get"])
+})
+
+test("provider usage methods use the public HTTP contract", async () => {
+  const requests: Request[] = []
+  const snapshot = {
+    providerID: "openai",
+    label: "Codex",
+    status: "available" as const,
+    source: "provider_internal_api" as const,
+    stability: "best_effort" as const,
+    updatedAt: 100,
+    windows: [{ id: "codex-primary", label: "5-hour", unit: "percent" as const, used: 25 }],
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json({ location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } }, data: request.url.includes("/openai/") ? snapshot : [snapshot] })
+    },
+  })
+
+  expect(await client.providerUsage.list({ refresh: true })).toEqual(expect.objectContaining({ data: [snapshot] }))
+  expect(await client.providerUsage.get({ providerID: "openai", refresh: false })).toEqual(
+    expect.objectContaining({ data: snapshot }),
+  )
+  expect(requests.map((request) => `${new URL(request.url).pathname}?${new URL(request.url).searchParams}`)).toEqual([
+    "/api/provider/usage?refresh=true",
+    "/api/provider/openai/usage?refresh=false",
+  ])
 })
 
 test("guardrail methods use the public HTTP contract", async () => {
