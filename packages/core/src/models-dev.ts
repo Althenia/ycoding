@@ -167,17 +167,18 @@ function released(date: string) {
 }
 
 function cost(input: SourceModel["cost"]): ModelV2.Info["cost"] {
+  if (!input) return []
   const base = {
-    input: input?.input ?? Money.USDPerMillionTokens.zero,
-    output: input?.output ?? Money.USDPerMillionTokens.zero,
+    input: input.input,
+    output: input.output,
     cache: {
-      read: input?.cache_read ?? Money.USDPerMillionTokens.zero,
-      write: input?.cache_write ?? Money.USDPerMillionTokens.zero,
+      read: input.cache_read ?? Money.USDPerMillionTokens.zero,
+      write: input.cache_write ?? Money.USDPerMillionTokens.zero,
     },
   }
   return [
     base,
-    ...(input?.tiers?.map((item) => ({
+    ...(input.tiers?.map((item) => ({
       tier: item.tier,
       input: item.input,
       output: item.output,
@@ -186,7 +187,7 @@ function cost(input: SourceModel["cost"]): ModelV2.Info["cost"] {
         write: item.cache_write ?? Money.USDPerMillionTokens.zero,
       },
     })) ?? []),
-    ...(input?.context_over_200k
+    ...((input.tiers?.length ?? 0) === 0 && input.context_over_200k
       ? [
           {
             tier: { type: "context" as const, size: 200_000 },

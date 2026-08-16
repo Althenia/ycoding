@@ -36,10 +36,11 @@ export const Plugin = {
                     action: "progress" as const,
                     task: yield* orchestration.progress(context.sessionID, input.text),
                   }
-                const question = yield* orchestration.question(context.sessionID, input.text, input.data)
+                const report = yield* orchestration.question(context.sessionID, input.text, input.data)
+                if (report.autoAnswered) return { action: "question" as const, question: report.question }
                 yield* runtime.job.background(context.sessionID)
                 yield* runtime.session.interrupt(context.sessionID)
-                return { action: "question" as const, question }
+                return { action: "question" as const, question: report.question }
               }).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error }))),
           }),
           { codemode: false },

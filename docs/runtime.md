@@ -76,6 +76,8 @@ Session autonomy is durable and supports:
 | `yolo`   | Autonomous execution under the effective permission policy. |
 | `goal`   | Repeated continuation toward a durable goal.                |
 
+`yolo` and active `goal` mode also govern managed descendants. A child Session automatically accepts an effective `ask` permission decision, selects the first ordinary question option, and answers a deterministic form while any managed ancestor is autonomous. Explicit permission denies remain denies. Auto-handled requests do not enter the pending request collections, so the TUI does not emit their approval or question notification sound.
+
 Goal state stores the goal text, status, iteration, no-progress count, maximum no-progress count, and last progress digest.
 
 Terminal goal states are:
@@ -122,6 +124,7 @@ Current behavior:
 - TeamView is model-facing coordination data, not user-facing narration. The parent keeps launch, running, completed, failed, and total bookkeeping silent unless the user explicitly asks for subagent status.
 - A child failure may still be reported when it blocks the requested outcome, but not as routine orchestration bookkeeping.
 - Running children receive a status, blocker, and ETA request every ten minutes.
+- A child question reported through orchestration receives the safe default answer immediately when its managed Session family is in `yolo` or active `goal` mode. The task remains running, and no parent-question notification or sound is emitted.
 - The effective permission policy limits which subagents are available.
 - Configured and managed subagents materialize the Location's registered tool catalog through their ordered permission rules and inherited parent ceiling. Empty managed-agent rules resolve to safe defaults with shell requiring approval; final `subagent` and `subagent_control` denies prevent nested orchestration.
 - Nested subagents are bounded by `experimental.subagent_depth`; the default depth is one.
@@ -255,7 +258,7 @@ Anthropic cache-control placement is normalized across direct and compatible pro
 
 The runtime preserves provider-reported cache reads, writes, creation detail, mechanisms, and model/context identity where available. Missing provider telemetry is reported as unreported rather than silently treated as zero.
 
-The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost.
+The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost. Cost is calculated from the selected catalog model's input, output, cache-read, cache-write, and eligible context-tier prices. ChatGPT/Codex and Claude Code subscription routes retain those catalog prices, so their nonzero total is an API-equivalent usage estimate rather than a claim about the subscription invoice.
 
 Session diagnostics also expose a bounded request summary: logical requests, transport attempts, helper calls, continued requests, fallbacks, raw token categories, estimated cost, and the latest cache invalidation reason. Only the first eight characters of the latest prompt-cache namespace are exposed; prompt content, full cache keys, system digests, tool digests, and internal provider-request events remain private. When any request lacks catalog pricing, estimated request cost is absent and the TUI renders `Estimated cost unavailable` instead of `$0.00`.
 

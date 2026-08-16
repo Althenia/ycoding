@@ -24,7 +24,7 @@
     "refresh:models": "bun run script/refresh-models.ts",
     "dev": "bun run src/index.ts",
     "test": "bun test --timeout 30000 --only-failures",
-    "typecheck": "tsgo --noEmit -p tsconfig.typecheck.json"
+    "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

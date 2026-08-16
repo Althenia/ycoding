@@ -192,8 +192,8 @@ export const OpenAIPlugin = define({
       const item = evt.provider.get(ProviderV2.ID.openai)
       if (!item) return
       for (const model of item.models.values()) {
-        // ChatGPT-plan tokens only authorize codex-eligible models, and the
-        // subscription covers usage, so hide the rest and zero the cost.
+        // ChatGPT-plan tokens only authorize codex-eligible models. Catalog
+        // prices remain available as API-equivalent usage estimates.
         evt.model.update(item.provider.id, model.id, (draft) => {
           if (Schema.is(Schema.Struct({ mode: Schema.Literal("pro") }))(draft.body?.reasoning)) {
             draft.enabled = false
@@ -203,7 +203,6 @@ export const OpenAIPlugin = define({
             draft.enabled = false
             return
           }
-          draft.cost = []
         })
       }
     })

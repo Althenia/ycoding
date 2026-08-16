@@ -12,7 +12,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiPaths } from "../../context/runtime"
 import { useConfig } from "../../config"
 import { useLocation } from "../../context/location"
-import { useTheme } from "../../context/theme"
+import { useTheme, selectedForeground } from "../../context/theme"
 import { SplitBorder } from "../../ui/border"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "../../util/locale"
@@ -32,7 +32,6 @@ import {
 import type { FileSystemEntry } from "@ycoding-ai/client"
 import { stringWidth } from "../../util/string-width"
 import { parseFileLineRange, stripFileLineRange } from "../../prompt/parse"
-import type { ComponentTheme } from "../../theme/v2/component"
 
 export type AutocompleteRef = {
   onInput: (value: string) => void
@@ -48,13 +47,6 @@ export type AutocompleteOption = {
   isDirectory?: boolean
   onSelect?: () => void
   path?: string
-}
-
-export function autocompleteSelectionColors(theme: Pick<ComponentTheme, "background" | "text">) {
-  return {
-    fill: theme.background.action.primary.focused,
-    foreground: theme.text.action.primary.focused,
-  }
 }
 
 export function Autocomplete(props: {
@@ -75,8 +67,7 @@ export function Autocomplete(props: {
   const data = useData()
   const keymap = Keymap.use()
   const keymapCommands = Keymap.useCommands()
-  const { theme, themeV2 } = useTheme()
-  const selection = autocompleteSelectionColors(themeV2)
+  const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
   const config = useConfig().data
@@ -813,7 +804,7 @@ export function Autocomplete(props: {
             <box
               paddingLeft={1}
               paddingRight={1}
-              backgroundColor={index === store.selected ? selection.fill : undefined}
+              backgroundColor={index === store.selected ? theme.primary : undefined}
               flexDirection="row"
               onMouseMove={() => {
                 setStore("input", "mouse")
@@ -828,14 +819,11 @@ export function Autocomplete(props: {
               }}
               onMouseUp={() => select()}
             >
-              <text fg={index === store.selected ? selection.foreground : theme.text} flexShrink={0}>
+              <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0}>
                 {option().display}
               </text>
               <Show when={option().description}>
-                <text
-                  fg={index === store.selected ? selection.foreground : theme.textMuted}
-                  wrapMode="none"
-                >
+                <text fg={index === store.selected ? selectedForeground(theme) : theme.textMuted} wrapMode="none">
                   {" " + option().description?.trimStart()}
                 </text>
               </Show>

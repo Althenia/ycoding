@@ -10,6 +10,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode } from "@ycoding-ai/core/effect/app-node"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventV2 } from "@ycoding-ai/core/event"
+import { Form } from "@ycoding-ai/core/form"
 import { Location } from "@ycoding-ai/core/location"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
@@ -27,12 +28,13 @@ import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionPendingTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
+import { SessionPendingTable, SessionTable, SessionTaskNotificationTable } from "@ycoding-ai/core/session/sql"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { QuestionV2 } from "@ycoding-ai/core/question"
 import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { SubagentTool } from "@ycoding-ai/core/tool/subagent"
 import { SubagentControlTool } from "@ycoding-ai/core/tool/subagent-control"
@@ -712,7 +714,7 @@ describe("SubagentTool", () => {
           yield* orchestration.answer({
             parentID: parent.id,
             childID: child.sessionID,
-            questionID: question.id,
+            questionID: question.question.id,
             text: "yes",
           })
           expect(
@@ -720,7 +722,7 @@ describe("SubagentTool", () => {
               orchestration.answer({
                 parentID: parent.id,
                 childID: child.sessionID,
-                questionID: question.id,
+                questionID: question.question.id,
                 text: "again",
               }),
             ),
@@ -1088,6 +1090,153 @@ describe("SubagentTool", () => {
               resources: ["src/index.ts"],
             }),
           ).toMatchObject({ effect: "allow" })
+        }),
+      ),
+    ),
+  )
+
+  it.live("auto handles child permissions and questions for yolo and goal roots without notifications", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* SessionV2.Service
+          const parent = yield* sessions.create({
+            location,
+            model: parentModel,
+            permissionCeiling: [{ action: "delete", resource: "*", effect: "deny" }],
+          })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          yield* AgentV2.Service.use((agents) =>
+            agents.transform((draft) =>
+              draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+                agent.permissions = [{ action: "*", resource: "*", effect: "ask" }]
+              }),
+            ),
+          ).pipe(Effect.provide(locations.get(parent.location)))
+          const orchestration = (yield* PluginRuntime.Service).orchestration
+          const prepared = yield* SessionOrchestration.preflight(parent, {
+            agent: AgentV2.ID.make("reviewer"),
+            caller: toolIdentity.agent,
+          }).pipe(Effect.provide(locations.get(parent.location)))
+          const child = yield* orchestration.launch({
+            parentID: parent.id,
+            parentAssistantMessageID: SessionMessage.ID.make("msg_autonomous_parent"),
+            toolCallID: "call_autonomous_child",
+            agent: AgentV2.ID.make("reviewer"),
+            description: "hold autonomous child",
+            prompt: "continue safely",
+            background: true,
+            prepared,
+          })
+          const permission = yield* PermissionV2.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const questions = yield* QuestionV2.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const forms = yield* Form.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          const db = (yield* Database.Service).db
+
+          for (const mode of ["yolo", "goal"] as const) {
+            yield* db
+              .update(SessionTable)
+              .set({
+                autonomy:
+                  mode === "goal"
+                    ? {
+                        mode,
+                        goal: {
+                          text: "Finish the parent goal",
+                          status: "active",
+                          iteration: 0,
+                          noProgress: 0,
+                          maxNoProgress: 3,
+                        },
+                      }
+                    : { mode },
+              })
+              .where(eq(SessionTable.id, parent.id))
+              .run()
+              .pipe(Effect.orDie)
+
+            expect(
+              yield* permission.ask({
+                id: PermissionV2.ID.create(`per_child_${mode}`),
+                sessionID: child.sessionID,
+                agent: AgentV2.ID.make("reviewer"),
+                action: "edit",
+                resources: ["src/index.ts"],
+              }),
+            ).toMatchObject({ effect: "allow" })
+            expect(
+              yield* permission.ask({
+                id: PermissionV2.ID.create(`per_child_deny_${mode}`),
+                sessionID: child.sessionID,
+                agent: AgentV2.ID.make("reviewer"),
+                action: "delete",
+                resources: ["src/index.ts"],
+              }),
+            ).toMatchObject({ effect: "deny" })
+            expect(
+              yield* questions.ask({
+                sessionID: child.sessionID,
+                questions: [
+                  {
+                    question: "Which option?",
+                    header: "Option",
+                    options: [{ label: "Safest", description: "Use the safest option" }],
+                  },
+                ],
+              }),
+            ).toEqual([["Safest"]])
+            expect(
+              yield* forms.ask({
+                sessionID: child.sessionID,
+                title: `Choose for ${mode}`,
+                fields: [
+                  {
+                    key: "choice",
+                    type: "string",
+                    required: true,
+                    options: [{ value: "safe", label: "Safe" }],
+                  },
+                ],
+              }),
+            ).toMatchObject({ status: "answered", answer: { choice: "safe" } })
+
+            expect(
+              yield* executeTool(registry, {
+                sessionID: child.sessionID,
+                agent: AgentV2.ID.make("reviewer"),
+                messageID: SessionMessage.ID.make(`msg_child_question_${mode}`),
+                call: {
+                  type: "tool-call",
+                  id: `call_child_question_${mode}`,
+                  name: SubagentReportTool.name,
+                  input: { action: "question", text: `How should ${mode} continue?` },
+                },
+              }),
+            ).toMatchObject({ type: "text" })
+            expect(yield* orchestration.get(parent.id, child.sessionID)).toMatchObject({
+              state: "running",
+              question: undefined,
+            })
+          }
+
+          expect(yield* permission.list()).toEqual([])
+          expect(yield* questions.list()).toEqual([])
+          expect(yield* forms.list({ sessionID: child.sessionID })).toEqual([])
+          expect(
+            (yield* db
+              .select({ type: SessionTaskNotificationTable.type })
+              .from(SessionTaskNotificationTable)
+              .where(eq(SessionTaskNotificationTable.task_session_id, child.sessionID))
+              .all()
+              .pipe(Effect.orDie))
+              .filter((item) => item.type === "question"),
+          ).toEqual([])
         }),
       ),
     ),

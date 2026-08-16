@@ -1,13 +1,15 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { useTheme } from "../../context/theme"
-import { RailSection } from "../../routes/session/rail-section"
 
 function View() {
   const { themeV2 } = useTheme()
   return (
-    <RailSection section="lsp" title="LSP" summary="unavailable">
+    <box>
+      <text fg={themeV2.text.default}>
+        <b>LSP</b>
+      </text>
       <text fg={themeV2.text.subdued}>LSP status unavailable</text>
-    </RailSection>
+    </box>
   )
 }
 

@@ -14,6 +14,7 @@ import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/acc
 import { ProjectArtifactStandardSourceRegistry } from "@ycoding-ai/core/project-artifact/source-registry"
 import {
   ProjectArtifactProjectScopeTable,
+  ProjectArtifactScopeTable,
   ProjectArtifactOperationTable,
   ProjectArtifactTable,
   ProjectArtifactVersionTable,
@@ -92,6 +93,118 @@ afterAll(() => Promise.all([
 ]))
 
 describe("ProjectArtifactStore scope and automatic writes", () => {
+  it.live("restores a missing project scope marker before a subsequent automatic write", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const store = yield* ProjectArtifactStore.Service
+      const projectID = Project.ID.make("project-missing-scope-marker")
+      yield* insertProject(projectID)
+      const first = yield* store.writeAutomatic({
+        projectID,
+        sessionID: Session.ID.make("ses_missing_scope_marker_first"),
+        insightKey: "missing-scope-marker-first",
+        id: "missing-scope-marker-first",
+        definition: skillDefinition("missing-scope-marker-first"),
+        now: 10_000,
+      })
+      const scope = yield* store.resolveProjectScope(projectID)
+      const marker = ProjectArtifactPackage.scopeMarkerPath(
+        path.join(root, "data", "project-artifacts", scope.storageID),
+      )
+      yield* Effect.promise(() => fs.rm(marker))
+
+      const second = yield* store.writeAutomatic({
+        projectID,
+        sessionID: Session.ID.make("ses_missing_scope_marker_second"),
+        insightKey: "missing-scope-marker-second",
+        id: "missing-scope-marker-second",
+        definition: skillDefinition("missing-scope-marker-second"),
+        now: 10_001,
+      })
+
+      expect(first.result).toBe("created")
+      expect(second.result).toBe("created")
+      expect(yield* Effect.promise(() => Bun.file(marker).exists())).toBe(true)
+    }),
+  )
+
+  it.live("preserves a conflicting project scope marker and rejects the write", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const store = yield* ProjectArtifactStore.Service
+      const projectID = Project.ID.make("project-conflicting-scope-marker")
+      yield* insertProject(projectID)
+      const scope = yield* store.resolveProjectScope(projectID)
+      const marker = ProjectArtifactPackage.scopeMarkerPath(
+        path.join(root, "data", "project-artifacts", scope.storageID),
+      )
+      const conflicting = JSON.stringify({
+        schema: 1,
+        scopeID: scope.id,
+        type: "project",
+        storageID: "00000000-0000-4000-8000-000000000000",
+      })
+      yield* Effect.promise(() => fs.writeFile(marker, conflicting))
+
+      expect(
+        (
+          yield* Effect.flip(
+            store.writeAutomatic({
+              projectID,
+              sessionID: Session.ID.make("ses_conflicting_scope_marker"),
+              insightKey: "conflicting-scope-marker",
+              id: "conflicting-scope-marker",
+              definition: skillDefinition("conflicting-scope-marker"),
+              now: 10_100,
+            }),
+          )
+        ).code,
+      ).toBe("OwnershipMismatch")
+      expect(yield* Effect.promise(() => fs.readFile(marker, "utf8"))).toBe(conflicting)
+    }),
+  )
+
+  it.live("restores project and global scope markers from their database rows", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const db = (yield* Database.Service).db
+      const store = yield* ProjectArtifactStore.Service
+      const projectID = Project.ID.make("project-restored-scope-marker-content")
+      yield* insertProject(projectID)
+      const project = yield* store.resolveProjectScope(projectID)
+      const global = yield* store.resolveGlobalScope()
+      const scopes = [project, global]
+      yield* Effect.forEach(
+        scopes,
+        (scope) => Effect.promise(() => fs.rm(ProjectArtifactPackage.scopeMarkerPath(path.join(root, "data", "project-artifacts", scope.storageID)))),
+        { discard: true },
+      )
+
+      const restoredProject = yield* store.resolveProjectScope(projectID)
+      const restoredGlobal = yield* store.resolveGlobalScope()
+      yield* Effect.forEach(
+        [restoredProject, restoredGlobal],
+        (scope) =>
+          Effect.gen(function* () {
+            const row = yield* db
+              .select({ id: ProjectArtifactScopeTable.id, type: ProjectArtifactScopeTable.type, storageID: ProjectArtifactScopeTable.storage_id })
+              .from(ProjectArtifactScopeTable)
+              .where(eq(ProjectArtifactScopeTable.id, scope.id))
+              .get()
+            expect(row).toBeDefined()
+            expect(
+              JSON.parse(
+                yield* Effect.promise(() =>
+                  fs.readFile(ProjectArtifactPackage.scopeMarkerPath(path.join(root, "data", "project-artifacts", scope.storageID)), "utf8"),
+                ),
+              ),
+            ).toEqual({ schema: 1, scopeID: row?.id, type: row?.type, storageID: row?.storageID })
+          }),
+        { discard: true },
+      )
+    }),
+  )
+
   it.live("shares scope across locations, rejects global, and adopts without moving storage", () =>
     Effect.gen(function* () {
       yield* setup()

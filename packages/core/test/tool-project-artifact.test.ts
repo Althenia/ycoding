@@ -1,14 +1,23 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, describe, expect, test } from "bun:test"
+import fs from "fs/promises"
+import { mkdtempSync } from "fs"
+import os from "os"
+import path from "path"
 import { Effect, Layer, Schema } from "effect"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { Database } from "@ycoding-ai/core/database/database"
+import { Global } from "@ycoding-ai/core/global"
 import { Image } from "@ycoding-ai/core/image"
 import { Location } from "@ycoding-ai/core/location"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { ProjectArtifactStore } from "@ycoding-ai/core/project-artifact"
+import { ProjectArtifactAccounting } from "@ycoding-ai/core/project-artifact/accounting"
 import { ProjectArtifactSource } from "@ycoding-ai/core/project-artifact/source"
+import { ProjectArtifactStandardSourceRegistry } from "@ycoding-ai/core/project-artifact/source-registry"
+import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
@@ -16,6 +25,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ProjectArtifactTool } from "@ycoding-ai/core/tool/project-artifact"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
+import { EffectFlock } from "@ycoding-ai/core/util/effect-flock"
 import { Project } from "@ycoding-ai/schema/project"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { imagePassthrough } from "./lib/image"
@@ -98,6 +108,60 @@ const it = testEffect(
     ],
   ),
 )
+
+const realRoot = mkdtempSync(path.join(os.tmpdir(), "project-artifact-tool-"))
+const realProjectID = Project.ID.make("project-artifact-tool-real")
+const realLocation = {
+  directory: AbsolutePath.make("/workspace/project-artifact-tool-real"),
+  project: { id: realProjectID, directory: AbsolutePath.make("/workspace/project-artifact-tool-real") },
+}
+const realLocationLayer = Layer.succeed(Location.Service, Location.Service.of(realLocation))
+const realProjectArtifactToolNode = makeLocationNode({
+  name: "test/project-artifact-tool-real-store-plugin",
+  layer: Layer.effectDiscard(registerToolPlugin(ProjectArtifactTool.Plugin)),
+  deps: [
+    ToolRegistry.toolsNode,
+    Location.node,
+    PermissionV2.node,
+    SessionGuardrail.node,
+    ProjectArtifactStore.node,
+    ProjectArtifactSource.node,
+  ],
+})
+const realIt = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      ToolRegistry.node,
+      ToolRegistry.toolsNode,
+      realProjectArtifactToolNode,
+      ProjectArtifactStore.node,
+      ProjectArtifactAccounting.node,
+      ProjectArtifactStandardSourceRegistry.registryNode,
+      Database.node,
+      EffectFlock.node,
+      Global.node,
+    ]),
+    [
+      [Location.node, realLocationLayer],
+      [PermissionV2.node, permission],
+      [SessionGuardrail.node, guardrail],
+      [ProjectArtifactSource.node, source],
+      [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
+      [Image.node, imagePassthrough],
+      [
+        Global.node,
+        Global.layerWith({
+          data: path.join(realRoot, "data"),
+          state: path.join(realRoot, "state"),
+          config: path.join(realRoot, "config"),
+          home: path.join(realRoot, "home"),
+        }),
+      ],
+    ],
+  ),
+)
+
+afterAll(() => fs.rm(realRoot, { recursive: true, force: true }))
 
 const skillInput = {
   kind: "skill" as const,
@@ -244,6 +308,76 @@ describe("ProjectArtifactTool runtime", () => {
     }),
   )
 
+  realIt.live("returns a real VersionConflict store code from automatic writes", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const store = yield* ProjectArtifactStore.Service
+      const registry = yield* ToolRegistry.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({
+          id: realProjectID,
+          worktree: realLocation.directory,
+          sandboxes: [],
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        })
+        .onConflictDoNothing()
+        .run()
+      yield* store.writeAutomatic({
+        projectID: realProjectID,
+        sessionID,
+        agentID,
+        insightKey: "prepare-version-conflict",
+        id: skillInput.id,
+        definition: {
+          kind: skillInput.kind,
+          name: skillInput.name,
+          description: skillInput.description,
+          content: skillInput.content,
+        },
+      })
+
+      const failed = yield* settleTool(registry, call(skillInput, "call-real-version-conflict"))
+
+      expect(failed.result).toEqual({
+        type: "error",
+        value: "Project artifact write was rejected: VersionConflict; pass base_version_id for the current version.",
+      })
+      expect(JSON.stringify(failed)).not.toContain(realRoot)
+    }),
+  )
+
+  realIt.live("returns an actionable UnsafeContent remedy from automatic writes", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const registry = yield* ToolRegistry.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({
+          id: realProjectID,
+          worktree: realLocation.directory,
+          sandboxes: [],
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        })
+        .onConflictDoNothing()
+        .run()
+
+      const failed = yield* settleTool(
+        registry,
+        call({ ...skillInput, content: "`/**unsafe`" }, "call-real-unsafe-content"),
+      )
+
+      expect(failed.result).toEqual({
+        type: "error",
+        value:
+          "Project artifact write was rejected: UnsafeContent; remove secrets, URLs, filesystem paths, contact details, markup or links, prompt-injection markers, executable code or commands, and packaging filenames.",
+      })
+      expect(JSON.stringify(failed)).not.toContain(realRoot)
+    }),
+  )
+
   it.effect("rejects Project.ID.global before Store and bounds Store failures", () =>
     Effect.gen(function* () {
       reset()
@@ -260,7 +394,10 @@ describe("ProjectArtifactTool runtime", () => {
         message: "secret input at /private/repository and https://private.invalid",
       })
       const failed = yield* settleTool(registry, call(skillInput, "call-store-failure"))
-      expect(failed.result).toEqual({ type: "error", value: "Project artifact write was rejected" })
+      expect(failed.result).toEqual({
+        type: "error",
+        value: "Project artifact write was rejected: StorageUnavailable; retry after storage is available.",
+      })
       expect(JSON.stringify(failed)).not.toContain("secret")
       expect(JSON.stringify(failed)).not.toContain("/private")
       expect(JSON.stringify(failed)).not.toContain("https://")

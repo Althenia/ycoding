@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
-import { descriptor, go, header, logo, terminal, wordmark } from "../src/logo"
+import { go, logo } from "../src/logo"
 
 const root = path.resolve(import.meta.dirname, "..")
 
@@ -18,13 +18,6 @@ test("uses the YCoding wordmark and compact YC mark", () => {
     left: ["     ", "█   █", "▀█ █▀", "  █  "],
     right: ["    ", "█▀▀▀", "█___", "▀▀▀▀"],
   })
-})
-
-test("exports the Penpot terminal mark and header lockup", () => {
-  expect(terminal).toEqual(["\u2588   \u2588", "\u2580\u2588 \u2588\u2580", "  \u2588"])
-  expect(header).toBe("y. ycoding")
-  expect(descriptor).toBe("terminal coding agent")
-  expect(wordmark).toBe("YCoding")
 })
 
 test("contains no legacy product copy in active TUI presentation sources", async () => {

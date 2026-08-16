@@ -6,7 +6,7 @@ import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { Hash } from "../util/hash"
 import { SessionSchema } from "./schema"
-import { SessionTable } from "./sql"
+import { SessionTable, SessionTaskTable } from "./sql"
 
 export const Mode = Schema.Literals(["normal", "yolo", "goal"])
 export type Mode = typeof Mode.Type
@@ -43,6 +43,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
 
 export interface Interface {
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
+  readonly isAutonomous: (sessionID: SessionSchema.ID) => Effect.Effect<boolean, NotFoundError>
   readonly setMode: (input: {
     sessionID: SessionSchema.ID
     mode: Exclude<Mode, "goal">
@@ -69,6 +70,7 @@ export const read = (value: unknown): State => {
 }
 
 export const CompletionMarker = "<goal-complete/>"
+export const AutomaticAnswer = "Continue with the safest reasonable default."
 
 /**
  * Source of the marker as models actually emit it. Providers routinely reformat a self-closing tag
@@ -143,6 +145,22 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       return state
     })
 
+  const isAutonomous: Interface["isAutonomous"] = (sessionID) =>
+    load(sessionID).pipe(
+      Effect.flatMap((state) => {
+        if (state.mode === "yolo" || state.mode === "goal") return Effect.succeed(true)
+        return input.db
+          .select({ parentID: SessionTaskTable.parent_id })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.session_id, sessionID))
+          .get()
+          .pipe(
+            Effect.orDie,
+            Effect.flatMap((task) => (task ? isAutonomous(task.parentID) : Effect.succeed(false))),
+          )
+      }),
+    )
+
   // Leaving goal mode ends the loop, so the goal survives the switch with a terminal
   // status: callers read it back to report how the run ended.
   const setMode: Interface["setMode"] = ({ sessionID, mode }) =>
@@ -159,6 +177,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
 
   return {
     get: (sessionID) => load(sessionID),
+    isAutonomous,
     setMode,
     setGoal: ({ sessionID, text, rawText, maxNoProgress = 3 }) =>
       save(sessionID, {

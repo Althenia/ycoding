@@ -721,7 +721,10 @@ const layerWithResolver = (standardSources: StandardSourceResolver, hooks: Store
     ) {
       if (projectID === Project.ID.global) return yield* failure("ProjectIdentityUnavailable")
       const current = yield* findProjectScope(projectID)
-      if (current) return current
+      if (current) {
+        yield* restoreMissingScopeMarker(scopeRoot(global.data, current.storageID), current)
+        return current
+      }
       const now = Date.now()
       const created = yield* db
         .transaction((tx) =>
@@ -767,7 +770,11 @@ const layerWithResolver = (standardSources: StandardSourceResolver, hooks: Store
         .get()
         .pipe(Effect.orDie)
       if (row?.scope.type !== undefined && row.scope.type !== "global") return yield* failure("ReconciliationRequired")
-      if (row) return scopeFromRow(row.scope) as ProjectArtifact.GlobalScope
+      if (row) {
+        const current = scopeFromRow(row.scope) as ProjectArtifact.GlobalScope
+        yield* restoreMissingScopeMarker(scopeRoot(global.data, current.storageID), current)
+        return current
+      }
       const now = Date.now()
       const scope = ProjectArtifact.GlobalScope.make({
         type: "global",
@@ -4986,12 +4993,40 @@ function writeScopeMarker(root: string, scope: ProjectArtifact.Scope) {
     try: async () => {
       await fs.mkdir(root, { recursive: true })
       const file = ProjectArtifactPackage.scopeMarkerPath(root)
-      const content = JSON.stringify({ schema: 1, scopeID: scope.id, type: scope.type, storageID: scope.storageID })
-      await fs.writeFile(`${file}.tmp`, content)
+      await fs.writeFile(`${file}.tmp`, scopeMarkerContent(scope))
       await fs.rename(`${file}.tmp`, file)
     },
     catch: () => failure("StorageUnavailable"),
   })
+}
+
+function restoreMissingScopeMarker(root: string, scope: ProjectArtifact.Scope) {
+  const file = ProjectArtifactPackage.scopeMarkerPath(root)
+  return Effect.tryPromise({
+    try: async () => {
+      const missing = await fs.readFile(file).then(
+        () => false,
+        (error) => {
+          if (fileErrorCode(error, "ENOENT")) return true
+          throw error
+        },
+      )
+      if (!missing) return
+      await fs.mkdir(root, { recursive: true })
+      await fs.writeFile(file, scopeMarkerContent(scope), { flag: "wx" }).catch((error) => {
+        if (!fileErrorCode(error, "EEXIST")) throw error
+      })
+    },
+    catch: () => failure("StorageUnavailable"),
+  })
+}
+
+function scopeMarkerContent(scope: ProjectArtifact.Scope) {
+  return JSON.stringify({ schema: 1, scopeID: scope.id, type: scope.type, storageID: scope.storageID })
+}
+
+function fileErrorCode(error: unknown, code: string) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code
 }
 
 function ownedDirectorySize(root: string): Effect.Effect<number> {

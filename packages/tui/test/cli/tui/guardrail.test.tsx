@@ -126,12 +126,11 @@ test("renders guardrail status without raw rules or command resources", async ()
     { width: 48, height: 14 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("GUARDRAILS"))
+  await app.waitForFrame((frame) => frame.includes("Guardrails"))
 
   try {
     const frame = app.captureCharFrame()
-    // Rail sections render their name in the design's uppercase section style.
-    expect(frame).toContain("GUARDRAILS")
+    expect(frame).toContain("Guardrails")
     expect(frame).toContain("Standard + 2 custom")
     expect(frame).toContain("3 approvals · 1 blocked")
     expect(frame).toContain("Shells 2 / 8")

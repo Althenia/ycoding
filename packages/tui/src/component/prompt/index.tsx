@@ -67,7 +67,6 @@ import {
 } from "../../util/session-autonomy"
 import { groupSessionShells, openBtwSession, steerBtwConclusion } from "../../util/session"
 import { DialogSessionGoal } from "../dialog-session-goal"
-import { ModeChips } from "./mode-chips"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
@@ -1931,7 +1930,6 @@ export function Prompt(props: PromptProps) {
           </Show>
           <Switch>
             <Match when={store.mode === "normal"}>
-              <ModeChips autonomy={props.autonomy} />
               <Switch>
                 <Match when={liveWorkStatusVisible()}>
                   <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>

@@ -254,13 +254,6 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
               [claudeCodeSourceSetting]: activeSource,
             });
           });
-          if (!activeSource) continue;
-          for (const model of item.models.values())
-            evt.model.update(
-              item.provider.id,
-              model.id,
-              (draft) => (draft.cost = []),
-            );
         }
       });
 

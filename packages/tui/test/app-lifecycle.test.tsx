@@ -49,6 +49,57 @@ test("SIGHUP clears title and disposes scoped resources once", async () => {
   }
 })
 
+test("Escape never exits and Ctrl+C requires two presses", async () => {
+  const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+  let started!: () => void
+  const ready = new Promise<void>((resolve) => {
+    started = resolve
+  })
+  const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
+  setup.renderer.setTerminalTitle = (title) => {
+    if (title === "YCoding") started()
+    setTitle(title)
+  }
+  const events = createEventStream()
+  const calls = createFetch(undefined, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+
+  try {
+    const { run } = await import("../src/app")
+    let resolved = false
+    const task = Effect.runPromise(
+      run({
+        server: { endpoint: { url: server.url.toString() } },
+        config: { get: async () => ({}), update: async () => ({}) },
+        packages: { resolve: async () => undefined },
+        args: {},
+        log: () => {},
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    ).then(() => {
+      resolved = true
+    })
+
+    await ready
+    setup.mockInput.pressKey("ESCAPE")
+    await Bun.sleep(10)
+    expect(resolved).toBe(false)
+
+    setup.mockInput.pressKey("c", { ctrl: true })
+    await Bun.sleep(10)
+    expect(resolved).toBe(false)
+
+    setup.mockInput.pressKey("c", { ctrl: true })
+    await task
+    expect(resolved).toBe(true)
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await server.stop()
+    mock.restore()
+  }
+})
+
 test("session lifecycle updates the terminal title and prints the epilogue after cleanup", async () => {
   const setup = await createTestRenderer({ width: 80, height: 24, useThread: false })
   const core = await import("@opentui/core")
@@ -186,21 +237,6 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/session/ses_resume/message") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/ses_resume/pending") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/permission") return json({ data: [] })
-    // The rail docks from 120 columns, so this 120-column session also loads its rail sections.
-    if (url.pathname === "/api/session/ses_resume/todo") return json({ data: [] })
-    if (url.pathname === "/api/session/ses_resume/guardrail/request") return json({ data: [] })
-    if (url.pathname === "/api/session/ses_resume/guardrail")
-      return json({
-        data: {
-          rootSessionID: "ses_resume",
-          profile: "standard",
-          customRules: 0,
-          approvals: 0,
-          blocked: 0,
-          counters: [],
-          invalidFiles: [],
-        },
-      })
     if (url.pathname === "/api/model") {
       modelDirectories.push(requestedDirectory)
       return json({ location, data: requestedDirectory === sessionDirectory ? [model] : [] })

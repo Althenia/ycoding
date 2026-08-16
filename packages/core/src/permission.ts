@@ -256,10 +256,9 @@ const layer = Layer.effect(
 
     const autonomy = yield* SessionAutonomy.Service
     const autonomous = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      const state = yield* autonomy
-        .get(sessionID)
+      return yield* autonomy
+        .isAutonomous(sessionID)
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
-      return state.mode === "yolo" || state.mode === "goal"
     })
 
     const ask = Effect.fn("PermissionV2.ask")(function* (input: AssertInput) {

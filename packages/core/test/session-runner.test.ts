@@ -263,6 +263,40 @@ test("calculates step cost using the matching context tier", () => {
   ).toBeCloseTo(0.0002926)
 })
 
+test("calculates current OpenAI and Anthropic list-price estimates including cache usage", () => {
+  const usage = { input: 100_000, output: 10_000, reasoning: 0, cache: { read: 50_000, write: 10_000 } }
+  expect(
+    SessionUsage.calculateCost(
+      [
+        {
+          input: Money.USDPerMillionTokens.make(5),
+          output: Money.USDPerMillionTokens.make(30),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.5),
+            write: Money.USDPerMillionTokens.make(6.25),
+          },
+        },
+      ],
+      usage,
+    ),
+  ).toBeCloseTo(0.8875)
+  expect(
+    SessionUsage.calculateCost(
+      [
+        {
+          input: Money.USDPerMillionTokens.make(5),
+          output: Money.USDPerMillionTokens.make(25),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.5),
+            write: Money.USDPerMillionTokens.make(6.25),
+          },
+        },
+      ],
+      usage,
+    ),
+  ).toBeCloseTo(0.8375)
+})
+
 test("does not apply an ineligible tier without base pricing", () => {
   expect(
     SessionUsage.calculateCost(

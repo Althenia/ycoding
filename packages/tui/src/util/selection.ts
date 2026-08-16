@@ -56,7 +56,7 @@ export function handleSelectionKey(
   if (!selection) return
 
   const copyKey =
-    event.name === "c" && (platform === "darwin" ? Boolean(event.meta || event.super) : Boolean(event.ctrl))
+    event.name === "c" && (Boolean(event.ctrl) || (platform === "darwin" && Boolean(event.meta || event.super)))
 
   if (copyKey) {
     if (!copy(renderer, toast, clipboard)) {

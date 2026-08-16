@@ -726,7 +726,7 @@ All other `cli.json` fields are optional and remain `unset` until configured. Th
 
 Attention sound names are `default`, `question`, `permission`, `error`, `done`, and `subagent_done`.
 
-`terminal.copy_on_select` is deprecated and behaviorally ignored. Passive mouse selection highlights text only. Copy the active selection with `Cmd+C` on macOS or `Ctrl+C` on other supported platforms; press `Esc` to clear it.
+`terminal.copy_on_select` is deprecated and behaviorally ignored. Passive mouse selection highlights text only. Copy the active selection with `Ctrl+C` on every supported platform or `Cmd+C` on macOS; press `Esc` to clear it. Selection copy consumes `Ctrl+C` and cannot exit the application. Without a selection, `Ctrl+C` keeps its prompt behavior and requires two presses to exit from an empty prompt; `Esc` never exits YCoding.
 
 `keybinds` is a record of command names to key sequences. The complete current key map lives in `packages/tui/src/config/keybind.ts`; that file is authoritative when bindings are added or renamed.
 

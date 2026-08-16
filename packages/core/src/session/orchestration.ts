@@ -22,6 +22,7 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { and, asc, eq, inArray } from "drizzle-orm"
 import { SessionV2 } from "../session"
 import { SessionExecution } from "./execution"
+import { SessionAutonomy } from "./autonomy"
 import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { SessionPermissionCeiling } from "./permission-ceiling"
@@ -211,7 +212,10 @@ export interface Interface {
     childID: SessionSchema.ID,
     text: string,
     data?: Schema.Json,
-  ) => Effect.Effect<Question, TaskNotFoundError | ConflictError>
+  ) => Effect.Effect<
+    { readonly question: Question; readonly autoAnswered: boolean },
+    TaskNotFoundError | ConflictError
+  >
   readonly settle: (
     childID: SessionSchema.ID,
     result:
@@ -270,6 +274,7 @@ const layer = Layer.effect(
     const events = yield* EventV2.Service
     const execution = yield* SessionExecution.Service
     const sessions = yield* SessionV2.Service
+    const autonomy = yield* SessionAutonomy.Service
     const locks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
 
     const task = Effect.fn("SessionOrchestration.task")(function* (childID: SessionSchema.ID) {
@@ -552,8 +557,40 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
+            if (
+              yield* autonomy
+                .isAutonomous(childID)
+                .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
+            ) {
+              yield* sessions.synthetic({
+                id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
+                sessionID: childID,
+                text: `Parent answer:\n${JSON.stringify({
+                  questionID: question.id,
+                  text: SessionAutonomy.AutomaticAnswer,
+                })}`,
+                description: "Autonomous subagent answer",
+                metadata: {
+                  source: "subagent_parent",
+                  parentID: row.parent_id,
+                  childID,
+                  kind: "answer",
+                  questionID: question.id,
+                },
+                delivery: "steer",
+                resume: false,
+              }).pipe(
+                Effect.mapError((error) =>
+                  error._tag === "Session.NotFoundError"
+                    ? new TaskNotFoundError({ childID })
+                    : new ConflictError({ message: `Conflicting autonomous answer for ${question.id}` }),
+                ),
+              )
+              yield* execution.wake(childID)
+              return { question, autoAnswered: true }
+            }
             yield* publish(childID, { type: "question_asked", question })
-            return question
+            return { question, autoAnswered: false }
           }),
         ),
       ),
@@ -678,5 +715,5 @@ const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, EventV2.node, SessionExecution.node, SessionV2.node],
+  deps: [Database.node, EventV2.node, SessionAutonomy.node, SessionExecution.node, SessionV2.node],
 })

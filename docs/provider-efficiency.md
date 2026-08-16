@@ -151,6 +151,8 @@ The local section reports:
 
 Unknown pricing renders `Estimated cost unavailable`. A real zero-priced catalog model renders `$0.0000`.
 
+OpenAI ChatGPT/Codex and Anthropic Claude Code connections retain the selected model's catalog prices instead of replacing them with zero. Their Session cost is an API-equivalent list-price estimate for comparing model usage; it is not the subscription invoice or remaining plan allowance. Provider quota reporting remains a separate read-only surface. The committed models.dev snapshot supplies release-time OpenAI and Anthropic master data, runtime refreshes may update it, and explicit context tiers take precedence over the legacy `context_over_200k` field so GPT-5.6 long-context pricing starts at its documented 272K boundary.
+
 ### Invalidation labels
 
 | Value | Interpretation |

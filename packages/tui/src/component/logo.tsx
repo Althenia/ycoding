@@ -1,37 +1,8 @@
 import { RGBA, TextAttributes } from "@opentui/core"
-import { createSignal, For, Show, type JSX } from "solid-js"
+import { For, type JSX } from "solid-js"
 import { useTheme } from "../context/theme"
 import { tint } from "../theme/color"
-import { logo, terminal } from "../logo"
-import mark from "../../../../assets/brand/ycoding-mark-256.png" with { type: "file" }
-
-export function TerminalLogo(props: { fg: RGBA }) {
-  return (
-    <box flexDirection="column">
-      <For each={terminal}>
-        {(line) => (
-          <text fg={props.fg} selectable={false}>
-            {line}
-          </text>
-        )}
-      </For>
-    </box>
-  )
-}
-
-// The bitmap mark needs a real terminal image protocol; ImageRenderable degrades to block glyphs on
-// its own, and the terminal fallback covers hosts where decoding or loading fails outright.
-export function BrandMark(props: { width?: number; height?: number }) {
-  const { themeV2 } = useTheme()
-  const [failed, setFailed] = createSignal(false)
-  return (
-    <Show when={!failed()} fallback={<TerminalLogo fg={themeV2.text.feedback.success.default} />}>
-      <box width={props.width ?? 12} height={props.height ?? 6} flexShrink={0}>
-        <image source={mark} fit="fit" onError={() => setFailed(true)} />
-      </box>
-    </Show>
-  )
-}
+import { logo } from "../logo"
 
 export function Logo() {
   const { themeV2 } = useTheme()

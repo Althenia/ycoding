@@ -226,9 +226,17 @@ it.effect("prefers an Anthropic API key connection over discovered Claude Code a
   ),
 )
 
-it.effect("makes Anthropic available from the discovered Claude Code source and zeroes subscription prices", () =>
+it.effect("makes Anthropic available from Claude Code while preserving catalog price estimates", () =>
   Effect.gen(function* () {
     const catalog = yield* Catalog.Service
+    const priced = {
+      input: Money.USDPerMillionTokens.make(5),
+      output: Money.USDPerMillionTokens.make(25),
+      cache: {
+        read: Money.USDPerMillionTokens.make(0.5),
+        write: Money.USDPerMillionTokens.make(6.25),
+      },
+    }
     yield* catalog.transform((draft) => {
       draft.provider.update(ProviderV2.ID.anthropic, (provider) => {
         provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
@@ -237,16 +245,7 @@ it.effect("makes Anthropic available from the discovered Claude Code source and 
       draft.model.update(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-opus-5"), (model) => {
         model.enabled = true
         model.status = "active"
-        model.cost = [
-          {
-            input: Money.USDPerMillionTokens.make(5),
-            output: Money.USDPerMillionTokens.make(25),
-            cache: {
-              read: Money.USDPerMillionTokens.make(0.5),
-              write: Money.USDPerMillionTokens.make(6.25),
-            },
-          },
-        ]
+        model.cost = [priced]
       })
     })
 
@@ -263,7 +262,7 @@ it.effect("makes Anthropic available from the discovered Claude Code source and 
       apiKey: "claude-code",
       claudeCodeSource: "account-a",
     })
-    expect(model?.cost).toEqual([])
+    expect(model?.cost).toEqual([priced])
     expect((yield* catalog.provider.available()).map((item) => item.id)).toContain(ProviderV2.ID.anthropic)
   }),
 )

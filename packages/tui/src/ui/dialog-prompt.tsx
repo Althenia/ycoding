@@ -94,7 +94,7 @@ export function DialogPrompt(props: DialogPromptProps) {
           placeholderColor={themeV2.text.subdued}
           textColor={props.busy ? themeV2.text.formfield.disabled : themeV2.text.formfield.default}
           focusedTextColor={props.busy ? themeV2.text.formfield.disabled : themeV2.text.formfield.default}
-          cursorColor={props.busy ? themeV2.text.subdued : themeV2.text.feedback.info.default}
+          cursorColor={props.busy ? themeV2.background.formfield.disabled : themeV2.text.default}
         />
         <Show when={props.busy}>
           <Spinner color={themeV2.text.subdued}>{props.busyText ?? "Working..."}</Spinner>

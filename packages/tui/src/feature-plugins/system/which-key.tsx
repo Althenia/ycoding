@@ -4,7 +4,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { Keymap } from "../../context/keymap"
 import type { ActiveKey } from "@opentui/keymap"
-import type { TuiPlugin, TuiPluginApi, TuiThemeCurrent } from "../../plugin/host-api"
+import type { TuiPlugin, TuiPluginApi } from "../../plugin/host-api"
 import type { BuiltinTuiPlugin } from "../builtins"
 
 const command = {
@@ -61,13 +61,6 @@ type Skin = {
   tabText: Color
 }
 
-export function whichKeySelectionColors(theme: Pick<TuiThemeCurrent, "info" | "selectedListItemText">) {
-  return {
-    fill: theme.info,
-    foreground: theme.selectedListItemText,
-  }
-}
-
 type Entry = {
   type: "entry"
   key: string
@@ -104,7 +97,6 @@ function ink(api: TuiPluginApi, name: string, fallback: string): Color {
 }
 
 function skin(api: TuiPluginApi): Skin {
-  const selection = whichKeySelectionColors(api.theme.current)
   return {
     panel: ink(api, "backgroundMenu", "#1c1c1c"),
     text: ink(api, "text", "#f0f0f0"),
@@ -112,8 +104,8 @@ function skin(api: TuiPluginApi): Skin {
     subtle: ink(api, "borderSubtle", "#6f6f6f"),
     key: ink(api, "warning", "#ffd75f"),
     accent: ink(api, "primary", "#5f87ff"),
-    tab: selection.fill,
-    tabText: selection.foreground,
+    tab: ink(api, "primary", "#5f87ff"),
+    tabText: ink(api, "selectedListItemText", "#ffffff"),
   }
 }
 

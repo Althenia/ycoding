@@ -107,8 +107,6 @@ import {
 } from "../../util/session-autonomy"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
-import { Header } from "./header"
-import { railPlacement, railWidth } from "./rail"
 
 addDefaultParsers(parsers.parsers)
 
@@ -194,6 +192,7 @@ export function Session() {
     return messages().findLast((x) => x.type === "assistant" && !x.time.completed && (!completed || x.id > completed))
       ?.id
   })
+
   const dimensions = useTerminalDimensions()
   const sidebar = createMemo(() => config.session?.sidebar ?? "auto")
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
@@ -204,16 +203,14 @@ export function Session() {
   const diffWrapMode = createMemo(() => config.diffs?.wrap ?? "word")
   const groupExploration = createMemo(() => config.session?.grouping !== "none")
 
-  const wide = createMemo(() => railPlacement(dimensions().width) === "docked")
+  const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
     if (session()?.parentID) return false
     if (sidebarOpen()) return true
     if (sidebar() === "auto" && wide()) return true
     return false
   })
-  const contentWidth = createMemo(
-    () => dimensions().width - (sidebarVisible() ? railWidth(dimensions().width) : 0) - 4,
-  )
+  const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
   const models = createMemo(() => data.location.model.list(location()) ?? [])
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
@@ -277,25 +274,6 @@ export function Session() {
   ]
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   const autoApproved = new Set<string>()
-  const headerState = createMemo(() => {
-    if (autonomy().mode === "yolo") return { type: "yolo" } as const
-    const message = messages().findLast((item) => item.type === "assistant" && !item.time.completed)
-    if (message?.type === "assistant")
-      return { type: "working", elapsed: (Date.now() - message.time.created) / 1000 } as const
-    const waiting = data.session.subagent.list(route.sessionID).filter((task) => task.state === "waiting").length
-    if (waiting) return { type: "awaiting-input", count: waiting } as const
-    return { type: "ready" } as const
-  })
-  const headerMessage = createMemo(() => {
-    const message = messages().findLast((item) => item.type === "assistant")
-    return message?.type === "assistant" ? message : undefined
-  })
-  const headerModel = createMemo(() => {
-    const message = headerMessage()
-    if (!message) return
-    return models().find((item) => item.providerID === message.model.providerID && item.id === message.model.id)?.name ?? message.model.id
-  })
-  const headerAgent = createMemo(() => headerMessage()?.agent)
   createEffect(() => {
     if (local.permission.mode !== "auto") return
     permissions().forEach((request) => {
@@ -1060,13 +1038,6 @@ export function Session() {
     >
       <SessionMemoryCommand sessionID={route.sessionID} />
       <ProviderUsageCommand />
-      <Header
-        path={location()?.directory}
-        agent={headerAgent()}
-        model={headerModel()}
-        variant={headerMessage()?.model.variant}
-        state={headerState()}
-      />
       <box flexDirection="row" flexGrow={1} minHeight={0}>
         <box flexGrow={1} minHeight={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
           <Show when={session()}>
@@ -1279,32 +1250,23 @@ function SessionHistoryRow(props: {
   const { themeV2 } = useTheme()
   const [hover, setHover] = createSignal(false)
   const label = () => {
-    if (props.placeholder.state === "loading") return "~ archived · loading"
-    if (props.placeholder.state === "error") return "~ archived"
-    const count = props.placeholder.count === undefined ? "loaded" : `${props.placeholder.count.toLocaleString()} messages`
-    return `~ archived · ${count}`
-  }
-  const action = () => {
-    if (props.placeholder.state === "loading") return
-    if (props.placeholder.state === "error") return "↑ retry"
-    return props.placeholder.state === "expanded" ? "↑ hide" : "↑ load"
+    if (props.placeholder.state === "loading") return "  Loading older messages..."
+    if (props.placeholder.state === "error") return "+ Retry older messages"
+    if (props.placeholder.state === "expanded")
+      return `- Hide ${props.placeholder.count ?? "loaded"} older messages`
+    return `+ Load ${props.placeholder.count ? `${props.placeholder.count} ` : ""}older messages`
   }
   return (
     <box
       height={1}
-      flexDirection="row"
-      alignItems="center"
       flexShrink={0}
       onMouseOver={() => setHover(true)}
       onMouseOut={() => setHover(false)}
       onMouseUp={() => props.placeholder.state !== "loading" && props.onToggle(props.placeholder)}
     >
-      <box border={["top"]} borderColor={themeV2.border.default} flexGrow={1} />
       <text wrapMode="none" fg={hover() ? themeV2.text.default : themeV2.text.subdued}>
-        <span style={{ fg: themeV2.text.subdued }}>{label()}</span>
-        <Show when={action()}>{(value) => <span style={{ fg: themeV2.text.feedback.info.default }}> · {value()}</span>}</Show>
+        {label()}
       </text>
-      <box border={["top"]} borderColor={themeV2.border.default} flexGrow={1} />
     </box>
   )
 }
@@ -1785,74 +1747,51 @@ function SessionSkillMessage(props: { message: Extract<SessionMessageInfo, { typ
 }
 
 function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type: "compaction" }> }) {
+  const ctx = use()
+  const { themeV2, syntax } = useTheme()
   const status = () => props.message.status
   const cancelled = () => props.message.status === "failed" && props.message.error.type === "aborted"
   const text = () =>
     props.message.status === "failed" ? (cancelled() ? "" : props.message.error.message) : props.message.summary
   const content = createMemo(() => text().trim())
-  return (
-    <>
-      <CompactionMarker status={status()} cancelled={cancelled()} />
-      <Show when={content()}>{(value) => <CompactionSummary content={value()} />}</Show>
-    </>
-  )
-}
-
-function CompactionMarker(props: {
-  status: Extract<SessionMessageInfo, { type: "compaction" }>["status"]
-  cancelled: boolean
-}) {
-  const { themeV2 } = useTheme()
   const color = () =>
-    props.status === "failed" && !props.cancelled ? themeV2.text.feedback.error.default : themeV2.text.subdued
+    status() === "failed" && !cancelled() ? themeV2.text.feedback.error.default : themeV2.text.subdued
   return (
     <box>
       <box flexDirection="row" alignItems="center">
         <box border={["top"]} borderColor={color()} flexGrow={1} />
         <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1}>
           <Switch>
-            <Match when={props.status === "running"}>
-              <CompactionSpinner color={color()} />
+            <Match when={status() === "running"}>
+              <Show when={ctx.config.animations ?? true} fallback={<text fg={color()}>⋯</text>}>
+                <spinner frames={SPINNER_FRAMES} interval={80} color={color()} />
+              </Show>
             </Match>
-            <Match when={props.status === "failed" && !props.cancelled}>
+            <Match when={status() === "failed" && !cancelled()}>
               <text fg={color()}>✗</text>
             </Match>
           </Switch>
-          <text fg={color()}>{props.status === "completed" ? "~ compacted" : "Compaction"}</text>
-          <Show when={props.cancelled}>
+          <text fg={color()}>Compaction</text>
+          <Show when={cancelled()}>
             <text fg={color()}>· cancelled</text>
           </Show>
         </box>
         <box border={["top"]} borderColor={color()} flexGrow={1} />
       </box>
-    </box>
-  )
-}
-
-function CompactionSpinner(props: { color: RGBA }) {
-  const ctx = use()
-  return (
-    <Show when={ctx.config.animations ?? true} fallback={<text fg={props.color}>⋯</text>}>
-      <spinner frames={SPINNER_FRAMES} interval={80} color={props.color} />
-    </Show>
-  )
-}
-
-function CompactionSummary(props: { content: string }) {
-  const ctx = use()
-  const { themeV2, syntax } = useTheme()
-  return (
-    <box paddingTop={1} paddingLeft={3}>
-      <markdown
-        syntaxStyle={syntax()}
-        streaming={true}
-        internalBlockMode="top-level"
-        content={props.content}
-        tableOptions={{ style: "grid" }}
-        conceal={ctx.markdownMode() === "rendered"}
-        fg={themeV2.markdown.text}
-        bg={themeV2.background.default}
-      />
+      <Show when={content()}>
+        <box paddingTop={1} paddingLeft={3}>
+          <markdown
+            syntaxStyle={syntax()}
+            streaming={true}
+            internalBlockMode="top-level"
+            content={content()}
+            tableOptions={{ style: "grid" }}
+            conceal={ctx.markdownMode() === "rendered"}
+            fg={themeV2.markdown.text}
+            bg={themeV2.background.default}
+          />
+        </box>
+      </Show>
     </box>
   )
 }

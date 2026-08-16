@@ -2,7 +2,6 @@ import type { GuardrailStatusOutput } from "@ycoding-ai/client"
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { createResource, Show, type Accessor } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { RailSection } from "../../routes/session/rail-section"
 
 export function guardrailSummary(status: GuardrailStatusOutput) {
   const counter = (id: string) => status.counters.find((item) => item.id === id)
@@ -30,12 +29,10 @@ export function GuardrailContent(props: { status: Accessor<GuardrailStatusOutput
       {(value) => {
         const summary = () => guardrailSummary(value())
         return (
-          <RailSection
-            section="guardrails"
-            title="GUARDRAILS"
-            summary={summary().profile}
-            attention={Boolean(summary().invalid)}
-          >
+          <box>
+            <text fg={themeV2.text.default}>
+              <b>Guardrails</b>
+            </text>
             <text fg={themeV2.text.default}>{summary().profile}</text>
             <text fg={themeV2.text.subdued}>{summary().decisions}</text>
             <Show when={summary().shells}>{(line) => <text fg={themeV2.text.subdued}>{line()}</text>}</Show>
@@ -44,7 +41,7 @@ export function GuardrailContent(props: { status: Accessor<GuardrailStatusOutput
             <Show when={summary().invalid}>
               {(line) => <text fg={themeV2.text.feedback.warning.default}>{line()}</text>}
             </Show>
-          </RailSection>
+          </box>
         )
       }}
     </Show>

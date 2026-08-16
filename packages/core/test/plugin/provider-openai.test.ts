@@ -206,7 +206,16 @@ describe("OpenAIPlugin", () => {
       yield* addPlugin()
 
       const eligible = required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.5")))
-      expect(eligible.cost).toEqual([])
+      expect(eligible.cost).toEqual([
+        {
+          input: Money.USDPerMillionTokens.make(1),
+          output: Money.USDPerMillionTokens.make(2),
+          cache: {
+            read: Money.USDPerMillionTokens.make(0.1),
+            write: Money.USDPerMillionTokens.zero,
+          },
+        },
+      ])
       expect(eligible.enabled).toBe(true)
       expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.5-pro"))).enabled).toBe(
         false,

@@ -1,10 +1,10 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
-import { createMemo, For, Match, Show, Switch } from "solid-js"
+import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { mcpStatusPresentation, type McpTone } from "../../mcp-presentation"
-import { RailSection } from "../../routes/session/rail-section"
 
 function View(props: { context: Plugin.Context; sessionID: string }) {
+  const [open, setOpen] = createSignal(true)
   const { themeV2 } = useTheme()
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
@@ -18,7 +18,6 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
           item.status.status === "needs_client_registration",
       ).length,
   )
-  const summary = createMemo(() => `${on()} active${bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""}`)
 
   const color = (tone: McpTone) => {
     if (tone === "success") return themeV2.text.feedback.success.default
@@ -29,8 +28,23 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
 
   return (
     <Show when={list().length > 0}>
-      <RailSection section="mcp" title="MCP" summary={summary()} attention={bad() > 0}>
-        <For each={list()}>
+      <box>
+        <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
+          <Show when={list().length > 2}>
+            <text fg={themeV2.text.default}>{open() ? "▼" : "▶"}</text>
+          </Show>
+          <text fg={themeV2.text.default}>
+            <b>MCP</b>
+            <Show when={!open()}>
+              <span style={{ fg: themeV2.text.subdued }}>
+                {" "}
+                ({on()} active{bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""})
+              </span>
+            </Show>
+          </text>
+        </box>
+        <Show when={list().length <= 2 || open()}>
+          <For each={list()}>
             {(item) => (
               <box flexDirection="row" gap={1}>
                 <text
@@ -53,8 +67,9 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
                 </text>
               </box>
             )}
-        </For>
-      </RailSection>
+          </For>
+        </Show>
+      </box>
     </Show>
   )
 }
