@@ -76,8 +76,8 @@ test("captures populated shell ownership and rail states at reference dimensions
   for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
     const capture = await boot(viewport)
     try {
-      await waitFor(capture.frame, "y. ycoding")
-      await waitFor(capture.frame, "Message YCoding")
+      await waitFor(capture.frame, "y. ycoding vlocal")
+      await waitFor(capture.frame, "Message YCoding…")
       await waitFor(capture.frame, "3 shells running")
       capture.input.pressKey("ARROW_DOWN")
       await waitFor(capture.frame, "Prompt")
@@ -105,15 +105,15 @@ test("captures populated shell ownership and rail states at reference dimensions
       expect(rows.join("\n")).toContain("exit — · 5m00s")
       expect(rows[1]).toContain("3 shells running")
       if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
-        expectAt(rows, 34, 3, "Prompt")
-        expectAt(rows, 34, 14, "Shell")
-        expectAt(rows, 34, 20, "3")
-        expectAt(rows, 34, 25, "Subagents")
-        expectAt(rows, 34, 36, "2")
-        expectAt(rows, 53, 3, "Enter view output")
-        expectAt(rows, 53, 23, "↑↓ move")
-        expectAt(rows, 53, 34, "⌃x k kill")
-        expectAt(rows, 53, 46, "Esc close")
+        expectAt(rows, 30, 3, "Prompt")
+        expectAt(rows, 30, 14, "Shell")
+        expectAt(rows, 30, 20, "3")
+        expectAt(rows, 30, 25, "Subagents")
+        expectAt(rows, 30, 36, "2")
+        expectAt(rows, 49, 3, "Enter view output")
+        expectAt(rows, 49, 23, "↑↓ move")
+        expectAt(rows, 49, 34, "⌃x k kill")
+        expectAt(rows, 49, 46, "Esc close")
       }
 
       await mkdir(renders, { recursive: true })

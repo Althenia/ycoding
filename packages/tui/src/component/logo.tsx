@@ -1,4 +1,4 @@
-import { RGBA, TextAttributes } from "@opentui/core"
+import { BoxRenderable, RGBA, TextAttributes, type ImageRenderable } from "@opentui/core"
 import { createSignal, For, Show, type JSX } from "solid-js"
 import { useTheme } from "../context/theme"
 import { tint } from "../theme/color"
@@ -27,10 +27,28 @@ export function BrandMark(props: { width?: number; height?: number }) {
   return (
     <Show when={!failed()} fallback={<TerminalLogo fg={themeV2.text.feedback.success.default} />}>
       <box width={props.width ?? 12} height={props.height ?? 6} flexShrink={0}>
-        <image source={mark} fit="fit" onError={() => setFailed(true)} />
+        <image
+          source={mark}
+          width={props.width ?? 12}
+          height={props.height ?? 6}
+          fit="fit"
+          renderBefore={function (buffer) {
+            buffer.fillRect(this.x, this.y, this.width, this.height, brandMarkBackground(this, themeV2.background.default))
+          }}
+          onError={() => setFailed(true)}
+        />
       </box>
     </Show>
   )
+}
+
+function brandMarkBackground(image: ImageRenderable, fallback: RGBA) {
+  let parent = image.parent?.parent
+  while (parent) {
+    if (parent instanceof BoxRenderable && parent.backgroundColor.a > 0) return parent.backgroundColor
+    parent = parent.parent
+  }
+  return fallback
 }
 
 export function Logo() {

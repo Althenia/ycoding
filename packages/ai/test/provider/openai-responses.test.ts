@@ -918,6 +918,40 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves Responses assistant phase metadata when replaying model output", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_phase", phase: "commentary" },
+        },
+        { type: "response.output_text.delta", item_id: "msg_phase", delta: "Working" },
+        {
+          type: "response.output_item.done",
+          item: { type: "message", id: "msg_phase", phase: "commentary" },
+        },
+        { type: "response.completed", response: { id: "resp_phase" } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+      expect(response.message.content[0]).toMatchObject({
+        type: "text",
+        text: "Working",
+        providerMetadata: { openai: { phase: "commentary" } },
+      })
+
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({ model, messages: [response.message] }),
+      )
+      expect(prepared.body.input).toEqual([
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "Working" }],
+        },
+      ])
+    }),
+  )
+
   it.effect("preserves every explicit prompt_cache_breakpoint beyond OpenAI's implicit write capacity", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })

@@ -83,10 +83,8 @@ async function renderEconomics(width = 120) {
                   siblingEconomics={{ ses_paid: "$0.13 · 1.6K" }}
                 />
                 <picker.SubagentMetadata
-                  model="anthropic/claude-sonnet-4"
-                  cacheHit="68% hit"
-                  elapsed="4m02s"
-                  status="Running"
+                  model="openai/gpt-5.6-terra#high"
+                  status="attached"
                   active={false}
                 />
                 <context.SidebarCacheContent diagnostics={() => diagnostics} cost={() => 0} subagentCost={() => 1.24} />
@@ -96,14 +94,16 @@ async function renderEconomics(width = 120) {
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width, height: 32 },
+    // The CONTEXT rail grew a model identity block and a SPEND group, so the cache rows below them
+    // need more rows than the original 32 to stay inside the captured frame.
+    { width, height: 44 },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Reviewer"))
   return app
 }
 
-test("renders footer economics, picker telemetry, and parent subagent spend", async () => {
+test("renders footer economics, picker attachment metadata, and parent subagent spend", async () => {
   const app = await renderEconomics()
 
   try {
@@ -113,33 +113,34 @@ test("renders footer economics, picker telemetry, and parent subagent spend", as
     expect(frame).toContain("prefix 1.0K")
     expect(frame).toContain("rolls up to Parent session")
     expect(frame).toContain("◦ Reviewer $0.13 · 1.6K")
-    expect(frame).toContain("anthropic/claude-sonnet-4")
-    expect(frame).toContain("68% hit · 4m02s · Running")
-    expect(frame).toContain("Input")
-    expect(frame).toContain("100")
-    expect(frame).toContain("Output")
-    expect(frame).toContain("20")
-    expect(frame).toContain("Used")
-    expect(frame).toContain("5%")
-    expect(frame).toContain("Spent")
+    expect(frame).toContain("openai/gpt-5.6-terra#high")
+    expect(frame).toContain("attached")
+    expect(frame).toContain("Model")
+    expect(frame).toContain("Context")
+    expect(frame).toContain("54,015 / 1,050,000")
+    expect(frame).toContain("Cache")
+    expect(frame).toContain("89%")
+    expect(frame).toContain("SPEND")
+    expect(frame).toContain("Total")
     expect(frame).toContain("$0.00")
     expect(frame).toContain("· subagents")
     expect(frame).toContain("$1.24")
     expect(frame).toContain("CACHE")
-    expect(frame).toContain("Hit ratio")
-    expect(frame).toContain("89%")
     expect(frame).toContain("Reads")
     expect(frame).toContain("900")
     expect(frame).toContain("Writes")
     expect(frame).toContain("12")
+    expect(frame).not.toContain("Input")
+    expect(frame).not.toContain("Output")
+    expect(frame).not.toContain("Hit ratio")
     expect(frame).not.toContain("Prefix")
-    expect(frame.indexOf("Input")).toBeLessThan(frame.indexOf("Output"))
-    expect(frame.indexOf("Output")).toBeLessThan(frame.indexOf("Used"))
-    expect(frame.indexOf("Used")).toBeLessThan(frame.indexOf("Spent"))
-    expect(frame.indexOf("Spent")).toBeLessThan(frame.indexOf("· subagents"))
+    expect(frame.indexOf("Model")).toBeLessThan(frame.indexOf("Context"))
+    expect(frame.indexOf("Context")).toBeLessThan(frame.indexOf("Cache"))
+    expect(frame.indexOf("Cache")).toBeLessThan(frame.indexOf("SPEND"))
+    expect(frame.indexOf("SPEND")).toBeLessThan(frame.indexOf("Total"))
+    expect(frame.indexOf("Total")).toBeLessThan(frame.indexOf("· subagents"))
     expect(frame.indexOf("· subagents")).toBeLessThan(frame.indexOf("CACHE"))
-    expect(frame.indexOf("CACHE")).toBeLessThan(frame.indexOf("Hit ratio"))
-    expect(frame.indexOf("Hit ratio")).toBeLessThan(frame.indexOf("Reads"))
+    expect(frame.indexOf("CACHE")).toBeLessThan(frame.indexOf("Reads"))
     expect(frame.indexOf("Reads")).toBeLessThan(frame.indexOf("Writes"))
   } finally {
     app.renderer.destroy()
@@ -151,7 +152,7 @@ test("does not invent hit or prefix telemetry for a child with zero or missing u
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("anthropic/claude-sonnet-4")
+    expect(frame).toContain("openai/gpt-5.6-terra#high")
     expect(frame).not.toContain("0% hit")
     expect(frame).not.toContain("prefix 0")
   } finally {

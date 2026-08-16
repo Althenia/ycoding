@@ -3,12 +3,12 @@ export * as ConfigCompaction from "./compaction"
 import { Schema } from "effect"
 import { NonNegativeInt } from "../schema"
 
-export class Keep extends Schema.Class<Keep>("ConfigV2.Compaction.Keep")({
-  tokens: NonNegativeInt.pipe(Schema.optional),
-}) {}
-
 export class Info extends Schema.Class<Info>("ConfigV2.Compaction")({
-  auto: Schema.Boolean.pipe(Schema.optional),
-  keep: Keep.pipe(Schema.optional),
-  buffer: NonNegativeInt.pipe(Schema.optional),
+  keep_recent_messages: NonNegativeInt.pipe(Schema.optional),
+  reserved_output_tokens: NonNegativeInt.pipe(Schema.optional),
+  context_safety_margin_tokens: NonNegativeInt.pipe(Schema.optional),
+  timeout_seconds: NonNegativeInt.pipe(Schema.optional),
+  max_output_tokens: NonNegativeInt.pipe(Schema.optional),
+  max_summary_bytes: NonNegativeInt.pipe(Schema.optional),
+  max_internal_passes: NonNegativeInt.pipe(Schema.optional),
 }) {}

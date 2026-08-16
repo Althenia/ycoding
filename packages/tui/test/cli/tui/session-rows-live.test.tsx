@@ -79,3 +79,64 @@ test("an initial instructions.updated event that never becomes a message never r
   }
 })
 
+test("streaming text and tool deltas preserve transcript row identity", async () => {
+  const sessionID = "session-stable-stream-rows"
+  const mounted = await mountRows(sessionID)
+
+  try {
+    mounted.events.emit({
+      id: "evt_step_started",
+      created: 1,
+      type: "session.step.started",
+      durable: durable(sessionID, 1),
+      data: {
+        sessionID,
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { providerID: "provider", id: "model" },
+      },
+    } as unknown as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_text_started",
+      created: 2,
+      type: "session.text.started",
+      data: { sessionID, assistantMessageID: "msg_assistant", ordinal: 0 },
+    } as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_text_delta_first",
+      created: 3,
+      type: "session.text.delta",
+      data: { sessionID, assistantMessageID: "msg_assistant", ordinal: 0, delta: "first" },
+    } as YCodingEvent)
+    await wait(() => mounted.rows.some((row) => row.type === "part" && row.ref.partID === "text:0"))
+    const textRow = mounted.rows.find((row) => row.type === "part" && row.ref.partID === "text:0")
+
+    mounted.events.emit({
+      id: "evt_tool_started",
+      created: 4,
+      type: "session.tool.input.started",
+      data: { sessionID, assistantMessageID: "msg_assistant", callID: "call_running", name: "project_index" },
+    } as YCodingEvent)
+    await wait(() => mounted.rows.some((row) => row.type === "part" && row.ref.partID === "call_running"))
+    const toolRow = mounted.rows.find((row) => row.type === "part" && row.ref.partID === "call_running")
+
+    mounted.events.emit({
+      id: "evt_text_delta_second",
+      created: 5,
+      type: "session.text.delta",
+      data: { sessionID, assistantMessageID: "msg_assistant", ordinal: 0, delta: " second" },
+    } as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_tool_delta",
+      created: 6,
+      type: "session.tool.input.delta",
+      data: { sessionID, assistantMessageID: "msg_assistant", callID: "call_running", delta: "{}" },
+    } as YCodingEvent)
+    await Bun.sleep(50)
+
+    expect(mounted.rows.find((row) => row.type === "part" && row.ref.partID === "text:0")).toBe(textRow)
+    expect(mounted.rows.find((row) => row.type === "part" && row.ref.partID === "call_running")).toBe(toolRow)
+  } finally {
+    mounted.destroy()
+  }
+})

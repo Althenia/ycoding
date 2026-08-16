@@ -1,24 +1,14 @@
-import type { ProviderUsageListOutput, SessionCacheDiagnostics, SessionInfo } from "@ycoding-ai/client"
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type Accessor } from "solid-js"
+import type { ModelInfo, ProviderUsageListOutput, SessionCacheDiagnostics, SessionInfo } from "@ycoding-ai/client"
+import { CREDIT_TO_USD } from "@ycoding-ai/core/provider-usage/copilot"
+import { createEffect, createMemo, createSignal, on, onCleanup, onMount, type Accessor } from "solid-js"
 import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { useRouteData } from "../../context/route"
-import { useTheme } from "../../context/theme"
 import { useDialog } from "../../ui/dialog"
-import type { RGBA } from "@opentui/core"
-import {
-  formatReset,
-  formatWindowValue,
-  freshnessLabel,
-  progressBar,
-  stabilityLabel,
-  usageSeverity,
-} from "../../util/provider-usage"
-import {
-  formatProviderRequestDiagnostics,
-  type ProviderRequestDiagnostics,
-} from "../../util/cache-diagnostics"
+import { formatWindowValue, freshnessLabel } from "../../util/provider-usage"
+import { formatDiagnosticsModel, type ProviderRequestDiagnostics } from "../../util/cache-diagnostics"
+import { DialogSelect } from "../../ui/dialog-select"
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 
@@ -167,7 +157,7 @@ export function ProviderUsageDialog(props: {
   })
 
   onMount(() => {
-    void data.session.diagnostics.sync(props.sessionID).catch(() => undefined)
+    sessionFamily().forEach((sessionID) => void data.session.diagnostics.sync(sessionID).catch(() => undefined))
     const token = guard.next()
     void loadProviderUsageSnapshots(props.providerIDs, async (providerID) => {
       const result = await client.api.providerUsage.get({ providerID, refresh: true })
@@ -193,6 +183,14 @@ export function ProviderUsageDialog(props: {
       sessionFamily={sessionFamily()}
       sessionID={props.sessionID}
       getSession={(sessionID) => data.session.get(sessionID)}
+      getModel={(sessionID) => {
+        const session = data.session.get(sessionID)
+        if (!session?.model) return
+        return data.location
+          .model.list(session.location)
+          ?.find((model) => model.providerID === session.model?.providerID && model.id === session.model?.id)
+      }}
+      getDiagnostics={(sessionID) => data.session.diagnostics.get(sessionID)}
       getStatus={(sessionID) => data.session.status(sessionID)}
     />
   )
@@ -206,211 +204,162 @@ export function ProviderUsageDialogContent(props: {
   onClose?: () => void
   sessionFamily?: readonly string[]
   sessionID?: string
-  getSession?: (sessionID: string) => Pick<SessionInfo, "model"> | undefined
+  getSession?: (sessionID: string) => Pick<SessionInfo, "model" | "title"> | undefined
+  getModel?: (sessionID: string) => ModelInfo | undefined
+  getDiagnostics?: (sessionID: string) => SessionCacheDiagnostics | null | undefined
   getStatus?: (sessionID: string) => string
+  sessionUsage?: ProviderUsageSessionPresentation
+  subagentUsage?: readonly ProviderUsageSubagentPresentation[]
 }) {
-  const { themeV2 } = useTheme().contextual("elevated")
-  const now = createMemo(() => props.now?.() ?? Date.now())
-  const [filter, setFilter] = createSignal("")
-  const rawSnapshots = createMemo(() => visibleProviderSnapshots(props.snapshots()))
-  const filteredSnapshots = createMemo(() => {
-    const needle = filter().toLowerCase()
-    if (!needle) return rawSnapshots()
-    return rawSnapshots().filter((s) => s.label.toLowerCase().includes(needle) || s.providerID.toLowerCase().includes(needle))
-  })
-  const local = createMemo(() => {
-    const requests = providerRequestDiagnostics(props.diagnostics?.())
-    return requests ? formatProviderRequestDiagnostics(requests) : undefined
-  })
-
-  const statusColor = (status: ProviderUsageSnapshot["status"]) => {
-    if (status === "unauthorized" || status === "stale") return themeV2.text.feedback.warning.default
-    if (status === "error") return themeV2.text.feedback.error.default
-    return themeV2.text.subdued
-  }
-
-  const percentColor = (used: number | undefined) => {
-    const severity = usageSeverity(used)
-    if (severity === "error") return themeV2.text.feedback.error.default
-    if (severity === "warning") return themeV2.text.feedback.warning.default
-    return themeV2.text.default
-  }
-
-  const sessionProviderIDs = createMemo(() => {
-    if (!props.sessionID || !props.getSession) return undefined
-    // Only sessions that are actually running contribute a provider. `selectedProviderIDs` does not
-    // filter by status, so the status filter belongs here rather than in a second near-identical helper.
-    const ids = selectedProviderIDs(
-      [props.sessionID].filter((sessionID) => (props.getStatus?.(sessionID) ?? "") === "running"),
-      (sessionID) => props.getSession!(sessionID),
-    )
-    return ids.length > 0 ? new Set(ids) : undefined
-  })
-
-  const subagentProviderIDs = createMemo(() => {
-    if (!props.sessionFamily || !props.sessionID || !props.getSession) return undefined
-    const subagentIDs = props.sessionFamily.filter((id) => id !== props.sessionID)
-    if (subagentIDs.length === 0) return undefined
-    const ids = selectedProviderIDs(
-      subagentIDs.filter((sessionID) => (props.getStatus?.(sessionID) ?? "") === "running"),
-      (sessionID) => props.getSession!(sessionID),
-    )
-    return ids.length > 0 ? new Set(ids) : undefined
-  })
-  const hasSessionGroups = createMemo(() => !!sessionProviderIDs() || !!subagentProviderIDs())
+  const sessionUsage = createMemo(() =>
+    props.sessionUsage ??
+    diagnosticsPresentation(
+      props.diagnostics?.(),
+      props.sessionID ? formatDiagnosticsModel(props.getSession?.(props.sessionID)?.model) : undefined,
+      props.sessionID ? props.getModel?.(props.sessionID) : undefined,
+    ),
+  )
+  const subagentUsage = createMemo(() =>
+    props.subagentUsage ??
+    (props.sessionFamily ?? []).flatMap((sessionID) => {
+      if (sessionID === props.sessionID) return []
+      const diagnostics = props.getDiagnostics?.(sessionID)
+      const session = props.getSession?.(sessionID)
+      const usage = diagnosticsPresentation(diagnostics, formatDiagnosticsModel(session?.model), props.getModel?.(sessionID))
+      if (!usage || !session) return []
+      return [{ ...usage, name: session.title }]
+    }),
+  )
+  const options = createMemo(() => [
+    ...(sessionUsage() ? usageOptions("This session", "session", sessionUsage()!) : []),
+    ...subagentUsage().flatMap((item) => usageOptions("Subagents", `subagent:${item.name}`, item, item.name)),
+    ...visibleProviderSnapshots(props.snapshots()).flatMap((snapshot) => providerQuotaOptions(snapshot, props.now?.() ?? Date.now())),
+  ])
 
   return (
-    <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={0}>
-      <box flexDirection="row" justifyContent="space-between">
-        <box flexDirection="row" gap={1}>
-          <text fg={themeV2.text.default}>
-            <b>Provider Usage</b>
-          </text>
-          <Show when={props.refreshing?.()}>
-            <text fg={themeV2.text.subdued}>refreshing</text>
-          </Show>
-        </box>
-        <text fg={themeV2.text.subdued} onMouseUp={() => props.onClose?.()}>
-          esc
-        </text>
-      </box>
-      <box paddingTop={1}>
-        <input
-          onInput={(e) => setFilter(e)}
-          focusedBackgroundColor={themeV2.background.surface.overlay}
-          cursorColor={themeV2.text.feedback.info.default}
-          focusedTextColor={themeV2.text.default}
-          placeholder="Search providers"
-          placeholderColor={themeV2.text.subdued}
-        />
-      </box>
-      <Show when={local()}>
-        {(value) => (
-          <box gap={0}>
-            <text fg={themeV2.text.default}>
-              <b>YCoding requests</b>
-            </text>
-            <text fg={themeV2.text.subdued}>
-              {`Logical requests ${value().logical} · Transport attempts ${value().physical}`}
-            </text>
-            <text fg={themeV2.text.subdued}>
-              {`Helpers ${value().helpers} · Continued ${value().continued} · Fallbacks ${value().fallback}`}
-            </text>
-            <text fg={themeV2.text.subdued}>
-              {`Raw input ${value().uncachedInput} · Raw output ${value().output}`}
-            </text>
-            <text fg={themeV2.text.subdued}>
-              {`Raw cache read ${value().cacheRead} · write ${value().cacheWrite}`}
-            </text>
-            <text fg={themeV2.text.subdued}>
-              {`Raw reasoning ${value().reasoning} · Estimated cost ${value().estimatedCost}`}
-            </text>
-            <Show when={value().latestInvalidation || value().latestNamespace}>
-              <text fg={themeV2.text.subdued}>
-                {[
-                  value().latestInvalidation ? `Last invalidation ${value().latestInvalidation}` : undefined,
-                  value().latestNamespace ? `Namespace ${value().latestNamespace}` : undefined,
-                ]
-                  .filter((item): item is string => item !== undefined)
-                  .join(" · ")}
-              </text>
-            </Show>
-          </box>
-        )}
-      </Show>
-      <Show when={hasSessionGroups()}>
-        <Show when={sessionProviderIDs()}>
-          {(ids) => (
-            <box marginTop={1} gap={0}>
-              <text fg={themeV2.text.default}>
-                <b>This session</b>
-              </text>
-              <For each={filteredSnapshots().filter((s) => ids().has(s.providerID))}>
-                {(snapshot) => (
-                  <ProviderUsageRow snapshot={snapshot} now={now} statusColor={statusColor} percentColor={percentColor} />
-                )}
-              </For>
-            </box>
-          )}
-        </Show>
-        <Show when={subagentProviderIDs()}>
-          {(ids) => (
-            <box marginTop={1} gap={0}>
-              <text fg={themeV2.text.default}>
-                <b>Subagents</b>
-              </text>
-              <For each={filteredSnapshots().filter((s) => ids().has(s.providerID))}>
-                {(snapshot) => (
-                  <ProviderUsageRow snapshot={snapshot} now={now} statusColor={statusColor} percentColor={percentColor} />
-                )}
-              </For>
-            </box>
-          )}
-        </Show>
-      </Show>
-      <Show when={!hasSessionGroups()}>
-        <For each={filteredSnapshots()}>
-          {(snapshot) => (
-            <ProviderUsageRow snapshot={snapshot} now={now} statusColor={statusColor} percentColor={percentColor} />
-          )}
-        </For>
-      </Show>
-    </box>
+    <DialogSelect title="Provider usage" options={options()} />
   )
 }
 
-function ProviderUsageRow(props: {
-  snapshot: ProviderUsageSnapshot
-  now: Accessor<number>
-  statusColor: (status: ProviderUsageSnapshot["status"]) => string | RGBA
-  percentColor: (used: number | undefined) => string | RGBA
-}) {
-  const { themeV2 } = useTheme().contextual("elevated")
-  return (
-    <box marginTop={1} gap={0}>
-      <box flexDirection="row" gap={1}>
-        <text fg={themeV2.text.default}>
-          <b>{props.snapshot.label}</b>
-        </text>
-        <Show when={props.snapshot.status === "available" || props.snapshot.status === "stale"}>
-          <text fg={props.statusColor(props.snapshot.status)}>{freshnessLabel(props.snapshot, props.now())}</text>
-          <Show when={stabilityLabel(props.snapshot)}>
-            {(label) => <text fg={themeV2.text.subdued}>{label()}</text>}
-          </Show>
-        </Show>
-      </box>
-      <Show
-        when={props.snapshot.status === "unauthorized" || props.snapshot.status === "error"}
-        fallback={
-          <For each={props.snapshot.windows}>
-            {(window) => {
-              const bar = createMemo(() => (window.unit === "percent" ? progressBar(window.used) : undefined))
-              const reset = createMemo(() => formatReset(window.resetAt, props.now()))
-              return (
-                <box gap={0}>
-                  <box flexDirection="row" gap={1}>
-                    <text width={14} flexShrink={0} fg={themeV2.text.subdued}>
-                      {window.label}
-                    </text>
-                    <Show when={bar()}>
-                      {(value) => <text fg={props.percentColor(window.used)}>{value()}</text>}
-                    </Show>
-                    <text fg={props.percentColor(window.unit === "percent" ? window.used : undefined)}>
-                      {formatWindowValue(window)}
-                    </text>
-                  </box>
-                  <Show when={reset()}>{(value) => <text fg={themeV2.text.subdued}>{value()}</text>}</Show>
-                </box>
-              )
-            }}
-          </For>
-        }
-      >
-        <text fg={props.statusColor(props.snapshot.status)}>Usage unavailable</text>
-      </Show>
-      <Show when={props.snapshot.message && props.snapshot.status !== "unauthorized" && props.snapshot.status !== "error"}>
-        {(message) => <text fg={props.statusColor(props.snapshot.status)}>{message()}</text>}
-      </Show>
-    </box>
-  )
+function providerQuotaOptions(snapshot: ProviderUsageSnapshot, now: number) {
+  const resetAt = snapshot.windows
+    .map((window) => window.resetAt)
+    .filter((value): value is number => value !== undefined && value > now)
+    .toSorted((left, right) => left - right)
+    .at(0)
+  return [
+    {
+      title: snapshot.label,
+      footer: snapshot.status === "available" ? freshnessLabel(snapshot, now) : "Unavailable",
+      category: "Provider quota",
+      value: `provider:${snapshot.providerID}`,
+    },
+    ...snapshot.windows.map((window) => ({
+      title: `  ${window.label}`,
+      footer: formatWindowValue(window),
+      category: "Provider quota",
+      value: `provider:${snapshot.providerID}:${window.id}`,
+    })),
+    ...(resetAt === undefined
+      ? []
+      : [{
+          title: "  Reset",
+          footer: formatRelativeReset(resetAt, now),
+          category: "Provider quota",
+          value: `provider:${snapshot.providerID}:reset`,
+        }]),
+  ]
+}
+
+function formatRelativeReset(resetAt: number, now: number) {
+  const minutes = Math.max(1, Math.ceil((resetAt - now) / 60_000))
+  if (minutes < 60) return `in ${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `in ${hours}h`
+  const days = Math.floor(hours / 24)
+  const remainingHours = hours % 24
+  return `in ${days}d${remainingHours ? ` ${remainingHours}h` : ""}`
+}
+
+export type ProviderUsageSessionPresentation = {
+  model: string
+  hit: string
+  input: string
+  output: string
+  cacheRead: string
+  cacheWrite: string
+  spent: string
+  aic?: {
+    input: string
+    output: string
+    cacheRead: string
+    cacheWrite: string
+  }
+}
+
+export type ProviderUsageSubagentPresentation = ProviderUsageSessionPresentation & { name: string }
+
+/**
+ * The measured subject is one row and its metrics are indented detail rows beneath it, so a session
+ * and a subagent read as the same shape.
+ */
+function usageOptions(category: string, key: string, usage: ProviderUsageSessionPresentation, name?: string) {
+  return [
+    {
+      title: name ?? usage.model,
+      description: name ? usage.model : undefined,
+      footer: usage.hit,
+      category,
+      value: `${key}:model`,
+    },
+    { title: "  Raw input", footer: metric(usage.input, usage.aic?.input), category, value: `${key}:input` },
+    { title: "  Raw output", footer: metric(usage.output, usage.aic?.output), category, value: `${key}:output` },
+    { title: "  Cache read", footer: metric(usage.cacheRead, usage.aic?.cacheRead), category, value: `${key}:cache-read` },
+    { title: "  Cache write", footer: metric(usage.cacheWrite, usage.aic?.cacheWrite), category, value: `${key}:cache-write` },
+    { title: "  Spent", footer: usage.spent, category, value: `${key}:spent` },
+  ]
+}
+
+function diagnosticsPresentation(
+  diagnostics: SessionCacheDiagnostics | null | undefined,
+  model?: string,
+  modelInfo?: ModelInfo,
+): ProviderUsageSessionPresentation | undefined {
+  if (!diagnostics) return
+  return {
+    model: model ?? formatDiagnosticsModel(diagnostics.model) ?? diagnostics.model.id,
+    hit: hitLabel(diagnostics.cache.hitRatio),
+    input: diagnostics.tokens.uncachedInput.toLocaleString("en-US"),
+    output: diagnostics.tokens.output.toLocaleString("en-US"),
+    cacheRead: diagnostics.tokens.cacheRead.toLocaleString("en-US"),
+    cacheWrite: diagnostics.tokens.cacheWrite.toLocaleString("en-US"),
+    spent: money(diagnostics.estimatedCost),
+    ...(aiCredits(diagnostics, modelInfo) === undefined ? {} : { aic: aiCredits(diagnostics, modelInfo) }),
+  }
+}
+
+function metric(tokens: string, credits: string | undefined) {
+  return credits === undefined ? tokens : `${tokens}    ${credits}`
+}
+
+function aiCredits(diagnostics: SessionCacheDiagnostics, model: ModelInfo | undefined) {
+  if (model?.providerID !== "github-copilot") return undefined
+  const cost = model.cost.find((item) => item.tier === undefined)
+  if (!cost) return undefined
+  const credits = (tokens: number, rate: number) =>
+    Math.round((tokens * rate) / 1_000_000 / CREDIT_TO_USD).toLocaleString("en-US")
+  return {
+    input: credits(diagnostics.tokens.uncachedInput, cost.input),
+    output: credits(diagnostics.tokens.output, cost.output),
+    cacheRead: credits(diagnostics.tokens.cacheRead, cost.cache.read),
+    cacheWrite: credits(diagnostics.tokens.cacheWrite, cost.cache.write),
+  }
+}
+
+function hitLabel(ratio: number | undefined) {
+  return ratio === undefined ? "Unreported" : `${Math.round(ratio * 100)}% hit`
+}
+
+function money(value: number | undefined) {
+  return value === undefined ? "Unreported" : `$${value.toFixed(2)}`
 }

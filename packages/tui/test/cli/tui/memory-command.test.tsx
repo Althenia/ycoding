@@ -60,7 +60,7 @@ test("mounted production session.memory command computes lazily, refreshes, rend
       (frame) =>
         frame.includes("Global process metrics (direct)") &&
         frame.includes("Estimated resident payload (approximate)") &&
-        frame.includes("Hot messages 0"),
+        frame.includes("Messages 0"),
     )
     events.emit({
       id: "evt_memory_refresh",
@@ -70,10 +70,10 @@ test("mounted production session.memory command computes lazily, refreshes, rend
       durable: { aggregateID: sessionID, seq: 1, version: 1 },
       data: { sessionID, agent: "review" },
     })
-    await app.waitFor(() => data.session.message.hot(sessionID).length === 1)
-    expect(app.captureCharFrame()).toContain("Hot messages 0")
+    await app.waitFor(() => data.session.message.list(sessionID).length === 1)
+    expect(app.captureCharFrame()).toContain("Messages 0")
     app.mockInput.pressKey("r")
-    await app.waitForFrame((frame) => frame.includes("Hot messages 1"))
+    await app.waitForFrame((frame) => frame.includes("Messages 1"))
     app.mockInput.pressKey("q")
     await app.waitForFrame((frame) => !frame.includes("Estimated resident payload"))
   } finally {

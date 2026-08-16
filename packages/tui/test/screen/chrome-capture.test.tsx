@@ -41,7 +41,7 @@ test("captures the product chrome variants at canonical terminal dimensions", as
       viewport,
     )
     app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes("goal 3/5 blocked"))
+    await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
 
     try {
       const rows = rowsOf(app.captureCharFrame())

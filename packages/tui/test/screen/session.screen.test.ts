@@ -156,11 +156,11 @@ describe("active session screen", () => {
     expect(frame).toContain("Claude Opus 5")
     expect(frame).toContain("max")
     expect(frame).toContain("Message YCoding…")
-    expect(frame).toContain("send")
+    // The composer no longer carries a hint row, and the rail footer that printed the connection
+    // state is gone. The build version now sits beside the header brand instead.
+    expect(frame).not.toContain("Enter send")
     expect(frame).toContain("subagents")
-    expect(frame).toContain("sidebar")
     expect(frame).toContain(InstallationVersion)
-    expect(frame).toContain("connected")
     expect(composerFooter?.trimEnd()).toEndWith("commands")
     expect(frame).not.toContain("Claude Opus 5 Claude")
     expect(frame).not.toContain("┃")
@@ -171,7 +171,8 @@ describe("active session screen", () => {
     expect(assistantIdentityLine).toBeLessThan(assistantLine)
     expect(userLine).not.toContain("┃")
     expect(sessionHeader).not.toContain("Provider cache audit")
-    for (const label of ["Input", "Output", "Used", "Spent", "CACHE", "Hit ratio", "Prefix", "Reads", "Writes"])
+    // Spend is now a SPEND subgroup with per-model rows and a total, not a single `Spent` row.
+    for (const label of ["Input", "Output", "Used", "SPEND", "Total", "CACHE", "Hit ratio", "Prefix", "Reads", "Writes"])
       expect(frame).toContain(label)
     expect(frame).not.toContain("GUARDRAIL")
     expect(frame).not.toContain("LSP")

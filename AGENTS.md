@@ -218,6 +218,8 @@ const table = sqliteTable("session", {
 - An explicit `queue` input remains pending until the Session would otherwise become idle; promote one queued input at that boundary, then reevaluate continuation before promoting another.
 - Promoting any new user input resets the selected agent's step allowance; a batch of steers resets it once.
 - One step is one logical LLM call; its durable record covers only the model-visible span. Do not use “provider turn”, and do not use bare “turn” for a single call. “Turn” is reserved for the future assistant-turn unit containing all steps from prompt promotion until the session would go idle.
+- Every logical Step that publishes `Step.Started` publishes exactly one terminal `Step.Ended` or `Step.Failed`, including malformed provider settlement and non-LLM stream failures.
+- A settled terminal Step with no non-whitespace assistant text and no local-tool continuation gets exactly one additional text-only recovery Step; recovery has no tools, no synthetic prompt, and cannot start a third Step.
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the Instructions algebra and built-ins in `src/instructions`; keep instruction producers with their observed domains, and keep Session History selection plus `InstructionState` and `InstructionEntry` persistence Session-owned.
 - `InstructionDiscovery` observes ambient global and upward-project instructions. The runner composes built-ins, discovery, guidance, and entries explicitly in `loadInstructions`; there is no instruction registry.
@@ -249,13 +251,11 @@ const table = sqliteTable("session", {
 
 ## TUI transcript history
 
-- Keep the hot transcript window at the latest 50 completed messages plus every active or incomplete boundary unless a separately approved design changes it.
-- Archive page requests use `MESSAGE_PAGE_LIMIT`, currently 1000.
-- Keep only one expanded archive page resident. Collapsed placeholders retain cursor and page metadata but no transcript payload.
-- Collapse, page replacement, navigation, resume, reconnect, and eviction must release archived payloads without losing canonical reload ability.
+- The TUI fetches each Session's complete current projected transcript in one canonical ascending-order request and retains it while that Session is resident.
+- Navigation, resume, reconnect, and eviction invalidate or release the complete resident transcript without changing durable history.
 - Every message-backed transcript row must verify that its message or assistant part is resident before mounting. An unresolved row must consume zero terminal lines and must not initialize child components that require Session context.
-- Timeline selection follows option identity, not list index, because archive expansion and new events reorder options.
-- Archived messages must render through the same typed transcript components as hot messages when expanded.
+- Timeline selection follows option identity, not list index, because new events can reorder options.
+- Messages render through the same typed transcript components.
 
 ## Provider cache and usage behavior
 

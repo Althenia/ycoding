@@ -62,6 +62,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
   let stepFailed = false
   let providerFailed = false
   let retryEvidence = false
+  let assistantText = false
   let stepFailure: SessionError.Error | undefined
   let stepSettlement:
     | {
@@ -90,6 +91,10 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
       ? Effect.die(new Error("Tool event before assistant step start"))
       : Effect.succeed(assistantMessageID)
   const providerState = (metadata: ProviderMetadata | undefined) => metadata?.[input.providerMetadataKey]
+  const textPhase = (metadata: ProviderMetadata | undefined) => {
+    const phase = providerState(metadata)?.phase
+    return phase === "commentary" || phase === "final_answer" ? phase : undefined
+  }
   const fragments = (
     name: string,
     ended: (id: string, value: string, ordinal: number, state?: Record<string, unknown>) => Effect.Effect<void>,
@@ -135,14 +140,17 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
 
   const text = fragments(
     "text",
-    (_textID, value, ordinal) =>
+    (_textID, value, ordinal, state) =>
       Effect.gen(function* () {
+        const phase = state?.phase
         yield* events.publish(SessionEvent.Text.Ended, {
           sessionID: input.sessionID,
           assistantMessageID: yield* currentAssistantMessageID(),
           ordinal,
           text: value,
+          phase: phase === "commentary" || phase === "final_answer" ? phase : undefined,
         })
+        if (value.trim().length > 0) assistantText = true
       }),
     true,
   )
@@ -309,15 +317,23 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         return
       case "text-start":
         retryEvidence = true
-        const startedTextOrdinal = yield* text.start(event.id)
+        const startedTextPhase = textPhase(event.providerMetadata)
+        const startedTextState = startedTextPhase === undefined ? undefined : { phase: startedTextPhase }
+        const startedTextOrdinal = yield* text.start(event.id, startedTextState)
         yield* events.publish(SessionEvent.Text.Started, {
           sessionID: input.sessionID,
           assistantMessageID: yield* startAssistant(),
           ordinal: startedTextOrdinal,
+          phase: startedTextPhase,
         })
         return
       case "text-delta":
-        const deltaTextOrdinal = yield* text.append(event.id, event.text)
+        const deltaTextPhase = textPhase(event.providerMetadata)
+        const deltaTextOrdinal = yield* text.append(
+          event.id,
+          event.text,
+          deltaTextPhase === undefined ? undefined : { phase: deltaTextPhase },
+        )
         yield* events.publish(SessionEvent.Text.Delta, {
           sessionID: input.sessionID,
           assistantMessageID: yield* currentAssistantMessageID(),
@@ -326,7 +342,8 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         })
         return
       case "text-end":
-        yield* text.end(event.id)
+        const endedTextPhase = textPhase(event.providerMetadata)
+        yield* text.end(event.id, endedTextPhase === undefined ? undefined : { phase: endedTextPhase })
         return
       case "reasoning-start":
         retryEvidence = true
@@ -488,6 +505,8 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
     failUnsettledTools,
     hasProviderError: () => providerFailed,
     hasRetryEvidence: () => retryEvidence,
+    hasAssistantText: () => assistantText,
+    hasStepStarted: () => stepStarted,
     stepFailure: () => stepFailure,
     stepSettlement: () => stepSettlement,
     startAssistant,

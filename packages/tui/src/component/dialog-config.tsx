@@ -238,6 +238,7 @@ export function DialogConfig() {
   const themeState = useTheme()
   const [selected, setSelected] = createSignal(0)
   const [saving, setSaving] = createSignal(false)
+  const [query, setQuery] = createSignal("")
 
   const value = (setting: Setting) => {
     const current = setting.path.reduce<unknown>((result, key) => {
@@ -258,12 +259,16 @@ export function DialogConfig() {
     return index === undefined || index < 0 ? String(current) : (setting.labels?.[index] ?? String(current))
   }
   const options = createMemo(() =>
-    settings.map((setting, index) => ({
+    settings.flatMap((setting, index) => {
+      const canonical = ["Theme", "Color mode", "Animations", "Sidebar", "Thinking", "Markdown", "Layout", "File tree"].includes(setting.title)
+      if (!canonical && query().length === 0) return []
+      return [{
       title: setting.title,
       category: setting.category,
       footer: display(setting),
       value: index,
-    })),
+      }]
+    }),
   )
 
   async function change(direction: number, index = selected()) {
@@ -292,9 +297,10 @@ export function DialogConfig() {
     <DialogSelect
       title="Settings"
       options={options()}
+      onFilter={setQuery}
       onMove={(option) => setSelected(option.value)}
       onSelect={(option) => void change(1, option.value)}
-      footerHints={[{ title: "←/→", label: "change" }]}
+      footerHints={[{ title: "change", label: "←/→" }]}
       bindings={[
         {
           bind: "left",

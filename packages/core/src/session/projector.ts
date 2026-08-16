@@ -334,6 +334,25 @@ function run(db: DatabaseService, event: MessageEvent) {
           return message.type === "assistant" ? message : undefined
         })
       },
+      getUser(messageID) {
+        return Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(SessionMessageTable)
+            .where(
+              and(
+                eq(SessionMessageTable.id, messageID),
+                eq(SessionMessageTable.session_id, event.data.sessionID),
+                eq(SessionMessageTable.type, "user"),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (!row) return
+          const message = decodeRow(row)
+          return message.type === "user" ? message : undefined
+        })
+      },
       getSkillActivation(messageID) {
         return Effect.gen(function* () {
           const row = yield* db
@@ -390,6 +409,7 @@ function run(db: DatabaseService, event: MessageEvent) {
         })
       },
       updateAssistant: updateMessage,
+      updateUser: updateMessage,
       updateSkillActivation: updateMessage,
       updateShell: updateMessage,
       updateCompaction: updateMessage,
@@ -757,6 +777,7 @@ const layer = Layer.effectDiscard(
         })
       }),
     )
+    yield* events.project(SessionEvent.InputConsumed, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Admitted, (event) =>
       Effect.gen(function* () {
         if (event.durable === undefined)

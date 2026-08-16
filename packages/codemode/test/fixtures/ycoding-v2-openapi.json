@@ -10886,9 +10886,6 @@
               },
               "updated": {
                 "type": "number"
-              },
-              "archived": {
-                "type": "number"
               }
             },
             "required": [

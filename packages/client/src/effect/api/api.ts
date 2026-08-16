@@ -112,8 +112,12 @@ export type Endpoint5_7Output = EffectValue<ReturnType<RawClient["server.session
 export type SessionRemoveOperation<E = never> = (input: Endpoint5_7Input) => Effect.Effect<Endpoint5_7Output, E>
 
 type Endpoint5_8Request = Parameters<RawClient["server.session"]["session.subagent.list"]>[0]
-export type Endpoint5_8Input = { readonly parentID: Endpoint5_8Request["params"]["parentID"] }
-export type Endpoint5_8Output = EffectValue<ReturnType<RawClient["server.session"]["session.subagent.list"]>>["data"]
+export type Endpoint5_8Input = {
+  readonly parentID: Endpoint5_8Request["params"]["parentID"]
+  readonly limit?: Endpoint5_8Request["query"]["limit"]
+  readonly cursor?: Endpoint5_8Request["query"]["cursor"]
+}
+export type Endpoint5_8Output = EffectValue<ReturnType<RawClient["server.session"]["session.subagent.list"]>>
 export type SessionSubagentListOperation<E = never> = (input: Endpoint5_8Input) => Effect.Effect<Endpoint5_8Output, E>
 
 type Endpoint5_9Request = Parameters<RawClient["server.session"]["session.subagent.launch"]>[0]
@@ -505,13 +509,8 @@ export interface GuardrailApi<E = never> {
 }
 
 type Endpoint7_0Request = Parameters<RawClient["server.message"]["session.messages"]>[0]
-export type Endpoint7_0Input = {
-  readonly sessionID: Endpoint7_0Request["params"]["sessionID"]
-  readonly limit?: Endpoint7_0Request["query"]["limit"]
-  readonly order?: Endpoint7_0Request["query"]["order"]
-  readonly cursor?: Endpoint7_0Request["query"]["cursor"]
-}
-export type Endpoint7_0Output = EffectValue<ReturnType<RawClient["server.message"]["session.messages"]>>
+export type Endpoint7_0Input = { readonly sessionID: Endpoint7_0Request["params"]["sessionID"] }
+export type Endpoint7_0Output = EffectValue<ReturnType<RawClient["server.message"]["session.messages"]>>["data"]
 export type MessageListOperation<E = never> = (input: Endpoint7_0Input) => Effect.Effect<Endpoint7_0Output, E>
 
 export interface MessageApi<E = never> {

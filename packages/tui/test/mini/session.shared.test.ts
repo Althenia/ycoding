@@ -158,8 +158,7 @@ describe("run session shared", () => {
   test("restores current prompt history from stored text and file references", async () => {
     const client = YCoding.make({ baseUrl: "https://ycoding.test" })
     spyOn(client.message, "list").mockImplementation(() =>
-      Promise.resolve({
-        data: [
+      Promise.resolve([
           {
             id: "msg_prompt",
             type: "user",
@@ -176,9 +175,7 @@ describe("run session shared", () => {
             agents: [],
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      }),
+      ]),
     )
     spyOn(client.session, "get").mockImplementation(() =>
       Promise.resolve({
@@ -215,7 +212,7 @@ describe("run session shared", () => {
       ],
     })
     expect(client.message.list).toHaveBeenCalledWith(
-      { sessionID: "ses_1", limit: 200, order: "desc" },
+      { sessionID: "ses_1" },
       { signal: controller.signal },
     )
     expect(client.session.get).toHaveBeenCalledWith({ sessionID: "ses_1" }, { signal: controller.signal })

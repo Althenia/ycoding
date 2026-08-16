@@ -1,6 +1,9 @@
 /** @jsxImportSource @opentui/solid */
+import { ImageRenderable, type Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
+import { createSignal } from "solid-js"
+import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Keymap } from "../src/context/keymap"
 import { modeChips } from "../src/component/prompt/mode-chips"
 import {
@@ -27,6 +30,14 @@ const identity = {
 
 function labels(width: number) {
   return headerSegments({ ...identity, width }).map((segment) => segment.label)
+}
+
+function findImage(node: Renderable): ImageRenderable | undefined {
+  if (node instanceof ImageRenderable) return node
+  return node
+    .getChildren()
+    .flatMap((child) => findImage(child) ?? [])
+    .at(0)
 }
 
 describe("header truncation ladder", () => {
@@ -65,6 +76,10 @@ describe("header status", () => {
   const cases: Array<[SessionHeaderState, number, string]> = [
     [{ type: "ready" }, 100, "ready"],
     [{ type: "working", elapsed: 4.14 }, 120, "working 4.1s"],
+    [{ type: "thinking", elapsed: 4.14 }, 120, "thinking · 4.1s"],
+    [{ type: "tool-running", elapsed: 4.14 }, 120, "tool running · 4.1s"],
+    [{ type: "waiting", count: 1 }, 100, "waiting · 1 subagent"],
+    [{ type: "waiting", count: 2 }, 100, "waiting · 2 subagents"],
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", code: 429 }, 100, "provider error \u00b7 429"],
@@ -138,7 +153,7 @@ async function renderHeader(
     { width, height: 6, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes(input.subagent ? "subagent" : "ycoding"))
+  await app.waitForFrame((frame) => frame.includes(input.subagent ? "subagent" : `v${InstallationVersion}`))
   if (input.leaderPending) {
     app.mockInput.pressKey("x", { ctrl: true })
     await app.waitForFrame((frame) => frame.includes("leader pending"))
@@ -162,20 +177,22 @@ describe("autonomy mode chips", () => {
     })
   })
 
-  test("shows goal progress against the no-progress bound while active", () => {
+  test("shows only the goal label while goal mode is active", () => {
     const autonomy = {
       mode: "goal",
       goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
     } as const
-    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal 3/5", tone: "on" })
+    const chip = modeChips({ autonomy })[0]
+    expect(chip).toEqual({ key: "goal", label: "goal", tone: "on" })
+    expect(chip?.label).not.toContain("/")
   })
 
-  test("keeps a terminal goal status visible after leaving goal mode", () => {
+  test("shows goal off after leaving goal mode with retained terminal state", () => {
     const autonomy = {
       mode: "normal",
       goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
     } as const
-    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal completed", tone: "off" })
+    expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
   })
 
   test("renders the chips on the composer status row", async () => {
@@ -254,6 +271,9 @@ describe("header rendering", () => {
     const cases: Array<[SessionHeaderState, string, { toInts(): readonly number[] }]> = [
       [{ type: "ready" }, "ready", theme.text.subdued],
       [{ type: "working", elapsed: 4.1 }, "working 4.1s", theme.text.feedback.success.default],
+      [{ type: "thinking", elapsed: 4.1 }, "thinking · 4.1s", theme.text.feedback.success.default],
+      [{ type: "tool-running", elapsed: 4.1 }, "tool running · 4.1s", theme.text.feedback.info.default],
+      [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error" }, "provider error", theme.text.feedback.error.default],
       [{ type: "yolo" }, "YOLO · auto-approve", theme.text.feedback.error.default],
@@ -269,15 +289,21 @@ describe("header rendering", () => {
     }
   })
 
-  test("shows brand, identity, and status on the strip at 160 columns", async () => {
+  test("shows the icon mark, version, identity, and status on the strip at 160 columns", async () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
     const frame = app.captureCharFrame()
     const lines = frame.split("\n")
-    expect(frame).toContain("y. ycoding")
+    const image = findImage(app.renderer.root)
+    expect(String(image?.source)).toEndWith("ycoding-mark-256.png")
+    expect(image?.width).toBe(6)
+    expect(image?.height).toBe(1)
+    expect(image?.x).toBe(1)
+    expect(frame).toContain(`v${InstallationVersion}`)
+    expect(frame).not.toContain("y. ycoding")
     expect(frame).toContain("~/Workspace/Personal/YCoding")
     expect(frame).toContain("main")
     expect(frame).toContain("working 4.1s")
-    expect(lines.findIndex((line) => line.includes("y. ycoding"))).toBe(1)
+    expect(lines.findIndex((line) => line.includes(`v${InstallationVersion}`))).toBe(1)
     expect(lines[0]?.trim()).toBe("")
     expect(lines[2]?.trim()).toBe("")
     app.renderer.destroy()
@@ -286,7 +312,9 @@ describe("header rendering", () => {
   test("drops the path and branch at 80 columns instead of shrinking the state word", async () => {
     const app = await renderHeader(80, { type: "ready" })
     const frame = app.captureCharFrame()
-    expect(frame).toContain("y. ycoding")
+    expect(String(findImage(app.renderer.root)?.source)).toEndWith("ycoding-mark-256.png")
+    expect(frame).toContain(`v${InstallationVersion}`)
+    expect(frame).not.toContain("y. ycoding")
     expect(frame).toContain("claude-opus-5")
     expect(frame).not.toContain("Workspace")
     expect(frame).toContain("ready")
@@ -296,15 +324,16 @@ describe("header rendering", () => {
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
     const app = await renderHeader(100, { type: "yolo" })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const spans = app.captureSpans().lines[3]?.spans ?? []
     const frame = app.captureCharFrame()
+    // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
+    // full-width destructive band under the header was an invention and read as a huge red bar.
     expect(frame).toContain("YOLO \u00b7 auto-approve")
-    expect(spans).not.toHaveLength(0)
+    expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
     expect(
-      spans.every((span) =>
+      (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
         span.bg.toInts().every((value, index) => value === theme.background.action.destructive.default.toInts()[index]),
       ),
-    ).toBe(true)
+    ).toBe(false)
     app.renderer.destroy()
   })
 
@@ -398,11 +427,49 @@ describe("header rendering", () => {
     const app = await renderHeader(160, { type: "working", elapsed: 4.1 })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
-    const brand = spans.find((span) => span.text.includes("y. ycoding"))
     const status = spans.find((span) => span.text.includes("working 4.1s"))
 
-    expect(brand?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
+    expect(String(findImage(app.renderer.root)?.source)).toEndWith("ycoding-mark-256.png")
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.success.default.toInts())
+    app.renderer.destroy()
+  })
+
+  test("updates active elapsed time and stops after becoming ready", async () => {
+    const config = createTuiResolvedConfig()
+    const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+      import("../src/config"),
+      import("../src/context/theme"),
+    ])
+    let setState!: (state: SessionHeaderState) => void
+    function LiveHeader() {
+      const [state, set] = createSignal<SessionHeaderState>({ type: "thinking", startedAt: Date.now() - 1_000 })
+      setState = set
+      return <Header {...identity} state={state()} />
+    }
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={config}>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <Keymap.Provider config={config}>
+                <LiveHeader />
+              </Keymap.Provider>
+            </ThemeProvider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 160, height: 6, kittyKeyboard: true },
+    )
+    app.renderer.start()
+    await app.waitForFrame((frame) => frame.includes("thinking · 1."))
+    const initial = app.captureCharFrame()
+    await Bun.sleep(200)
+    expect(app.captureCharFrame()).not.toBe(initial)
+    setState({ type: "ready" })
+    await app.waitForFrame((frame) => frame.includes("ready"))
+    const settled = app.captureCharFrame()
+    await Bun.sleep(200)
+    expect(app.captureCharFrame()).toBe(settled)
     app.renderer.destroy()
   })
 

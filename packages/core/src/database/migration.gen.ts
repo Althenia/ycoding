@@ -10,5 +10,6 @@ export const migrations = (
     import("./migration/20260727001011_observation-sessionless-identity"),
     import("./migration/20260728025034_dusty_havok"),
     import("./migration/20260728084114_provider-request-optional-cost"),
+    import("./migration/20260801114207_drop-session-archived"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

@@ -622,6 +622,7 @@ describe("SessionRunnerModel", () => {
         directory: "/repo",
         providerID: "openai",
         modelID: "gpt-5.6-sol",
+        apiModelID: resolved.id,
         variant: "default",
         policyRevision: CACHE_POLICY_REVISION,
         permissions: [],

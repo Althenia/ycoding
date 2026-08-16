@@ -6,7 +6,6 @@ import { useTheme } from "../../../context/theme"
 import { Keymap } from "../../../context/keymap"
 import { useData } from "../../../context/data"
 import { groupSessionShells } from "../../../util/session"
-import { activeSubagentCount } from "../../../util/subagent"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
 
@@ -63,7 +62,7 @@ export function Composer(props: ComposerProps) {
       0,
     ),
   )
-  const subagents = createMemo(() => activeSubagentCount(data.session.subagent.list(props.sessionID)))
+  const subagents = createMemo(() => data.session.subagent.summary(props.sessionID)?.active ?? 0)
   const hasActiveContent = createMemo(() =>
     activeTab()?.id === "shell" ? shells() > 0 : activeTab()?.id === "subagents" ? subagents() > 0 : false,
   )
@@ -143,15 +142,13 @@ export function Composer(props: ComposerProps) {
       >
         <box
           backgroundColor={themeV2.background.default}
-          paddingLeft={activeTab()?.id === "shell" ? 1 : 3}
-          paddingRight={2}
-          paddingTop={activeTab()?.id === "shell" ? 7 : props.prompt ? 5 : 3}
+          paddingLeft={3}
+          paddingRight={4}
+          paddingTop={3}
           paddingBottom={1}
         >
           <box gap={1}>
             <box flexDirection="row" paddingLeft={0}>
-              <text fg={themeV2.text.subdued}>Prompt</text>
-              <box width={5} />
               <Show
                 when={tabList().length > 1}
                 fallback={
@@ -210,7 +207,7 @@ export function Composer(props: ComposerProps) {
             </box>
           </box>
         </box>
-        <Show when={props.prompt}>{(prompt) => <box position="absolute" top={0} left={0} right={0} zIndex={1}>{prompt()}</box>}</Show>
+        <Show when={props.prompt}>{(prompt) => <box width="100%">{prompt()}</box>}</Show>
       </box>
     </ComposerContext.Provider>
   )

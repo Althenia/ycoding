@@ -138,7 +138,7 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 | `attachments`           | object                                | Attachment processing, currently image limits and resizing.                                 |
 | `tool_output`           | object                                | Tool-output truncation limits.                                                              |
 | `mcp`                   | object                                | MCP defaults and named servers.                                                             |
-| `compaction`            | object                                | Automatic conversation compaction.                                                          |
+| `compaction`            | object                                | Explicit conversation-summary limits.                                                       |
 | `skills`                | string array                          | Additional skill directories or HTTP(S) sources.                                            |
 | `commands`              | record                                | Named slash commands.                                                                       |
 | `instructions`          | string array                          | Accepted by Schema, but no current runtime consumer reads this field. Do not rely on it.    |
@@ -232,8 +232,13 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `attachments.image.max_width`, `.max_height`, `.max_base64_bytes` | positive integer | unset | Image limits. |
 | `tool_output.max_lines`, `.max_bytes` | positive integer | unset | Output truncation thresholds. |
 | `watcher.ignore` | string[] | unset | Watcher ignore patterns. |
-| `compaction.auto` | boolean | unset | Automatic compaction. |
-| `compaction.keep.tokens`, `.buffer` | non-negative integer | unset | Retained-context and buffer values. |
+| `compaction.keep_recent_messages` | non-negative integer | `20` | Hard minimum of message rows that remain after an explicit summary boundary. |
+| `compaction.reserved_output_tokens` | non-negative integer | `0` | Output-token reservation for the summarizer request. |
+| `compaction.context_safety_margin_tokens` | non-negative integer | `4096` | Additional summarizer context reservation. |
+| `compaction.timeout_seconds` | non-negative integer | `0` | Summarizer timeout; `0` disables the timeout. |
+| `compaction.max_output_tokens` | non-negative integer | `0` | Summarizer output cap; `0` uses the model cap. |
+| `compaction.max_summary_bytes` | non-negative integer | `65536` | UTF-8 cap for the validated TOON checkpoint. |
+| `compaction.max_internal_passes` | non-negative integer | `8` | Maximum in-memory batching passes before deletion is permitted. |
 | `guardrails.enabled` | boolean | unset | Guardrail switch. |
 | `guardrails.max_concurrent_shells`, `.max_concurrent_subagents`, `.max_pending_reviews` | positive integer | unset | Root-Session-family caps for running shells, running subagents, and pending reviews. |
 | `provider_usage.codex_app_server.command` | non-empty string | required when object is present | Direct executable, not a shell command. |
@@ -249,6 +254,12 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `efficiency.openai_responses_continuation` | `auto` \| `on` \| `off` | `auto` | Response continuation policy. |
 | `experimental.subagent_depth` | non-negative integer | `1` | Maximum nesting depth. |
 | `experimental.policies` | `Config.Policy.Info[]` | unset | Ordered configured-resource policies. |
+
+### Provider-usage reporting
+
+**Implemented:** `provider_usage` currently configures only the optional Codex app-server fields above. GitHub Copilot usage reporting has no `provider_usage` key and requires no separate credential; it reuses the OAuth credential already configured for the `github-copilot` provider.
+
+For `github.com` accounts, the read-only, best-effort refresh queries `GET https://api.github.com/copilot_internal/user`. It normalizes paid `quota_snapshots` (including `chat`, `completions`, and legacy `premium_interactions`) and free or limited `limited_user_quotas`, `monthly_quotas`, and `limited_user_reset_date` responses. For a token-based-billing seat, it reads organization billing summaries for `aic_quantity` and `aic_gross_amount`, remembers the organization that reported AI-credit data, and re-discovers one after the remembered organization stops reporting. One GitHub AI credit is fixed at `$0.01` USD. Missing values remain absent and render as unreported, never zero.
 
 ## Model selectors
 
@@ -282,7 +293,10 @@ The optional `efficiency` block controls provider-request amplification and prom
     "helper_models": {
       "title": "openai/gpt-5-mini#low",
       "goal": "openai/gpt-5-mini#low",
-      "compaction": "session",
+      "compaction": {
+        "main": "session",
+        "subagent": "openai/gpt-5-mini#low",
+      },
     },
     "prompt_cache": {
       "anthropic_ttl": "adaptive",
@@ -300,7 +314,8 @@ The optional `efficiency` block controls provider-request amplification and prom
 | `goal_synthesis`                         | `local`, `model`               | `local`    | Normalize goals locally or use the hidden goal agent.                                    |
 | `helper_models.title`                    | model selector, `session`      | `session`  | Model for model-generated Session titles.                                               |
 | `helper_models.goal`                     | model selector, `session`      | `session`  | Model for model-based goal synthesis.                                                    |
-| `helper_models.compaction`               | model selector, `session`      | `session`  | Model for manual and automatic compaction.                                               |
+| `helper_models.compaction.main`          | model selector, `session`      | `session`  | Model for explicit summaries in main chats.                                              |
+| `helper_models.compaction.subagent`      | model selector, `session`      | `session`  | Model for explicit summaries in subagent chats.                                          |
 | `prompt_cache.anthropic_ttl`             | `adaptive`, `5m`, `1h`         | `adaptive` | Choose Anthropic-compatible cache lifetime behavior.                                     |
 | `prompt_cache.openai_mode`               | `auto`, `implicit`, `explicit` | `auto`     | Select OpenAI prompt-cache behavior according to model and route capabilities.           |
 | `prompt_cache.openai_extended_retention` | boolean                        | `false`    | Request pre-GPT-5.6 `24h` OpenAI cache retention only on supported routes.                |
@@ -308,7 +323,7 @@ The optional `efficiency` block controls provider-request amplification and prom
 
 `prompt_cache.anthropic_ttl: "adaptive"` starts every namespace at five minutes. After two provider-reported reusable cache reads or writes for the same stable namespace within five minutes, later requests use the one-hour bucket. Missing cache telemetry, a namespace change, a stale observation, or a model without published extended-TTL support keeps the five-minute bucket. This process-local optimization is bounded and is not required for correctness.
 
-`prompt_cache.openai_mode: "auto"` uses hybrid caching for direct OpenAI Responses requests on GPT-5.6 and later: request-wide implicit mode keeps OpenAI's managed latest-message breakpoint while OpenAI selects its latest three explicit write candidates. `"explicit"` disables that managed breakpoint and lets OpenAI select its latest four explicit write candidates. YCoding generates one combined system-text marker plus selected user/assistant text markers inside the raw policy window and does not impose a client read-lookback or write-slot cap. Responses uses `input_text` EasyInput blocks for a marked assistant message and otherwise retains `output_text`. Tools and tool results remain cacheable in the prefix but receive no generated marker. Older public OpenAI models remain implicit. The ChatGPT Codex backend, OpenAI-compatible gateways, and unsupported model families omit GPT-5.6-only fields and retain stable key-based caching. `"implicit"` disables YCoding's generated explicit markers.
+`prompt_cache.openai_mode: "auto"` uses hybrid caching for direct OpenAI Responses requests on GPT-5.6 and later: request-wide implicit mode keeps OpenAI's managed latest-message breakpoint while OpenAI selects its latest three explicit write candidates. `"explicit"` disables that managed breakpoint and lets OpenAI select its latest four explicit write candidates. YCoding emits one combined system-text marker and retains markers on every non-volatile user/assistant text boundary, allowing the provider's current read window to match an earlier exact conversation prefix across tool-heavy turns. Responses uses `input_text` EasyInput blocks for a marked assistant message and otherwise retains `output_text`. Tools and tool results remain cacheable in the prefix but receive no generated marker. Older public OpenAI models remain implicit. The ChatGPT Codex backend, OpenAI-compatible gateways, and unsupported model families omit GPT-5.6-only fields and retain key-based, backend-managed caching. `"implicit"` disables YCoding's generated explicit markers.
 
 Direct OpenAI GPT-5.6 Responses requests automatically enable server-side compaction at `200000` rendered tokens. This uses encrypted compaction items in stateless request history; it does not enable Responses storage or stored-response continuation. Direct OpenAI is Responses-only; configured third-party OpenAI-compatible Chat remains a separate route family.
 
@@ -320,7 +335,7 @@ When `openai_extended_retention` is true, supported pre-GPT-5.6 direct OpenAI re
 
 The default `local` title and goal modes do not make provider requests. Set `title` or `goal_synthesis` to `model` to restore model-generated behavior. `title: "off"` leaves the initial generated Session title unchanged.
 
-For each model-based helper, an explicit model on the matching hidden `title`, `goal`, or `compaction` agent takes precedence over `efficiency.helper_models.<role>`. A missing role or the explicit value `session` uses the current Session model. Compaction always remains model-based. Model-based helper requests use the same prompt-cache policy and feed their provider-reported cache usage into the adaptive runtime.
+For titles and goals, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. For explicit conversation summaries, `helper_models.compaction.main` applies to main chats and `.subagent` to child Sessions. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then current Session-model precedence. A subagent's `session` value always means that subagent's own model. Summaries are model-based and use the same prompt-cache policy and provider cache accounting.
 
 ## Permissions
 
@@ -620,9 +635,13 @@ LSP configuration is `false`, `true`, or a record. A server entry supports `comm
 ```jsonc
 {
   "compaction": {
-    "auto": true,
-    "keep": { "tokens": 16000 },
-    "buffer": 8000,
+    "keep_recent_messages": 20,
+    "reserved_output_tokens": 4096,
+    "context_safety_margin_tokens": 4096,
+    "timeout_seconds": 60,
+    "max_output_tokens": 4096,
+    "max_summary_bytes": 65536,
+    "max_internal_passes": 8,
   },
   "experimental": {
     "subagent_depth": 2,

@@ -115,7 +115,7 @@ Owns:
 Owns:
 
 - the YCoding wordmark, terminal title, startup and exit presentation;
-- transcript rendering and archive pagination;
+- transcript rendering and complete resident transcript loading;
 - prompt, autocomplete, commands, keymaps, dialogs, themes, and notifications;
 - session, subagent, shell, permission, form, skill, and project-artifact interaction;
 - cache and context diagnostics;
@@ -164,7 +164,7 @@ Models, providers, provider usage, tools, permissions, Session guardrails, instr
 
 Durable events record facts. Projections and read models derive display state from ordered history. Public event streaming and local execution ownership remain separate concerns.
 
-The TUI applies events to a bounded Solid store and reconciles canonical Client reads. A missing, archived, or evicted UI row is never durable state.
+The TUI applies events to a Solid store and reconciles canonical Client reads. A missing or evicted UI row is never durable state.
 
 ## State scopes
 
@@ -176,7 +176,7 @@ The TUI applies events to a bounded Solid store and reconciles canonical Client 
 | Project durable | project artifacts and project configuration | Core project-artifact store |
 | Global durable | global project artifacts and shared artifact state | Core project-artifact store |
 | Process-local Session-family safety | pending guardrail reviews and running shell/subagent/review reservations | Core `SessionGuardrail` service |
-| UI resident | hot messages, one expanded archive page, guardrail/provider snapshots, dialogs, scroll state | TUI only |
+| UI resident | complete projected messages for each resident Session, guardrail/provider snapshots, dialogs, scroll state | TUI only |
 
 ## Generated and tool-owned content
 
@@ -193,7 +193,7 @@ The TUI applies events to a bounded Solid store and reconciles canonical Client 
 - Session execution ownership remains process-local until clustering is implemented explicitly.
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.
 - Durable state remains replayable; caches and projections remain rebuildable.
-- TUI pagination may release payloads but preserves stable placeholders and canonical reload.
+- TUI Session eviction releases complete resident transcript payloads; canonical reload rebuilds them.
 - Project artifacts use their validated lifecycle instead of writing directly into source directories.
 - Agent permissions and Session guardrails are separate mediation layers; neither approval widens the other layer.
 - Provider usage failures remain isolated from Session startup and model execution.

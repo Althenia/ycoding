@@ -277,7 +277,7 @@ test("captures the product transcript block primitives at canonical terminal dim
         <TestTuiContexts>
           <ConfigProvider config={createTuiResolvedConfig()}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <TranscriptBlocksFixture />
+              <TranscriptBlocksFixture width={viewport.width} />
             </ThemeProvider>
           </ConfigProvider>
         </TestTuiContexts>
@@ -324,7 +324,7 @@ test("captures the product transcript block primitives at canonical terminal dim
       ] as const) {
         const row = rows.find((item) => item.includes(command))
         expect(row).toBeDefined()
-        expect(row!.indexOf(status)).toBe(viewport.width - 4 - status.length)
+        expect(row!.indexOf(status)).toBe(viewport.width - 3 - status.length)
       }
 
       await mkdir(renders, { recursive: true })
@@ -377,17 +377,25 @@ test("captures transcript blocks through the real session route", async () => {
         [19, 13, "+ return read / total"],
         [21, 5, "89"],
         [21, 13, "}"],
-      ] as const)
-        expect(lines[row - 1]?.indexOf(value)).toBe(column)
-      expect(lines.slice(10, 21).join("\n")).not.toContain("─")
-      expect(lines.slice(10, 21).join("\n")).not.toContain("│")
+      ] as const) {
+        const actual = lines[row - 1]?.indexOf(value)
+        if (actual !== column) throw new Error(`Expected ${JSON.stringify(value)} at ${column} in row ${row}: ${lines[row - 1]}`)
+      }
+      const diffContent = lines.slice(10, 21).map((line) => line.slice(0, 140)).join("\n")
+      expect(diffContent).not.toContain("─")
+      expect(diffContent).not.toContain("│")
     }
 
     if (viewport.width === DESIGN_VIEWPORT.width) {
-      expect(lines[25]?.indexOf("ok")).toBe(3)
-      expect(lines[25]?.indexOf("bun test provider")).toBe(10)
-      expect(lines[28]?.indexOf("!")).toBe(3)
-      expect(lines[28]?.indexOf("bun typecheck")).toBe(10)
+      for (const [row, column, value] of [
+        [27, 3, "ok"],
+        [27, 10, "bun test provider"],
+        [30, 3, "!!"],
+        [30, 10, "bun typecheck"],
+      ] as const) {
+        const actual = lines[row - 1]?.indexOf(value)
+        if (actual !== column) throw new Error(`Expected ${JSON.stringify(value)} at ${column} in row ${row}: ${lines[row - 1]}`)
+      }
     }
 
     await mkdir(renders, { recursive: true })
@@ -395,19 +403,24 @@ test("captures transcript blocks through the real session route", async () => {
   }
 }, 120_000)
 
-test("wraps command text without displacing its status at 80 columns", async () => {
+test("truncates command text without displacing its status at 80 columns", async () => {
   const app = await testRender(
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <box paddingLeft={3} paddingRight={3}>
-              <InlineCommand
-                icon="✓"
-                command="bun test provider with the focused transcript command-result regression suite"
-                pass={14}
-                fail={0}
-              />
+            {/* Explicit width: the row fills 100% of its parent, which an auto-sized box reports
+                as zero. */}
+            <box width={80}>
+              <box width={74} marginLeft={3}>
+                <InlineCommand
+                  icon="✓"
+                  command="bun test provider with the focused transcript command-result regression suite"
+                  pass={14}
+                  fail={0}
+                  width={74}
+                />
+              </box>
             </box>
           </ThemeProvider>
         </ConfigProvider>
@@ -424,8 +437,8 @@ test("wraps command text without displacing its status at 80 columns", async () 
     const status = "14 pass · 0 fail"
     const row = rows.find((item) => item.includes(status))
     expect(row).toBeDefined()
-    expect(row!.indexOf(status)).toBe(80 - 4 - status.length)
-    expect(rows.join("\n")).toContain("command-result regression suite")
+    expect(row!.indexOf(status)).toBe(80 - 3 - status.length)
+    expect(rows.join("\n")).toContain("bun test provider with ...result regression suite")
   } finally {
     app.renderer.destroy()
   }
@@ -456,14 +469,16 @@ test("selects structured transcript blocks only for matching tool message data",
   expect(transcriptToolPresentation({ tool: "plugin_tool", input: {}, output: "done" })).toBeUndefined()
 })
 
-function TranscriptBlocksFixture() {
+function TranscriptBlocksFixture(props: { width: number }) {
   return (
-    <box flexDirection="column" paddingLeft={3} paddingRight={3}>
-      <text>YCODING</text>
-      <text>Applied the cache accounting fix.</text>
-      <InlineDiff diff={DIFF_FIXTURE} />
-      <InlineCommand icon="✓" command="bun test provider" pass={14} fail={0} />
-      <InlineCommand icon="!" command="bun typecheck" errors={2} failed={true} />
+    <box width={props.width} flexDirection="column">
+      <box width={props.width - 6} marginLeft={3} flexDirection="column">
+        <text>YCODING</text>
+        <text>Applied the cache accounting fix.</text>
+        <InlineDiff diff={DIFF_FIXTURE} />
+        <InlineCommand icon="✓" command="bun test provider" pass={14} fail={0} width={props.width - 6} />
+        <InlineCommand icon="!" command="bun typecheck" errors={2} failed={true} width={props.width - 6} />
+      </box>
     </box>
   )
 }

@@ -56,6 +56,10 @@ export type AutocompleteOption = {
 }
 
 const COMMAND_DESCRIPTION_COLUMN = `${(244 / 992) * 100}%`
+const COMMAND_DESCRIPTION_OFFSET = 244 / 992
+const COMMAND_TEXT_LEFT_INSET = 3
+const COMMAND_TEXT_RIGHT_INSET = 2
+const COMMAND_COMPOSER_GAP = 1
 
 export function autocompleteSelectionColors(theme: Pick<ComponentTheme, "background" | "text">) {
   return {
@@ -96,6 +100,10 @@ export function Autocomplete(props: {
     input: "keyboard" as "keyboard" | "mouse",
   })
   const chromeHeight = createMemo(() => (store.visible === "/" ? 4 : 0))
+  const commandMenu = createMemo(() => store.visible === "/")
+  const textLeftInset = createMemo(() => (commandMenu() ? COMMAND_TEXT_LEFT_INSET : 1))
+  const textRightInset = createMemo(() => (commandMenu() ? COMMAND_TEXT_RIGHT_INSET : 1))
+  const composerGap = createMemo(() => (commandMenu() ? COMMAND_COMPOSER_GAP : 0))
 
   const [positionTick, setPositionTick] = createSignal(0)
 
@@ -135,6 +143,7 @@ export function Autocomplete(props: {
       width: anchor.width,
     }
   })
+  const popupWidth = createMemo(() => position().width)
 
   const filter = createMemo(() => {
     if (!store.visible) return
@@ -614,8 +623,7 @@ export function Autocomplete(props: {
   function moveTo(next: number) {
     setStore("selected", next)
     if (!scroll) return
-    const viewportHeight = Math.min(height(), options().length)
-    const scrollBottom = scroll.scrollTop + viewportHeight
+    const scrollBottom = scroll.scrollTop + height()
     if (next < scroll.scrollTop) {
       scroll.scrollBy(next - scroll.scrollTop)
     } else if (next + 1 > scrollBottom) {
@@ -799,7 +807,14 @@ export function Autocomplete(props: {
     const count = options().length || 1
     if (!store.visible) return Math.min(10, count)
     positionTick()
-    return Math.min(10, count, Math.max(1, props.anchor().y - chromeHeight()))
+    const availableRows = props.anchor().y - chromeHeight() - composerGap()
+    return Math.min(10, count, Math.max(1, availableRows))
+  })
+  const commandDescriptionWidth = createMemo(() => {
+    if (!commandMenu()) return COMMAND_DESCRIPTION_COLUMN
+    const contentWidth = popupWidth() - 2
+    const commandStart = 1 + textLeftInset()
+    return Math.max(1, Math.round(contentWidth * COMMAND_DESCRIPTION_OFFSET) - commandStart - 1)
   })
 
   let scroll: ScrollBoxRenderable
@@ -818,9 +833,9 @@ export function Autocomplete(props: {
     <box
       visible={store.visible !== false}
       position="absolute"
-      top={position().y - height() - chromeHeight()}
+      top={position().y - height() - chromeHeight() - composerGap()}
       left={position().x}
-      width={position().width}
+      width={popupWidth()}
       zIndex={100}
       {...SplitBorder}
       backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : undefined}
@@ -829,11 +844,17 @@ export function Autocomplete(props: {
     >
       <Show when={store.visible === "/"}>
         <>
-          <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} height={1}>
+          <box
+            flexDirection="row"
+            justifyContent="space-between"
+            paddingLeft={textLeftInset()}
+            paddingRight={textRightInset()}
+            height={1}
+          >
             <text fg={themeV2.text.label}>/ COMMANDS</text>
             <text fg={themeV2.text.label} flexShrink={0}>{`${options().length} of ${commands().length}`}</text>
           </box>
-          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, position().width - 2))}</text>
+          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
         </>
       </Show>
       <scrollbox
@@ -853,15 +874,17 @@ export function Autocomplete(props: {
         >
           {(option, index) => (
             <box
-              paddingLeft={1}
-              paddingRight={1}
-              backgroundColor={index() === store.selected ? selection.fill : undefined}
-              flexDirection="row"
+              backgroundColor={
+                store.visible === "/" ? themeV2.background.surface.offset : theme.backgroundMenu
+              }
+              height={1}
+              flexDirection="column"
               onMouseMove={() => {
                 setStore("input", "mouse")
+                moveTo(index())
               }}
               onMouseOver={() => {
-                if (store.input !== "mouse") return
+                setStore("input", "mouse")
                 moveTo(index())
               }}
               onMouseDown={() => {
@@ -870,50 +893,75 @@ export function Autocomplete(props: {
               }}
               onMouseUp={() => select()}
             >
-              <box width={store.visible === "/" ? COMMAND_DESCRIPTION_COLUMN : undefined} flexShrink={0} overflow="hidden">
-                <text fg={index() === store.selected ? selection.foreground : themeV2.text.default} flexShrink={0}>
-                  <AutocompleteOptionText
-                    text={option.display}
-                    matches={
-                      store.visible === "/" && option.display.toLowerCase().startsWith(`/${search().toLowerCase()}`)
-                        ? Array.from({ length: search().length + 1 }, (_, match) => match)
-                        : option.matches
-                    }
-                    selected={index() === store.selected}
-                    foreground={index() === store.selected ? selection.foreground : themeV2.text.default}
-                    background={index() === store.selected ? selection.fill : undefined}
-                    accent={themeV2.text.feedback.success.default}
-                  />
-                </text>
-              </box>
-              <Show when={option.marker}>
-                <text fg={index() === store.selected ? selection.foreground : themeV2.text.feedback.warning.default} flexShrink={0}>
-                  {" · " + option.marker}
-                </text>
-              </Show>
-              <Show when={option.description}>
-                <text
-                  fg={index() === store.selected ? selection.foreground : themeV2.text.subdued}
-                  wrapMode="none"
-                >
-                  <span
-                    style={{
-                      fg: index() === store.selected ? selection.foreground : themeV2.text.subdued,
-                      bg: index() === store.selected ? selection.fill : undefined,
-                    }}
+              <box
+                height={1}
+                paddingLeft={textLeftInset()}
+                paddingRight={textRightInset()}
+                backgroundColor={
+                  index() === store.selected
+                    ? selection.fill
+                    : store.visible === "/"
+                      ? themeV2.background.surface.offset
+                      : theme.backgroundMenu
+                }
+                flexDirection="row"
+              >
+                <box width={store.visible === "/" ? commandDescriptionWidth() : undefined} flexShrink={0} overflow="hidden">
+                  <text fg={index() === store.selected ? selection.foreground : themeV2.text.default} flexShrink={0}>
+                    <AutocompleteOptionText
+                      text={option.display}
+                      matches={
+                        store.visible === "/" && option.display.toLowerCase().startsWith(`/${search().toLowerCase()}`)
+                          ? Array.from({ length: search().length + 1 }, (_, match) => match)
+                          : option.matches
+                      }
+                      selected={index() === store.selected}
+                      foreground={index() === store.selected ? selection.foreground : themeV2.text.default}
+                      background={
+                        index() === store.selected
+                          ? selection.fill
+                          : store.visible === "/"
+                            ? themeV2.background.surface.offset
+                            : theme.backgroundMenu
+                      }
+                      accent={themeV2.text.feedback.success.default}
+                    />
+                  </text>
+                </box>
+                <Show when={option.marker}>
+                  <text fg={index() === store.selected ? selection.foreground : themeV2.text.feedback.warning.default} flexShrink={0}>
+                    {" · " + option.marker}
+                  </text>
+                </Show>
+                <Show when={option.description}>
+                  <text
+                    fg={index() === store.selected ? selection.foreground : themeV2.text.subdued}
+                    wrapMode="none"
                   >
-                    {" " + option.description?.trimStart()}
-                  </span>
-                </text>
-              </Show>
+                    <span
+                      style={{
+                        fg: index() === store.selected ? selection.foreground : themeV2.text.subdued,
+                        bg:
+                          index() === store.selected
+                            ? selection.fill
+                            : store.visible === "/"
+                              ? themeV2.background.surface.offset
+                              : theme.backgroundMenu,
+                      }}
+                    >
+                      {" " + option.description?.trimStart()}
+                    </span>
+                  </text>
+                </Show>
+              </box>
             </box>
           )}
         </For>
       </scrollbox>
       <Show when={store.visible === "/"}>
         <>
-          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, position().width - 2))}</text>
-          <box paddingLeft={1} paddingRight={1} height={1}>
+          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, popupWidth() - 2))}</text>
+          <box paddingLeft={textLeftInset()} paddingRight={textRightInset()} height={1}>
             <text fg={themeV2.text.subdued}>↑↓ move    Enter accept    Tab complete    Esc close</text>
           </box>
         </>

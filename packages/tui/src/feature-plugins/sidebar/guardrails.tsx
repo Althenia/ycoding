@@ -12,6 +12,9 @@ export function guardrailSummary(status: GuardrailStatusOutput) {
   }
   return {
     profile: `${title(status.profile)}${status.customRules ? ` + ${status.customRules} custom` : ""}`,
+    header: `${title(status.profile)}${
+      status.blocked ? ` · ${status.blocked} blocked` : status.invalidFiles.length ? ` · ${status.invalidFiles.length} invalid` : ""
+    }`,
     decisions: `${status.approvals} approval${status.approvals === 1 ? "" : "s"} · ${status.blocked} blocked`,
     shells: format("Shells", "shell"),
     subagents: format("Subagents", "subagent"),
@@ -33,7 +36,7 @@ export function GuardrailContent(props: { status: Accessor<GuardrailStatusOutput
           <RailSection
             section="guardrails"
             title="GUARDRAILS"
-            summary={summary().profile}
+            summary={summary().header}
             attention={Boolean(summary().invalid)}
           >
             <text fg={themeV2.text.default}>{summary().profile}</text>

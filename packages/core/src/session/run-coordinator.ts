@@ -97,6 +97,8 @@ export const make = <Key, E, Reason = never>(options: {
 
     // A doorbell that survives the execution loop (rung after the loop decided to end, or
     // during failure or interruption cleanup) starts a fresh execution for the remaining work.
+    // Register the successor before resolving completed callers so awaitIdle follows the new
+    // owner. start yields before it invokes drain, preserving the original caller's exit first.
     const settle = (key: Key, execution: Execution<E, Reason>, exit: Exit.Exit<void, E>) => {
       if (execution.pendingWake) start(key, false)
       else executions.delete(key)

@@ -764,7 +764,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     })
     if (oversizedSubagent.status !== 400)
       throw new Error(`Oversized subagent payload returned ${oversizedSubagent.status}, expected 400`)
-    if ((await client.session.subagent.list({ parentID: subagentParent.id })).length !== 0)
+    if ((await client.session.subagent.list({ parentID: subagentParent.id })).data.length !== 0)
       throw new Error("Oversized subagent payload persisted a task")
 
     const launchedSubagent = await client.session.subagent.launch({
@@ -777,7 +777,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       background: true,
     })
     await eventually(async () => {
-      const task = (await client.session.subagent.list({ parentID: subagentParent.id })).find(
+      const task = (await client.session.subagent.list({ parentID: subagentParent.id })).data.find(
         (item) => item.sessionID === launchedSubagent.sessionID,
       )
       return task?.state === "running" ? task : undefined
@@ -789,7 +789,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (cancelledSubagent.state !== "cancelled")
       throw new Error(`Subagent cancellation did not settle durably: ${cancelledSubagent.state}`)
     const persistedSubagent = await eventually(async () => {
-      const task = (await client.session.subagent.list({ parentID: subagentParent.id })).find(
+      const task = (await client.session.subagent.list({ parentID: subagentParent.id })).data.find(
         (item) => item.sessionID === launchedSubagent.sessionID,
       )
       return task?.state === "cancelled" ? task : undefined

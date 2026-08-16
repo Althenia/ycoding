@@ -49,8 +49,15 @@ function feed() {
   }
 }
 
-function ok<T>(data: T) {
+function ok(data: { data: MessageListOutput; cursor: unknown }): Promise<MessageListOutput>
+function ok<T>(data: T): Promise<T>
+function ok(data: unknown) {
+  if (isMessagePage(data)) return Promise.resolve(data.data)
   return Promise.resolve(data)
+}
+
+function isMessagePage(data: unknown): data is { data: MessageListOutput; cursor: unknown } {
+  return typeof data === "object" && data !== null && "data" in data && "cursor" in data
 }
 
 function defer<T = void>() {
@@ -96,7 +103,7 @@ function footer() {
   return createFooterApiFixture()
 }
 
-type SessionMessages = MessageListOutput["data"]
+type SessionMessages = MessageListOutput
 
 function form(id: string, sessionID: string, title = id): FormInfo {
   return {
@@ -132,8 +139,8 @@ function sdk(input: {
   let subscription = 0
   spyOn(client.event, "subscribe").mockImplementation(() => input.streams[subscription++]?.stream ?? feed().stream)
   spyOn(client.message, "list").mockImplementation((request) =>
-    ok({
-      data: input.messages?.[request.sessionID] ?? [
+    ok(
+      input.messages?.[request.sessionID] ?? [
         {
           id: "msg_old",
           type: "user" as const,
@@ -143,8 +150,7 @@ function sdk(input: {
           time: { created: 1 },
         },
       ],
-      cursor: {},
-    }),
+    ),
   )
   spyOn(client.permission, "list").mockImplementation((request) => ok(input.permissions?.[request.sessionID] ?? []))
   spyOn(client.form, "list").mockImplementation((request) => ok(input.forms?.[request.sessionID] ?? []))
@@ -960,8 +966,7 @@ describe("V2 mini transport", () => {
       if (request.sessionID !== "ses_1") return ok({ data: [], cursor: {} })
       replacementHydrating = true
       await hydration
-      return ok({
-        data: [
+      return ok([
           {
             id: "msg_assistant",
             type: "assistant",
@@ -970,9 +975,7 @@ describe("V2 mini transport", () => {
             content: [{ type: "text", text: "partial replacement" }],
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      })
+      ])
     })
     const current: YCodingClient[] = []
     const ui = footer()
@@ -3110,8 +3113,7 @@ describe("V2 mini transport", () => {
         return ok({ data: [], cursor: {} })
       }
       await retry
-      return ok({
-        data: [
+      return ok([
           {
             id: "msg_overflow_assistant",
             type: "assistant" as const,
@@ -3128,9 +3130,7 @@ describe("V2 mini transport", () => {
             agents: [],
             time: { created: 1 },
           },
-        ],
-        cursor: {},
-      })
+      ])
     })
     const ui = footer()
     const transport = await createSessionTransport({

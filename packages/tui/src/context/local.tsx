@@ -55,7 +55,7 @@ export function recentModels(model: ModelPreferenceModel, recent: ModelPreferenc
     .map((item) => ({ providerID: item.providerID, modelID: item.modelID }))
 }
 
-export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
+export const { use: useLocal, provider: LocalProvider, context: LocalContext } = createSimpleContext({
   name: "Local",
   init: () => {
     const data = useData()

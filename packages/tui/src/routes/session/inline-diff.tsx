@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
-import { createMemo, For, Show } from "solid-js"
-import { useTheme } from "../../context/theme"
 import { TextAttributes } from "@opentui/core"
 import { parsePatch } from "diff"
+import { createMemo, For, Show } from "solid-js"
+import { useTheme } from "../../context/theme"
 
 type InlineDiffLine = { kind: "added" | "removed" | "context"; line: string; lineNum: string }
 
@@ -39,6 +39,7 @@ export function InlineDiff(props: {
   diff: string
   additions?: number
   deletions?: number
+  wrapMode?: "word" | "none"
 }) {
   const { themeV2 } = useTheme()
 
@@ -58,33 +59,46 @@ export function InlineDiff(props: {
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingTop={2} paddingBottom={3} gap={1} flexShrink={0}>
-      <text wrapMode="none" fg={themeV2.text.default}>
-        <span style={{ fg: themeV2.text.default }}>{path()}</span>
+      <box width="100%" flexDirection="row">
+        <text width={55} flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.default}>
+          {path()}
+        </text>
         <Show when={additions() > 0}>
-          <span style={{ fg: themeV2.diff.text.added, attributes: TextAttributes.BOLD }}>
-            {"                    "}+{additions()}
-          </span>
+          <text flexShrink={0} fg={themeV2.diff.text.added} attributes={TextAttributes.BOLD}>
+            +{additions()}
+          </text>
         </Show>
+        <box width={3} flexShrink={0} />
         <Show when={deletions() > 0}>
-          <span style={{ fg: themeV2.diff.text.removed, attributes: TextAttributes.BOLD }}>
-            {"   "}−{deletions()}
-          </span>
+          <text flexShrink={0} fg={themeV2.diff.text.removed} attributes={TextAttributes.BOLD}>
+            −{deletions()}
+          </text>
         </Show>
-      </text>
+      </box>
       <For each={hunkLines()}>
         {(item) => (
-          <text wrapMode="none" fg={
-            item.kind === "added"
-              ? themeV2.diff.text.added
-              : item.kind === "removed"
-                ? themeV2.diff.text.removed
-                : themeV2.diff.text.context
-          }>
+          <text
+            wrapMode={props.wrapMode ?? "none"}
+            fg={
+              item.kind === "added"
+                ? themeV2.diff.text.added
+                : item.kind === "removed"
+                  ? themeV2.diff.text.removed
+                  : themeV2.diff.text.context
+            }
+          >
             {"  "}
-            <span style={{
-              fg: themeV2.diff.lineNumber.text,
-              bg: item.kind === "added" ? themeV2.diff.lineNumber.background.added : item.kind === "removed" ? themeV2.diff.lineNumber.background.removed : themeV2.diff.background.context,
-            }}>
+            <span
+              style={{
+                fg: themeV2.diff.lineNumber.text,
+                bg:
+                  item.kind === "added"
+                    ? themeV2.diff.lineNumber.background.added
+                    : item.kind === "removed"
+                      ? themeV2.diff.lineNumber.background.removed
+                      : themeV2.diff.background.context,
+              }}
+            >
               {item.lineNum.slice(0, 6)}
             </span>
             {"  "}

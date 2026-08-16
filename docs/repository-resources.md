@@ -416,6 +416,8 @@ Do not create `.ycoding/hooks.json`, `.ycoding/hooks/`, or a top-level `hooks` c
 
 YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
 
+The built-in `conversation_summarize` tool explicitly summarizes history through an existing boundary message. It validates a TOON checkpoint before atomically replacing only covered message-producing event history; it is always registered and is never triggered automatically.
+
 Custom tools must be supplied through:
 
 1. a YCoding plugin using the Tool domain;

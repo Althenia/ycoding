@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DateTime, Schema } from "effect"
 import {
   AbsolutePath,
   Agent,
@@ -49,6 +50,7 @@ describe("public event manifest", () => {
     expect(Workspace.Event).toBe(WorkspaceEvent)
     expect(Workspace.Event.Definitions).toBe(WorkspaceEvent.Definitions)
     expect(EventManifest.Latest.get("session.created")).toBe(SessionEvent.Created)
+    expect(EventManifest.Latest.get("session.input.consumed")).toBe(SessionEvent.InputConsumed)
     expect(EventManifest.Latest.get("session.step.ended")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Latest.get("agent.updated")).toBe(Agent.Event.Updated)
     expect(EventManifest.Latest.get("project.updated")).toBe(Project.Event.Updated)
@@ -103,6 +105,7 @@ describe("public event manifest", () => {
         "session.forked.2",
         "session.input.promoted.1",
         "session.input.admitted.1",
+        "session.input.consumed.1",
         "session.execution.started.1",
         "session.execution.succeeded.1",
         "session.execution.failed.1",
@@ -222,5 +225,33 @@ describe("public event manifest", () => {
 
     expect(SessionEvent.Deleted.data.make({ sessionID })).toEqual({ sessionID })
     expect(SessionEvent.Deleted.durable?.version).toBe(2)
+  })
+
+  test("decodes exact consumed input IDs and keeps historical user messages compatible", () => {
+    const sessionID = SessionID.make("ses_receipt")
+    const inputIDs = [SessionMessage.ID.make("msg_first"), SessionMessage.ID.make("msg_second")] as const
+
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.InputConsumed.data)({
+        sessionID,
+        inputIDs,
+      }),
+    ).toEqual({ sessionID, inputIDs })
+
+    const historical = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: "msg_historical",
+      type: "user",
+      text: "Historical prompt",
+      time: { created: 1 },
+    })
+    const consumed = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: "msg_consumed",
+      type: "user",
+      text: "Consumed prompt",
+      time: { created: 1, consumed: 2 },
+    })
+
+    expect(historical.time.consumed).toBeUndefined()
+    expect(DateTime.toEpochMillis(consumed.time.consumed!)).toBe(2)
   })
 })

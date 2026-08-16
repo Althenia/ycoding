@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { Global } from "@ycoding-ai/core/global"
+import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { mkdir, rm } from "node:fs/promises"
 import path from "path"
 import { renderScreen } from "./harness"
@@ -115,13 +116,11 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     expect(hints).toBeLessThan(footer)
 
     if (viewport.width === DESIGN_VIEWPORT.width) {
-      const heroMark = lines.findIndex((line, index) => index > 3 && line.includes("y. ycoding"))
       const heading = lines.findIndex((line) => line.includes("What should we build?"))
       const description = lines.findIndex((line) => line.includes("Describe a goal, paste an error"))
       const headerRow = lines.findIndex((line) => line.includes("ready"))
 
       expect(headerRow).toBe(1)
-      expect(heroMark).toBe(26)
       expect(heading).toBe(29)
       expect(description).toBe(32)
       expect(rule).toBe(57)
@@ -129,7 +128,7 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
       expect(hints).toBe(61)
       expect(footer).toBe(67)
       expect(header.indexOf("y. ycoding")).toBe(3)
-      expect(header.indexOf("~/landing") - (header.indexOf("y. ycoding") + "y. ycoding".length)).toBe(6)
+      expect(header.indexOf("~/landing") - (header.indexOf("y. ycoding") + `y. ycoding v${InstallationVersion}`.length)).toBe(6)
       expect(viewport.width - header.trimEnd().length).toBe(3)
       expect(lines[footer]?.indexOf("main")).toBe(3)
       expect(lines[footer]?.indexOf("goal off")! - (lines[footer]?.indexOf("main")! + "main".length)).toBe(3)
@@ -146,7 +145,8 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     }
 
     // Every hero line is centred on the frame independently, not left-aligned in a block.
-    for (const hero of ["y. ycoding", "What should we build?", "Describe a goal, paste an error"]) {
+    // The native bitmap mark deliberately replaces the frozen text wordmark; it has no stable glyph frame.
+    for (const hero of ["What should we build?", "Describe a goal, paste an error"]) {
       const line = lines.slice(rule < 0 ? 0 : 0, rule).find((candidate) => candidate.includes(hero))
       expect(line).toBeDefined()
       if (!line) continue

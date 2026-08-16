@@ -61,6 +61,55 @@ describe("ClaudeUsage", () => {
     })
   })
 
+  test("skips inactive OAuth buckets reported as null", () => {
+    const snapshot = ClaudeUsage.normalizeOAuth({
+      providerID,
+      label: "Claude",
+      updatedAt: 100,
+      response: {
+        five_hour: { utilization: 14, resets_at: "2026-08-01T16:10:00Z" },
+        seven_day: { utilization: 76, resets_at: "2026-08-04T18:00:00Z" },
+        seven_day_oauth_apps: null,
+        seven_day_opus: null,
+        seven_day_sonnet: null,
+        extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
+      },
+    })
+
+    expect(snapshot.status).toBe("available")
+    expect(snapshot.windows.map((window) => window.id)).toEqual(["five-hour", "seven-day"])
+  })
+
+  test("adds scoped model lanes reported through the limits array", () => {
+    const snapshot = ClaudeUsage.normalizeOAuth({
+      providerID,
+      label: "Claude",
+      updatedAt: 100,
+      response: {
+        five_hour: { utilization: 14, resets_at: "2026-08-01T16:10:00Z" },
+        seven_day: { utilization: 76, resets_at: "2026-08-04T18:00:00Z" },
+        seven_day_opus: null,
+        limits: [
+          { kind: "session", group: "session", percent: 14, resets_at: "2026-08-01T16:10:00Z", scope: null },
+          { kind: "weekly_all", group: "weekly", percent: 76, resets_at: "2026-08-04T18:00:00Z", scope: null },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 0,
+            resets_at: null,
+            scope: { model: { id: null, display_name: "Fable" }, surface: null },
+          },
+        ],
+      },
+    })
+
+    expect(snapshot.windows).toMatchObject([
+      { id: "five-hour", label: "Session", used: 14 },
+      { id: "seven-day", label: "All models", used: 76 },
+      { id: "seven-day-fable", label: "Fable weekly", used: 0 },
+    ])
+  })
+
   test("lets newer live headers replace overlapping OAuth windows", () => {
     const oauth = ClaudeUsage.normalizeOAuth({
       providerID,

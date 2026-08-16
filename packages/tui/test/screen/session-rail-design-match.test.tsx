@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
+import { railWidth } from "../../src/routes/session/rail"
 import { json } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "./harness"
@@ -69,7 +70,7 @@ function route(url: URL) {
     return json({
       data: {
         model: { providerID: "anthropic", id: "claude-opus-5" },
-        context: { total: 1_464, percent: 56 },
+        context: { total: 1_464, limit: 200_000, percent: 56 },
         tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 220_672, cacheWrite: 4_096 },
         cache: {
           eligible: 220_672,
@@ -129,33 +130,33 @@ async function expectRailDesign(viewport: typeof DESIGN_VIEWPORT) {
       await Bun.sleep(20)
     }
     const lines = screen.lines()
-    const railStart = viewport.width - 50
+    const railStart = viewport.width - railWidth(viewport.width)
 
-    expect(lines[4]?.indexOf("−")).toBe(railStart + 7)
-    expect(lines[4]?.indexOf("SESSION")).toBe(railStart + 10)
+    expect(lines[4]?.indexOf("−") - railStart).toBe(3)
+    expect(lines[4]?.indexOf("SESSION") - railStart).toBe(6)
     const rowOf = (label: string) => lines.findIndex((line) => line.includes(label))
     expect(rowOf("Provider cache audit")).toBe(7)
-    expect(rowOf("ses_rail_desi…")).toBe(9)
-    expect(rowOf("CONTEXT")).toBe(12)
-    const input = rowOf("Input")
-    expect(input).toBe(15)
-    expect(rowOf("Output")).toBe(17)
-    expect(rowOf("Used")).toBe(19)
-    expect(rowOf("Spent")).toBe(21)
-    expect(rowOf("CACHE")).toBe(25)
-    expect(rowOf("Hit ratio")).toBe(27)
-    expect(rowOf("Prefix")).toBe(28)
-    expect(rowOf("Reads")).toBe(30)
-    expect(rowOf("Writes")).toBe(32)
+    expect(lines[9]?.slice(railStart)).not.toContain("ses_")
+    expect(rowOf("CONTEXT")).toBe(10)
+    expect(rowOf("Model")).toBe(12)
+    expect(rowOf("Context")).toBe(13)
+    const cache = rowOf("Cache")
+    expect(cache).toBe(14)
+    expect(rowOf("SPEND")).toBe(16)
+    expect(rowOf("Total")).toBe(17)
+    expect(rowOf("CACHE")).toBe(19)
+    expect(rowOf("Prefix")).toBe(20)
+    expect(rowOf("Reads")).toBe(21)
+    expect(rowOf("Writes")).toBe(22)
     expect(rowOf("TODO LIST")).toBe(-1)
     expect(rowOf("SUBAGENTS")).toBe(-1)
     expect(rowOf("SHELLS")).toBe(-1)
     expect(rowOf("SKILLS")).toBe(-1)
     expect(rowOf("MCP")).toBe(-1)
     expect(rowOf("PLUGINS")).toBe(-1)
-    const inputEnd = (lines[input]?.indexOf("1,411") ?? -Infinity) + "1,411".length
-    expect(inputEnd).toBeGreaterThanOrEqual(viewport.width - 4)
-    expect(inputEnd).toBeLessThanOrEqual(viewport.width - 3)
+    const cacheEnd = (lines[cache]?.indexOf("71%") ?? -Infinity) + "71%".length
+    expect(cacheEnd).toBeGreaterThanOrEqual(viewport.width - 4)
+    expect(cacheEnd).toBeLessThanOrEqual(viewport.width - 3)
   } finally {
     await screen.dispose()
   }

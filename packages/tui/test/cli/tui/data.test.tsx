@@ -64,6 +64,19 @@ function durable(sessionID: string, seq = 0, version = 1) {
   return { aggregateID: sessionID, seq, version }
 }
 
+function subagentPage(data: SessionOrchestrationTask[], cursor: { previous?: string; next?: string } = {}) {
+  return {
+    data,
+    summary: {
+      total: data.length,
+      active: data.filter((task) => ["starting", "running", "waiting", "cancelling"].includes(task.state)).length,
+      running: data.filter((task) => task.state === "running").length,
+      waiting: data.filter((task) => task.state === "waiting").length,
+    },
+    cursor,
+  }
+}
+
 test("preloads root sessions before applying the session limit", async () => {
   const events = createEventStream()
   let request: URL | undefined
@@ -279,7 +292,7 @@ test("refreshes resources into reactive getters", async () => {
     await data.location.agent.sync()
 
     expect(data.session.get("ses_test")?.title).toBe("Test session")
-    expect(data.session.message.list("ses_test").map((message) => message.id)).toEqual(["msg_first", "msg_second"])
+    expect(data.session.message.list("ses_test").map((message) => message.id)).toEqual(["msg_second", "msg_first"])
     expect(data.session.message.get("ses_test", "msg_second")?.id).toBe("msg_second")
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("msg_second")
@@ -677,6 +690,167 @@ test("restores running manual compaction before applying live deltas", async () 
   }
 })
 
+test("replaces resident history after conversation summarization succeeds", async () => {
+  const events = createEventStream()
+  const sessionID = "session-conversation-summary"
+  let compacted = false
+  let messageRequests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname !== `/api/session/${sessionID}/message`) return undefined
+    messageRequests++
+    return json({
+      data: compacted
+        ? [
+            {
+              id: "message-summary",
+              type: "compaction",
+              status: "completed",
+              reason: "manual",
+              summary: "Summary A",
+              recent: "",
+              time: { created: 2 },
+            },
+            {
+              id: "message-recent",
+              type: "user",
+              text: "Recent message",
+              files: [],
+              agents: [],
+              time: { created: 3 },
+            },
+          ]
+        : [
+            {
+              id: "message-old",
+              type: "user",
+              text: "Covered message",
+              files: [],
+              agents: [],
+              time: { created: 1 },
+            },
+            {
+              id: "message-recent",
+              type: "user",
+              text: "Recent message",
+              files: [],
+              agents: [],
+              time: { created: 3 },
+            },
+          ],
+      cursor: {},
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await data.session.message.sync(sessionID)
+    expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual([
+      "message-old",
+      "message-recent",
+    ])
+
+    emitEvent(events, {
+      id: "evt_summary_step_started",
+      created: 4,
+      type: "session.step.started",
+      durable: durable(sessionID, 4),
+      data: {
+        sessionID,
+        assistantMessageID: "message-assistant",
+        agent: "build",
+        model: { id: "model", providerID: "provider" },
+      },
+    })
+    emitEvent(events, {
+      id: "evt_summary_tool_started",
+      created: 5,
+      type: "session.tool.input.started",
+      durable: durable(sessionID, 5),
+      data: {
+        sessionID,
+        assistantMessageID: "message-assistant",
+        callID: "call-summary",
+        name: "conversation_summarize",
+      },
+    })
+    emitEvent(events, {
+      id: "evt_summary_tool_called",
+      created: 6,
+      type: "session.tool.called",
+      durable: durable(sessionID, 6),
+      data: {
+        sessionID,
+        assistantMessageID: "message-assistant",
+        callID: "call-summary",
+        input: { boundary_message_id: "message-old" },
+        executed: true,
+      },
+    })
+    await wait(() => {
+      const assistant = data.session.message.get(sessionID, "message-assistant")
+      return (
+        assistant?.type === "assistant" &&
+        assistant.content[0]?.type === "tool" &&
+        assistant.content[0].state.status === "running"
+      )
+    })
+
+    compacted = true
+    emitEvent(events, {
+      id: "evt_summary_tool_succeeded",
+      created: 7,
+      type: "session.tool.success",
+      durable: durable(sessionID, 7),
+      data: {
+        sessionID,
+        assistantMessageID: "message-assistant",
+        callID: "call-summary",
+        structured: {
+          summary_message_id: "message-summary",
+          provider: "provider",
+          model: "model",
+          summarized_through_sequence: 1,
+          deleted_count: 1,
+          remaining_count: 3,
+          summary_revision: 1,
+          context_rebuild_required: true,
+        },
+        content: [],
+        executed: true,
+      },
+    })
+
+    await wait(() => messageRequests === 2)
+    await wait(() => data.session.message.get(sessionID, "message-summary") !== undefined)
+    expect(data.session.message.list(sessionID).map((message) => message.id)).toEqual([
+      "message-summary",
+      "message-recent",
+      "message-assistant",
+    ])
+    expect(data.session.message.get(sessionID, "message-old")).toBeUndefined()
+    expect(data.session.message.memory(sessionID).counts.messages).toBe(3)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("reconnects the event stream and resyncs active data", async () => {
   const events = createEventStream()
   const requests = { active: 0, event: 0, message: 0, model: 0 }
@@ -809,9 +983,11 @@ test("completes exploration when a queued prompt is promoted", async () => {
   }, events)
   let rows!: ReturnType<typeof createSessionRows>
   let client!: ReturnType<typeof useClient>
+  let data!: ReturnType<typeof useData>
 
   function Probe() {
     client = useClient()
+    data = useData()
     rows = createSessionRows(() => sessionID)
     return <box />
   }
@@ -879,6 +1055,18 @@ test("completes exploration when a queued prompt is promoted", async () => {
     })
     await wait(() => rows.find((row) => row.type === "group")?.completed === true)
     expect(rows.at(-1)).toEqual({ type: "message", messageID: "message-user" })
+
+    emitEvent(events, {
+      id: "evt_prompt_consumed",
+      created: 5,
+      type: "session.input.consumed",
+      durable: durable(sessionID, 4),
+      data: { sessionID, inputIDs: ["message-user"] },
+    })
+    await wait(() => {
+      const message = data.session.message.get(sessionID, "message-user")
+      return message?.type === "user" && message.time.consumed === 5
+    })
   } finally {
     app.renderer.destroy()
   }
@@ -3297,7 +3485,7 @@ test("syncs durable subagent tasks and refreshes them from task events", async (
   const calls = createFetch((url) => {
     if (url.pathname !== "/api/session/ses_parent/subagent") return undefined
     requests++
-    return json({ data: [task()] })
+    return json(subagentPage([task()]))
   }, events)
   let data!: ReturnType<typeof useData>
 
@@ -3320,7 +3508,7 @@ test("syncs durable subagent tasks and refreshes them from task events", async (
 
   try {
     await data.session.subagent.sync("ses_parent")
-    const waiting = data.session.subagent.list("ses_parent")[0]
+    const waiting = data.session.subagent.page("ses_parent")?.data[0]
     expect(waiting?.sessionID).toBe("ses_child")
     expect(waiting?.state).toBe("waiting")
     expect(waiting?.question?.text).toBe("Proceed?")
@@ -3337,8 +3525,234 @@ test("syncs durable subagent tasks and refreshes them from task events", async (
       },
     })
 
-    await wait(() => data.session.subagent.list("ses_parent")[0]?.state === "failed")
+    await wait(() => data.session.subagent.page("ses_parent")?.data[0]?.state === "failed")
     expect(requests).toBe(2)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("replaces bounded subagent pages instead of appending them", async () => {
+  const events = createEventStream()
+  const tasks = Array.from({ length: 12 }, (_, index): SessionOrchestrationTask => ({
+    sessionID: `ses_child_${index}`,
+    parentID: "ses_parent",
+    description: `Child ${index}`,
+    agent: "reviewer",
+    model: { providerID: "openai", id: "gpt-5.6" },
+    background: true,
+    state: index === 0 ? "waiting" : "completed",
+    revision: index,
+    time: { created: index, updated: 12 - index },
+  }))
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/session/ses_parent/subagent") return undefined
+    if (url.searchParams.get("cursor") === "older")
+      return json({ data: tasks.slice(10), summary: { total: 12, active: 1, running: 0, waiting: 1 }, cursor: { previous: "top" } })
+    if (url.searchParams.get("cursor") === "top")
+      return json({ data: tasks.slice(0, 10), summary: { total: 12, active: 1, running: 0, waiting: 1 }, cursor: { next: "older" } })
+    return json({ data: tasks.slice(0, 10), summary: { total: 12, active: 1, running: 0, waiting: 1 }, cursor: { next: "older" } })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await data.session.subagent.sync("ses_parent")
+    const top = data.session.subagent.page("ses_parent")!
+    expect({
+      data: [...top.data],
+      summary: { ...top.summary },
+      cursor: { ...top.cursor },
+      offset: top.offset,
+      position: top.position,
+    }).toEqual({
+      data: tasks.slice(0, 10),
+      summary: { total: 12, active: 1, running: 0, waiting: 1 },
+      cursor: { next: "older" },
+      position: "top",
+      offset: 0,
+    })
+    await data.session.subagent.loadOlder("ses_parent")
+    const older = data.session.subagent.page("ses_parent")!
+    expect({
+      data: [...older.data],
+      summary: { ...older.summary },
+      cursor: { ...older.cursor },
+      offset: older.offset,
+      position: older.position,
+    }).toEqual({
+      data: tasks.slice(10),
+      summary: { total: 12, active: 1, running: 0, waiting: 1 },
+      cursor: { previous: "top" },
+      position: "older",
+      offset: 10,
+    })
+    expect(older.data).toHaveLength(2)
+    expect(
+      older.offset + older.data.findIndex((task) => task.sessionID === "ses_child_11") + 1,
+    ).toBe(12)
+    await data.session.subagent.loadNewer("ses_parent")
+    const newer = data.session.subagent.page("ses_parent")!
+    expect({
+      data: [...newer.data],
+      summary: { ...newer.summary },
+      cursor: { ...newer.cursor },
+      offset: newer.offset,
+      position: newer.position,
+    }).toEqual({
+      data: tasks.slice(0, 10),
+      summary: { total: 12, active: 1, running: 0, waiting: 1 },
+      cursor: { next: "older" },
+      position: "top",
+      offset: 0,
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("resolves an evicted task parent before restoring its top page", async () => {
+  const events = createEventStream()
+  let page = 0
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_evicted") return json({ data: sessionInfo("ses_evicted", "ses_parent") })
+    if (url.pathname !== "/api/session/ses_parent/subagent") return undefined
+    page++
+    return json({
+      data:
+        page === 1
+          ? Array.from({ length: 10 }, (_, index) => ({
+              sessionID: `ses_terminal_${index}`,
+              parentID: "ses_parent",
+              description: `Terminal ${index}`,
+              agent: "reviewer",
+              model: { providerID: "openai", id: "gpt-5.6" },
+              background: true,
+              state: "completed" as const,
+              revision: index,
+              time: { created: index, updated: index },
+            }))
+          : [
+              {
+                sessionID: "ses_evicted",
+                parentID: "ses_parent",
+                description: "Needs input",
+                agent: "reviewer",
+                model: { providerID: "openai", id: "gpt-5.6" },
+                background: true,
+                state: "waiting" as const,
+                question: { id: "qst_evicted", text: "Proceed?", time: 2 },
+                revision: 2,
+                time: { created: 2, updated: 2 },
+              },
+            ],
+      summary: { total: 11, active: 1, running: 0, waiting: 1 },
+      cursor: { next: "older" },
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await data.session.subagent.sync("ses_parent")
+    emitEvent(events, {
+      id: "evt_evicted_waiting",
+      created: 2,
+      type: "session.task.updated",
+      durable: durable("ses_evicted", 2),
+      data: {
+        sessionID: "ses_evicted",
+        change: { type: "question_asked", question: { id: "qst_evicted", text: "Proceed?", time: 2 } },
+      },
+    })
+    await wait(() => data.session.subagent.page("ses_parent")?.data[0]?.sessionID === "ses_evicted")
+    expect(data.session.get("ses_evicted")).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps a refreshed top page when an older request settles late", async () => {
+  const events = createEventStream()
+  let release!: () => void
+  const older = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let requests = 0
+  const calls = createFetch(async (url) => {
+    if (url.pathname !== "/api/session/ses_parent/subagent") return undefined
+    requests++
+    if (url.searchParams.get("cursor") === "older") {
+      await older
+      return json({ data: [], summary: { total: 11, active: 1, running: 1, waiting: 0 }, cursor: { previous: "top" } })
+    }
+    return json({
+      data: [{ sessionID: `ses_top_${requests}`, parentID: "ses_parent", description: "top", agent: "reviewer", model: { providerID: "openai", id: "gpt-5.6" }, background: true, state: "running", revision: requests, time: { created: requests, updated: requests } }],
+      summary: { total: 11, active: 1, running: 1, waiting: 0 },
+      cursor: { next: "older" },
+    })
+  }, events)
+  let data!: ReturnType<typeof useData>
+
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await data.session.subagent.sync("ses_parent")
+    const pendingOlder = data.session.subagent.loadOlder("ses_parent")
+    await wait(() => requests === 2)
+    await data.session.subagent.sync("ses_parent")
+    release()
+    await pendingOlder
+    expect(data.session.subagent.page("ses_parent")?.position).toBe("top")
+    expect(data.session.subagent.page("ses_parent")?.offset).toBe(0)
+    expect(data.session.subagent.page("ses_parent")?.data[0]?.sessionID).toBe("ses_top_3")
   } finally {
     app.renderer.destroy()
   }
@@ -3444,7 +3858,7 @@ test("rehydrates durable subagent tasks for active families when the stream conn
     if (url.pathname === "/api/session/ses_child") return json({ data: sessionInfo("ses_child", "ses_parent") })
     if (url.pathname === "/api/session/ses_parent/subagent") {
       requests++
-      return json({ data: [task] })
+      return json(subagentPage([task]))
     }
   }, events)
   let data!: ReturnType<typeof useData>
@@ -3467,8 +3881,9 @@ test("rehydrates durable subagent tasks for active families when the stream conn
   ))
 
   try {
-    await wait(() => data.session.subagent.list("ses_parent").length === 1)
-    expect(data.session.subagent.list("ses_parent")[0]?.state).toBe("waiting")
+    await wait(() => requests === 1)
+    await wait(() => data.session.subagent.page("ses_parent")?.data.length === 1)
+    expect(data.session.subagent.page("ses_parent")?.data[0]?.state).toBe("waiting")
     expect(requests).toBe(1)
   } finally {
     app.renderer.destroy()
@@ -3538,10 +3953,10 @@ test("refetches durable subagent tasks changed during an in-flight sync", async 
     if (url.pathname === "/api/session/ses_child") return new Promise<Response>(() => {})
     if (url.pathname !== "/api/session/ses_parent/subagent") return undefined
     requests++
-    if (requests > 1) return json({ data: [task()] })
+    if (requests > 1) return json(subagentPage([task()]))
     const snapshot = task()
     await gate
-    return json({ data: [snapshot] })
+    return json(subagentPage([snapshot]))
   }, events)
   let data!: ReturnType<typeof useData>
 
@@ -3602,18 +4017,18 @@ test("refetches durable subagent tasks changed during an in-flight sync", async 
     })
     await wait(() => data.session.status("ses_child") === "running")
     expect(data.session.get("ses_child")?.parentID).toBe("ses_parent")
-    expect(requests).toBe(1)
+    await wait(() => requests === 2)
 
     state = "completed"
     release()
     await first
-    expect(data.session.subagent.list("ses_parent")[0]?.state).toBe("running")
+    expect(data.session.subagent.page("ses_parent")?.data[0]?.state).toBe("running")
 
-    // The change landed while the list was in flight, so the cached list is
-    // stale and the next read must refetch instead of resolving from cache.
+    // The task event restored the top page while the first request was in
+    // flight. The stale response cannot replace that newer page.
     await data.session.subagent.sync("ses_parent")
-    expect(requests).toBe(2)
-    expect(data.session.subagent.list("ses_parent")[0]?.state).toBe("completed")
+    expect(requests).toBe(3)
+    expect(data.session.subagent.page("ses_parent")?.data[0]?.state).toBe("completed")
   } finally {
     app.renderer.destroy()
   }

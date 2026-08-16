@@ -107,9 +107,12 @@ test("mounts provider usage as a command and removes the sidebar builtin", async
 })
 
 test("renders provider progress and unavailable states in a dedicated dialog", async () => {
-  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
+    import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"),
+    import("../../../src/ui/toast"),
   ])
   const snapshots: Snapshot[] = [
     {
@@ -167,9 +170,15 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ProviderUsageDialogContent snapshots={() => snapshots} diagnostics={() => diagnostics} now={() => 1_000} />
-          </ThemeProvider>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <ProviderUsageDialogContent snapshots={() => snapshots} diagnostics={() => diagnostics} now={() => 1_000} />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
         </ConfigProvider>
       </TestTuiContexts>
     ),
@@ -213,9 +222,12 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
 })
 
 test("renders unavailable local pricing without inventing zero cost", async () => {
-  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
+    import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"),
+    import("../../../src/ui/toast"),
   ])
   const diagnostics = {
     model: { id: "custom", providerID: "custom" },
@@ -235,9 +247,15 @@ test("renders unavailable local pricing without inventing zero cost", async () =
     () => (
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
-          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <ProviderUsageDialogContent snapshots={() => []} diagnostics={() => diagnostics} />
-          </ThemeProvider>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <ProviderUsageDialogContent snapshots={() => []} diagnostics={() => diagnostics} />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
         </ConfigProvider>
       </TestTuiContexts>
     ),

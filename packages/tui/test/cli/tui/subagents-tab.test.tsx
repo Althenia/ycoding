@@ -21,7 +21,13 @@ function findScrollBox(root: Renderable): ScrollBoxRenderable | undefined {
   return root.getChildren().map(findScrollBox).find(Boolean)
 }
 
-async function renderMetadata(input: { model?: string; status?: string; width?: number }) {
+async function renderMetadata(input: {
+  model?: string
+  status?: string
+  cacheHit?: string
+  elapsed?: string
+  width?: number
+}) {
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -32,11 +38,17 @@ async function renderMetadata(input: { model?: string; status?: string; width?: 
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <box flexDirection="row">
+            <box flexDirection="column">
               <box flexGrow={1}>
                 <text>Task</text>
               </box>
-              <module.SubagentMetadata model={input.model} status={input.status} active={false} />
+              <module.SubagentMetadata
+                model={input.model}
+                cacheHit={input.cacheHit}
+                elapsed={input.elapsed}
+                status={input.status}
+                active={false}
+              />
             </box>
           </ThemeProvider>
         </ConfigProvider>
@@ -58,8 +70,10 @@ test("formats provider, model, and optional variant", () => {
     }),
   ).toBe("openai/gpt-5.6-luna#high")
   expect(module.formatSubagentModel({ providerID: "openai", id: "gpt-5.6-sol" })).toBe("openai/gpt-5.6-sol")
-  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-sonnet-5" })).toBe("Sonnet 5")
-  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe("Haiku 4.5")
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-sonnet-5", variant: "max" })).toBe(
+    "anthropic/claude-sonnet-5#max",
+  )
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe("anthropic/claude-haiku-4-5")
   expect(module.formatSubagentModel(undefined)).toBeUndefined()
   expect(module.formatSubagentCacheHit(undefined)).toBe("—")
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
@@ -279,21 +293,20 @@ test("cancels waiting managed tasks through the durable endpoint", async () => {
   expect(interrupted).toBe(false)
 })
 
-test("renders model and running status on one row", async () => {
+test("renders model and running status on their own row under the title", async () => {
   const app = await renderMetadata({
     model: "openai/gpt-5.6-luna#high",
     status: "Running",
   })
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("openai/gpt-5.6-luna#high · Running")
-    expect(
-      frame
-        .split("\n")
-        .find((line) => line.includes("Running"))
-        ?.trimEnd()
-        .endsWith("Running"),
-    ).toBe(true)
+    const rows = frame.split("\n").map((line) => line.trimEnd())
+    const titleRow = rows.find((line) => line.includes("Task"))
+    const modelRow = rows.find((line) => line.includes("Running"))
+    expect(titleRow).toBeDefined()
+    expect(modelRow).toBeDefined()
+    expect(titleRow).not.toContain("openai/gpt-5.6-luna#high")
+    expect(modelRow?.trimEnd().endsWith("Running")).toBe(true)
   } finally {
     app.renderer.destroy()
   }
@@ -327,25 +340,20 @@ test("omits model metadata when the session has no model", async () => {
   }
 })
 
-test("clips a long model label while preserving running status", async () => {
-  const model = `provider/${"model".repeat(16)}#variant`
-  const app = await renderMetadata({ model, status: "Running", width: 48 })
+test("renders a long model id untruncated on its own row without colliding with telemetry", async () => {
+  const model = "openrouter/deepseek/deepseek-v4-flash-0731"
+  const app = await renderMetadata({
+    model,
+    status: "attached",
+    cacheHit: "100% hit",
+    elapsed: "12s",
+    width: 120,
+  })
   try {
     const frame = app.captureCharFrame()
-    expect(frame).not.toContain(model)
-    expect(frame).toContain(model.slice(0, 12))
-    const contentRows = frame.split("\n").filter((line) => line.trim().length > 0)
-    expect(contentRows).toHaveLength(1)
-    expect(contentRows[0]).toContain("Task")
-    expect(contentRows[0]).toContain(model.slice(0, 12))
-    expect(contentRows[0]).toContain("Running")
-    expect(
-      frame
-        .split("\n")
-        .find((line) => line.includes("Running"))
-        ?.trimEnd()
-        .endsWith("Running"),
-    ).toBe(true)
+    expect(frame).toContain("openrouter/deepseek/deepseek-v4-flash-0731 · attached · 100% hit · 12s")
+    expect(frame).not.toContain("deepsee100%")
+    expect(frame).not.toContain("0730%")
   } finally {
     app.renderer.destroy()
   }
@@ -399,7 +407,12 @@ test("renders section headings while keyboard navigation selects only task rows 
     },
   ]
   const calls = createFetch((url) => {
-    if (url.pathname === "/api/session/ses_parent/subagent") return json({ data: tasks })
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({
+        data: tasks,
+        summary: { total: tasks.length, active: 2, running: 1, waiting: 1 },
+        cursor: {},
+      })
     return undefined
   })
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
@@ -452,7 +465,10 @@ test("renders section headings while keyboard navigation selects only task rows 
     const initial = app.captureCharFrame()
     expect(initial).toContain("ACTIVE")
     expect(initial).toContain("INACTIVE")
-    expect(initial).toContain("reviewer  · Review implementation")
+    // The title row spans the full panel width; the model identity renders on its own indented row
+    // below the title. Assert the agent identity and the surviving description head rather than a
+    // truncated run.
+    expect(initial).toContain("reviewer  · Rev")
     expect(initial).toContain("general  · Archive results")
     const sectionRoots = findScrollBox(app.renderer.root)?.getChildren() ?? []
     expect(sectionRoots).toHaveLength(2)

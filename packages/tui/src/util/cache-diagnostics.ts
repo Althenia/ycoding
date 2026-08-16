@@ -6,6 +6,14 @@ export function formatDiagnosticsModel(model: SessionCacheDiagnostics["model"] |
   return `${model.providerID}/${model.id}${model.variant ? `#${model.variant}` : ""}`
 }
 
+/**
+ * Rail context rows identify the measured model by id and variant. The provider is omitted because the
+ * rail is already scoped to one session and the row width is shared with a right-aligned value.
+ */
+export function contextModelLabel(model: SessionCacheDiagnostics["model"]) {
+  return `${model.id}${model.variant ? `#${model.variant}` : ""}`
+}
+
 export function cacheHitPercent(value: number | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? Math.round(value * 100) : undefined
 }

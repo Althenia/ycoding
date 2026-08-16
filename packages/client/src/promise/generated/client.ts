@@ -600,16 +600,17 @@ export function make(options: ClientOptions) {
         ),
       subagent: {
         list: (input: SessionSubagentListInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: SessionSubagentListOutput }>(
+          request<SessionSubagentListOutput>(
             {
               method: "GET",
               path: `/api/session/${encodeURIComponent(input.parentID)}/subagent`,
+              query: { limit: input["limit"], cursor: input["cursor"] },
               successStatus: 200,
               declaredStatuses: [404, 400, 401],
               empty: false,
             },
             requestOptions,
-          ).then((value) => value.data),
+          ),
         launch: (input: SessionSubagentLaunchInput, requestOptions?: RequestOptions) =>
           request<{ readonly data: SessionSubagentLaunchOutput }>(
             {
@@ -733,7 +734,7 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/model`,
             body: { model: input["model"] },
             successStatus: 204,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 409, 500, 400, 401],
             empty: true,
           },
           requestOptions,
@@ -1089,17 +1090,16 @@ export function make(options: ClientOptions) {
     },
     message: {
       list: (input: MessageListInput, requestOptions?: RequestOptions) =>
-        request<MessageListOutput>(
+        request<{ readonly data: MessageListOutput }>(
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/message`,
-            query: { limit: input["limit"], order: input["order"], cursor: input["cursor"] },
             successStatus: 200,
-            declaredStatuses: [400, 404, 500, 401],
+            declaredStatuses: [404, 500, 400, 401],
             empty: false,
           },
           requestOptions,
-        ),
+        ).then((value) => value.data),
     },
     model: {
       list: (input?: ModelListInput, requestOptions?: RequestOptions) =>

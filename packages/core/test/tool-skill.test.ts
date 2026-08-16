@@ -155,6 +155,8 @@ describe("SkillTool", () => {
                 get: unavailable,
                 launch: unavailable,
                 list: unavailable,
+                page: () =>
+                  Effect.succeed({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} }),
                 send: unavailable,
                 answer: unavailable,
                 cancel: unavailable,

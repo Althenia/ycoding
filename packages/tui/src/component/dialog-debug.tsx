@@ -1,18 +1,18 @@
-import { TextAttributes } from "@opentui/core"
-import { createMemo, createSignal, For } from "solid-js"
+import { createMemo, createSignal } from "solid-js"
 import { InstallationChannel, InstallationVersion } from "@ycoding-ai/core/installation/version"
-import { Keymap } from "../context/keymap"
-import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { useRoute } from "../context/route"
 import { useLocal } from "../context/local"
 import { useClipboard } from "../context/clipboard"
 import { useToast } from "../ui/toast"
 import { describeOS, describeTerminal } from "../util/system"
+import { DialogSelect } from "../ui/dialog-select"
+import { useRenderer } from "@opentui/solid"
+import { writeHeapSnapshot } from "node:v8"
 
 export function DialogDebug() {
-  const { themeV2 } = useTheme()
   const dialog = useDialog()
+  const renderer = useRenderer()
   const route = useRoute()
   const local = useLocal()
   const clipboard = useClipboard()
@@ -46,46 +46,60 @@ export function DialogDebug() {
       .catch(toast.error)
   }
 
-  Keymap.createLayer(() => ({
-    mode: "modal",
-    commands: [{ bind: "return", title: "Copy debug info", group: "Dialog", run: copy }],
-  }))
-
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
-          Debug
-        </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
-      </box>
-      {/* No click-to-copy here: releasing a mouse selection must trigger the
-          global copy-on-select so users can copy a single value, e.g. the session id. */}
-      <box>
-        <For each={entries()}>
-          {(entry) => (
-            <box flexDirection="row" gap={1}>
-              <text flexShrink={0} fg={themeV2.text.subdued}>
-                {entry.label.padEnd(10)}
-              </text>
-              <text fg={themeV2.text.default} wrapMode="word">
-                {entry.value}
-              </text>
-            </box>
-          )}
-        </For>
-      </box>
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg={themeV2.text.subdued}>Share this when reporting an issue.</text>
-        <text onMouseUp={copy}>
-          <span style={{ fg: copied() ? themeV2.text.feedback.success.default : themeV2.text.default }}>
-            <b>{copied() ? "✓ copied" : "copy"}</b>{" "}
-          </span>
-          <span style={{ fg: themeV2.text.subdued }}>enter</span>
-        </text>
-      </box>
-    </box>
+    <DialogSelect
+      title="Debug"
+      options={[
+        {
+          title: "Renderer stats",
+          category: "Panels",
+          value: "renderer",
+          onSelect: () => {
+            renderer.toggleDebugOverlay()
+            dialog.clear()
+          },
+        },
+        {
+          title: "Event log",
+          category: "Panels",
+          value: "events",
+          onSelect: () => {
+            renderer.console.toggle()
+            dialog.clear()
+          },
+        },
+        {
+          title: "Heap snapshot",
+          category: "Panels",
+          value: "heap",
+          onSelect: () => {
+            const file = writeHeapSnapshot()
+            toast.show({ message: `TUI heap snapshot written to ${file}`, variant: "info", duration: 5000 })
+            dialog.clear()
+          },
+        },
+        {
+          title: "Console",
+          category: "Panels",
+          value: "console",
+          onSelect: () => {
+            renderer.console.toggle()
+            dialog.clear()
+          },
+        },
+        ...entries().map((entry) => ({
+          title: entry.label,
+          description: entry.value,
+          category: "Information",
+          value: `info:${entry.label}`,
+        })),
+        {
+          title: copied() ? "Copied debug info" : "Copy debug info",
+          category: "Information",
+          value: "copy",
+          onSelect: copy,
+        },
+      ]}
+    />
   )
 }

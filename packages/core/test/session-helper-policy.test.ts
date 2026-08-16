@@ -43,14 +43,18 @@ test("helper policy reads independent role models", () => {
       helper_models: {
         title: "openai/gpt-5-mini#low",
         goal: "session",
-        compaction: "anthropic/claude-opus-5",
+        compaction: { main: "anthropic/claude-opus-5" },
       },
     },
   })
 
-  expect(settings([new Config.Document({ type: "document", info })]).models).toEqual({
-    title: ref("openai", "gpt-5-mini", "low"),
-    goal: "session",
-    compaction: ref("anthropic", "claude-opus-5"),
+  expect(settings([new Config.Document({ type: "document", info })])).toMatchObject({
+    models: {
+      title: ref("openai", "gpt-5-mini", "low"),
+      goal: "session",
+    },
+    compactionScopes: {
+      main: ref("anthropic", "claude-opus-5"),
+    },
   })
 })

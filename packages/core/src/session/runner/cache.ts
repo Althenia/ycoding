@@ -7,7 +7,7 @@ import type { PermissionV2 } from "../../permission"
 import { Hash } from "../../util/hash"
 
 export interface PromptCacheNamespaceInput {
-  readonly scope?: "compaction"
+  readonly scope?: "compaction" | "summarizer"
   readonly projectID: string
   readonly directory: string
   readonly workspaceID?: string
@@ -107,6 +107,7 @@ export const efficiencySettings = (input?: ConfigEfficiency.Info): EfficiencySet
 })
 
 export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
+  readonly apiModelID: string
   readonly sessionID: string
   readonly routeID: string
   readonly anthropicTtlSeconds?: 300 | 3600
@@ -134,7 +135,7 @@ export const providerOptions = (input: ProviderOptionsInput) => {
     input.routeID === "ai-sdk:@openrouter/ai-sdk-provider"
       ? { prompt_cache_key: promptCacheKey, session_id: providerSessionID }
       : { promptCacheKey, sessionID: providerSessionID }
-  const openaiCacheCapability = OpenAIOptions.publicPromptCacheCapability(input.routeID, input.modelID)
+  const openaiCacheCapability = OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID)
   const controlledOpenAI =
     openaiCacheCapability === "gpt-5.6" &&
     input.openaiMode !== undefined &&
@@ -151,7 +152,7 @@ export const providerOptions = (input: ProviderOptionsInput) => {
         }
       : openaiCacheCapability === "legacy" &&
           input.openaiExtendedRetention === true &&
-          OpenAIOptions.supportsExtendedPromptCacheRetention(input.modelID)
+          OpenAIOptions.supportsExtendedPromptCacheRetention(input.apiModelID)
         ? { promptCacheRetention: "24h" as const }
         : {}),
   }
@@ -159,7 +160,10 @@ export const providerOptions = (input: ProviderOptionsInput) => {
     ? {
         tools: false,
         system: true,
-        messages: input.openaiMode === "auto" ? "latest-user-message" : { tail: 3 },
+        // OpenAI currently documents conflicting 50- and 80-breakpoint read
+        // windows. Retain every stable conversation boundary and let the
+        // service choose its live read window and latest write candidates.
+        messages: { tail: Number.MAX_SAFE_INTEGER },
       }
     : input.anthropicTtlSeconds !== undefined && ANTHROPIC_CACHE_ROUTES.has(input.routeID)
       ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }

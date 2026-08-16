@@ -49,6 +49,8 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
+// provider-native/v6 retains every cacheable message boundary, which owns this stable namespace.
+const expectedPromptCacheKey = "8d3e4919c91105affdd6a7fb82a7624c101a613522110807a93fe10a3326cfbd"
 if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")
   HttpRecorder.removeCassetteSync(cassetteName, { directory: cassetteDirectory })
@@ -60,9 +62,11 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
     expected.messages[0].content = [expected.messages[0].content.trimEnd(), ProjectArtifactInstructions.content].join(
       "\n\n",
     )
-    expected.prompt_cache_key = "2fff2b3cee2a78e9b0dd8aa9ce55a03db47a341bf5f08c15520447075782f21e"
+    expected.prompt_cache_key = expectedPromptCacheKey
+    const incomingBody = JSON.parse(incoming.body)
     expect(incoming.headers).toEqual(recorded.headers)
-    expect(JSON.parse(incoming.body)).toEqual(expected)
+    expect(incomingBody.prompt_cache_key).toBe(expectedPromptCacheKey)
+    expect(incomingBody).toEqual(expected)
     return incoming.method === recorded.method && incoming.url === recorded.url
   },
 })
@@ -229,7 +233,12 @@ describe("SessionRunnerLLM recorded", () => {
 
       const messages = yield* session.context(sessionID)
       expect(messages).toHaveLength(2)
-      expect(messages[0]).toMatchObject({ id: prompt.id, type: "user", text: "Say hello in one short sentence." })
+      expect(messages[0]).toMatchObject({
+        id: prompt.id,
+        type: "user",
+        text: "Say hello in one short sentence.",
+        time: { consumed: expect.anything() },
+      })
       expect(messages[1]).toMatchObject({ type: "assistant", agent: "build", finish: "stop" })
       expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
@@ -245,6 +254,7 @@ describe("SessionRunnerLLM recorded", () => {
         "session.input.admitted.1",
         "session.instructions.updated.2",
         "session.input.promoted.1",
+        "session.input.consumed.1",
         "session.step.started.1",
         "session.text.started.1",
         "session.text.ended.1",

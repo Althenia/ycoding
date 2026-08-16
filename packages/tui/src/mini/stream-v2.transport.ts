@@ -686,7 +686,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
     const client = attempt.client
     const options = { signal: attempt.signal }
     const [messages, permissions, forms, globals, active] = await Promise.all([
-      client.message.list({ sessionID: input.sessionID, limit: input.replayLimit ?? 200, order: "desc" }, options),
+      client.message.list({ sessionID: input.sessionID }, options),
       client.permission.list({ sessionID: input.sessionID }, options),
       client.form.list({ sessionID: input.sessionID }, options),
       input.location
@@ -700,7 +700,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       client.session.active(options),
     ])
     if (!current(attempt)) return
-    const projected = structuredClone(messages.data).toReversed() as SessionMessageInfo[]
+    const projected = structuredClone(messages).toReversed() as SessionMessageInfo[]
     state.permissions = permissions
     pruneToolSources()
     for (const message of projected) renderMessage(message, next.render, next.reuseVisibleWait)

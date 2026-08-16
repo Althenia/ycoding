@@ -3,7 +3,7 @@ import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { SessionsCursor } from "@ycoding-ai/protocol/groups/session"
+import { SessionsCursor, SubagentCursor } from "@ycoding-ai/protocol/groups/session"
 import {
   ConflictError,
   CommandEvaluationError,
@@ -11,6 +11,7 @@ import {
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
+  ModelSwitchBlockedError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -210,7 +211,27 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.subagent.list",
         Effect.fn(function* (ctx) {
-          return { data: yield* orchestration.list(ctx.params.parentID).pipe(Effect.mapError(mapSessionNotFound)) }
+          const parsed =
+            ctx.query.cursor === undefined
+              ? undefined
+              : yield* SubagentCursor.parse(ctx.query.cursor).pipe(
+                  Effect.mapError(() => new InvalidCursorError({ message: "Invalid cursor" })),
+                )
+          if (parsed && parsed.parentID !== ctx.params.parentID)
+            return yield* new InvalidCursorError({ message: "Invalid cursor" })
+          const page = yield* orchestration
+            .page({ parentID: ctx.params.parentID, limit: ctx.query.limit ?? 10, cursor: parsed?.anchor })
+            .pipe(Effect.mapError(mapSessionNotFound))
+          return {
+            data: page.data,
+            summary: page.summary,
+            cursor: {
+              previous: page.cursor.previous
+                ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.previous })
+                : undefined,
+              next: page.cursor.next ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.next }) : undefined,
+            },
+          }
         }),
       )
       .handle(
@@ -350,16 +371,31 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.switchModel",
         Effect.fn(function* (ctx) {
-          yield* session.switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+          const outcome = yield* session
+            .switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
               ),
-            ),
-          )
+              Effect.catchTag("Session.MessageDecodeError", (error) => {
+                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+                return Effect.logError("failed to decode session transcript for model switch").pipe(
+                  Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
+                  Effect.andThen(
+                    Effect.fail(
+                      new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }),
+                    ),
+                  ),
+                )
+              }),
+            )
+          if (outcome.status === "blocked")
+            return yield* Effect.fail(new ModelSwitchBlockedError(outcome))
           return HttpApiSchema.NoContent.make()
         }),
       )

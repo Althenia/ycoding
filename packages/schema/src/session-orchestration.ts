@@ -102,6 +102,35 @@ export const Task = Schema.Struct({
 }).annotate({ identifier: "SessionOrchestration.Task" })
 export interface Task extends Schema.Schema.Type<typeof Task> {}
 
+export const ListRank = Schema.Literals([0, 1, 2, 3, 4])
+export type ListRank = typeof ListRank.Type
+
+export const ListAnchor = Schema.Struct({
+  rank: ListRank,
+  updated: NonNegativeInt,
+  sessionID: SessionID,
+  direction: Schema.Literals(["previous", "next"]),
+}).annotate({ identifier: "SessionOrchestration.ListAnchor" })
+export interface ListAnchor extends Schema.Schema.Type<typeof ListAnchor> {}
+
+export const Summary = Schema.Struct({
+  total: NonNegativeInt,
+  active: NonNegativeInt,
+  running: NonNegativeInt,
+  waiting: NonNegativeInt,
+}).annotate({ identifier: "SessionOrchestration.Summary" })
+export interface Summary extends Schema.Schema.Type<typeof Summary> {}
+
+export const Page = Schema.Struct({
+  data: Schema.Array(Task),
+  summary: Summary,
+  cursor: Schema.Struct({
+    previous: Schema.String.pipe(optional),
+    next: Schema.String.pipe(optional),
+  }),
+}).annotate({ identifier: "SessionOrchestration.Page" })
+export interface Page extends Schema.Schema.Type<typeof Page> {}
+
 export const TeamView = Schema.Struct({
   children: Schema.Array(Task),
   omitted: NonNegativeInt,

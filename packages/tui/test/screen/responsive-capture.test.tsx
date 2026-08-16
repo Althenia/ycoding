@@ -56,7 +56,9 @@ test("renders the responsive rail placement bands", async () => {
     const app = await renderOverlayRail(width, 30)
     try {
       const line = app.captureCharFrame().split("\n").find((value) => value.includes("SESSION"))
-      expect(line?.indexOf("SESSION")).toBe(width - 28)
+      // Measure from the rail's own left rule rather than the interpolated rail width. The extra
+      // section-label padding only applies at the full-width rail, so the overlay band sits at 5.
+      expect((line?.indexOf("SESSION") ?? -1) - (line?.indexOf("│") ?? -1)).toBe(5)
       expect(app.captureCharFrame()).toContain(session.title)
     } finally {
       app.renderer.destroy()
@@ -67,9 +69,10 @@ test("renders the responsive rail placement bands", async () => {
     const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: "Claude Opus 5" })
     try {
       const line = screen.lines().find((value) => value.includes("SESSION"))
-      const railWidth = viewport.width >= 160 ? 50 : 32
-      const labelOffset = viewport.width >= 160 ? 10 : 4
-      expect(line?.indexOf("SESSION")).toBe(viewport.width - railWidth + labelOffset)
+      // Measured from the rail's left rule. The full-width rail adds one column of section-label
+      // padding that the narrower docked band does not.
+      const labelOffset = viewport.width >= 160 ? 6 : 5
+      expect((line?.indexOf("SESSION") ?? -1) - (line?.indexOf("│") ?? -1)).toBe(labelOffset)
       expect(screen.frame()).toContain(session.title)
     } finally {
       await screen.dispose()
@@ -82,8 +85,10 @@ test("renders the shared dialog at the responsive width ladder", async () => {
     const app = await renderDialog(viewport)
     try {
       const line = app.captureCharFrame().split("\n").find((value) => value.includes("Responsive dialog"))
-      const width = viewport.width < 100 ? viewport.width : 88
-      expect(line?.indexOf("Responsive dialog")).toBe(Math.ceil((viewport.width - width) / 2) + 2)
+      // The shared dialog panel is the design's 98-column frame above the narrow band.
+      const width = viewport.width < 100 ? viewport.width : 98
+      // Board 20 places the dialog title at panel column 3.
+      expect(line?.indexOf("Responsive dialog")).toBe(Math.ceil((viewport.width - width) / 2) + 3)
       expect(line).toContain("esc")
     } finally {
       app.renderer.destroy()

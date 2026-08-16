@@ -24,8 +24,9 @@ export function ShellRailContent(props: {
       .filter((group) => group.owner.label === "Unknown session")
       .reduce((total, group) => total + group.shells.length, 0),
   )
-  const summary = createMemo(() =>
-    rail?.expanded("shells") && !props.shellSurface?.() ? String(running()) : `${running()} running`,
+  const summary = createMemo(
+    () =>
+      `${running()}/${running() + props.terminalCount} running${orphaned() ? ` · ${orphaned()} orphaned` : ""}`,
   )
   const label = (value: string) => (rail?.allExpanded() ? value.split(" · ")[0] ?? value : value)
 
@@ -56,9 +57,6 @@ export function ShellRailContent(props: {
             </>
           )}
         </For>
-        <Show when={rail?.allExpanded()}>
-          <box height={1} flexShrink={0} />
-        </Show>
       </RailSection>
     </Show>
   )

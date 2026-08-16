@@ -83,7 +83,7 @@ Update documentation in the same change when behavior or public contracts change
 Use a Conventional Commit subject:
 
 ```text
-fix(tui): restore archived history
+fix(tui): preserve transcript row residency
 feat(core): add durable hook state
 chore(client): regenerate protocol client
 ```

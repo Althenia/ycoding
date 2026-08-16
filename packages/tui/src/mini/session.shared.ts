@@ -63,13 +63,12 @@ export async function resolveCurrentSession(
   sdk: RunInput["sdk"],
   sessionID: string,
   signal?: AbortSignal,
-  limit = LIMIT,
 ): Promise<RunSession> {
   const [response, session] = await Promise.all([
-    sdk.message.list({ sessionID, limit, order: "desc" }, ...requestOptions(signal)),
+    sdk.message.list({ sessionID }, ...requestOptions(signal)),
     sdk.session.get({ sessionID }, ...requestOptions(signal)),
   ])
-  const current = createSession(response.data.toReversed())
+  const current = createSession(response.toReversed())
   return {
     ...current,
     turns: current.turns.map((turn) => ({

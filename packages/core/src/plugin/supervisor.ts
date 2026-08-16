@@ -41,6 +41,7 @@ import { PluginPromise } from "../plugin/promise";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
 import { SessionGuardrail } from "../session/guardrail";
+import { SessionCompaction } from "../session/compaction";
 import { SessionInstructions } from "../session/instructions";
 import { SessionRunnerModel } from "../session/runner/model";
 import { SessionTodo } from "../session/todo";
@@ -386,6 +387,7 @@ export const node = makeLocationNode({
     PermissionV2.node,
     ProviderUsageV2.node,
     SessionGuardrail.node,
+    SessionCompaction.node,
     PluginRuntime.node,
     Form.node,
     ReadToolFileSystem.node,

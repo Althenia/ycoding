@@ -11,10 +11,17 @@ export class PromptCache extends Schema.Class<PromptCache>("ConfigEfficiency.Pro
 
 export const HelperModel = Schema.Union([Schema.Literal("session"), ConfigModel.Selection])
 
+export class CompactionHelperModels extends Schema.Class<CompactionHelperModels>("ConfigEfficiency.HelperModels.Compaction")(
+  {
+    main: HelperModel.pipe(Schema.optional),
+    subagent: HelperModel.pipe(Schema.optional),
+  },
+) {}
+
 export class HelperModels extends Schema.Class<HelperModels>("ConfigEfficiency.HelperModels")({
   title: HelperModel.pipe(Schema.optional),
   goal: HelperModel.pipe(Schema.optional),
-  compaction: HelperModel.pipe(Schema.optional),
+  compaction: CompactionHelperModels.pipe(Schema.optional),
 }) {}
 
 export class Info extends Schema.Class<Info>("ConfigEfficiency.Info")({

@@ -77,16 +77,15 @@ test("captures populated subagent picker states at reference terminal dimensions
       expect(lines.join("\n")).toContain("ACTIVE")
       expect(lines.join("\n")).toContain("INACTIVE")
       if (viewport.width === DESIGN_VIEWPORT_WIDE.width) {
-        expectAt(lines, 34, 3, "Prompt")
-        expectAt(lines, 34, 14, "Shell")
-        expectAt(lines, 34, 20, "3")
-        expectAt(lines, 34, 25, "Subagents")
-        expectAt(lines, 34, 36, "2")
-        expectAt(lines, 40, 115, "Sonnet 5 · 68% hit · 4m02s")
-        expectAt(lines, 44, 115, "attached · 74% hit · 2m14s")
-        expectAt(lines, 48, 116, "Haiku 4.5 · 81% hit · 48s")
-        expectAt(lines, 51, 3, "cancelled")
-        expectAt(lines, 51, 123, "Sonnet 5 · — · 12s")
+        expectAt(lines, 34, 3, "Shell")
+        expectAt(lines, 34, 9, "3")
+        expectAt(lines, 34, 14, "Subagents")
+        expectAt(lines, 34, 25, "2")
+        expectAt(lines, 40, 19, "anthropic/claude-sonnet-5 · 68% hit · 4m02s")
+        expectAt(lines, 43, 19, "anthropic/claude-sonnet-5 · attached · 74% hit · 2m14s")
+        expectAt(lines, 46, 19, "anthropic/claude-haiku-4-5 · 81% hit · 48s")
+        expectAt(lines, 47, 3, "cancelled")
+        expectAt(lines, 48, 19, "anthropic/claude-sonnet-5 · — · 12s")
         expectAt(lines, 53, 3, "Enter attach")
         expectAt(lines, 53, 18, "↑↓ move")
         expectAt(lines, 53, 28, "⌃x k cancel")
@@ -112,13 +111,13 @@ test("renders populated subagents in the parent-session rail", async () => {
     const frame = screen.frame()
     expect(frame).toContain("SUBAGENTS")
     expect(frame).toContain("Should I mark the pre-existing")
-    expect(frame).toContain("? awaiting input")
+    expect(frame).toContain("waiting · 2 subagents")
   } finally {
     await screen.dispose()
   }
 }, 60_000)
 
-test("keeps the header status amber when a subagent needs input", async () => {
+test("keeps the parent header status informational while subagents are active", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
@@ -130,8 +129,7 @@ test("keeps the header status amber when a subagent needs input", async () => {
     const spanOf = (text: string) =>
       screen.spans().lines.flatMap((line) => line.spans).find((span) => span.text.trim() === text)
 
-    // The design's header states the condition, not a count: "? awaiting input".
-    expect(spanOf("? awaiting input")?.fg.toInts()).toEqual([240, 190, 98, 255])
+    expect(spanOf("waiting · 2 subagents")?.fg.toInts()).not.toEqual([240, 190, 98, 255])
   } finally {
     await screen.dispose()
   }
@@ -214,7 +212,8 @@ async function waitFor(frame: () => string, text: string) {
 }
 
 function expectAt(lines: string[], row: number, column: number, text: string) {
-  expect(lines[row]?.slice(column, column + text.length)).toBe(text)
+  const actual = lines[row]?.slice(column, column + text.length)
+  if (actual !== text) throw new Error(`Expected ${JSON.stringify(text)} at ${row}:${column}, found at ${lines[row]?.indexOf(text)}: ${lines[row]}`)
 }
 
 function task(sessionID: string, agent: string, description: string, state: "waiting" | "running" | "completed" | "cancelled", elapsed: number, modelID: string) {
@@ -247,7 +246,8 @@ function route(url: URL) {
       { id: "msg_user", type: "user", text: "Dispatch the background subagents.", time: { created: 1 } },
     ], cursor: {} })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
-  if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: tasks })
+  if (url.pathname === `/api/session/${sessionID}/subagent`)
+    return json({ data: tasks, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: { rootSessionID: sessionID, profile: "standard", customRules: 0, approvals: 0, blocked: 0, counters: [], invalidFiles: [] } })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: diagnostics(sessionID) })
   if (children.some((child) => url.pathname === `/api/session/${child.id}/diagnostics`))

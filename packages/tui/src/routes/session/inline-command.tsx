@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
-import { Show, createMemo } from "solid-js"
-import { useTheme } from "../../context/theme"
-import { RGBA } from "@opentui/core"
+import type { RGBA } from "@opentui/core"
+import { createMemo } from "solid-js"
+import { SessionToolActivityRow } from "./activity-row"
 
 export type InlineCommandResult =
   | { pass: number; fail: number }
@@ -26,43 +26,21 @@ export function InlineCommand(props: {
   failed?: boolean
   complete?: boolean
   paddingLeft?: number
+  width?: number
 }) {
-  const { themeV2 } = useTheme()
-
-  const statusColor = createMemo(() => {
-    if (props.errors) return themeV2.text.feedback.error.default
-    if (props.fail) return themeV2.text.feedback.error.default
-    return themeV2.text.feedback.success.default
-  })
-
   const statusText = createMemo(() => {
     if (props.errors !== undefined) return `${props.errors} ${props.errors === 1 ? "error" : "errors"}`
     if (props.pass !== undefined || props.fail !== undefined) return `${props.pass ?? 0} pass · ${props.fail ?? 0} fail`
-    return ""
+    return props.complete === false ? "running" : "done"
   })
 
   return (
-    <box width="100%" paddingLeft={props.paddingLeft ?? 3} marginBottom={1} flexDirection="row">
-      <text flexShrink={1} wrapMode="word" fg={props.failed ? themeV2.text.feedback.error.default : props.color}>
-        <Show when={props.complete ?? true} fallback={<span style={{ fg: themeV2.text.subdued }}>{"…".padEnd(7)}</span>}>
-          <span style={{ fg: props.iconColor ?? props.color }}>{props.icon.padEnd(7)}</span>
-        </Show>
-        {props.command}
-      </text>
-      <box flexGrow={1} />
-      <CommandStatusBadge color={statusColor()}>{statusText()}</CommandStatusBadge>
-    </box>
-  )
-}
-
-function CommandStatusBadge(props: { children: string; color?: RGBA }) {
-  const { themeV2 } = useTheme()
-  return (
-    <Show when={props.children}>
-      <text flexShrink={0} bg={themeV2.raise(themeV2.background.default)} fg={props.color ?? themeV2.text.subdued}>
-        {" "}
-        {props.children}{" "}
-      </text>
-    </Show>
+    <SessionToolActivityRow
+      tool={props.command}
+      detail=""
+      status={statusText()}
+      variant={props.failed || props.errors || props.fail ? "error" : props.complete === false ? "running" : "success"}
+      width={props.width}
+    />
   )
 }

@@ -18,6 +18,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
+  ModelSwitchBlockedError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -107,6 +108,32 @@ export const SessionsCursor = Schema.String.pipe(
 )
 export type SessionsCursor = typeof SessionsCursor.Type
 
+const SubagentCursorInput = Schema.Struct({
+  parentID: Session.ID,
+  anchor: SessionOrchestration.ListAnchor,
+})
+const SubagentCursorJson = Schema.fromJsonString(SubagentCursorInput)
+const encodeSubagentCursor = Schema.encodeSync(SubagentCursorJson)
+const decodeSubagentCursor = Schema.decodeUnknownEffect(SubagentCursorJson)
+
+export const SubagentCursor = Schema.String.pipe(
+  Schema.brand("SubagentCursor"),
+  statics((schema) => {
+    const make = schema.make.bind(schema)
+    return {
+      make: (input: typeof SubagentCursorInput.Type) => make(Encoding.encodeBase64Url(encodeSubagentCursor(input))),
+      parse: (input: string) =>
+        Effect.suspend(() => {
+          const result = Encoding.decodeBase64UrlString(input)
+          return Result.isFailure(result)
+            ? Effect.fail(invalidCursor)
+            : decodeSubagentCursor(result.success).pipe(Effect.mapError(() => invalidCursor))
+        }),
+    }
+  }),
+)
+export type SubagentCursor = typeof SubagentCursor.Type
+
 const SessionActive = Schema.Struct({
   type: Schema.Literal("running"),
 }).annotate({ identifier: "SessionActive" })
@@ -165,6 +192,12 @@ export const SessionSubagentAnswer = Schema.Struct({
   text: SessionOrchestration.ControlText.pipe(Schema.optional),
   data: SessionOrchestration.AnswerData.pipe(Schema.optional),
 }).annotate({ identifier: "SessionSubagentAnswer" })
+
+const SubagentPageLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(10))
+export const SessionSubagentListQuery = Schema.Struct({
+  limit: Schema.NumberFromString.pipe(Schema.decodeTo(SubagentPageLimit), Schema.optional),
+  cursor: SubagentCursor.pipe(Schema.optional),
+}).annotate({ identifier: "SessionSubagentListQuery" })
 
 const SessionsQueryCursor = SessionsCursor.annotate({
   description: "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response.",
@@ -316,15 +349,16 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.subagent.list", "/api/session/:parentID/subagent", {
         params: { parentID: Session.ID },
-        success: Schema.Struct({ data: Schema.Array(SessionOrchestration.Task) }),
-        error: SessionNotFoundError,
+        query: SessionSubagentListQuery,
+        success: SessionOrchestration.Page,
+        error: [SessionNotFoundError, InvalidCursorError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.subagent.list",
             summary: "List direct subagents",
-            description: "List durable task records for direct managed child Sessions.",
+            description: "List one bounded page of durable task records for direct managed child Sessions.",
           }),
         ),
     )
@@ -441,14 +475,15 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ model: Model.Ref }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ModelSwitchBlockedError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.switchModel",
             summary: "Switch session model",
-            description: "Switch the model used by subsequent provider turns.",
+            description:
+              "Switch the model used by subsequent provider turns. Refuses the switch when the current context cannot fit the target model.",
           }),
         ),
     )

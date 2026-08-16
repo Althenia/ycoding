@@ -16,7 +16,11 @@ import { DialogSessionRename } from "./dialog-session-rename"
 import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 
-export function DialogSessionList() {
+export function DialogSessionList(props: {
+  pinned?: readonly string[]
+  messageCounts?: Readonly<Record<string, number>>
+  now?: number
+} = {}) {
   const dialog = useDialog()
   const route = useRoute()
   const data = useData()
@@ -88,27 +92,32 @@ export function DialogSessionList() {
   })
 
   const options = createMemo(() => {
-    const today = new Date().toDateString()
     const sessionMap = new Map(
       sessions()
         .filter((session) => !session.parentID)
         .map((session) => [session.id, session]),
     )
-    const pinned = local.session.pinned().filter((sessionID) => sessionMap.has(sessionID))
+    const pinned = (props.pinned ?? local.session.pinned()).filter((sessionID) => sessionMap.has(sessionID))
     const pinnedSet = new Set(pinned)
     const slotByID = new Map(local.session.slots().map((sessionID, index) => [sessionID, index + 1]))
 
-    const option = (session: SessionInfo, category: string) => {
+    const option = (session: SessionInfo, category: string, secondLine = false) => {
       const directory = session.location.directory
-      const footer =
-        directory !== data.location.info()?.project.directory ? Locale.truncate(path.basename(directory), 20) : ""
+      const messageCount = props.messageCounts?.[session.id]
+      const footer = messageCount === undefined
+        ? directory !== data.location.info()?.project.directory
+          ? Locale.truncate(path.basename(directory), 20)
+          : ""
+        : `${messageCount.toLocaleString("en-US")} msgs`
       const slot = slotByID.get(session.id)
       const deleting = toDelete() === session.id
       return {
         title: deleting ? `Press ${shortcuts.get("session.delete")} again to confirm` : session.title,
+        titleView: secondLine ? <>{`\n${session.title}`}</> : undefined,
+        description: relativeTime(session.time.updated, props.now ?? Date.now()),
         value: session.id,
         category,
-        footer,
+        footer: secondLine && footer ? `\n${footer}` : footer,
         bg: deleting ? theme.error : undefined,
         gutter: data.session.family(session.id).some((id) => data.session.status(id) === "running")
           ? () => <Spinner />
@@ -120,10 +129,7 @@ export function DialogSessionList() {
 
     const remaining = sessions()
       .filter((session) => !session.parentID && !pinnedSet.has(session.id))
-      .map((session) => {
-        const date = new Date(session.time.updated).toDateString()
-        return option(session, date === today ? "Today" : date)
-      })
+      .map((session, index) => option(session, "Recent", index === 0))
 
     return [...pinned.map((sessionID) => option(sessionMap.get(sessionID)!, "Pinned")), ...remaining]
   })
@@ -132,7 +138,7 @@ export function DialogSessionList() {
 
   return (
     <DialogSelect
-      title="Sessions"
+      title="Switch session"
       options={options()}
       skipFilter={true}
       current={currentSessionID()}
@@ -186,9 +192,20 @@ export function DialogSessionList() {
             DialogSessionRename.show(dialog, option.value, data.session.get(option.value)?.title),
         },
       ]}
+      footer={<text>⌃f pin</text>}
       footerHints={quickSwitchFooterHints()}
     />
   )
+}
+
+function relativeTime(updated: number, now: number) {
+  const minutes = Math.max(0, Math.floor((now - updated) / 60_000))
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} hr ago`
+  const days = Math.floor(hours / 24)
+  if (days === 1) return "yesterday"
+  return `${days} days ago`
 }
 
 function quickSwitchRange(first: string, last: string) {

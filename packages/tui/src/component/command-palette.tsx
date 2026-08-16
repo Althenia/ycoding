@@ -1,15 +1,14 @@
 import { useRenderer } from "@opentui/solid"
-import { createMemo, onCleanup } from "solid-js"
+import { createMemo, onCleanup, onMount } from "solid-js"
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
 import { useDialog, type DialogContext } from "../ui/dialog"
-import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "../context/keymap"
+import { COMMAND_PALETTE_COMMAND, Keymap } from "../context/keymap"
 
-function isSuggestedPaletteCommand(command: KeymapCommand) {
-  const suggested = command.suggested
-  if (typeof suggested === "boolean") return suggested
-  if (typeof suggested === "function") return suggested() === true
-  return false
-}
+const canonicalPromotions = [
+  { id: "session.list", title: "Switch session" },
+  { id: "model.list", title: "Switch model" },
+  { id: "ycoding.settings", title: "Open settings" },
+]
 
 export function CommandPaletteDialog() {
   const dialog = useDialog()
@@ -17,6 +16,11 @@ export function CommandPaletteDialog() {
   const keymap = Keymap.use()
   const commands = Keymap.useCommands()
   const shortcuts = Keymap.useShortcuts()
+
+  onMount(() => {
+    dialog.setSize("command-palette")
+    dialog.setCentered(true)
+  })
 
   // Close before the app-level selection handler consumes Escape to clear selected text.
   const offEscape = keymap.intercept(
@@ -39,9 +43,8 @@ export function CommandPaletteDialog() {
         title: command.title ?? command.id,
         description: command.description,
         category: command.group,
-        footer: shortcuts.all(command.id),
+        footer: shortcuts.all(command.id)?.replaceAll("ctrl+", "⌃"),
         value: command.id,
-        suggested: isSuggestedPaletteCommand(command),
         onSelect: (dialog: DialogContext) => {
           dialog.clear()
           command.run()
@@ -53,17 +56,17 @@ export function CommandPaletteDialog() {
   let ref: DialogSelectRef<string>
   const list = () => {
     if (ref?.filter) return options()
+    const promoted = canonicalPromotions.flatMap((promotion) => {
+      const option = options().find((option) => option.value === promotion.id || option.title === promotion.title)
+      if (!option) return []
+      return [{ ...option, category: "Suggested" }]
+    })
+    const promotedIDs = new Set(promoted.map((option) => option.value))
     return [
-      ...options()
-        .filter((option) => option.suggested)
-        .map((option) => ({
-          ...option,
-          value: `suggested:${option.value}`,
-          category: "Suggested",
-        })),
-      ...options().filter((option) => !option.suggested),
+      ...promoted,
+      ...options().filter((option) => !promotedIDs.has(option.value)),
     ]
   }
 
-  return <DialogSelect ref={(value) => (ref = value)} title="Commands" options={list()} />
+  return <DialogSelect ref={(value) => (ref = value)} layout="command-palette" title="Commands" options={list()} />
 }

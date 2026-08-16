@@ -67,14 +67,23 @@ export function DialogIntegration(props: { onConnected?: OnIntegrationConnected 
     integrationOptions(data.location.integration.list() ?? []).map((integration) => {
       const methods = connectMethods(integration)
       const connected = integration.connections.length > 0
+      const category = integration.id in INTEGRATION_PRIORITY ? "Popular" : "Services"
       return {
         title: integration.name,
         value: integration.id,
         description: methods.length ? undefined : "Environment only",
-        footer: connectionSummary(integration) || undefined,
-        category: integration.id in INTEGRATION_PRIORITY ? "Popular" : "Services",
+        footer: connected ? `Linked · ${connectionSummary(integration)}` : "Not linked",
+        category,
+        categoryView:
+          category === "Services" ? (
+            <box position="relative" top={-1}>
+              <text fg={themeV2.text.feedback.info.default} attributes={TextAttributes.BOLD}>
+                Services
+              </text>
+            </box>
+          ) : undefined,
         disabled: methods.length === 0,
-        gutter: connected ? () => <text fg={themeV2.text.feedback.success.default}>✓</text> : undefined,
+        state: connected ? ("connected" as const) : ("disabled" as const),
         onSelect: () =>
           credentialConnections(integration).length
             ? manageConnections(integration, methods, dialog, props.onConnected)
@@ -147,16 +156,25 @@ function selectMethod(
   onConnected?: OnIntegrationConnected,
 ) {
   if (methods.length === 1) return openMethod(integration, methods[0], dialog, onConnected)
-  dialog.replace(() => (
+  dialog.replace(() => <DialogIntegrationMethods integration={integration} onConnected={onConnected} />)
+}
+
+export function DialogIntegrationMethods(props: {
+  integration: IntegrationInfo
+  onConnected?: OnIntegrationConnected
+}) {
+  const dialog = useDialog()
+  const methods = createMemo(() => connectMethods(props.integration))
+  return (
     <DialogSelect
-      title={`Connect ${integration.name}`}
-      options={methods.map((method) => ({
+      title={`Connect ${props.integration.name}`}
+      options={methods().map((method) => ({
         title: method.type === "key" ? (method.label ?? "API key") : method.label,
         value: method.type === "key" ? "key" : method.id,
-        onSelect: () => openMethod(integration, method, dialog, onConnected),
+        onSelect: () => openMethod(props.integration, method, dialog, props.onConnected),
       }))}
     />
-  ))
+  )
 }
 
 function openMethod(

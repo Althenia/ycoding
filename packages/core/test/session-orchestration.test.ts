@@ -253,6 +253,106 @@ describe("Session orchestration projection", () => {
 })
 
 describe("Session orchestration helpers", () => {
+  it.effect("pages direct children by actionable state, durable activity, and stable ID", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const pageParentID = SessionSchema.ID.make("ses_page_parent")
+      const rows = [
+        ["ses_wait_b", "waiting", 20],
+        ["ses_wait_a", "waiting", 20],
+        ["ses_start", "starting", 19],
+        ["ses_run", "running", 18],
+        ["ses_cancel", "cancelling", 17],
+        ["ses_terminal_7", "failed", 16],
+        ["ses_terminal_6", "completed", 15],
+        ["ses_terminal_5", "lost", 14],
+        ["ses_terminal_4", "cancelled", 13],
+        ["ses_terminal_3", "completed", 12],
+        ["ses_terminal_2", "failed", 11],
+        ["ses_terminal_1", "lost", 10],
+      ] as const satisfies ReadonlyArray<readonly [string, SessionOrchestrationSchema.State, number]>
+
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/page"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+      yield* db
+        .insert(SessionTable)
+        .values([
+          { id: pageParentID, project_id: Project.ID.global, directory: "/page", title: "parent" },
+          ...rows.map(([id]) => ({
+            id: SessionSchema.ID.make(id),
+            project_id: Project.ID.global,
+            parent_id: pageParentID,
+            directory: "/page",
+            title: id,
+          })),
+        ])
+        .run()
+      yield* db
+        .insert(SessionTaskTable)
+        .values(
+          rows.map(([id, state, updated], index) => ({
+            session_id: SessionSchema.ID.make(id),
+            parent_id: pageParentID,
+            parent_assistant_message_id: SessionMessage.ID.make(`msg_page_${index}`),
+            tool_call_id: `call_page_${index}`,
+            input_id: SessionMessage.ID.make(`msg_page_input_${index}`),
+            description: id,
+            agent: AgentV2.ID.make("build"),
+            model,
+            prompt_digest: `digest_${index}`,
+            background: true,
+            delivery: "steer",
+            state,
+            time_created: index,
+            time_updated: updated,
+          } satisfies typeof SessionTaskTable.$inferInsert)),
+        )
+        .run()
+
+      const first = yield* SessionOrchestration.page(db, { parentID: pageParentID })
+      expect(first.data).toHaveLength(10)
+      expect(first.data.map((task) => task.sessionID)).toEqual(
+        [
+          "ses_wait_a",
+          "ses_wait_b",
+          "ses_start",
+          "ses_run",
+          "ses_cancel",
+          "ses_terminal_7",
+          "ses_terminal_6",
+          "ses_terminal_5",
+          "ses_terminal_4",
+          "ses_terminal_3",
+        ].map((id) => SessionSchema.ID.make(id)),
+      )
+      expect(first.summary).toEqual({ total: 12, active: 5, running: 1, waiting: 2 })
+      expect(first.cursor.next).toBeDefined()
+      expect(first.cursor.previous).toBeUndefined()
+
+      const second = yield* SessionOrchestration.page(db, {
+        parentID: pageParentID,
+        cursor: first.cursor.next,
+      })
+      expect(second.data.map((task) => task.sessionID)).toEqual(
+        ["ses_terminal_2", "ses_terminal_1"].map((id) => SessionSchema.ID.make(id)),
+      )
+      expect(second.cursor.previous).toBeDefined()
+
+      const roundTrip = yield* SessionOrchestration.page(db, {
+        parentID: pageParentID,
+        cursor: second.cursor.previous,
+      })
+      expect(roundTrip.data.map((task) => task.sessionID)).toEqual(first.data.map((task) => task.sessionID))
+      expect((yield* Effect.exit(SessionOrchestration.page(db, { parentID: SessionSchema.ID.make("ses_missing") })))._tag).toBe(
+        "Failure",
+      )
+      expect(yield* db.select().from(SessionTaskTable).where(eq(SessionTaskTable.parent_id, pageParentID)).all()).toHaveLength(12)
+    }),
+  )
+
   it.effect("exposes the Session-owned orchestration service contract", () =>
     Effect.sync(() => {
       expect(SessionOrchestration.Service).toBeDefined()

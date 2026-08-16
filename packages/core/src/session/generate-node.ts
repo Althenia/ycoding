@@ -63,6 +63,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             permissions,
             system: contextEvent.system,
             tools: [],
+            apiModelID: selected.model.id,
             sessionID: selection.session.id,
             routeID: selected.model.route.id,
           })

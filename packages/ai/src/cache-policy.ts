@@ -19,7 +19,7 @@ import { CacheHint, type CachePolicy, type CachePolicyObject } from "./schema/op
 import { LLMRequest, Message, ToolDefinition, type ContentPart } from "./schema/messages"
 import { OpenAIOptions } from "./protocols/utils/openai-options"
 
-export const CACHE_POLICY_REVISION = "provider-native/v5"
+export const CACHE_POLICY_REVISION = "provider-native/v6"
 
 const AUTO: CachePolicyObject = {
   tools: true,
@@ -185,9 +185,28 @@ const lastMarkableMessages = (
   return found.reverse()
 }
 
-// Mark the last non-empty text or tool-result part of `messages[index]`.
-// Other part types do not expose a cache field in the canonical schema and
-// empty text markers are rejected by Anthropic-compatible APIs.
+// Mark the last non-empty text or tool-result part of one message. Other part
+// types do not expose a cache field in the canonical schema and empty text
+// markers are rejected by Anthropic-compatible APIs.
+const markMessage = (
+  target: Message,
+  index: number,
+  hint: CacheHint,
+  reserve: (position: HintPosition, hint: CacheHint) => boolean,
+  gpt56Roles: Gpt56MarkerRoles = undefined,
+): Message => {
+  // Volatile messages are regenerated per request; a breakpoint on one would be
+  // invalidated on the next request and would void the prefix behind it.
+  if (target.volatile || target.content.length === 0) return target
+  if (gpt56Roles !== undefined && !gpt56Roles.includes(target.role as "user" | "assistant")) return target
+  const markAt = target.content.findLastIndex(gpt56Roles === undefined ? isMarkablePart : isGpt56MarkablePart)
+  if (markAt < 0) return target
+  const existing = target.content[markAt]!
+  if (("cache" in existing && existing.cache) || !reserve([2, index, markAt], hint)) return target
+  const nextContent = target.content.map((part, i) => (i === markAt ? ({ ...part, cache: hint } as ContentPart) : part))
+  return new Message({ ...target, content: nextContent })
+}
+
 const markMessageAt = (
   messages: ReadonlyArray<Message>,
   index: number,
@@ -196,22 +215,10 @@ const markMessageAt = (
   gpt56Roles: Gpt56MarkerRoles = undefined,
 ): ReadonlyArray<Message> => {
   if (index < 0 || index >= messages.length) return messages
-  const target = messages[index]!
-  // Volatile messages are regenerated per request; a breakpoint on one would be
-  // invalidated on the next request and would void the prefix behind it.
-  if (target.volatile || target.content.length === 0) return messages
-  if (gpt56Roles !== undefined && !gpt56Roles.includes(target.role as "user" | "assistant")) return messages
-  const markAt = target.content.findLastIndex(gpt56Roles === undefined ? isMarkablePart : isGpt56MarkablePart)
-  if (markAt < 0) return messages
-  const existing = target.content[markAt]!
-  if (("cache" in existing && existing.cache) || !reserve([2, index, markAt], hint)) return messages
-  const nextContent = target.content.map((part, i) => (i === markAt ? ({ ...part, cache: hint } as ContentPart) : part))
-  const next = new Message({ ...target, content: nextContent })
-  // Single pass over `messages`, substituting the one updated entry. Long
-  // conversations call this on every request, so avoid `.map()` here — its
-  // closure dispatch and identity copies show up in profiling.
+  const nextMessage = markMessage(messages[index]!, index, hint, reserve, gpt56Roles)
+  if (nextMessage === messages[index]) return messages
   const result = messages.slice()
-  result[index] = next
+  result[index] = nextMessage
   return result
 }
 
@@ -222,12 +229,17 @@ const markAutoMessages = (
   reserve: (position: HintPosition, hint: CacheHint) => boolean,
   gpt56Roles: Gpt56MarkerRoles = undefined,
 ): ReadonlyArray<Message> => {
-  let next = messages
+  let next: Message[] | undefined
   // Ascending so the budget is spent in wire order: when manual hints leave
   // fewer slots than requested, the older anchor survives and the tail is shed.
-  for (const index of lastMarkableMessages(messages, anchors, gpt56Roles))
-    next = markMessageAt(next, index, hint, reserve, gpt56Roles)
-  return next
+  for (const index of lastMarkableMessages(messages, anchors, gpt56Roles)) {
+    const current = (next ?? messages)[index]!
+    const marked = markMessage(current, index, hint, reserve, gpt56Roles)
+    if (marked === current) continue
+    next ??= messages.slice()
+    next[index] = marked
+  }
+  return next ?? messages
 }
 
 const markMessages = (
@@ -243,9 +255,15 @@ const markMessages = (
   if (strategy === "latest-assistant")
     return markMessageAt(messages, lastIndexOfRole(messages, "assistant"), hint, reserve, gpt56Roles)
   const start = Math.max(0, messages.length - strategy.tail)
-  let next = messages
-  for (let i = start; i < messages.length; i++) next = markMessageAt(next, i, hint, reserve, gpt56Roles)
-  return next
+  let next: Message[] | undefined
+  for (let index = start; index < messages.length; index++) {
+    const current = (next ?? messages)[index]!
+    const marked = markMessage(current, index, hint, reserve, gpt56Roles)
+    if (marked === current) continue
+    next ??= messages.slice()
+    next[index] = marked
+  }
+  return next ?? messages
 }
 
 export const applyCachePolicy = (request: LLMRequest): LLMRequest => {

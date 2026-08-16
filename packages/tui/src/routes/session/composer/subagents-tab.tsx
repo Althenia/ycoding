@@ -49,8 +49,6 @@ const taskStateOrder = {
 } as const
 
 export function formatSubagentModel(model: { providerID: string; id: string; variant?: string } | undefined) {
-  if (model?.providerID === "anthropic" && model.id === "claude-sonnet-5") return "Sonnet 5"
-  if (model?.providerID === "anthropic" && model.id === "claude-haiku-4-5") return "Haiku 4.5"
   return formatDiagnosticsModel(model)
 }
 
@@ -152,41 +150,29 @@ export function SubagentMetadata(props: {
   active: boolean
 }) {
   const { themeV2 } = useTheme()
-  const color = () => (props.active ? themeV2.text.action.primary.focused : themeV2.text.subdued)
-  const telemetry = () => [props.cacheHit, props.elapsed].filter((value): value is string => Boolean(value))
+  const dimensions = useTerminalDimensions()
+  const telemetry = createMemo(() => {
+    if (dimensions().width < 100) return []
+    if (dimensions().width < 120) return [props.cacheHit].filter((value): value is string => Boolean(value))
+    return [props.cacheHit, props.elapsed].filter((value): value is string => Boolean(value))
+  })
+  const suffix = createMemo(() => [props.status, ...telemetry()].filter((value): value is string => Boolean(value)).join(" · "))
 
   return (
-    <box flexDirection="row" minWidth={0} gap={1}>
+    <box flexDirection="row" paddingLeft={16} flexShrink={0}>
       <Show when={props.model}>
-        <box minWidth={0} maxWidth={40} flexShrink={1}>
-          <text fg={color()} wrapMode="none">
+        <box flexShrink={0}>
+          <text fg={themeV2.text.subdued} wrapMode="none" truncate>
             {props.model}
           </text>
         </box>
       </Show>
-      <Show when={props.model && (telemetry().length > 0 || props.status)}>
-        <text fg={color()} flexShrink={0}>
-          ·
-        </text>
-      </Show>
-      <For each={telemetry()}>
-        {(item, index) => (
-          <>
-            <text fg={color()} wrapMode="none" flexShrink={0}>
-              {item}
-            </text>
-            <Show when={index() < telemetry().length - 1 || props.status}>
-              <text fg={color()} flexShrink={0}>
-                ·
-              </text>
-            </Show>
-          </>
+      <Show when={suffix()}>
+        {(value) => (
+          <text fg={themeV2.text.subdued} wrapMode="none" flexShrink={0}>
+            {props.model ? ` · ${value()}` : value()}
+          </text>
         )}
-      </For>
-      <Show when={props.status}>
-        <text fg={color()} wrapMode="none" flexShrink={0}>
-          {props.status}
-        </text>
       </Show>
     </box>
   )
@@ -204,20 +190,9 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   const session = createMemo(() => data.session.get(props.sessionID))
   const parentID = createMemo(() => session()?.parentID ?? props.sessionID)
-  const entries = createMemo(() => {
-    const tasks = entriesFromTasks(data.session.subagent.list(parentID()), route.sessionID)
-    const taskIDs = new Set(tasks.map((task) => task.sessionID))
-    return [
-      ...tasks,
-      ...entriesFromBtwSessions(
-        data.session.family(parentID()).flatMap((sessionID) => {
-          const session = data.session.get(sessionID)
-          return session ? [session] : []
-        }),
-        route.sessionID,
-      ).filter((entry) => !taskIDs.has(entry.sessionID)),
-    ]
-  })
+  const page = createMemo(() => data.session.subagent.page(parentID()))
+  const pager = createMemo(() => data.session.subagent.navigation(parentID()))
+  const entries = createMemo(() => entriesFromTasks(page()?.data ?? [], route.sessionID))
   const sections = createMemo(() => subagentSections(entries()))
   const [now, setNow] = createSignal(Date.now())
 
@@ -237,7 +212,8 @@ export function SubagentsTab(props: { sessionID: string }) {
   })
 
   const [store, setStore] = createStore({ selected: 0 })
-  let selectedSessionID = ""
+  let selectedEntryID = ""
+  let activeRouteSessionID = ""
   let wasActive = false
   let scroll: ScrollBoxRenderable | undefined
 
@@ -248,27 +224,35 @@ export function SubagentsTab(props: { sessionID: string }) {
     const active = composer.active("subagents")
     if (!active) {
       if (wasActive) {
-        selectedSessionID = ""
+        selectedEntryID = ""
+        activeRouteSessionID = ""
         setStore("selected", 0)
       }
       wasActive = false
       return
     }
     const list = entries()
-    if (selectedSessionID !== route.sessionID && list.length > 0) {
+    if (activeRouteSessionID !== route.sessionID) {
+      activeRouteSessionID = route.sessionID
+      selectedEntryID = route.sessionID
+    }
+    const selectedIdx = list.findIndex((entry) => entry.sessionID === selectedEntryID)
+    if (selectedIdx < 0 && list.length > 0) {
       const currentIdx = list.findIndex((entry) => entry.current)
       const next = currentIdx >= 0 ? currentIdx : 0
-      selectedSessionID = route.sessionID
+      selectedEntryID = list[next]!.sessionID
       setStore("selected", next)
       const scrollCurrentIntoView = () => scrollToIndex(next, true)
       scrollCurrentIntoView()
       requestAnimationFrame(scrollCurrentIntoView)
     }
+    if (selectedIdx >= 0 && selectedIdx !== store.selected) setStore("selected", selectedIdx)
     wasActive = true
     if (store.selected >= list.length) moveTo(Math.max(0, list.length - 1))
   })
 
   function moveTo(next: number, center = false) {
+    selectedEntryID = entries()[next]?.sessionID ?? ""
     setStore("selected", next)
     scrollToIndex(next, center)
   }
@@ -296,6 +280,8 @@ export function SubagentsTab(props: { sessionID: string }) {
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
           { label: "⌃x k", shortcut: "cancel", gapAfter: 4 },
           { label: "r", shortcut: "answer", gapAfter: 3 },
+          ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
+          ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
           { label: "Esc", shortcut: "close" },
         ]
       },
@@ -322,6 +308,26 @@ export function SubagentsTab(props: { sessionID: string }) {
             return
           }
           moveTo(store.selected - 1, true)
+        },
+      },
+      {
+        id: "composer.subagent.older",
+        title: "Load older subagents",
+        group: "Composer",
+        bind: "ctrl+n",
+        run() {
+          if (!pager().older) return
+          void data.session.subagent.loadOlder(parentID()).catch((error) => console.error("Failed to load older subagents", error))
+        },
+      },
+      {
+        id: "composer.subagent.newer",
+        title: "Load newer subagents",
+        group: "Composer",
+        bind: "ctrl+p",
+        run() {
+          if (!pager().newer) return
+          void data.session.subagent.loadNewer(parentID()).catch((error) => console.error("Failed to load newer subagents", error))
         },
       },
       {
@@ -379,8 +385,9 @@ export function SubagentsTab(props: { sessionID: string }) {
     <Show when={composer.active("subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
+        width="100%"
+        maxWidth={dimensions().width}
         maxHeight={16}
-        maxWidth={139}
         paddingTop={2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
@@ -406,61 +413,59 @@ export function SubagentsTab(props: { sessionID: string }) {
                       <>
                         <box flexDirection="row" minWidth={0} flexGrow={1}>
                           <box
-                            flexDirection="row"
+                            flexDirection="column"
                             minWidth={0}
                             flexGrow={1}
                             paddingLeft={0}
                             paddingRight={1}
-                            paddingTop={active() ? 1 : 0}
-                            paddingBottom={active() ? 1 : entry.status === "running" || entry.status === "completed" ? 2 : 0}
-                            backgroundColor={
-                              active()
-                                ? themeV2.background.action.primary.focused
-                                : entry.current
-                                  ? themeV2.background.action.primary.selected
-                                  : themeV2.background.action.primary.default
-                            }
-                            onMouseOver={() => setStore("selected", entryIndex())}
+                            backgroundColor={active() ? themeV2.background.surface.offset : undefined}
+                            onMouseOver={() => moveTo(entryIndex())}
                             onMouseUp={() => {
-                              setStore("selected", entryIndex())
+                              moveTo(entryIndex())
                               navigate({
                                 type: "session",
                                 sessionID: entry.sessionID,
                               })
                             }}
                           >
-                            <box width={16} flexShrink={0}>
-                              <text fg={statusColor()} wrapMode="none">
-                                {taskStatusLabel(entry.status)}
-                              </text>
+                            <box flexDirection="row" minWidth={0} flexGrow={1}>
+                              <box width={16} flexShrink={0}>
+                                <text fg={statusColor()} wrapMode="none">
+                                  {taskStatusLabel(entry.status)}
+                                </text>
+                              </box>
+                              <box flexShrink={0}>
+                                <text
+                                  fg={
+                                    active()
+                                      ? themeV2.text.feedback.info.default
+                                      : entry.current
+                                        ? themeV2.text.feedback.info.default
+                                        : themeV2.text.default
+                                  }
+                                  attributes={active() ? TextAttributes.BOLD : undefined}
+                                  wrapMode="none"
+                                >
+                                  {entry.agent}
+                                </text>
+                              </box>
+                              <box flexDirection="row" minWidth={1} flexGrow={1} paddingLeft={2}>
+                                <text fg={themeV2.text.subdued} wrapMode="none" truncate>
+                                  {`· ${entry.title}`}
+                                </text>
+                              </box>
                             </box>
-                            <text
-                              fg={
-                                active()
-                                  ? themeV2.text.action.primary.focused
-                                  : entry.current
-                                    ? themeV2.text.action.primary.selected
-                                    : themeV2.text.action.primary.default
-                              }
-                              attributes={active() ? TextAttributes.BOLD : undefined}
-                              wrapMode="none"
-                            >
-                              {entry.agent}
-                            </text>
-                            <text fg={themeV2.text.subdued} wrapMode="none">
-                              {`  · ${entry.title}`}
-                            </text>
-                            <box flexGrow={1} />
                             <SubagentMetadata
-                              model={entry.status === "running" ? "attached" : entry.model}
+                              model={entry.model}
                               cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
                               elapsed={dimensions().width >= 100 ? formatSubagentElapsed(entry.startedAt, now()) : undefined}
+                              status={entry.status === "running" ? "attached" : undefined}
                               active={active()}
                             />
                           </box>
                         </box>
                         <Show when={entry.awaitingInput && entry.detail}>
-                          <box paddingLeft={16} paddingBottom={1}>
+                          <box paddingLeft={16}>
                             <text fg={themeV2.text.feedback.warning.default} wrapMode="none">
                               ? {entry.detail}
                             </text>
@@ -473,6 +478,20 @@ export function SubagentsTab(props: { sessionID: string }) {
               </box>
             )}
           </For>
+          <Show when={pager().older || pager().newer}>
+            <box flexDirection="row" gap={3} paddingTop={1}>
+              <Show when={pager().newer}>
+                <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
+                  newer
+                </text>
+              </Show>
+              <Show when={pager().older}>
+                <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
+                  {page()?.position === "top" ? `+${Math.max(0, (page()?.summary.total ?? 0) - entries().length)} more` : "older"}
+                </text>
+              </Show>
+            </box>
+          </Show>
         </Show>
       </scrollbox>
     </Show>

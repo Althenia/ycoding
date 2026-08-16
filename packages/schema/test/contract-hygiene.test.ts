@@ -148,6 +148,11 @@ describe("contract hygiene", () => {
       type: "text",
       text: "hello",
     })
+    expect(SessionMessage.AssistantText.make({ type: "text", text: "working", phase: "commentary" })).toEqual({
+      type: "text",
+      text: "working",
+      phase: "commentary",
+    })
     expect(
       SessionMessage.AssistantReasoning.make({ type: "reasoning", text: "thinking", state: { id: "opaque" } }),
     ).toEqual({ type: "reasoning", text: "thinking", state: { id: "opaque" } })

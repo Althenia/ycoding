@@ -53,7 +53,7 @@ const geminiModel = Gemini.route
 const openrouterModel = OpenRouter.configure({ apiKey: "test" }).model("anthropic/claude-sonnet-4.5")
 
 test("pins the provider-native cache policy revision", () => {
-  expect(CACHE_POLICY_REVISION).toBe("provider-native/v5")
+  expect(CACHE_POLICY_REVISION).toBe("provider-native/v6")
 })
 
 const unknownAnthropicModel = AnthropicMessages.route
@@ -380,7 +380,7 @@ describe("applyCachePolicy", () => {
     expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral", ttlSeconds: 3600 } })
   })
 
-  test("marks GPT-5.6 Responses user and assistant text inside the raw tail window", () => {
+  test("marks all GPT-5.6 Responses user and assistant text across tool-result spans", () => {
     const request = LLM.request({
       model: Model.update(openai56Model, {
         route: openai56Model.route.with({ id: "openai-responses" }),
@@ -392,13 +392,14 @@ describe("applyCachePolicy", () => {
         Message.user("latest user"),
         Message.assistant("tail assistant"),
       ],
-      cache: { messages: { tail: 2 } },
+      cache: { messages: { tail: Number.MAX_SAFE_INTEGER } },
       providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
     })
 
     const applied = applyCachePolicy(request)
+    expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[1]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
     expect(applied.messages[3]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
-    expect((applied.messages[1]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
     expect((applied.messages[2]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
     expect(applied.messages[4]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
   })

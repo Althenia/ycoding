@@ -8,8 +8,11 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   const { themeV2 } = useTheme()
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
-  const on = createMemo(() => list().filter((item) => item.status.status === "connected").length)
-  const summary = createMemo(() => String(on()))
+  const summary = createMemo(() => {
+    const connected = list().filter((item) => item.status.status === "connected").length
+    const failed = list().filter((item) => item.status.status === "failed").length
+    return `${connected}/${list().length} connected${failed ? ` · ${failed} failed` : ""}`
+  })
 
   const color = (tone: McpTone) => {
     if (tone === "success") return themeV2.text.feedback.success.default

@@ -148,12 +148,16 @@ const Endpoint5_7 = (raw: RawClient["server.session"]) => (input: Endpoint5_7Inp
   raw["session.remove"]({ params: { sessionID: input["sessionID"] } }).pipe(Effect.mapError(mapClientError))
 
 type Endpoint5_8Request = Parameters<RawClient["server.session"]["session.subagent.list"]>[0]
-type Endpoint5_8Input = { readonly parentID: Endpoint5_8Request["params"]["parentID"] }
+type Endpoint5_8Input = {
+  readonly parentID: Endpoint5_8Request["params"]["parentID"]
+  readonly limit?: Endpoint5_8Request["query"]["limit"]
+  readonly cursor?: Endpoint5_8Request["query"]["cursor"]
+}
 const Endpoint5_8 = (raw: RawClient["server.session"]) => (input: Endpoint5_8Input) =>
-  raw["session.subagent.list"]({ params: { parentID: input["parentID"] } }).pipe(
-    Effect.mapError(mapClientError),
-    Effect.map((value) => value.data),
-  )
+  raw["session.subagent.list"]({
+    params: { parentID: input["parentID"] },
+    query: { limit: input["limit"], cursor: input["cursor"] },
+  }).pipe(Effect.mapError(mapClientError))
 
 type Endpoint5_9Request = Parameters<RawClient["server.session"]["session.subagent.launch"]>[0]
 type Endpoint5_9Input = {
@@ -654,17 +658,12 @@ const adaptGroup6 = (raw: RawClient["server.guardrail"]) => ({
 })
 
 type Endpoint7_0Request = Parameters<RawClient["server.message"]["session.messages"]>[0]
-type Endpoint7_0Input = {
-  readonly sessionID: Endpoint7_0Request["params"]["sessionID"]
-  readonly limit?: Endpoint7_0Request["query"]["limit"]
-  readonly order?: Endpoint7_0Request["query"]["order"]
-  readonly cursor?: Endpoint7_0Request["query"]["cursor"]
-}
+type Endpoint7_0Input = { readonly sessionID: Endpoint7_0Request["params"]["sessionID"] }
 const Endpoint7_0 = (raw: RawClient["server.message"]) => (input: Endpoint7_0Input) =>
-  raw["session.messages"]({
-    params: { sessionID: input["sessionID"] },
-    query: { limit: input["limit"], order: input["order"], cursor: input["cursor"] },
-  }).pipe(Effect.mapError(mapClientError))
+  raw["session.messages"]({ params: { sessionID: input["sessionID"] } }).pipe(
+    Effect.mapError(mapClientError),
+    Effect.map((value) => value.data),
+  )
 
 const adaptGroup7 = (raw: RawClient["server.message"]) => ({ list: Endpoint7_0(raw) })
 

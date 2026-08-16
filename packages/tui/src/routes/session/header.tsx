@@ -1,10 +1,12 @@
-import { createMemo, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, useContext } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
+import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
+import { LocalContext } from "../../context/local"
 import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
-import { header } from "../../logo"
+import { BrandMark } from "../../component/logo"
 import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
@@ -12,7 +14,10 @@ import { formatDuration } from "../../util/format"
 export type SessionHeaderState =
   // Penpot's resting frame displays the existing working state with its elapsed value.
   | { type: "ready" }
-  | { type: "working"; elapsed: number }
+  | { type: "working"; elapsed?: number; startedAt?: number }
+  | { type: "thinking"; elapsed?: number; startedAt?: number }
+  | { type: "tool-running"; elapsed?: number; startedAt?: number }
+  | { type: "waiting"; count: number }
   | { type: "awaiting-input"; count: number; elapsed?: number }
   | { type: "provider-error"; code?: number }
   | { type: "yolo" }
@@ -55,14 +60,17 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
 }
 
 export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, subagent = false) {
-  if (state.type === "working" || state.type === "awaiting-input") {
+  if (state.type === "working" || state.type === "thinking" || state.type === "tool-running" || state.type === "awaiting-input") {
     // One rule for every surface: the design writes sub-minute working time with a decimal
     // ("4.1s", "8.4s") and anything longer as "2m14s". formatDuration floors to whole seconds, so
     // it alone cannot express the decimal form.
     const elapsed = state.elapsed === undefined ? undefined : state.elapsed < 60 ? `${state.elapsed.toFixed(1)}s` : formatDuration(state.elapsed)
-    if (state.type === "working") return width < 120 ? elapsed : `working ${elapsed}`
+    if (state.type === "working") return elapsed ? (width < 120 ? elapsed : `working ${elapsed}`) : "working"
+    if (state.type === "thinking") return elapsed ? `thinking · ${elapsed}` : "thinking"
+    if (state.type === "tool-running") return elapsed ? `tool running · ${elapsed}` : "tool running"
     return elapsed ? `? awaiting input · ${elapsed}` : "? awaiting input"
   }
+  if (state.type === "waiting") return `waiting · ${state.count} subagent${state.count === 1 ? "" : "s"}`
   if (state.type === "provider-error") return state.code ? `provider error \u00b7 ${state.code}` : "provider error"
   if (state.type === "yolo") return "YOLO \u00b7 auto-approve"
   if (runningShells) return `${runningShells} shell${runningShells === 1 ? "" : "s"} running`
@@ -76,6 +84,23 @@ export function Header(
   const dimensions = useTerminalDimensions()
   const shortcuts = Keymap.useShortcuts()
   const leaderActive = Keymap.useLeaderActive()
+  const [now, setNow] = createSignal(Date.now())
+  const timed = createMemo(() =>
+    props.state.type === "working" || props.state.type === "thinking" || props.state.type === "tool-running"
+      ? props.state
+      : undefined,
+  )
+  createEffect(() => {
+    if (timed()?.startedAt === undefined) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 100)
+    onCleanup(() => clearInterval(timer))
+  })
+  const state = createMemo<SessionHeaderState>(() => {
+    const active = timed()
+    if (!active?.startedAt) return props.state
+    return { ...active, elapsed: Math.max(0, (now() - active.startedAt) / 1000) }
+  })
   const identity = createMemo(() => resolveIdentity(props))
   const segments = createMemo(() =>
     headerSegments({
@@ -88,17 +113,28 @@ export function Header(
     }),
   )
   const statusColor = createMemo(() => {
-    if (props.state.type === "provider-error" || props.state.type === "yolo")
+    if (state().type === "provider-error" || state().type === "yolo")
       return themeV2.text.feedback.error.default
-    if (props.state.type === "awaiting-input") return themeV2.text.feedback.warning.default
-    if (props.state.type === "working")
+    if (state().type === "awaiting-input") return themeV2.text.feedback.warning.default
+    if (state().type === "tool-running" || state().type === "waiting") return themeV2.text.feedback.info.default
+    if (state().type === "working" || state().type === "thinking")
       return props.subagent ? themeV2.text.feedback.info.default : themeV2.text.feedback.success.default
     return themeV2.text.subdued
   })
+  // Optional: the header is also mounted standalone by component tests with no LocalProvider.
+  const local = useContext(LocalContext)
   const segmentColor = (key: SessionHeaderSegmentKey) => {
     if (key === "path") return themeV2.text.subdued
     if (key === "branch") return themeV2.text.feedback.info.default
     if (key === "variant") return themeV2.text.feedback.success.default
+    // The agent carries its own configured colour, so the header names it the way every other
+    // agent affordance does instead of rendering it as plain default ink.
+    if (key === "agent") {
+      const agent = local?.agent
+        .list()
+        .find((item) => item.id === props.agent || item.name === props.agent || Locale.titlecase(item.id) === props.agent)
+      if (agent) return local!.agent.color(agent.id)
+    }
     // The branch is info by default, so focused segments retain their roles instead of impersonating it.
     return themeV2.text.default
   }
@@ -115,17 +151,27 @@ export function Header(
     <>
       <box
         flexDirection="row"
-        gap={6}
-        paddingLeft={3}
+        gap={props.subagent ? 6 : 2}
+        paddingLeft={props.subagent ? 3 : 1}
         paddingRight={3}
         height={3}
         flexShrink={0}
         alignItems="center"
         backgroundColor={themeV2.background.chrome}
       >
-        <text fg={props.subagent ? themeV2.text.feedback.info.default : themeV2.text.feedback.success.default} wrapMode="none">
-          {props.subagent ? `${getGlyph("subagent").glyph} subagent` : header}
-        </text>
+        <Show
+          when={props.subagent}
+          fallback={
+            <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
+              <BrandMark width={6} height={1} />
+              <text fg={themeV2.text.subdued} wrapMode="none">v{InstallationVersion}</text>
+            </box>
+          }
+        >
+          <text fg={themeV2.text.feedback.info.default} wrapMode="none">
+            {getGlyph("subagent").glyph} subagent
+          </text>
+        </Show>
         <text flexGrow={1} wrapMode="none">
           <For each={segments()}>
             {(segment, index) => (
@@ -149,12 +195,9 @@ export function Header(
           </For>
         </text>
         <text fg={statusColor()} wrapMode="none" flexShrink={0}>
-          {headerStatusLabel(props.state, dimensions().width, identity().runningShells, props.subagent)}
+          {headerStatusLabel(state(), dimensions().width, identity().runningShells, props.subagent)}
         </text>
       </box>
-      <Show when={props.state.type === "yolo"}>
-        <box height={1} width="100%" flexShrink={0} backgroundColor={themeV2.background.action.destructive.default} />
-      </Show>
     </>
   )
 }

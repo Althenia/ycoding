@@ -8,7 +8,7 @@
   "packageManager": "bun@1.3.14",
   "scripts": {
     "dev": "bun run --cwd packages/cli --conditions=browser src/index.ts",
-    "build:tui": "bun run --cwd packages/cli build:tui --single --skip-install --outdir=../../dist/tui",
+    "build:tui": "bun run --cwd packages/cli build:tui --single --outdir=../../dist/tui",
     "smoke:tui": "bun run --cwd packages/cli smoke:tui -- --dir=../../dist/tui",
     "smoke:runtime": "bun run --cwd packages/cli smoke:runtime -- --dir=../../dist/tui",
     "refresh:models": "bun run --cwd packages/cli refresh:models",

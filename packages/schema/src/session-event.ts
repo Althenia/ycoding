@@ -203,6 +203,16 @@ export const InputAdmitted = Event.durable({
 })
 export type InputAdmitted = typeof InputAdmitted.Type
 
+export const InputConsumed = Event.durable({
+  type: "session.input.consumed",
+  ...options,
+  schema: {
+    ...Base,
+    inputIDs: Schema.NonEmptyArray(SessionMessage.ID),
+  },
+})
+export type InputConsumed = typeof InputConsumed.Type
+
 export namespace Execution {
   export const Started = Event.durable({ type: "session.execution.started", ...options, schema: Base })
   export type Started = typeof Started.Type
@@ -367,6 +377,7 @@ export namespace Text {
       ...Base,
       assistantMessageID: SessionMessage.ID,
       ordinal: NonNegativeInt,
+      phase: Schema.Literals(["commentary", "final_answer"]).pipe(optional),
     },
   })
   export type Started = typeof Started.Type
@@ -391,6 +402,7 @@ export namespace Text {
       assistantMessageID: SessionMessage.ID,
       ordinal: NonNegativeInt,
       text: Schema.String,
+      phase: Schema.Literals(["commentary", "final_answer"]).pipe(optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -627,6 +639,7 @@ export const Definitions = Event.inventory(
   Forked,
   InputPromoted,
   InputAdmitted,
+  InputConsumed,
   Execution.Started,
   Execution.Succeeded,
   Execution.Failed,

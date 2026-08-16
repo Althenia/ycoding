@@ -14,6 +14,7 @@ import {
 type RailStore = {
   allExpanded: () => boolean
   expanded: (key: RailSectionKey) => boolean
+  leftRule: boolean
   shellSurface: boolean
   showTodo: () => boolean
   toggle: (key: RailSectionKey) => void
@@ -22,7 +23,9 @@ type RailStore = {
 
 const RailContext = createContext<RailStore>()
 
-export function RailProvider(props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean; allExpanded?: boolean }>) {
+export function RailProvider(
+  props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean; allExpanded?: boolean; leftRule?: boolean }>,
+) {
   const [order, setOrder] = createSignal(
     defaultExpanded({
       goal: props.goal,
@@ -49,6 +52,7 @@ export function RailProvider(props: ParentProps<{ goal?: boolean; autonomy?: boo
   const store: RailStore = {
     allExpanded: () => Boolean(props.allExpanded),
     expanded: (key) => order().includes(key),
+    leftRule: Boolean(props.leftRule),
     shellSurface: Boolean(props.shellSurface),
     showTodo: () => !props.allExpanded,
     toggle: (key) =>
@@ -105,9 +109,12 @@ export function RailSection(
         gap={1}
         height={RAIL_SECTION_BAND_HEIGHT}
         alignItems={rail ? "center" : "flex-start"}
-        paddingLeft={rail ? metrics().paddingLeft : 0}
+        paddingLeft={rail ? metrics().paddingLeft - (rail.leftRule ? 1 : 0) : 0}
         paddingRight={rail ? metrics().paddingRight : 0}
         backgroundColor={themeV2.background.surface.overlay}
+        // The whole band toggles, not just its glyph, label and summary. Handlers on those children
+        // alone left the band's padding dead, so a click one column left of the marker did nothing.
+        onMouseUp={toggle}
       >
         <text fg={headerColor()} wrapMode="none" flexShrink={0} onMouseUp={toggle}>
           {expanded() ? "\u2212" : "\u002b"}
@@ -133,19 +140,19 @@ export function RailSection(
       <Show when={expanded()}>
         <box
           width="100%"
-          paddingLeft={rail ? metrics().paddingLeft : 0}
+          paddingLeft={rail ? metrics().paddingLeft - (rail.leftRule ? 1 : 0) : 0}
           paddingRight={rail ? metrics().paddingRight : 0}
         >
-          <Show when={rail}>
+          <Show when={props.children || props.section === "autonomy"}>
             <box height={1} flexShrink={0} />
-          </Show>
-          {props.children}
-          <Show when={props.section === "autonomy"}>
-            <>
-              <box height={1} flexShrink={0} />
-              <RailRow label="Guardrails" value="enforced" valueColor={themeV2.text.feedback.success.default} />
-              <box height={2} flexShrink={0} />
-            </>
+            {props.children}
+            <Show when={props.section === "autonomy"}>
+              <>
+                <box height={1} flexShrink={0} />
+                <RailRow label="Guardrails" value="enforced" valueColor={themeV2.text.feedback.success.default} />
+              </>
+            </Show>
+            <box height={1} flexShrink={0} />
           </Show>
         </box>
       </Show>
@@ -163,8 +170,8 @@ export function RailRow(props: { label: string; value: string; valueColor?: RGBA
   const { themeV2 } = useTheme()
 
   return (
-    <box width="100%" flexDirection="row" justifyContent="space-between" overflow="hidden">
-      <text fg={themeV2.text.subdued} wrapMode="none" flexGrow={1} flexShrink={1} overflow="hidden">
+    <box width="100%" flexDirection="row" justifyContent="space-between" gap={1} overflow="hidden">
+      <text fg={themeV2.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1} overflow="hidden">
         {props.label}
       </text>
       <text fg={props.valueColor ?? themeV2.text.default} wrapMode="none" flexShrink={0}>

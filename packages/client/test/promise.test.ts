@@ -245,16 +245,21 @@ test("session subagent controls use their public HTTP contracts", async () => {
     revision: 2,
     time: { created: 1, updated: 2 },
   }
+  const page = {
+    data: [task],
+    summary: { total: 1, active: 1, running: 1, waiting: 0 },
+    cursor: {},
+  }
   const client = YCoding.make({
     baseUrl: "http://localhost:3000",
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return Response.json({ data: request.method === "GET" ? [task] : task })
+      return Response.json(request.method === "GET" ? page : { data: task })
     },
   })
 
-  expect(await client.session.subagent.list({ parentID: "ses_parent" })).toEqual([task])
+  expect(await client.session.subagent.list({ parentID: "ses_parent" })).toEqual(page)
   expect(
     await client.session.subagent.answer({
       parentID: "ses_parent",

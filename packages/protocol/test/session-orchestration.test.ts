@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test"
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
-import { SessionSubagentAnswer, SessionSubagentLaunch, SessionSubagentMessage } from "../src/groups/session.js"
+import { Session } from "@ycoding-ai/schema/session"
+import {
+  SessionSubagentAnswer,
+  SessionSubagentLaunch,
+  SessionSubagentListQuery,
+  SessionSubagentMessage,
+  SubagentCursor,
+} from "../src/groups/session.js"
 
 test("validates Session subagent launch and control payloads", () => {
   const messageID = SessionMessage.ID.make("msg_control")
@@ -58,4 +65,18 @@ test("validates Session subagent launch and control payloads", () => {
   expect(() =>
     Schema.decodeUnknownSync(SessionSubagentAnswer)({ data: { value: "x".repeat(8 * 1024) } }),
   ).toThrow()
+})
+
+test("validates bounded subagent page queries and opaque parent-scoped cursors", async () => {
+  const input = {
+    parentID: Session.ID.make("ses_parent"),
+    anchor: { rank: 0 as const, updated: 2, sessionID: Session.ID.make("ses_child"), direction: "next" as const },
+  }
+  const cursor = SubagentCursor.make(input)
+
+  expect(await Effect.runPromise(SubagentCursor.parse(cursor))).toEqual(input)
+  expect(Schema.decodeUnknownSync(SessionSubagentListQuery)({ limit: "10", cursor })).toEqual({ limit: 10, cursor })
+  expect(() => Schema.decodeUnknownSync(SessionSubagentListQuery)({ limit: "0" })).toThrow()
+  expect(() => Schema.decodeUnknownSync(SessionSubagentListQuery)({ limit: "11" })).toThrow()
+  expect(await Effect.runPromise(Effect.exit(SubagentCursor.parse("not-a-cursor")))).toMatchObject({ _tag: "Failure" })
 })

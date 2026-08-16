@@ -10,6 +10,14 @@ export function DialogTimeline(props: {
   sessionID: string
   onMove: (messageID: string) => void
   setPrompt?: (prompt: PromptInfo) => void
+  presentation?: readonly {
+    id: string
+    title: string
+    age: string
+    status: string
+    category: "Today"
+    done?: boolean
+  }[]
 }) {
   const data = useData()
   const dialog = useDialog()
@@ -18,9 +26,18 @@ export function DialogTimeline(props: {
     dialog.setSize("large")
   })
 
-  type TimelineValue = { type: "message"; id: string } | { type: "history"; cursor?: string }
+  type TimelineValue = { type: "message"; id: string }
 
   const options = createMemo((): DialogSelectOption<TimelineValue>[] => {
+    if (props.presentation)
+      return props.presentation.map((entry) => ({
+        title: entry.title,
+        description: entry.age,
+        footer: entry.status,
+        category: entry.category,
+        state: entry.done ? "connected" : undefined,
+        value: { type: "message" as const, id: entry.id },
+      }))
     const messages = data.session.message.list(props.sessionID)
     const result = [] as DialogSelectOption<TimelineValue>[]
     for (const message of messages) {
@@ -37,33 +54,15 @@ export function DialogTimeline(props: {
       })
     }
     result.reverse()
-    const history = data.session.message.history(props.sessionID)
-    const expanded = history.findIndex((item) => item.state === "expanded")
-    const pending = history.find((item) => item.state === "loading" || item.state === "error")
-    const next = pending ?? history[expanded === -1 ? 0 : expanded + 1]
-    if (next)
-      result.push({
-        title:
-          next.state === "loading"
-            ? "Loading older messages..."
-            : next.state === "error"
-              ? "Retry older messages"
-              : `Load ${next.count ? `${next.count} ` : ""}older messages`,
-        value: { type: "history", cursor: next.cursor },
-        onSelect: () => {
-          if (next.state === "loading") return
-          void data.session.message.expand(props.sessionID, next.cursor).catch(() => undefined)
-        },
-      })
     return result
   })
 
   return (
     <DialogSelect
       onMove={(option) => option.value.type === "message" && props.onMove(option.value.id)}
-      title="Timeline"
-      // Expanding history and newly arriving messages both rebuild this list and shift
-      // every index, so the selection has to follow the option's value, not its position.
+      title="Session timeline"
+      // Newly arriving messages rebuild this list and shift every index, so selection follows the
+      // option's value rather than its position.
       preserveSelection
       options={options()}
     />

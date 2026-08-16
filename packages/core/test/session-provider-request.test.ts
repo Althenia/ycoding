@@ -124,6 +124,7 @@ it.effect("keeps unavailable pricing distinct and summarizes the latest bounded 
       helpers: 0,
       continued: 1,
       fallback: 0,
+      models: [{ model, requests: 2 }],
       tokens: { input: 30, output: 5, reasoning: 1, cache: { read: 100, write: 5 } },
       latestInvalidation: "tool-prefix-changed",
       latestNamespace: "abcdef12",
@@ -230,10 +231,71 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       continued: 0,
       fallback: 0,
       cost: Money.USD.make(0.0123),
+      models: [
+        {
+          model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+          requests: 1,
+          cost: Money.USD.make(0.0123),
+        },
+      ],
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
       latestInvalidation: "first-request",
       latestNamespace: "cache-ke",
     })
+  }),
+)
+
+it.effect("groups summary spend by model with deterministic ordering and unreported group cost", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionV2.ID.make("ses_provider_request_model_spend")
+    yield* insertSession(sessionID)
+    const service = yield* SessionProviderRequest.Service
+    const model = (providerID: string, id: string, variant?: string) =>
+      ModelV2.Ref.make({
+        id: ModelV2.ID.make(id),
+        providerID: ProviderV2.ID.make(providerID),
+        ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
+      })
+    const record = Effect.fnUntraced(function* (selected: ModelV2.Ref, cost?: number) {
+      const tracker = yield* service.next({
+        sessionID,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model: selected,
+        routeID: "openai-responses",
+        promptCacheKey: "cache-key",
+        systemDigest: "system",
+        toolDigest: "tools",
+      })
+      yield* tracker.complete({
+        continuation: "full",
+        ...(cost === undefined ? {} : { cost: Money.USD.make(cost) }),
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    yield* record(model("openai", "gpt-5.6"), 0.75)
+    yield* record(model("openai", "gpt-5.6", "high"), 0.25)
+    yield* record(model("openai", "gpt-5.6", "high"), 0.25)
+    yield* record(model("openai", "gpt-5.6", "low"), 0.5)
+    yield* record(model("openai", "aaa-model"), 0.5)
+    yield* record(model("zzz", "tie-model"), 0.5)
+    yield* record(model("anthropic", "claude-sonnet-4"), 0.125)
+    yield* record(model("anthropic", "claude-sonnet-4"))
+    yield* record(model("zzz", "free-model"), 0)
+
+    const summary = yield* service.summary(sessionID)
+    expect(summary.models).toEqual([
+      { model: model("openai", "gpt-5.6"), requests: 1, cost: Money.USD.make(0.75) },
+      { model: model("openai", "aaa-model"), requests: 1, cost: Money.USD.make(0.5) },
+      { model: model("openai", "gpt-5.6", "high"), requests: 2, cost: Money.USD.make(0.5) },
+      { model: model("openai", "gpt-5.6", "low"), requests: 1, cost: Money.USD.make(0.5) },
+      { model: model("zzz", "tie-model"), requests: 1, cost: Money.USD.make(0.5) },
+      { model: model("zzz", "free-model"), requests: 1, cost: Money.USD.zero },
+      { model: model("anthropic", "claude-sonnet-4"), requests: 2 },
+    ])
+    // One anthropic request never reported a cost, so neither its group nor the session total may claim one.
+    expect(summary).not.toHaveProperty("cost")
   }),
 )
 

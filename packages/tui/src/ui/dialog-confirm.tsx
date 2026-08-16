@@ -1,10 +1,10 @@
-import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog, type DialogContext } from "./dialog"
+import { DialogHeader, DialogSearchRow, DialogTitle, dialogMessageLines, dialogPanelWidth, useDialog, type DialogContext } from "./dialog"
 import { createStore } from "solid-js/store"
-import { For } from "solid-js"
+import { createMemo, For } from "solid-js"
 import { Locale } from "../util/locale"
+import { useTerminalDimensions } from "@opentui/solid"
 
 export type DialogConfirmProps = {
   title: string
@@ -19,9 +19,11 @@ export type DialogConfirmResult = boolean | undefined
 export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
+  const dimensions = useTerminalDimensions()
   const [store, setStore] = createStore({
     active: "confirm" as "confirm" | "cancel",
   })
+  const lines = createMemo(() => dialogMessageLines(props.message))
 
   Keymap.createLayer(() => ({
     mode: "modal",
@@ -55,34 +57,41 @@ export function DialogConfirm(props: DialogConfirmProps) {
     ],
   }))
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
-          {props.title}
-        </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+    <box paddingTop={1}>
+      <DialogHeader title={<DialogTitle>{props.title}</DialogTitle>} />
+      <DialogSearchRow />
+      <box paddingTop={2} paddingLeft={3} paddingRight={4}>
+        <For each={lines()}>
+          {(line) => (
+            <box height={2}>
+              <text fg={themeV2.text.subdued}>{line}</text>
+            </box>
+          )}
+        </For>
       </box>
-      <box paddingBottom={1}>
-        <text fg={themeV2.text.subdued}>{props.message}</text>
-      </box>
-      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
+      <box>
         <For each={["cancel", "confirm"] as const}>
           {(key) => (
             <box
-              paddingLeft={1}
-              paddingRight={1}
-              backgroundColor={key === store.active ? themeV2.background.action.primary.focused : undefined}
+              height={1}
+              width={dialogPanelWidth(dimensions().width)}
               onMouseUp={() => {
                 if (key === "confirm") props.onConfirm?.()
                 if (key === "cancel") props.onCancel?.()
                 dialog.clear()
               }}
             >
-              <text fg={key === store.active ? themeV2.text.action.primary.focused : themeV2.text.subdued}>
-                {Locale.titlecase(key === "confirm" ? (props.label ?? key) : key)}
-              </text>
+              <box
+                height={1}
+                width={dialogPanelWidth(dimensions().width)}
+                paddingLeft={6}
+                paddingRight={4}
+                backgroundColor={key === store.active ? themeV2.background.action.primary.focused : undefined}
+              >
+                <text fg={key === store.active ? themeV2.text.action.primary.focused : themeV2.text.subdued}>
+                  {Locale.titlecase(key === "confirm" ? (props.label ?? key) : key)}
+                </text>
+              </box>
             </box>
           )}
         </For>

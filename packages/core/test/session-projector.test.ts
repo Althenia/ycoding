@@ -300,12 +300,6 @@ describe("SessionProjector", () => {
       })
       expect(secondPage.map((message) => (message.type === "user" ? message.text : message.type))).toEqual(["second"])
       expect(
-        yield* sessions.messageRemainder({ sessionID, afterID: firstPage[0]!.id, order: "asc" }),
-      ).toEqual(1)
-      expect(
-        yield* sessions.messageRemainder({ sessionID, afterID: secondPage[0]!.id, order: "asc" }),
-      ).toEqual(0)
-      expect(
         (yield* sessions.messages({
           sessionID,
           limit: 1,
@@ -778,6 +772,7 @@ describe("SessionProjector", () => {
         sessionID,
         assistantMessageID: SessionMessage.ID.make("msg_assistant_completed"),
         ordinal: 0,
+        phase: "commentary",
       })
 
       const rows = yield* db
@@ -796,7 +791,7 @@ describe("SessionProjector", () => {
           type: "assistant",
           agent: build,
           model,
-          content: [SessionMessage.AssistantText.make({ type: "text", text: "" })],
+          content: [SessionMessage.AssistantText.make({ type: "text", text: "", phase: "commentary" })],
           time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
         }),
         SessionMessage.Assistant.make({

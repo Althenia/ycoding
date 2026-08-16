@@ -55,14 +55,14 @@ const states = [
   {
     name: "prompt",
     settle: "Enter a value",
-    evidence: ["...", "Search", "enter submit"],
-    view: () => <DialogPrompt title="Enter a value" description={() => <text>...</text>} value="Search" />,
+    evidence: ["…", "Search", "Enter confirm"],
+    view: () => <DialogPrompt title="Enter a value" description={() => <text>…</text>} value="Search" />,
   },
   {
     name: "prompt-busy",
     settle: "Enter a value",
-    evidence: ["...", "Search", "Saving...", "processing..."],
-    view: () => <DialogPrompt title="Enter a value" description={() => <text>...</text>} value="Search" busy busyText="Saving..." />,
+    evidence: ["…", "Search", "Saving...", "processing..."],
+    view: () => <DialogPrompt title="Enter a value" description={() => <text>…</text>} value="Search" busy busyText="Saving..." />,
   },
   {
     name: "confirm",

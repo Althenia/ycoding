@@ -1,61 +1,53 @@
-import { TextAttributes } from "@opentui/core"
-import { For } from "solid-js"
 import { Keymap } from "../context/keymap"
-import { useTheme } from "../context/theme"
 import { useDialog } from "./dialog"
+import { DialogSelect } from "./dialog-select"
 
-export function DialogHelp() {
+export function DialogHelp(props: { shortcuts?: Readonly<Record<string, string>> } = {}) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
   const shortcuts = Keymap.useShortcuts()
-  const keybindings = [
-    [shortcuts.get("variant.list"), "List model variants"],
-    [shortcuts.get("session.autonomy.normal"), "Disable YOLO"],
-  ] as const
-
-  Keymap.createLayer(() => ({
-    mode: "modal",
-    commands: [
-      { bind: "return", title: "Close help", group: "Dialog", run: () => dialog.clear() },
-      { bind: "escape", title: "Close help", group: "Dialog", run: () => dialog.clear() },
-    ],
-  }))
+  const keymap = Keymap.use()
+  const option = (title: string, command: string, category: string, footer?: string) => ({
+    title,
+    value: command,
+    category,
+    footer: footer ?? props.shortcuts?.[command] ?? shortcut(shortcuts.get(command)),
+  })
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
-          Help
-        </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc/enter
-        </text>
-      </box>
-      <box paddingBottom={1}>
-        <text fg={themeV2.text.subdued}>
-          Press {shortcuts.get("command.palette.show")} to see all available actions and commands in any context.
-        </text>
-      </box>
-      <box paddingBottom={1} gap={1}>
-        <For each={keybindings}>
-          {([shortcut, label]) => (
-            <box flexDirection="row" gap={1}>
-              <text fg={themeV2.text.subdued}>{shortcut}</text>
-              <text fg={themeV2.text.default}>{label}</text>
-            </box>
-          )}
-        </For>
-      </box>
-      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
-        <box
-          paddingLeft={3}
-          paddingRight={3}
-          backgroundColor={themeV2.background.action.primary.focused}
-          onMouseUp={() => dialog.clear()}
-        >
-          <text fg={themeV2.text.action.primary.focused}>ok</text>
-        </box>
-      </box>
-    </box>
+    <DialogSelect
+      title="Keyboard shortcuts"
+      options={[
+        option("Switch session", "session.list", "Session"),
+        option("New session", "session.new", "Session"),
+        option("Compact", "session.compact", "Session"),
+        option("Open picker", "session.child.first", "Subagents"),
+        option(
+          "Next / previous",
+          "session.child.next",
+          "Subagents",
+          props.shortcuts?.["session.child.next"] && props.shortcuts?.["session.child.previous"]
+            ? `${props.shortcuts["session.child.next"]} / ${props.shortcuts["session.child.previous"]}`
+            : `${shortcut(shortcuts.get("session.child.next"))} / ${shortcut(shortcuts.get("session.child.previous"))}`,
+        ),
+        option("Back to parent", "session.parent", "Subagents"),
+        option("Switch model", "model.list", "Model"),
+        option("Cycle variant", "variant.cycle", "Model"),
+      ]}
+      onSelect={(item) => {
+        dialog.clear()
+        keymap.dispatch(item.value)
+      }}
+    />
   )
+}
+
+function shortcut(value: string | undefined) {
+  if (!value) return ""
+  return value
+    .replace(/^ctrl\+x /, "⌃x ")
+    .replace(/^ctrl\+/, "⌃")
+    .replace("down", "↓")
+    .replace("up", "↑")
+    .replace("right", "→")
+    .replace("left", "←")
 }

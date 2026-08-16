@@ -13,6 +13,7 @@ export interface Adapter {
   readonly getAssistant: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<SessionMessage.Assistant | undefined, never, never>
+  readonly getUser: (messageID: SessionMessage.ID) => Effect.Effect<SessionMessage.User | undefined, never, never>
   readonly getSkillActivation: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<SessionMessage.Skill | SessionMessage.Assistant | undefined, never, never>
@@ -21,6 +22,7 @@ export interface Adapter {
   ) => Effect.Effect<SessionMessage.Shell | undefined, never, never>
   readonly getCompaction: () => Effect.Effect<SessionMessage.Compaction | undefined, never, never>
   readonly updateAssistant: (assistant: SessionMessage.Assistant) => Effect.Effect<void, never, never>
+  readonly updateUser: (user: SessionMessage.User) => Effect.Effect<void, never, never>
   readonly updateSkillActivation: (
     message: SessionMessage.Skill | SessionMessage.Assistant,
   ) => Effect.Effect<void, never, never>
@@ -65,6 +67,12 @@ export function memory(state: MemoryState): Adapter {
         return assistant?.type === "assistant" ? assistant : undefined
       })
     },
+    getUser(messageID) {
+      return Effect.sync(() => {
+        const message = state.messages.findLast((item) => item.id === messageID)
+        return message?.type === "user" ? message : undefined
+      })
+    },
     getSkillActivation(messageID) {
       return Effect.sync(() => {
         const message = state.messages.findLast((item) => item.id === messageID)
@@ -92,6 +100,13 @@ export function memory(state: MemoryState): Adapter {
         const current = state.messages[index]
         if (current?.type !== "assistant") return
         state.messages[index] = assistant
+      })
+    },
+    updateUser(user) {
+      return Effect.sync(() => {
+        const index = state.messages.findLastIndex((message) => message.id === user.id)
+        if (index < 0 || state.messages[index]?.type !== "user") return
+        state.messages[index] = user
       })
     },
     updateSkillActivation(message) {
@@ -214,6 +229,17 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.forked": () => Effect.void,
       "session.input.promoted": () => Effect.void,
       "session.input.admitted": () => Effect.void,
+      "session.input.consumed": (event) =>
+        Effect.forEach(
+          event.data.inputIDs,
+          (inputID) =>
+            Effect.gen(function* () {
+              const user = yield* adapter.getUser(inputID)
+              if (!user || user.time.consumed) return
+              yield* adapter.updateUser({ ...user, time: { ...user.time, consumed: event.created } })
+            }),
+          { discard: true },
+        ),
       "session.execution.started": () => Effect.void,
       "session.execution.succeeded": () => clearCurrentRetry,
       "session.execution.failed": () => clearCurrentRetry,
@@ -380,7 +406,9 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.text.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          draft.content.push(castDraft(SessionMessage.AssistantText.make({ type: "text", text: "" })))
+          draft.content.push(
+            castDraft(SessionMessage.AssistantText.make({ type: "text", text: "", phase: event.data.phase })),
+          )
         })
       },
       "session.text.delta": (event) => {
@@ -392,7 +420,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.text.ended": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestText(draft)
-          if (match) match.text = event.data.text
+          if (match) {
+            match.text = event.data.text
+            match.phase = event.data.phase
+          }
         })
       },
       "session.tool.input.started": (event) => {

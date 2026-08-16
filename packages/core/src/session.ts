@@ -3,7 +3,7 @@ export * from "./session/schema"
 
 import { Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
-import { and, asc, count, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
+import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -61,6 +61,11 @@ import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { ProjectArtifactAccounting } from "./project-artifact/accounting"
 import { ProjectArtifactStore } from "./project-artifact"
 import { ProjectArtifactSource } from "./project-artifact/source"
+import { SessionModelSwitch } from "./session/model-switch"
+import { SessionHistory } from "./session/history"
+import { SessionContextBudget } from "./session/context-budget"
+import { Catalog } from "./catalog"
+import { Config } from "./config"
 
 export const RevertState = Session.Revert
 export type RevertState = Session.Revert
@@ -223,13 +228,6 @@ export interface Interface {
       direction: "previous" | "next"
     }
   }) => Effect.Effect<SessionMessage.Info[], NotFoundError | MessageDecodeError>
-  // Counts the messages a `next` cursor still has behind it without decoding their payloads, so a
-  // client can describe the size of unloaded history instead of walking every page to discover it.
-  readonly messageRemainder: (input: {
-    sessionID: SessionSchema.ID
-    afterID: SessionMessage.ID
-    order: "asc" | "desc"
-  }) => Effect.Effect<number, NotFoundError>
   readonly message: (input: {
     sessionID: SessionSchema.ID
     messageID: SessionMessage.ID
@@ -265,7 +263,7 @@ export interface Interface {
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<SessionModelSwitch.Outcome, NotFoundError | MessageDecodeError>
   readonly rename: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<void, NotFoundError>
   readonly move: (input: {
     sessionID: SessionSchema.ID
@@ -390,6 +388,40 @@ const layer = Layer.effect(
         Effect.provide(locations.get(location)),
         Effect.catchCause(() => Effect.succeed(undefined)),
       )
+    })
+    // Context validation for a model switch resolves the target in the Session's
+    // Location-scoped registry. The transcript read below is durable database work.
+    const checkModelSwitch = Effect.fnUntraced(function* (session: SessionSchema.Info, targetModel: ModelV2.Ref) {
+      const resolution = yield* Effect.gen(function* () {
+        const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+        const config = yield* Config.Service.pipe(Effect.provide(locations.get(session.location)))
+        const compaction = (yield* config.entries())
+          .filter((entry): entry is Config.Document => entry.type === "document")
+          .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : []))
+        return {
+          target: SessionContextBudget.resolveCapabilities(
+            yield* catalog.model.available(),
+            targetModel.providerID,
+            targetModel.id,
+            {
+              safetyMarginTokens:
+                compaction.findLast((item) => item.context_safety_margin_tokens !== undefined)
+                  ?.context_safety_margin_tokens ?? 0,
+            },
+          ),
+          keepRecentMessages: compaction.findLast((item) => item.keep_recent_messages !== undefined)
+            ?.keep_recent_messages,
+        }
+      })
+      const messages = yield* SessionHistory.forModel(db, session.id)
+      return SessionModelSwitch.decide({
+        currentModel: session.model,
+        targetModel,
+        messages,
+        model: session.model ?? targetModel,
+        target: resolution.target,
+        keepRecentMessages: resolution.keepRecentMessages,
+      })
     })
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
@@ -611,30 +643,6 @@ const layer = Layer.effect(
         )
         return yield* Effect.forEach(direction === "previous" ? rows.toReversed() : rows, decode)
       }),
-      messageRemainder: Effect.fn("V2Session.messageRemainder")(function* (input) {
-        yield* result.get(input.sessionID)
-        const anchor = yield* db
-          .select({ seq: SessionMessageTable.seq })
-          .from(SessionMessageTable)
-          .where(and(eq(SessionMessageTable.session_id, input.sessionID), eq(SessionMessageTable.id, input.afterID)))
-          .get()
-          .pipe(Effect.orDie)
-        if (!anchor) return 0
-        // Mirrors the boundary a `next` cursor applies, so the count always describes exactly the
-        // rows that continuing to page would return.
-        const remaining = yield* db
-          .select({ total: count() })
-          .from(SessionMessageTable)
-          .where(
-            and(
-              eq(SessionMessageTable.session_id, input.sessionID),
-              input.order === "asc" ? gt(SessionMessageTable.seq, anchor.seq) : lt(SessionMessageTable.seq, anchor.seq),
-            ),
-          )
-          .get()
-          .pipe(Effect.orDie)
-        return remaining?.total ?? 0
-      }),
       message: Effect.fn("V2Session.message")(function* (input) {
         const stored = yield* store.message(input.messageID)
         return stored?.sessionID === input.sessionID ? stored.message : undefined
@@ -746,7 +754,13 @@ const layer = Layer.effect(
         const model = command.model ?? commandAgent?.model ?? input.model
         if (agent !== undefined && session.agent !== AgentV2.ID.make(agent))
           yield* result.switchAgent({ sessionID: input.sessionID, agent: AgentV2.ID.make(agent) })
-        if (model !== undefined) yield* result.switchModel({ sessionID: input.sessionID, model })
+        // A blocked switch is advisory for command execution: the command still runs on the
+        // current model rather than failing the whole command. Transcript corruption is a
+        // defect and fails loudly for both the switch and the following prompt.
+        if (model !== undefined)
+          yield* result
+            .switchModel({ sessionID: input.sessionID, model })
+            .pipe(Effect.asVoid, Effect.catchTag("Session.MessageDecodeError", Effect.die))
         const provenance = source ? yield* source.provenance("command", input.command) : undefined
 
         const admitted = yield* result.prompt({
@@ -972,11 +986,19 @@ const layer = Layer.effect(
           session.model.id === input.model.id &&
           (session.model.variant ?? "default") === (input.model.variant ?? "default")
         )
-          return
+          return { status: "switched" }
+        // Switching waits for the current drain to finish. This keeps the active request
+        // on its already-selected model and validates the transcript at the next request
+        // boundary; it does not cancel or compact any session state.
+        yield* execution.awaitIdle(session.id)
+        const settled = yield* result.get(session.id)
+        const checked = yield* checkModelSwitch(settled, input.model)
+        if (checked.status === "blocked") return checked
         yield* events.publish(SessionEvent.ModelSelected, {
-          sessionID: input.sessionID,
+          sessionID: session.id,
           model: input.model,
         })
+        return { status: "switched" }
       }),
       rename: Effect.fn("V2Session.rename")(function* (input) {
         yield* result.get(input.sessionID)

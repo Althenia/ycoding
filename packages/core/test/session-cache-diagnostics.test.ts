@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
+import { DateTime } from "effect"
+import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionCacheDiagnostics } from "@ycoding-ai/core/session/cache-diagnostics"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 
@@ -183,4 +186,35 @@ test("omits the minimum when the model has no published cache profile", () => {
   })
   expect(result.cache.minimumTokens).toBeUndefined()
   expect(result.cache.belowMinimum).toBeUndefined()
+})
+
+test("uses the latest provider telemetry after switching from Claude to GPT", () => {
+  const created = DateTime.makeUnsafe(0)
+  const assistant = (
+    id: string,
+    selected: ModelV2.Ref,
+    cache: { read: number; write: number },
+    mechanism: "anthropic-cache-control" | "openai-prefix-cache",
+  ) =>
+    SessionMessage.Assistant.make({
+      id: SessionMessage.ID.make(id),
+      type: "assistant",
+      agent: AgentV2.defaultID,
+      model: selected,
+      content: [],
+      tokens: { input: 100, output: 20, reasoning: 0, cache },
+      diagnostics: { providerCache: { mechanism, readReported: true, writeReported: true } },
+      time: { created, completed: created },
+    })
+  const claude = namedModel("anthropic", "claude-opus-4-8")
+  const gpt = namedModel("openai", "gpt-5.6")
+
+  const result = SessionCacheDiagnostics.fromMessages([
+    assistant("msg_claude", claude, { read: 900, write: 0 }, "anthropic-cache-control"),
+    assistant("msg_gpt", gpt, { read: 0, write: 25 }, "openai-prefix-cache"),
+  ])
+
+  expect(result?.model).toEqual(gpt)
+  expect(result?.tokens).toMatchObject({ cacheRead: 0, cacheWrite: 25 })
+  expect(result?.cache).toMatchObject({ mechanism: "openai-prefix-cache", hitRatio: 0 })
 })

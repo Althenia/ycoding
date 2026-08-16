@@ -48,7 +48,7 @@ function durable(sessionID: string, seq = 0) {
   return { aggregateID: sessionID, seq, version: 1 as const }
 }
 
-type SessionMessages = MessageListOutput["data"]
+type SessionMessages = MessageListOutput
 
 function sdk(input: {
   streams: ReturnType<typeof feed>[]
@@ -61,9 +61,7 @@ function sdk(input: {
   const client = YCoding.make({ baseUrl: "https://ycoding.test" })
   let subscription = 0
   spyOn(client.event, "subscribe").mockImplementation(() => input.streams[subscription++]?.stream ?? feed().stream)
-  spyOn(client.message, "list").mockImplementation((request) =>
-    ok({ data: input.messages?.[request.sessionID] ?? [], cursor: {} }),
-  )
+  spyOn(client.message, "list").mockImplementation((request) => ok(input.messages?.[request.sessionID] ?? []))
   spyOn(client.permission, "list").mockImplementation(() => ok([]))
   spyOn(client.form, "list").mockImplementation(() => ok([]))
   spyOn(client.form.request, "list").mockImplementation(() =>

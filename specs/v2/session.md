@@ -39,15 +39,31 @@ The public interrupt operation verifies that the durable Session exists. An unkn
 
 The managed server provides graceful restart continuity through private Session suspension. Shutdown marks active Sessions before interrupting them; the next managed server atomically consumes each suspension and schedules at most one resume. Hard-crash recovery and exactly-once provider or tool execution remain out of scope. See [Managed restart continuation](./session-restart-continuation.md).
 
+## Model Selection Requires Context Fit
+
+`POST /api/session/:sessionID/model` resolves the requested provider and model in the Session Location's catalog, then estimates the active rolling summary and recent model-visible messages against the target context window after reserving its maximum output and configured `compaction.context_safety_margin_tokens`. The margin is passed explicitly and defaults to zero when absent.
+
+If the context fits, the operation preserves its `204 No Content` response and appends the existing `session.model.selected` event. The next provider request receives a distinct model-specific cache namespace and invalidation reason through the existing request path.
+
+If it does not fit, the endpoint returns `409 ModelSwitchBlockedError` and changes no durable Session state. Its structured payload contains the current and target models, estimated current context tokens, target safe input tokens, required reduction tokens, and `context-window-exceeded`. `maximumSafeSummaryBoundary` is present only when `compaction.keep_recent_messages` is configured and retaining that tail is estimated to fit; it is advisory. The switch never starts compaction, deletes or rewrites transcript rows, or changes the selected model.
+
+When a Session drain is active, selection waits for that drain to settle before checking the persisted context and changing the model. The active provider request therefore completes using its original model; the selected model applies only at the following request boundary.
+
 ## One Step Owns One Logical LLM Call
 
 Before each Step, the runner reloads Session History, resolves the selected agent and model, prepares instructions, and materializes tools. Most Steps make one Physical Attempt; overflow-triggered compaction recovery may rebuild the same Step for one additional provider request.
 
 Each complete local tool call is durable before side effects begin. Local calls start eagerly and may run concurrently, but settlement publication remains serialized. Every local and hosted call reaches durable success or failure before the Step publishes its single terminal ended or failed event.
 
+Every Step that publishes `session.step.started.1` publishes exactly one terminal `session.step.ended.1` or `session.step.failed.1`. Provider step settlement is required for `Step.Ended`. A malformed started Step with missing settlement fails truthfully as `provider.invalid-output`; an unstarted empty malformed request may proceed to the bounded terminal-silence recovery without inventing a Step event. A valid settled response with no non-whitespace assistant text and no local-tool continuation may start exactly one text-only recovery Step. The recovery disables tools and stored Responses continuation, carries no synthetic max-step message, and must fail without a third Step unless it receives both real provider settlement and non-whitespace assistant text.
+
 Tool calls belong to their assistant message. `callID` is unique only within that Step, so durable tool events also carry `assistantMessageID`.
 
 Before `runStep` assembles its provider request, orphan reconciliation fails tool calls still projected as streaming or running from an earlier process. It preserves the original assistant attribution and never replays ambiguous side effects.
+
+Before each physical attempt, the runner derives the promoted user-message IDs present in the final model-visible message slice after instruction loading, active-history selection, compaction, stored-response continuation slicing, and `session:context` hook shaping. The single eager `llm.stream(request)` invocation does not itself create a receipt. When the provider stream emits its first event, the runner first appends `session.input.consumed.1` for IDs without an earlier consumption fact, then projects that provider event; a transport failure before the first stream event creates no consumption fact. One event may contain multiple coalesced steers. The user-message projection stores the event time as optional `time.consumed`, so first consumption remains idempotent across retry, restart, and resident-transcript eviction.
+
+The event contains only Session and message IDs. It exposes no provider request ID, prompt content, cache digest, credential, or private request-ledger field. A pre-hook provider-ledger `inputID`, a visible transcript row, an assistant step, and a provider response are not substitutes for exact final request membership. Historical user messages omit `time.consumed` and remain compatible without a data migration; YCoding does not infer receipts retroactively.
 
 After local settlement, continuation reloads projected history and begins a new Step. The runner never delegates orchestration to an in-memory tool loop.
 
@@ -77,17 +93,17 @@ Implemented HTTP contract: `POST /api/session/:sessionID/skill/resolve` uses the
 
 Compatibility: durable projectors dispatch by exact `<type>.<version>`, and aggregate reads skip event types absent from an older manifest while advancing across their sequence. Conflict resolution therefore uses the new `session.skill.deactivated.1` type instead of changing or bumping `session.skill.activated.1`; bumping activation would leave existing `.1` records without the current activation projector. The projected `skillDeactivations` field is optional on existing skill and assistant messages, so new readers decode historical messages that omit it. The new closed-enum value is isolated to the new event and optional projection fact; it is not written into an existing versioned event payload.
 
-## Compaction Rebuilds Active History
+## Explicit Summary Rebuilds Active History
 
-Before each Step, the runner estimates the complete model-visible request against the selected model's context window and reserved output headroom. When compaction is enabled, model limits are known, and enough older Session History is available, the runner may store a structured rolling summary plus bounded recent context instead of sending an over-budget request.
+The main agent may call `conversation_summarize` through one existing message boundary. The hidden summarizer must return a validated, versioned TOON checkpoint containing enough objective, decision, constraint, progress, blocker, and identifier detail to continue without the covered rows. Summarization is explicit and advisory; context pressure never starts it automatically.
 
-The full transcript remains durable. Active model history after the compaction boundary contains the summary and retained recent context; provider-native continuation state does not cross that boundary.
+A successful write atomically replaces the previous summary and covered message-producing history with the new summary while preserving the configured recent tail and protected lifecycle history. The current projected transcript, resident TUI transcript, and next model request contain the latest summary plus retained recent messages; covered transcript rows are not retained as a second visible or model-facing history. Provider-native continuation state does not cross that boundary.
 
 Implemented: a completed `session.compaction.ended.1` event and its completed compaction projection may carry `messages`, the count folded into that summary operation, and structured `tokens` containing normalized provider-reported input, output, reasoning, cache-read, and cache-write usage. Both fields are optional for compatibility with persisted events and unreported provider usage. A missing token value is absent, not zero.
 
 Compaction helper requests use an internal cache namespace scope and never share a provider cache key with ordinary Session steps. Existing ordinary-step namespace bytes remain stable. Parent and child Sessions may reuse a provider prefix only when every model-visible namespace input is equal, including provider, model, variant, policy revision, permissions, system, and tool definitions.
 
-If the provider reports context overflow before durable assistant output or tool execution, the runner may perform one overflow-triggered compaction and rebuild the same logical Step. A second overflow or any overflow after durable output is terminal.
+Provider context overflow is terminal. The runtime does not start summarization or rebuild a Step automatically; the agent must call `conversation_summarize` before exhaustion.
 
 ## Cache reset diagnostics
 
@@ -100,6 +116,16 @@ The bounded Session diagnostics response includes the latest provider-request in
 Live-only text, reasoning, tool-input, and compaction deltas are intentionally absent from replay. The instance-wide live event stream has different schemas and no replay guarantee.
 
 There is no separate finite Session-history endpoint. Request/response consumers use authoritative Session projections such as messages, pending input, and context; replay consumers use the durable log.
+
+## Bounded Managed Subagent Pages
+
+`GET /api/session/:parentID/subagent` returns one page of direct durable managed-child task records. `limit` is a positive integer, defaults to `10`, and cannot exceed `10`. The response is `{ data, summary, cursor }`: `data` contains at most the requested page size; `summary` contains exact `total`, `active`, `running`, and `waiting` counts; and `cursor.previous` or `cursor.next` is an opaque base64url value when an adjacent page exists.
+
+Task order is deterministic: `waiting`, `starting`, `running`, `cancelling`, then the terminal group (`cancelled`, `completed`, `failed`, `lost`); records in each group sort by durable `time.updated` descending and Session ID ascending. Cursors carry the parent Session ID, this rank, durable update time, Session ID, and direction. The server rejects malformed cursors and cursors for another parent with `InvalidCursorError`.
+
+The page read verifies the parent Session and calculates aggregates and rows in one database transaction. Paging neither removes child Sessions nor deletes task, message, event, permission-ceiling, ownership, nesting, or background-execution state. The full internal task list remains available for the independently bounded model-facing TeamView.
+
+For each parent, the TUI retains only the current page's at-most-10 task metadata rows and replaces them on previous or next navigation. Exact summary totals remain independent from resident rows. Sibling navigation first locates an absent current child by loading pages lazily, then loads an adjacent page only when navigation crosses the current page boundary; this changes only volatile TUI residency and never durable child state.
 
 ## Recovery Boundaries Stay Explicit
 

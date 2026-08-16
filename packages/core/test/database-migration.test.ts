@@ -12,6 +12,7 @@ import { DatabaseMigration } from "@ycoding-ai/core/database/migration"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { tmpdir } from "./fixture/tmpdir"
 import dropApplicationCache from "../src/database/migration/20260725062914_drop-application-cache"
+import dropSessionArchived from "../src/database/migration/20260801114207_drop-session-archived"
 import retireSelfImprovement from "../src/database/migration/20260726182810_retire-self-improvement"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
@@ -29,6 +30,7 @@ const migrations = [
   { id: "20260727001011_observation-sessionless-identity" },
   { id: "20260728025034_dusty_havok" },
   { id: "20260728084114_provider-request-optional-cost" },
+  { id: "20260801114207_drop-session-archived" },
 ]
 const projectArtifactTables = [
   "project_artifact",
@@ -135,6 +137,7 @@ describe("DatabaseMigration", () => {
           "summary_diffs",
           "metadata",
           "time_compacting",
+          "time_archived",
         ]) {
           expect(columns).not.toContain(removed)
         }
@@ -191,6 +194,30 @@ describe("DatabaseMigration", () => {
         ).toEqual([])
         expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
           { id: "20260725062914_drop-application-cache" },
+        ])
+      }),
+    )
+  })
+
+  test("drops the session archive timestamp while retaining the remaining columns", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(
+          sql.raw(
+            `CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL, time_archived INTEGER, time_suspended INTEGER)`,
+          ),
+        )
+        yield* db.run(sql`INSERT INTO session (id, title, time_archived) VALUES ('ses_1', 'kept', 1785584106948)`)
+
+        yield* DatabaseMigration.applyOnly(db, [dropSessionArchived])
+        yield* DatabaseMigration.applyOnly(db, [dropSessionArchived])
+
+        const columns = (yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)
+        expect(columns).toEqual(["id", "title", "time_suspended"])
+        expect(yield* db.get(sql`SELECT id, title FROM session`)).toEqual({ id: "ses_1", title: "kept" })
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
+          { id: "20260801114207_drop-session-archived" },
         ])
       }),
     )

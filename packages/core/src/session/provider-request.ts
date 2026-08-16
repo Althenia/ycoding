@@ -169,6 +169,35 @@ const layer = Layer.effect(
           const cost = records.every((record) => record.cost !== undefined)
             ? Money.USD.make(records.reduce((total, record) => total + (record.cost ?? 0), 0))
             : undefined
+          const models = [
+            ...Map.groupBy(
+              records,
+              (record) => JSON.stringify([record.model.providerID, record.model.id, record.model.variant]),
+            ).values(),
+          ]
+            .flatMap((group) => {
+              const first = group.at(0)
+              if (!first) return []
+              const groupCost = group.every((record) => record.cost !== undefined)
+                ? Money.USD.make(group.reduce((total, record) => total + (record.cost ?? 0), 0))
+                : undefined
+              return [
+                { model: first.model, requests: group.length, ...(groupCost === undefined ? {} : { cost: groupCost }) },
+              ]
+            })
+            .sort(
+              (left, right) =>
+                (left.cost === undefined
+                  ? right.cost === undefined
+                    ? 0
+                    : 1
+                  : right.cost === undefined
+                    ? -1
+                    : right.cost - left.cost) ||
+                left.model.providerID.localeCompare(right.model.providerID) ||
+                left.model.id.localeCompare(right.model.id) ||
+                (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
+            )
           return {
             logical: records.length,
             physical: records.reduce((total, record) => total + record.attempts, 0),
@@ -176,6 +205,7 @@ const layer = Layer.effect(
             continued: records.filter((record) => record.continuation === "continued").length,
             fallback: records.filter((record) => record.continuation === "fallback").length,
             ...(cost === undefined ? {} : { cost }),
+            ...(models.length === 0 ? {} : { models }),
             tokens: records.reduce((total, record) => addTokens(total, record.tokens), zeroTokens()),
             ...(last === undefined
               ? {}

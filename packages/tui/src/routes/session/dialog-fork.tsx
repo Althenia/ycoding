@@ -10,7 +10,12 @@ import { errorMessage } from "../../util/error"
 import { Locale } from "../../util/locale"
 import { projectedPromptInput } from "../../prompt/codec"
 
-export function DialogFork(props: { sessionID: string; messageID?: string; onMove?: (messageID?: string) => void }) {
+export function DialogFork(props: {
+  sessionID: string
+  messageID?: string
+  boundary?: { messageID: string; index: number; total: number }
+  onMove?: (messageID?: string) => void
+}) {
   const data = useData()
   const dialog = useDialog()
   const client = useClient()
@@ -48,13 +53,8 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
     if (props.messageID) void fork(props.messageID)
   })
 
-  const options = createMemo((): DialogSelectOption<string | undefined>[] => [
-    {
-      title: "Full session",
-      value: undefined,
-      onSelect: () => fork(),
-    },
-    ...data.session.message
+  const options = createMemo((): DialogSelectOption<string | undefined>[] => {
+    const messages = data.session.message
       .list(props.sessionID)
       .filter((message) => message.type === "user")
       .toReversed()
@@ -63,8 +63,30 @@ export function DialogFork(props: { sessionID: string; messageID?: string; onMov
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: () => fork(message.id),
-      })),
-  ])
+      }))
+    if (!props.boundary)
+      return [
+        { title: "From latest", value: undefined, onSelect: () => fork() },
+        ...messages,
+      ]
+    return [
+      {
+        title: "From this message",
+        value: props.boundary.messageID,
+        category: "Fork point",
+        description: `message ${props.boundary.index} of ${props.boundary.total}`,
+        onSelect: () => fork(props.boundary?.messageID),
+      },
+      {
+        title: "From latest",
+        value: undefined,
+        category: "Fork point",
+        description: `message ${props.boundary.total} of ${props.boundary.total}`,
+        onSelect: () => fork(),
+      },
+      ...messages.filter((message) => message.value !== props.boundary?.messageID),
+    ]
+  })
 
   return (
     <Show

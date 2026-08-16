@@ -50,11 +50,14 @@ test("centers the first rail section title in a full-width three-row background 
     expect(contentRow).toBe(titleRow + 3)
     expect([titleRow - 1, titleRow, titleRow + 1].map(hasTitleBackground)).toEqual([true, true, true])
     expect(hasTitleBackground(titleRow + 2)).toBe(false)
+    // The rail's one-column left rule sits at its outer edge, so the section band fills every
+    // column to its right, through to the terminal edge.
     expect([filledColumns[0], filledColumns.at(-1)]).toEqual([
-      dimensions.width - railWidth(dimensions.width),
+      dimensions.width - railWidth(dimensions.width) + 1,
       dimensions.width - 1,
     ])
-    expect(filledColumns).toHaveLength(railWidth(dimensions.width))
+    // The left rule occupies the rail's outermost column, so the band fills the remainder.
+    expect(filledColumns).toHaveLength(railWidth(dimensions.width) - 1)
   } finally {
     await app.dispose()
   }

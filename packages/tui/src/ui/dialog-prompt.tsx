@@ -1,9 +1,10 @@
-import { TextareaRenderable, TextAttributes } from "@opentui/core"
+import { TextareaRenderable } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog, type DialogContext } from "./dialog"
+import { DialogHeader, DialogSearchRow, DialogTitle, useDialog, type DialogContext } from "./dialog"
 import { Show, createEffect, createSignal, onMount, type JSX } from "solid-js"
 import { Spinner } from "../component/spinner"
+import { Locale } from "../util/locale"
 
 export type DialogPromptProps = {
   title: string
@@ -72,25 +73,19 @@ export function DialogPrompt(props: DialogPromptProps) {
   })
 
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
-          {props.title}
-        </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
-      </box>
-      <box gap={1}>
+    <box paddingTop={1} paddingBottom={1}>
+      <DialogHeader title={<DialogTitle>{props.title}</DialogTitle>} />
+      <DialogSearchRow />
+      <box minHeight={3} paddingTop={1} paddingLeft={6} paddingRight={4}>
         {props.description?.()}
         <textarea
-          height={3}
+          height={1}
           ref={(val: TextareaRenderable) => {
             textarea = val
             setTextareaTarget(val)
           }}
           initialValue={props.value}
-          placeholder={props.placeholder ?? "Enter text"}
+          placeholder={props.placeholder ?? "Search"}
           placeholderColor={themeV2.text.subdued}
           textColor={props.busy ? themeV2.text.formfield.disabled : themeV2.text.formfield.default}
           focusedTextColor={props.busy ? themeV2.text.formfield.disabled : themeV2.text.formfield.default}
@@ -100,12 +95,14 @@ export function DialogPrompt(props: DialogPromptProps) {
           <Spinner color={themeV2.text.subdued}>{props.busyText ?? "Working..."}</Spinner>
         </Show>
       </box>
-      <box paddingBottom={1} gap={1} flexDirection="row">
+      <box paddingTop={1} paddingLeft={6} paddingRight={4} flexDirection="row">
         <Show when={!props.busy} fallback={<text fg={themeV2.text.subdued}>processing...</text>}>
           <Show when={shortcuts.get("dialog.prompt.submit")}>
-            <text fg={themeV2.text.default}>
-              {shortcuts.get("dialog.prompt.submit")} <span style={{ fg: themeV2.text.subdued }}>submit</span>
-            </text>
+            {(shortcut) => (
+              <text fg={themeV2.text.default}>
+                {Locale.titlecase(shortcut())} <span style={{ fg: themeV2.text.subdued }}>confirm</span>
+              </text>
+            )}
           </Show>
         </Show>
       </box>

@@ -99,7 +99,8 @@ export function railWidth(width: number) {
 export function railMetrics(width: number) {
   const fullWidth = railWidth(width) >= DESIGN_RAIL_WIDTH
   return {
-    paddingLeft: fullWidth ? 7 : 2,
+    // The left rule plus two inner columns retain the design's marker column at rail offset 3.
+    paddingLeft: 3,
     paddingRight: 3,
     sectionLabelPadding: fullWidth ? 1 : 0,
     sessionGap: fullWidth ? 1 : 0,

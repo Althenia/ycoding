@@ -53,7 +53,6 @@ export const SessionTable = sqliteTable(
       variant?: string
     }>(),
     ...Timestamps,
-    time_archived: integer(),
     time_suspended: integer(),
   },
   (table) => [

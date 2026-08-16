@@ -26,7 +26,7 @@ Start with [`docs/README.md`](./docs/README.md). Product scope, architecture, ru
 - Session skill activation, conflict reporting, and rehydration.
 - Project and global artifacts for skills, commands, agents, and plugin drafts.
 - Provider cache diagnostics and explicit prompt-cache support.
-- Paginated transcript history with a 50-message hot window and 1000-message archive pages.
+- Complete resident transcript loading for the currently open Session.
 - TUI session timeline, diagnostics, project-artifact management, and session-skill inspection.
 
 See [`docs/runtime.md`](./docs/runtime.md) for behavior details.

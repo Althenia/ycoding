@@ -1,5 +1,6 @@
 import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useArgs } from "../context/args"
 import { useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
@@ -16,6 +17,7 @@ import { useDialog } from "../ui/dialog"
 import { ModeChips } from "../component/prompt/mode-chips"
 import { Header } from "./session/header"
 import { useClient } from "../context/client"
+import { BrandMark } from "../component/logo"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -32,9 +34,7 @@ export function LandingHero() {
   return (
     <box alignItems="center" flexShrink={0}>
       <box flexDirection="column" alignItems="center" gap={2}>
-        <text fg={themeV2.text.feedback.success.default} selectable={false}>
-          y. ycoding
-        </text>
+        <BrandMark width={12} height={6} />
         <text fg={themeV2.text.default} selectable={false}>
           What should we build?
         </text>
@@ -48,8 +48,14 @@ export function LandingHero() {
 
 export function LandingComposer(props: { children: JSX.Element }) {
   const { themeV2 } = useTheme()
+  const dimensions = useTerminalDimensions()
   return (
-    <box width="100%" paddingBottom={3} border={["top"]} borderColor={themeV2.text.feedback.success.default}>
+    <box
+      width="100%"
+      paddingBottom={Math.max(0, Math.max(1, Math.min(4, Math.floor(dimensions().height / 16))) - 1)}
+      border={["top"]}
+      borderColor={themeV2.text.feedback.success.default}
+    >
       {props.children}
     </box>
   )
@@ -176,7 +182,6 @@ export function Home() {
           <pluginRuntime.Slot name="home_prompt" mode="replace" ref={bind}>
             <Prompt
               ref={bind}
-              right={<pluginRuntime.Slot name="home_prompt_right" />}
               placeholders={landingPlaceholder}
               landing
               onOverlayChange={setPromptOverlay}

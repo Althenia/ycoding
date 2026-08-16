@@ -1,3 +1,4 @@
+import type { SessionOrchestrationSummary, SessionOrchestrationTask } from "@ycoding-ai/client"
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { createEffect, createMemo, For, Show } from "solid-js"
 import { useData } from "../../context/data"
@@ -5,34 +6,49 @@ import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { RailRow, RailSection, useRail } from "../../routes/session/rail-section"
 import { getGlyph } from "../../ui/glyph"
-import { subagentSiblingSessionIDs } from "../../routes/session/subagent-footer"
 import { formatDuration } from "../../util/format"
 
 export function SubagentRail(props: { sessionID: string }) {
   const route = useRoute()
   const data = useData()
   createEffect(() => void data.session.subagent.sync(props.sessionID))
-  const tasks = createMemo(() => data.session.subagent.list(props.sessionID))
-  const ordered = createMemo(() => {
-    const ids = subagentSiblingSessionIDs(tasks())
-    return ids.flatMap((id) => tasks().find((task) => task.sessionID === id) ?? [])
-  })
+  const page = createMemo(() => data.session.subagent.page(props.sessionID))
+  const navigation = createMemo(() => data.session.subagent.navigation(props.sessionID))
 
-  return <SubagentRailContent tasks={ordered().map((task) => ({ ...task, elapsed: formatDuration((Date.now() - task.time.created) / 1000) }))} onSelect={(sessionID) => route.navigate({ type: "session", sessionID })} />
+  return (
+    <SubagentRailContent
+      tasks={(page()?.data ?? []).map((task) => ({ ...task, elapsed: formatDuration((Date.now() - task.time.created) / 1000) }))}
+      summary={page()?.summary}
+      position={navigation().position}
+      onSelect={(sessionID) => route.navigate({ type: "session", sessionID })}
+      onLoadOlder={() => void data.session.subagent.loadOlder(props.sessionID)}
+      onLoadNewer={() => void data.session.subagent.loadNewer(props.sessionID)}
+    />
+  )
 }
 
 export function SubagentRailContent(props: {
-  tasks: ReadonlyArray<{ sessionID: string; description: string; question?: { text: string }; elapsed?: string }>
+  tasks: ReadonlyArray<Pick<SessionOrchestrationTask, "sessionID" | "description" | "state" | "question"> & { elapsed?: string }>
+  summary?: SessionOrchestrationSummary
+  position?: "top" | "older"
   onSelect?: (sessionID: string) => void
+  onLoadOlder?: () => void
+  onLoadNewer?: () => void
 }) {
   const { themeV2 } = useTheme()
   const rail = useRail()
-  const waiting = createMemo(() => props.tasks.filter((task) => task.question?.text))
-  const summary = createMemo(() => String(props.tasks.length))
+  const waiting = createMemo(() => props.summary?.waiting ?? props.tasks.filter((task) => task.question?.text).length)
+  const summary = createMemo(
+    () =>
+      `${props.summary?.running ?? props.tasks.filter((task) => task.state === "running").length}/${props.summary?.total ?? props.tasks.length} running${
+        waiting() ? ` · ${waiting()} waiting` : ""
+      }`,
+  )
+  const more = createMemo(() => (props.position === "top" ? Math.max(0, (props.summary?.total ?? props.tasks.length) - props.tasks.length) : 0))
 
   return (
-    <Show when={props.tasks.length > 0}>
-      <RailSection section="subagents" title="SUBAGENTS" summary={summary()} attention={waiting().length > 0}>
+    <Show when={props.tasks.length > 0 || (props.summary?.total ?? 0) > 0}>
+      <RailSection section="subagents" title="SUBAGENTS" summary={summary()} attention={waiting() > 0}>
         <For each={props.tasks}>
           {(task, index) => {
             const blocked = () => Boolean(task.question?.text)
@@ -53,8 +69,15 @@ export function SubagentRailContent(props: {
             )
           }}
         </For>
-        <Show when={rail?.allExpanded()}>
-          <box height={2} flexShrink={0} />
+        <Show when={more() > 0}>
+          <box onMouseUp={() => props.onLoadOlder?.()}>
+            <RailRow label={`+${more()} more`} value="older" />
+          </box>
+        </Show>
+        <Show when={props.position === "older" && props.onLoadNewer}>
+          <box onMouseUp={() => props.onLoadNewer?.()}>
+            <RailRow label="newer" value="top" />
+          </box>
         </Show>
       </RailSection>
     </Show>

@@ -52,6 +52,8 @@ export type SessionOrchestrationProgress = { text: string; time: number }
 
 export type SessionOrchestrationQuestion = { id: string; text: string; data?: JsonValue; time: number }
 
+export type SessionOrchestrationSummary = { total: number; active: number; running: number; waiting: number }
+
 export type SessionTodoInfo = {
   content: string
   status: "pending" | "in_progress" | "completed" | "cancelled"
@@ -115,7 +117,7 @@ export type SessionMessageShell = {
   output?: { output: string; cursor: number; size: number; truncated: boolean }
 }
 
-export type SessionMessageAssistantText = { type: "text"; text: string }
+export type SessionMessageAssistantText = { type: "text"; text: string; phase?: "commentary" | "final_answer" }
 
 export type SessionMessageProviderState = { [x: string]: JsonValue }
 
@@ -471,29 +473,7 @@ export type ProviderRequest = {
 
 export type PermissionV2Rule = { action: string; resource: string; effect: PermissionV2Effect }
 
-export type ProviderRequestSummary = {
-  logical: number
-  physical: number
-  helpers: number
-  continued: number
-  fallback: number
-  cost?: MoneyUSD
-  tokens: TokenUsageInfo
-  latestInvalidation?:
-    | "first-request"
-    | "compaction-reset"
-    | "model-switched"
-    | "model-variant-switched"
-    | "stable-hit"
-    | "prefix-changed"
-    | "system-prefix-changed"
-    | "tool-prefix-changed"
-    | "below-minimum"
-    | "provider-not-reported"
-    | "cache-disabled"
-    | "retry-fallback"
-  latestNamespace?: string
-}
+export type ProviderRequestModelSpend = { model: ModelRef; requests: number; cost?: MoneyUSD }
 
 export type SessionMessageCompactionCompleted = {
   type: "compaction"
@@ -578,6 +558,16 @@ export type SessionInputPromoted = {
   data: { sessionID: string; inputID: string }
 }
 
+export type SessionInputConsumed = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.input.consumed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; inputIDs: [string, ...Array<string>] }
+}
+
 export type SessionExecutionStarted = {
   id: string
   created: number
@@ -655,7 +645,7 @@ export type SessionTextStarted = {
   type: "session.text.started"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; assistantMessageID: string; ordinal: number }
+  data: { sessionID: string; assistantMessageID: string; ordinal: number; phase?: "commentary" | "final_answer" }
 }
 
 export type SessionTextEnded = {
@@ -665,7 +655,13 @@ export type SessionTextEnded = {
   type: "session.text.ended"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; assistantMessageID: string; ordinal: number; text: string }
+  data: {
+    sessionID: string
+    assistantMessageID: string
+    ordinal: number
+    text: string
+    phase?: "commentary" | "final_answer"
+  }
 }
 
 export type SessionToolInputStarted = {
@@ -1787,21 +1783,29 @@ export type ProjectArtifactApiMetrics = {
 
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
-export type SessionCacheDiagnostics = {
-  model: ModelRef
-  context: { total: number; limit?: number; remaining?: number; percent?: number }
-  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  cache: {
-    eligible: number
-    hitRatio?: number
-    mechanism: SessionCacheMechanism
-    readReported: boolean
-    writeReported: boolean
-    minimumTokens?: number
-    belowMinimum?: boolean
-  }
-  estimatedCost?: MoneyUSD
-  requests?: ProviderRequestSummary
+export type ProviderRequestSummary = {
+  logical: number
+  physical: number
+  helpers: number
+  continued: number
+  fallback: number
+  cost?: MoneyUSD
+  models?: Array<ProviderRequestModelSpend>
+  tokens: TokenUsageInfo
+  latestInvalidation?:
+    | "first-request"
+    | "compaction-reset"
+    | "model-switched"
+    | "model-variant-switched"
+    | "stable-hit"
+    | "prefix-changed"
+    | "system-prefix-changed"
+    | "tool-prefix-changed"
+    | "below-minimum"
+    | "provider-not-reported"
+    | "cache-disabled"
+    | "retry-fallback"
+  latestNamespace?: string
 }
 
 export type SessionRevertStaged = {
@@ -1856,6 +1860,12 @@ export type SessionStepFailed = {
 
 export type SessionAutonomyState = { mode: SessionAutonomyMode; goal?: SessionAutonomyGoal | undefined }
 
+export type SessionOrchestrationPage = {
+  data: Array<SessionOrchestrationTask>
+  summary: SessionOrchestrationSummary
+  cursor: { previous?: string; next?: string }
+}
+
 export type SessionPendingUserData = {
   text: string
   files?: Array<PromptFileAttachment>
@@ -1866,7 +1876,7 @@ export type SessionPendingUserData = {
 export type SessionMessageUser = {
   id: string
   metadata?: { [x: string]: JsonValue }
-  time: { created: number }
+  time: { created: number; consumed?: number }
   text: string
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
@@ -2106,7 +2116,7 @@ export type SessionInfo = {
   permissionCeiling?: PermissionV2Ruleset
   cost: MoneyUSD
   tokens: TokenUsageInfo
-  time: { created: number; updated: number; archived?: number }
+  time: { created: number; updated: number }
   title: string
   location: LocationRef
   subpath?: string
@@ -2141,6 +2151,23 @@ export type ProjectArtifactAgentDefinition = {
   system: ProjectArtifactAgentSystem
   mode: "subagent"
   permissions: PermissionV2Ruleset
+}
+
+export type SessionCacheDiagnostics = {
+  model: ModelRef
+  context: { total: number; limit?: number; remaining?: number; percent?: number }
+  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
+  cache: {
+    eligible: number
+    hitRatio?: number
+    mechanism: SessionCacheMechanism
+    readReported: boolean
+    writeReported: boolean
+    minimumTokens?: number
+    belowMinimum?: boolean
+  }
+  estimatedCost?: MoneyUSD
+  requests?: ProviderRequestSummary
 }
 
 export type SessionPendingUser = {
@@ -2299,6 +2326,7 @@ export type SessionEventPublicDurable =
   | SessionForked
   | SessionInputPromoted
   | SessionInputAdmitted
+  | SessionInputConsumed
   | SessionExecutionStarted
   | SessionExecutionSucceeded
   | SessionExecutionFailed
@@ -2332,14 +2360,7 @@ export type SessionEventPublicDurable =
   | SessionRevertCleared
   | SessionRevertCommitted
 
-export type SessionMessagesResponse = {
-  data: Array<SessionMessageInfo>
-  cursor: {
-    previous?: string | null
-    next?: string | null
-    messages?: number | "Infinity" | "-Infinity" | "NaN" | null
-  }
-}
+export type SessionMessagesResponse = { data: Array<SessionMessageInfo> }
 
 export type V2Event =
   | ModelsDevRefreshed
@@ -2358,6 +2379,7 @@ export type V2Event =
   | SessionForked
   | SessionInputPromoted
   | SessionInputAdmitted
+  | SessionInputConsumed
   | SessionExecutionStarted
   | SessionExecutionSucceeded
   | SessionExecutionFailed
@@ -2505,6 +2527,20 @@ export type MessageNotFoundError = {
 }
 export const isMessageNotFoundError = (value: unknown): value is MessageNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "MessageNotFoundError"
+
+export type ModelSwitchBlockedError = {
+  readonly _tag: "ModelSwitchBlockedError"
+  readonly status: "blocked"
+  readonly currentModel: { readonly id: string; readonly providerID: string; readonly variant?: string }
+  readonly targetModel: { readonly id: string; readonly providerID: string; readonly variant?: string }
+  readonly currentContextTokens: number
+  readonly targetSafeInputTokens: number
+  readonly requiredReductionTokens: number
+  readonly maximumSafeSummaryBoundary?: string
+  readonly reason: "context-window-exceeded"
+}
+export const isModelSwitchBlockedError = (value: unknown): value is ModelSwitchBlockedError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ModelSwitchBlockedError"
 
 export type CommandNotFoundError = {
   readonly _tag: "CommandNotFoundError"
@@ -2882,9 +2918,13 @@ export type SessionRemoveInput = { readonly sessionID: { readonly sessionID: str
 
 export type SessionRemoveOutput = void
 
-export type SessionSubagentListInput = { readonly parentID: { readonly parentID: string }["parentID"] }
+export type SessionSubagentListInput = {
+  readonly parentID: { readonly parentID: string }["parentID"]
+  readonly limit?: { readonly limit?: number | undefined; readonly cursor?: string | undefined }["limit"]
+  readonly cursor?: { readonly limit?: number | undefined; readonly cursor?: string | undefined }["cursor"]
+}
 
-export type SessionSubagentListOutput = { data: Array<SessionOrchestrationTask> }["data"]
+export type SessionSubagentListOutput = SessionOrchestrationPage
 
 export type SessionSubagentLaunchInput = {
   readonly parentID: { readonly parentID: string }["parentID"]
@@ -3590,26 +3630,9 @@ export type GuardrailRequestReplyInput = {
 
 export type GuardrailRequestReplyOutput = void
 
-export type MessageListInput = {
-  readonly sessionID: { readonly sessionID: string }["sessionID"]
-  readonly limit?: {
-    readonly limit?: number | undefined
-    readonly order?: "asc" | "desc" | undefined
-    readonly cursor?: string | undefined
-  }["limit"]
-  readonly order?: {
-    readonly limit?: number | undefined
-    readonly order?: "asc" | "desc" | undefined
-    readonly cursor?: string | undefined
-  }["order"]
-  readonly cursor?: {
-    readonly limit?: number | undefined
-    readonly order?: "asc" | "desc" | undefined
-    readonly cursor?: string | undefined
-  }["cursor"]
-}
+export type MessageListInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
-export type MessageListOutput = SessionMessagesResponse
+export type MessageListOutput = SessionMessagesResponse["data"]
 
 export type ModelListInput = {
   readonly location?: {

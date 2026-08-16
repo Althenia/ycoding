@@ -96,11 +96,12 @@ const make = (dependencies: Dependencies) => {
     )
     const ttl = yield* dependencies.cacheRuntime.policy({
       namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
-      modelID: resolved.ref.id,
+      modelID: resolved.model.id,
       configured: efficiency.anthropicTtl,
     })
     const cache = SessionRunnerCache.providerOptions({
       ...namespaceInput,
+      apiModelID: resolved.model.id,
       sessionID: input.session.id,
       routeID: resolved.model.route.id,
       anthropicTtlSeconds: ttl.ttlSeconds,

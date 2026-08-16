@@ -122,20 +122,21 @@ describe("screen chrome colour probes", () => {
     for (const viewport of viewports) {
       const screen = await renderScreen({ ...viewport, args: { sessionID }, route: sessionRoute, settle: "SESSION" })
       try {
-        await waitFor(screen, "YCoding v")
         const railBand = railSpans(screen.spans().lines[4]?.spans ?? [], viewport.width)
-        const railFooter = screen.spans().lines.findIndex((line) => line.spans.some((span) => span.text.includes("YCoding v")))
-        const edgeBand = railSpans(screen.spans().lines[railFooter - 3]?.spans ?? [], viewport.width)
         expect(railBand).not.toHaveLength(0)
         const sessionHeader = railBand.find((span) => span.text.includes("SESSION"))
         if (!sessionHeader) throw new Error("SESSION header did not render")
         expect(sessionHeader.bg.toInts()).toEqual(railSection)
-        expect(edgeBand).not.toHaveLength(0)
-        const railEdge = edgeBand.find((span) => span.text.includes("─"))
-        if (!railEdge) throw new Error("Rail footer border did not render")
-        expect(railEdge.fg.toInts()).toEqual(border)
+
+        // The rail footer that printed the build and connection state was removed by design; the
+        // rail's own left rule is now what separates it from the transcript.
+        const ruleSpan = screen
+          .spans()
+          .lines[4]?.spans.find((span) => span.text.includes("\u2502"))
+        if (!ruleSpan) throw new Error("Rail left rule did not render")
+        expect(ruleSpan.fg.toInts()).toEqual(border)
+        expect(screen.frame()).not.toContain("YCoding v")
         expect(screen.colorOf("SESSION")).toEqual(accent)
-        expect(screen.colorOf("YCoding v")).toEqual(subdued)
       } finally {
         await screen.dispose()
       }

@@ -15,9 +15,10 @@ function getRelativeTime(timestamp: number): string {
   const days = Math.floor(hours / 24)
 
   if (seconds < 60) return "just now"
-  if (minutes < 60) return `${minutes}m ago`
-  if (hours < 24) return `${hours}h ago`
-  if (days < 7) return `${days}d ago`
+  if (minutes < 60) return `${minutes} min ago`
+  if (hours < 24) return `${hours} hr ago`
+  if (days === 1) return "yesterday"
+  if (days < 7) return `${days} days ago`
   return Locale.datetime(timestamp)
 }
 
@@ -48,7 +49,12 @@ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
           bg: isDeleting ? theme.error : undefined,
           value: index,
           description: getRelativeTime(entry.timestamp),
-          footer: lineCount > 1 ? `~${lineCount} lines` : undefined,
+          footer:
+            entry.prompt.pasted.length > 0
+              ? `${entry.prompt.pasted.length} file${entry.prompt.pasted.length === 1 ? "" : "s"}`
+              : lineCount > 1
+                ? `~${lineCount} lines`
+                : undefined,
         }
       })
       .toReversed()
@@ -56,7 +62,7 @@ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
 
   return (
     <DialogSelect
-      title="Stash"
+      title="Stashes"
       options={options()}
       onMove={() => {
         setToDelete(undefined)
@@ -70,10 +76,11 @@ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
         }
         dialog.clear()
       }}
+      footer={<text>⌃x k drop</text>}
       actions={[
         {
           command: "stash.delete",
-          title: "delete",
+          title: "drop",
           onTrigger: (option) => {
             if (toDelete() === option.value) {
               stash.remove(option.value)

@@ -9,21 +9,12 @@ export type ModeChip = { key: "goal" | "yolo"; label: string; tone: "off" | "on"
  * active autonomy mode is the most consequential fact on screen. Guardrails still require a human in YOLO mode.
  */
 export function modeChips(input: { autonomy?: SessionAutonomyState; guardrailPending?: boolean }): ModeChip[] {
-  const goal = input.autonomy?.goal
-  const active = goal?.status === "active"
+  const active = input.autonomy?.mode === "goal" && input.autonomy.goal?.status === "active"
   const blocked = input.autonomy?.mode === "yolo" && input.guardrailPending
   return [
     {
       key: "goal",
-      label: blocked
-        ? active
-          ? `goal ${goal.noProgress}/${goal.maxNoProgress} blocked`
-          : "guardrail blocked"
-        : active
-          ? `goal ${goal.noProgress}/${goal.maxNoProgress}`
-          : goal
-            ? `goal ${goal.status}`
-            : "goal off",
+      label: blocked ? "guardrail blocked" : active ? "goal" : "goal off",
       tone: blocked ? "warning" : active ? "on" : "off",
     },
     {

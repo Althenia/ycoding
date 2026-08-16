@@ -113,7 +113,7 @@ describe("Config", () => {
           helper_models: {
             title: "openai/gpt-5-mini#low",
             goal: "session",
-            compaction: "session",
+            compaction: { main: "session", subagent: "openai/gpt-5-mini#low" },
           },
           prompt_cache: {
             anthropic_ttl: "adaptive",
@@ -129,7 +129,7 @@ describe("Config", () => {
         helper_models: {
           title: selection("openai/gpt-5-mini#low"),
           goal: "session",
-          compaction: "session",
+          compaction: { main: "session", subagent: selection("openai/gpt-5-mini#low") },
         },
         prompt_cache: {
           anthropic_ttl: "adaptive",
@@ -736,10 +736,13 @@ describe("Config", () => {
                   },
                 },
                 compaction: {
-                  auto: true,
-                  prune: false,
-                  keep: { tokens: 2000 },
-                  buffer: 10000,
+                  keep_recent_messages: 20,
+                  reserved_output_tokens: 2000,
+                  context_safety_margin_tokens: 4096,
+                  timeout_seconds: 30,
+                  max_output_tokens: 4000,
+                  max_summary_bytes: 65536,
+                  max_internal_passes: 8,
                 },
                 skills: ["./skills", "~/shared-skills", "https://example.com/.well-known/skills/"],
                 instructions: ["CONTRIBUTING.md", ".cursor/rules/*.md", "https://example.com/shared-rules.md"],
@@ -823,9 +826,13 @@ describe("Config", () => {
               },
             })
             expect(documents[0]?.info.compaction).toEqual({
-              auto: true,
-              keep: { tokens: 2000 },
-              buffer: 10000,
+              keep_recent_messages: 20,
+              reserved_output_tokens: 2000,
+              context_safety_margin_tokens: 4096,
+              timeout_seconds: 30,
+              max_output_tokens: 4000,
+              max_summary_bytes: 65536,
+              max_internal_passes: 8,
             })
             expect(documents[0]?.info.skills).toEqual([
               "./skills",

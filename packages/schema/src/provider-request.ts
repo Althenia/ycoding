@@ -58,6 +58,14 @@ export const Record = Schema.Struct({
 }).annotate({ identifier: "ProviderRequest.Record" })
 export interface Record extends Schema.Schema.Type<typeof Record> {}
 
+export const ModelSpend = Schema.Struct({
+  model: Model.Ref,
+  requests: NonNegativeInt,
+  /** Absent when any request in the group reported no cost, because unreported spend is not zero spend. */
+  cost: Money.USD.pipe(optional),
+}).annotate({ identifier: "ProviderRequest.ModelSpend" })
+export interface ModelSpend extends Schema.Schema.Type<typeof ModelSpend> {}
+
 export const Summary = Schema.Struct({
   logical: NonNegativeInt,
   physical: NonNegativeInt,
@@ -65,6 +73,11 @@ export const Summary = Schema.Struct({
   continued: NonNegativeInt,
   fallback: NonNegativeInt,
   cost: Money.USD.pipe(optional),
+  /**
+   * Spend grouped by model, ordered by descending cost then by provider, model, and variant.
+   * Absent when the session recorded no provider requests.
+   */
+  models: Schema.Array(ModelSpend).pipe(optional),
   tokens: TokenUsage.Info,
   latestInvalidation: Invalidation.pipe(optional),
   latestNamespace: Schema.String.check(Schema.isMinLength(8), Schema.isMaxLength(8)).pipe(optional),

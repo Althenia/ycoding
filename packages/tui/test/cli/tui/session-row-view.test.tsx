@@ -24,7 +24,7 @@ test("a message row for a message that does not exist renders nothing, not a bla
     () => (
       <box flexDirection="column" width={40}>
         <text>before</text>
-        <SessionRowView row={{ type: "message", messageID: "msg_missing" }} message={() => undefined} history={() => {}} />
+        <SessionRowView row={{ type: "message", messageID: "msg_missing" }} message={() => undefined} />
         <text>after</text>
       </box>
     ),
@@ -44,7 +44,6 @@ test("assistant content rows without a resident message render no empty blocks",
         <SessionRowView
           row={{ type: "part", ref: { messageID: "msg_missing", partID: "text:0" } }}
           message={() => undefined}
-          history={() => {}}
         />
         <SessionRowView
           row={{
@@ -54,7 +53,6 @@ test("assistant content rows without a resident message render no empty blocks",
             completed: true,
           }}
           message={() => undefined}
-          history={() => {}}
         />
         <SessionRowView
           row={{
@@ -65,7 +63,6 @@ test("assistant content rows without a resident message render no empty blocks",
             completed: true,
           }}
           message={() => undefined}
-          history={() => {}}
         />
         <text>after</text>
       </box>

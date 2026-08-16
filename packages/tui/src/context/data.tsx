@@ -1,7 +1,6 @@
 // Client data layer: apply server events and cache API reads into a Solid store.
-// Prefer straightforward projection. Transcript request identities only prevent an
-// evicted page or hot-window load from becoming reachable after navigation/collapse.
-// Reconnect invalidates cached reads; active UI owners decide what to sync again.
+// Transcript request identities prevent an evicted session load from becoming reachable after
+// navigation. Reconnect invalidates cached reads; active UI owners decide what to sync again.
 
 import type {
   AgentInfo,
@@ -25,8 +24,8 @@ import type {
   SessionMessageAssistantTool,
   SessionInfo,
   SessionDiagnosticsOutput,
+  SessionOrchestrationPage,
   SessionPendingInfo,
-  SessionOrchestrationTask,
   SessionTodoInfo,
   ShellInfo,
   SkillInfo,
@@ -36,22 +35,9 @@ import type { Plugin } from "@ycoding-ai/plugin/tui"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { useClient } from "./client"
-import { batch, createEffect, createSignal, onCleanup, untrack } from "solid-js"
+import { batch, createEffect, createSignal, onCleanup } from "solid-js"
 
 export type DataSessionStatus = "idle" | "running"
-
-export const MESSAGE_HOT_LIMIT = 50
-export const MESSAGE_PAGE_LIMIT = 1000
-
-export type DataMessageHistoryPlaceholder = {
-  sessionID: string
-  cursor?: string
-  oldestID?: string
-  newestID?: string
-  count?: number
-  pages?: { start: number; end: number }
-  state: "collapsed" | "loading" | "error" | "expanded"
-}
 
 export type DataSessionMemoryEstimate = {
   process: { heapUsed: number; heapTotal: number; rss: number }
@@ -70,35 +56,8 @@ export type DataSessionMemoryEstimate = {
       other: number
     }
   }
-  counts: { hot: number; page: number; placeholders: number; residentSessions: number }
+  counts: { messages: number; residentSessions: number }
 }
-
-type MessageHistory = {
-  placeholders: Array<Omit<DataMessageHistoryPlaceholder, "state"> & { state: "collapsed" | "loading" | "error" }>
-  stale: boolean
-  exhausted?: string
-}
-
-type MessagePage = {
-  cursor: string
-  messages: SessionMessageInfo[]
-}
-
-export function messageHistoryPlaceholders(placeholders: readonly DataMessageHistoryPlaceholder[]) {
-  return placeholders.map((placeholder, index) => {
-    const tracked = placeholders.slice(0, index + 1).every((item) =>
-      item.oldestID !== undefined && item.newestID !== undefined && item.count !== undefined,
-    )
-    if (!tracked) return placeholder
-    const page = index + 1
-    return { ...placeholder, pages: { start: page, end: page } }
-  })
-}
-
-// The generated client widens JSON numbers to include non-finite string sentinels. Only a real
-// number is a usable count; anything else is unreported rather than zero.
-const finiteCount = (value: number | "Infinity" | "-Infinity" | "NaN" | null | undefined) =>
-  typeof value === "number" ? value : undefined
 
 const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
 
@@ -106,6 +65,11 @@ const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
 // server cannot recover their Location when settling them. Preserve the event Location
 // until MCP elicitations carry session ownership.
 export type FormWithLocation = FormInfo & { readonly location?: LocationRef }
+
+export type SubagentPage = SessionOrchestrationPage & {
+  readonly offset: number
+  readonly position: "top" | "older"
+}
 
 type LocationData = {
   info?: LocationGetOutput
@@ -135,10 +99,8 @@ type Store = {
     active: Record<string, DataSessionStatus>
     diagnostics: Record<string, SessionDiagnosticsOutput>
     message: Record<string, SessionMessageInfo[]>
-    messageHistory: Record<string, MessageHistory>
-    messagePage: Record<string, MessagePage>
     pending: Record<string, SessionPendingInfo[]>
-    subagent: Record<string, SessionOrchestrationTask[]>
+    subagent: Record<string, SubagentPage>
     todo: Record<string, SessionTodoInfo[]>
     input: Record<string, string[]>
     permission: Record<string, PermissionV2Request[]>
@@ -170,18 +132,6 @@ export function isMessageComplete(message: SessionMessageInfo) {
     if (item.type === "reasoning" && item.time) return item.time.completed !== undefined
     return true
   })
-}
-
-export function boundHotMessages(
-  messages: SessionMessageInfo[],
-  active: ReadonlySet<string>,
-  limit = MESSAGE_HOT_LIMIT,
-) {
-  const latest = new Map(messages.map((message) => [message.id, message]))
-  const unique = messages.filter((message) => latest.get(message.id) === message)
-  const completed = unique.filter((message) => !active.has(message.id) && isMessageComplete(message))
-  const keep = new Set(completed.slice(-limit).map((message) => message.id))
-  return unique.filter((message) => active.has(message.id) || !isMessageComplete(message) || keep.has(message.id))
 }
 
 function messageRevision(message: SessionMessageInfo) {
@@ -278,9 +228,7 @@ export function reconcileCanonicalMessages(
 }
 
 export function estimateResidentSessionMemory(input: {
-  hot: SessionMessageInfo[]
-  page: SessionMessageInfo[]
-  placeholders: number
+  messages: SessionMessageInfo[]
   residentSessions: number
   process: DataSessionMemoryEstimate["process"]
   maxNodes?: number
@@ -411,15 +359,10 @@ export function estimateResidentSessionMemory(input: {
     if (message.type === "agent-switched") add("other", message.agent)
     if (message.type === "model-switched") add("other", [message.model, message.previous])
   }
-  input.page.some((message) => {
+  input.messages.some((message) => {
     inspect(message)
     return truncated
   })
-  if (!truncated)
-    input.hot.some((message) => {
-      inspect(message)
-      return truncated
-    })
   return {
     process: input.process,
     estimated: {
@@ -428,9 +371,7 @@ export function estimateResidentSessionMemory(input: {
       categories,
     },
     counts: {
-      hot: input.hot.length,
-      page: input.page.length,
-      placeholders: input.placeholders,
+      messages: input.messages.length,
       residentSessions: input.residentSessions,
     },
   }
@@ -459,8 +400,7 @@ export function sessionMemoryLines(memory: DataSessionMemoryEstimate) {
     `User files                    ${formatMemoryBytes(categories.userFiles)}`,
     `Shell output                  ${formatMemoryBytes(categories.shellOutput)}`,
     `Skill / synthetic / other     ${formatMemoryBytes(categories.other)}`,
-    `Hot messages ${memory.counts.hot} · Expanded page ${memory.counts.page}`,
-    `Collapsed placeholders ${memory.counts.placeholders} · Resident sessions ${memory.counts.residentSessions}`,
+    `Messages ${memory.counts.messages} · Resident sessions ${memory.counts.residentSessions}`,
     memory.estimated.truncated
       ? "Estimate truncated at the traversal limit; object overhead and shared backing stores are excluded."
       : "Estimate excludes object overhead and shared backing stores; it is not exact per-session heap attribution.",
@@ -508,8 +448,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         active: {},
         diagnostics: {},
         message: {},
-        messageHistory: {},
-        messagePage: {},
         pending: {},
         subagent: {},
         todo: {},
@@ -529,144 +467,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       directory: process.cwd(),
     })
     const messageIndex = new Map<string, Map<string, number>>()
-    const messagePageIndex = new Map<string, Map<string, number>>()
-    const messageLoad = new Map<string, object>()
     const messageSyncLoad = new Map<string, object>()
     const messageVersion = new Map<string, number>()
     const messageMutations = new Map<string, Map<string, number>>()
+    const subagentGeneration = new Map<string, number>()
     const sync = createSync()
 
-    function clearMessagePage(sessionID: string) {
-      messagePageIndex.delete(sessionID)
-      setStore(
-        "session",
-        "messagePage",
-        produce((draft) => {
-          delete draft[sessionID]
-        }),
-      )
-    }
-
-    function setMessageHistoryState(
-      sessionID: string,
-      cursor: string | undefined,
-      state: "collapsed" | "loading" | "error",
-    ) {
-      setStore(
-        "session",
-        "messageHistory",
-        sessionID,
-        "placeholders",
-        produce((draft) => {
-          draft.forEach((item) => {
-            item.state = item.cursor === cursor ? state : "collapsed"
-          })
-        }),
-      )
-    }
-
-    function invalidateMessageHistory(sessionID: string, error = false, ensurePlaceholder = false) {
-      const existing = store.session.messageHistory[sessionID]
-      const page = store.session.messagePage[sessionID]
-      messageLoad.delete(sessionID)
-      clearMessagePage(sessionID)
-      if (!existing && !page && !ensurePlaceholder) return
-      const placeholder = existing?.placeholders[0] ??
-        (page
-          ? {
-              sessionID,
-              cursor: page.cursor,
-              state: "collapsed" as const,
-            }
-          : ensurePlaceholder
-            ? { sessionID, state: "collapsed" as const }
-            : undefined)
-      setStore("session", "messageHistory", sessionID, {
-        stale: true,
-        placeholders: placeholder ? [{ ...placeholder, state: error ? "error" : "collapsed" }] : [],
-      })
-    }
-
-    function replaceHotMessages(sessionID: string, messages: SessionMessageInfo[]) {
-      const bounded = boundHotMessages(messages, new Set(store.session.input[sessionID] ?? []))
-      messageIndex.set(sessionID, new Map(bounded.map((item, position) => [item.id, position])))
+    function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
+      messageIndex.set(sessionID, new Map(messages.map((item, position) => [item.id, position])))
       const mutations = messageMutations.get(sessionID)
       if (mutations) {
-        const resident = new Set(bounded.map((item) => item.id))
+        const resident = new Set(messages.map((item) => item.id))
         mutations.forEach((_, id) => {
           if (!resident.has(id)) mutations.delete(id)
         })
       }
-      setStore("session", "message", sessionID, bounded)
-      return bounded
-    }
-
-    function resetMessageHistory(sessionID: string, cursor?: string, remaining?: number) {
-      messageLoad.delete(sessionID)
-      clearMessagePage(sessionID)
-      // The server reports how many messages sit behind the cursor, so a collapsed archive can state
-      // its size before any of it is fetched. The page range stays with the per-page metadata that
-      // tracks real loaded pages; a range derived from a nominal page size would not survive the
-      // server returning short pages.
-      const archived = remaining !== undefined && remaining > 0 ? { count: remaining } : undefined
-      setStore("session", "messageHistory", sessionID, {
-        stale: false,
-        placeholders: cursor ? [{ sessionID, cursor, state: "collapsed", ...archived }] : [],
-      })
-    }
-
-    function mergeMessagePageMetadata(
-      sessionID: string,
-      cursor: string,
-      messages: SessionMessageInfo[],
-      next?: string,
-    ) {
-      setStore(
-        "session",
-        "messageHistory",
-        sessionID,
-        produce((draft) => {
-          draft.stale = false
-          if (draft.exhausted === cursor) draft.exhausted = undefined
-          const position = draft.placeholders.findIndex((item) => item.cursor === cursor)
-          const metadata = {
-            sessionID,
-            cursor,
-            oldestID: messages[0]?.id,
-            newestID: messages.at(-1)?.id,
-            count: messages.length,
-            state: "collapsed" as const,
-          }
-          if (position === -1) draft.placeholders.push(metadata)
-          else draft.placeholders[position] = metadata
-          if (!next || draft.exhausted === next || draft.placeholders.some((item) => item.cursor === next)) return
-          const current = draft.placeholders.findIndex((item) => item.cursor === cursor)
-          draft.placeholders.splice(current + 1, 0, { sessionID, cursor: next, state: "collapsed" })
-        }),
-      )
-    }
-
-    function exhaustMessageHistoryCursor(sessionID: string, cursor: string) {
-      setStore(
-        "session",
-        "messageHistory",
-        sessionID,
-        produce((draft) => {
-          draft.exhausted = cursor
-          const position = draft.placeholders.findIndex((item) => item.cursor === cursor)
-          if (position !== -1) draft.placeholders.splice(position, 1)
-        }),
-      )
-    }
-
-    function canonicalPage(sessionID: string, messages: SessionMessageInfo[]) {
-      const hot = new Set((store.session.message[sessionID] ?? []).map((item) => item.id))
-      const seen = new Set<string>()
-      return messages.toReversed().filter((item) => {
-        if (hot.has(item.id) || seen.has(item.id)) return false
-        seen.add(item.id)
-        return true
-      })
+      setStore("session", "message", sessionID, messages)
+      return messages
     }
 
     async function syncMessages(sessionID: string) {
@@ -674,40 +491,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       const requestVersion = messageVersion.get(sessionID) ?? 0
       messageSyncLoad.set(sessionID, token)
       try {
-        const first = await client.api.message.list({
-          sessionID,
-          limit: MESSAGE_HOT_LIMIT,
-          order: "desc",
-        })
-        if (messageSyncLoad.get(sessionID) !== token) return
-        const messages = [...first.data]
-        const seen = new Set(messages.map((message) => message.id))
-        const cursors = new Set<string>()
-        let cursor = first.cursor.next ?? undefined
-        let remaining = finiteCount(first.cursor.messages)
-        let completed = messages.filter(isMessageComplete).length
-        while (completed < MESSAGE_HOT_LIMIT && cursor) {
-          if (messageSyncLoad.get(sessionID) !== token) return
-          if (cursors.has(cursor)) {
-            cursor = undefined
-            break
-          }
-          cursors.add(cursor)
-          const response = await client.api.message.list({
-            sessionID,
-            cursor,
-            limit: Math.min(MESSAGE_PAGE_LIMIT, MESSAGE_HOT_LIMIT - completed),
-          })
-          if (messageSyncLoad.get(sessionID) !== token) return
-          response.data.forEach((message) => {
-            if (seen.has(message.id)) return
-            seen.add(message.id)
-            messages.push(message)
-            if (isMessageComplete(message)) completed++
-          })
-          cursor = response.cursor.next ?? undefined
-          remaining = finiteCount(response.cursor.messages)
-        }
+        const response = await client.api.message.list({ sessionID })
         if (messageSyncLoad.get(sessionID) !== token) return
         const active = new Set(store.session.input[sessionID] ?? [])
         const touched = new Set(
@@ -715,52 +499,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             .filter(([, version]) => version > requestVersion)
             .map(([id]) => id),
         )
-        replaceHotMessages(
-          sessionID,
-          reconcileCanonicalMessages(messages.toReversed(), store.session.message[sessionID] ?? [], touched, active),
-        )
-        resetMessageHistory(sessionID, cursor, remaining)
+        replaceMessages(sessionID, reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active))
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
       }
-    }
-
-    async function prepareMessageHistory(sessionID: string) {
-      if (!store.session.messageHistory[sessionID]?.stale) return
-      sync.invalidate(`session.message:${sessionID}`)
-      await sync.run(`session.message:${sessionID}`, () => syncMessages(sessionID))
-    }
-
-    async function loadMessagePage(sessionID: string, cursor: string) {
-      return client.api.message.list({ sessionID, cursor, limit: MESSAGE_PAGE_LIMIT })
-    }
-
-    function failMessageHistory(sessionID: string, cursor?: string) {
-      setStore(
-        "session",
-        "messageHistory",
-        sessionID,
-        produce((draft) => {
-          draft.stale = true
-          draft.exhausted = undefined
-          if (cursor === undefined) {
-            draft.placeholders.splice(0, draft.placeholders.length, { sessionID, state: "error" })
-            return
-          }
-          if (!draft.placeholders.some((item) => item.cursor === cursor)) {
-            draft.placeholders.splice(0, draft.placeholders.length, { sessionID, cursor, state: "error" })
-            return
-          }
-          draft.placeholders.forEach((item) => {
-            item.state = item.cursor === cursor ? "error" : "collapsed"
-          })
-        }),
-      )
-    }
-
-    function retainMessagePage(sessionID: string, cursor: string, messages: SessionMessageInfo[]) {
-      messagePageIndex.set(sessionID, new Map(messages.map((item, position) => [item.id, position])))
-      setStore("session", "messagePage", sessionID, { cursor, messages })
     }
 
     function setSessionActive(sessionID: string, status: DataSessionStatus) {
@@ -807,7 +549,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     const message = {
       update(sessionID: string, fn: (messages: SessionMessageInfo[], index: Map<string, number>) => void) {
-        let evicted = false
         const before = new Map((store.session.message[sessionID] ?? []).map((item) => [item.id, messageRevision(item)]))
         batch(() => {
           setStore(
@@ -816,9 +557,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             produce((draft) => {
               const messages = (draft[sessionID] ??= [])
               fn(messages, index(sessionID))
-              const bounded = boundHotMessages(messages, new Set(store.session.input[sessionID] ?? []))
-              evicted = bounded.length !== messages.length
-              if (evicted) messages.splice(0, messages.length, ...bounded)
             }),
           )
           messageIndex.set(
@@ -837,8 +575,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             if (!residentIDs.has(id)) mutations.delete(id)
           })
           messageMutations.set(sessionID, mutations)
-          if (evicted || store.session.messageHistory[sessionID]?.placeholders.length || store.session.messagePage[sessionID])
-            invalidateMessageHistory(sessionID, false, evicted)
         })
       },
       append(messages: SessionMessageInfo[], index: Map<string, number>, item: SessionMessageInfo) {
@@ -933,11 +669,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     function removeSession(sessionID: string) {
       messageIndex.delete(sessionID)
-      messagePageIndex.delete(sessionID)
-      messageLoad.delete(sessionID)
       messageSyncLoad.delete(sessionID)
       messageVersion.delete(sessionID)
       messageMutations.delete(sessionID)
+      subagentGeneration.delete(sessionID)
       sync.invalidate(`session:${sessionID}`)
       sync.invalidate(`session.pending:${sessionID}`)
       sync.invalidate(`session.subagent:${sessionID}`)
@@ -952,15 +687,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           delete draft.info[sessionID]
           delete draft.active[sessionID]
           delete draft.message[sessionID]
-          delete draft.messageHistory[sessionID]
-          delete draft.messagePage[sessionID]
           delete draft.diagnostics[sessionID]
           delete draft.pending[sessionID]
           delete draft.subagent[sessionID]
-          for (const [parentID, tasks] of Object.entries(draft.subagent)) {
-            const next = tasks.filter((task) => task.sessionID !== sessionID)
-            if (next.length === 0) delete draft.subagent[parentID]
-            else draft.subagent[parentID] = next
+          for (const [parentID, page] of Object.entries(draft.subagent)) {
+            if (page.data.some((task) => task.sessionID === sessionID)) delete draft.subagent[parentID]
           }
           delete draft.input[sessionID]
           delete draft.permission[sessionID]
@@ -978,6 +709,33 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           }
         }),
       )
+    }
+
+    async function loadSubagentPage(
+      parentID: string,
+      input: { readonly cursor?: string },
+      requested: "top" | "older",
+      pageOffset: (page: SessionOrchestrationPage) => number,
+    ) {
+      const generation = (subagentGeneration.get(parentID) ?? 0) + 1
+      subagentGeneration.set(parentID, generation)
+      const page = await client.api.session.subagent.list({ parentID, limit: 10, ...input })
+      if (subagentGeneration.get(parentID) !== generation) return
+      const position = requested === "top" || page.cursor.previous === undefined ? "top" : "older"
+      setStore("session", "subagent", parentID, {
+        data: page.data.slice(0, 10),
+        summary: page.summary,
+        cursor: page.cursor,
+        offset: position === "top" ? 0 : pageOffset(page),
+        position,
+      })
+    }
+
+    function restoreSubagentTop(parentID: string) {
+      result.session.subagent.invalidate(parentID)
+      void result.session.subagent
+        .sync(parentID)
+        .catch((error) => console.error("Failed to refresh durable subagent tasks", error))
     }
 
     function handleEvent(event: YCodingEvent) {
@@ -1018,19 +776,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           const parentID =
             event.data.change.type === "launched"
               ? event.data.change.parentID
-              : (Object.entries(store.session.subagent).find(([, tasks]) =>
-                  tasks.some((task) => task.sessionID === event.data.sessionID),
+              : (Object.entries(store.session.subagent).find(([, page]) =>
+                  page.data.some((task) => task.sessionID === event.data.sessionID),
                 )?.[0] ?? store.session.info[event.data.sessionID]?.parentID)
-          if (!parentID) break
-          // Always drop the cached list, even mid-flight: an in-flight read
-          // predates this change, so its result must not settle as current.
-          result.session.subagent.invalidate(parentID)
-          // Nothing cached means nobody is showing this parent's tasks yet, so
-          // leave the refetch to whoever opens them next.
-          if (store.session.subagent[parentID] === undefined) break
-          void result.session.subagent
-            .sync(parentID)
-            .catch((error) => console.error("Failed to refresh durable subagent tasks", error))
+          if (parentID) {
+            restoreSubagentTop(parentID)
+            break
+          }
+          void client.api.session
+            .get({ sessionID: event.data.sessionID })
+            .then((child) => {
+              if (child.parentID) restoreSubagentTop(child.parentID)
+            })
+            .catch((error) => console.error("Failed to resolve durable subagent parent", error))
           break
         }
         case "session.usage.updated":
@@ -1149,6 +907,17 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           projectPending(pending)
           break
         }
+        case "session.input.consumed":
+          message.update(event.data.sessionID, (draft, index) => {
+            event.data.inputIDs.forEach((inputID) => {
+              const position = index.get(inputID)
+              if (position === undefined) return
+              const existing = draft[position]
+              if (existing?.type !== "user" || existing.time.consumed !== undefined) return
+              existing.time.consumed = event.created
+            })
+          })
+          break
         case "session.instructions.updated":
           const instructions = event.metadata?.instructions
           if (
@@ -1355,7 +1124,15 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             match.state.content = [...event.data.content]
           })
           break
-        case "session.tool.success":
+        case "session.tool.success": {
+          const successfulTool = message.latestTool(
+            message.assistant(
+              store.session.message[event.data.sessionID] ?? [],
+              index(event.data.sessionID),
+              event.data.assistantMessageID,
+            ),
+            event.data.callID,
+          )
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.latestTool(
               message.assistant(draft, index, event.data.assistantMessageID),
@@ -1373,7 +1150,13 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             match.providerResultState = event.data.resultState
             match.time.completed = event.created
           })
+          if (successfulTool?.name === "conversation_summarize") {
+            messageSyncLoad.delete(event.data.sessionID)
+            sync.invalidate(`session.message:${event.data.sessionID}`)
+            void result.session.message.sync(event.data.sessionID).catch(() => undefined)
+          }
           break
+        }
         case "session.tool.failed":
           message.update(event.data.sessionID, (draft, index) => {
             const match = message.latestTool(
@@ -1470,14 +1253,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         case "session.revert.staged":
-          invalidateMessageHistory(event.data.sessionID)
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "revert", event.data.revert)
           result.session.diagnostics.invalidate(event.data.sessionID)
           void result.session.diagnostics.sync(event.data.sessionID).catch(() => undefined)
           break
         case "session.revert.cleared":
-          invalidateMessageHistory(event.data.sessionID)
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "revert", undefined)
           result.session.diagnostics.invalidate(event.data.sessionID)
@@ -1487,7 +1268,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           // A list captured before this canonical deletion cannot settle as current.
           messageSyncLoad.delete(event.data.sessionID)
           sync.invalidate(`session.message:${event.data.sessionID}`)
-          invalidateMessageHistory(event.data.sessionID)
           if (store.session.info[event.data.sessionID]) {
             setStore("session", "info", event.data.sessionID, "revert", undefined)
           }
@@ -1720,15 +1500,37 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
         },
         subagent: {
-          list(parentID: string) {
-            return store.session.subagent[parentID] ?? []
+          page(parentID: string) {
+            return store.session.subagent[parentID]
+          },
+          summary(parentID: string) {
+            return store.session.subagent[parentID]?.summary
+          },
+          navigation(parentID: string) {
+            const page = store.session.subagent[parentID]
+            return {
+              position: page?.position ?? "top",
+              older: page?.cursor?.next !== undefined,
+              newer: page?.cursor?.previous !== undefined,
+            }
           },
           sync(parentID: string) {
-            return sync.run(`session.subagent:${parentID}`, async () => {
-              setStore("session", "subagent", parentID, reconcile(await client.api.session.subagent.list({ parentID })))
-            })
+            return loadSubagentPage(parentID, {}, "top", () => 0)
+          },
+          loadOlder(parentID: string) {
+            const page = store.session.subagent[parentID]
+            if (!page || !page.cursor.next) return Promise.resolve()
+            return loadSubagentPage(parentID, { cursor: page.cursor.next }, "older", () => page.offset + page.data.length)
+          },
+          loadNewer(parentID: string) {
+            const page = store.session.subagent[parentID]
+            if (!page || !page.cursor.previous) return Promise.resolve()
+            return loadSubagentPage(parentID, { cursor: page.cursor.previous }, "older", (loaded) =>
+              Math.max(0, page.offset - loaded.data.length),
+            )
           },
           invalidate(parentID: string) {
+            subagentGeneration.set(parentID, (subagentGeneration.get(parentID) ?? 0) + 1)
             sync.invalidate(`session.subagent:${parentID}`)
           },
         },
@@ -1769,152 +1571,32 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         },
         message: {
           list(sessionID: string) {
-            const page = store.session.messagePage[sessionID]?.messages ?? []
-            const hot = store.session.message[sessionID] ?? []
-            const seen = new Set<string>()
-            return [...page, ...hot].filter((message) => {
-              if (seen.has(message.id)) return false
-              seen.add(message.id)
-              return true
-            })
-          },
-          hot(sessionID: string) {
             return store.session.message[sessionID] ?? []
-          },
-          page(sessionID: string) {
-            return store.session.messagePage[sessionID]?.messages ?? []
-          },
-          history(sessionID: string): DataMessageHistoryPlaceholder[] {
-            const expanded = store.session.messagePage[sessionID]?.cursor
-            return messageHistoryPlaceholders(
-              (store.session.messageHistory[sessionID]?.placeholders ?? []).map((item) => ({
-                ...item,
-                state: expanded !== undefined && item.cursor === expanded ? "expanded" : item.state,
-              })),
-            )
           },
           memory(sessionID: string) {
             const memory = process.memoryUsage()
             return estimateResidentSessionMemory({
-              hot: store.session.message[sessionID] ?? [],
-              page: store.session.messagePage[sessionID]?.messages ?? [],
-              placeholders: store.session.messageHistory[sessionID]?.placeholders.length ?? 0,
-              residentSessions: new Set([
-                ...Object.keys(store.session.message),
-                ...Object.keys(store.session.messagePage),
-              ]).size,
+              messages: store.session.message[sessionID] ?? [],
+              residentSessions: Object.keys(store.session.message).length,
               process: { heapUsed: memory.heapUsed, heapTotal: memory.heapTotal, rss: memory.rss },
             })
           },
           get(sessionID: string, messageID: string) {
             const messages = store.session.message[sessionID]
             const position = messageIndex.get(sessionID)?.get(messageID)
-            if (position !== undefined) return messages?.[position]
-            const pagePosition = messagePageIndex.get(sessionID)?.get(messageID)
-            return pagePosition === undefined ? undefined : store.session.messagePage[sessionID]?.messages[pagePosition]
+            return position === undefined ? undefined : messages?.[position]
           },
           sync(sessionID: string) {
             return sync.run(`session.message:${sessionID}`, () => syncMessages(sessionID))
           },
-          async expand(sessionID: string, requested?: string) {
-            const stale = store.session.messageHistory[sessionID]?.stale === true
-            await prepareMessageHistory(sessionID)
-            const history = store.session.messageHistory[sessionID]
-            const expanded = store.session.messagePage[sessionID]?.cursor
-            const position = history?.placeholders.findIndex((item) => item.cursor === expanded) ?? -1
-            const cursor = stale
-              ? history?.placeholders[0]?.cursor
-              : (requested ??
-                (expanded === undefined
-                  ? history?.placeholders[0]?.cursor
-                  : position === -1
-                    ? undefined
-                    : history?.placeholders[position + 1]?.cursor))
-            if (!cursor || history?.exhausted === cursor) return false
-            const token = {}
-            messageLoad.set(sessionID, token)
-            setMessageHistoryState(sessionID, cursor, "loading")
-            try {
-              const response = await loadMessagePage(sessionID, cursor)
-              if (messageLoad.get(sessionID) !== token) return false
-              const messages = canonicalPage(sessionID, response.data)
-              if (messages.length === 0 && !response.cursor.next) {
-                exhaustMessageHistoryCursor(sessionID, cursor)
-                return false
-              }
-              mergeMessagePageMetadata(sessionID, cursor, messages, response.cursor.next ?? undefined)
-              retainMessagePage(sessionID, cursor, messages)
-              return true
-            } catch (error) {
-              if (messageLoad.get(sessionID) === token) failMessageHistory(sessionID, cursor)
-              throw error
-            } finally {
-              if (messageLoad.get(sessionID) === token) messageLoad.delete(sessionID)
-            }
-          },
-          collapse(sessionID: string) {
-            messageLoad.delete(sessionID)
-            clearMessagePage(sessionID)
-            const history = store.session.messageHistory[sessionID]
-            if (!history) return
-            setStore(
-              "session",
-              "messageHistory",
-              sessionID,
-              "placeholders",
-              produce((draft) => {
-                draft.forEach((item) => (item.state = "collapsed"))
-              }),
-            )
-          },
           async find(sessionID: string, messageID: string) {
             if (result.session.message.get(sessionID, messageID)) return true
-            await prepareMessageHistory(sessionID)
-            const history = store.session.messageHistory[sessionID]
-            const first = history?.placeholders[0]
-            if (!first?.cursor) return false
-            const token = {}
-            messageLoad.set(sessionID, token)
-            clearMessagePage(sessionID)
-            const visited = new Set<string>()
-            let exhausted = false
-            const run = async (cursor: string): Promise<boolean> => {
-              if (visited.has(cursor)) return false
-              visited.add(cursor)
-              setMessageHistoryState(sessionID, cursor, "loading")
-              const response = await loadMessagePage(sessionID, cursor)
-              if (messageLoad.get(sessionID) !== token) return false
-              const messages = canonicalPage(sessionID, response.data)
-              if (messages.length === 0 && !response.cursor.next) {
-                exhaustMessageHistoryCursor(sessionID, cursor)
-                exhausted = true
-                return false
-              }
-              mergeMessagePageMetadata(sessionID, cursor, messages, response.cursor.next ?? undefined)
-              if (messages.some((message) => message.id === messageID)) {
-                retainMessagePage(sessionID, cursor, messages)
-                return true
-              }
-              const next = response.cursor.next ?? undefined
-              if (!next) return false
-              return run(next)
-            }
-            try {
-              const found = await run(first.cursor)
-              if (messageLoad.get(sessionID) !== token) return false
-              if (!found) failMessageHistory(sessionID, exhausted ? undefined : [...visited].at(-1))
-              return found
-            } catch (error) {
-              if (messageLoad.get(sessionID) === token) failMessageHistory(sessionID, [...visited].at(-1))
-              throw error
-            } finally {
-              if (messageLoad.get(sessionID) === token) messageLoad.delete(sessionID)
-            }
+            sync.invalidate(`session.message:${sessionID}`)
+            await result.session.message.sync(sessionID)
+            return result.session.message.get(sessionID, messageID) !== undefined
           },
           evict(sessionID: string) {
             messageIndex.delete(sessionID)
-            messagePageIndex.delete(sessionID)
-            messageLoad.delete(sessionID)
             messageSyncLoad.delete(sessionID)
             messageVersion.delete(sessionID)
             messageMutations.delete(sessionID)
@@ -1923,14 +1605,11 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               "session",
               produce((draft) => {
                 delete draft.message[sessionID]
-                delete draft.messageHistory[sessionID]
-                delete draft.messagePage[sessionID]
               }),
             )
           },
           invalidate(sessionID: string) {
             sync.invalidate(`session.message:${sessionID}`)
-            invalidateMessageHistory(sessionID)
           },
         },
         permission: {
@@ -2294,9 +1973,8 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     createEffect(() => {
       if (client.connection.status() === "connected") return
       sync.invalidate()
-      messageLoad.clear()
+      subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
       messageSyncLoad.clear()
-      untrack(() => Object.keys(store.session.messageHistory).forEach((sessionID) => invalidateMessageHistory(sessionID)))
     })
 
     onCleanup(

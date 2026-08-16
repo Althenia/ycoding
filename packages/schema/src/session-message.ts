@@ -76,6 +76,10 @@ export const User = Schema.Struct({
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
   type: Schema.tag("user"),
+  time: Schema.Struct({
+    created: DateTimeUtcFromMillis,
+    consumed: DateTimeUtcFromMillis.pipe(optional),
+  }),
 }).annotate({ identifier: "Session.Message.User" })
 
 export interface Synthetic extends Schema.Schema.Type<typeof Synthetic> {}
@@ -184,6 +188,7 @@ export interface AssistantText extends Schema.Schema.Type<typeof AssistantText> 
 export const AssistantText = Schema.Struct({
   type: Schema.tag("text"),
   text: Schema.String,
+  phase: Schema.Literals(["commentary", "final_answer"]).pipe(optional),
 }).annotate({ identifier: "Session.Message.Assistant.Text" })
 
 export interface AssistantReasoning extends Schema.Schema.Type<typeof AssistantReasoning> {}

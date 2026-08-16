@@ -34,7 +34,6 @@ import type {
 } from "./types"
 import { canonicalToolName, normalizeTool, toolOutputText, toolView } from "./tool"
 
-const CHILD_MESSAGE_LIMIT = 80
 const CHILD_FRAME_LIMIT = 80
 const CHILD_EVENT_BUFFER_LIMIT = 64
 const FAMILY_LIST_LIMIT = 100
@@ -433,7 +432,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
     const pendingTools = new Map(child.tools)
     let retry = false
     const task = sdk.message
-      .list({ sessionID: child.sessionID, limit: CHILD_MESSAGE_LIMIT, order: "desc" }, { signal })
+      .list({ sessionID: child.sessionID }, { signal })
       .then((response) => {
         if (!active(signal)) return
         const buffered = hydrationEvents.get(child.sessionID) ?? []
@@ -447,7 +446,7 @@ export function createSubagentTracker(input: SubagentTrackerInput): SubagentTrac
         for (const [id, prompt] of pendingPrompts) {
           if (!child.prompts.has(id)) child.prompts.set(id, prompt)
         }
-        rebuild(child, structuredClone(response.data).toReversed() as SessionMessageInfo[])
+        rebuild(child, structuredClone(response).toReversed() as SessionMessageInfo[])
         child.permissions = child.permissions.map((request) => permissionTool(request, child.toolSources))
         for (const [id, tool] of pendingTools) {
           if (!child.finishedTools.has(id) && !child.tools.has(id)) child.tools.set(id, tool)

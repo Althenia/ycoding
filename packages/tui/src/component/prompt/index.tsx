@@ -1,6 +1,5 @@
 import {
   BoxRenderable,
-  RGBA,
   TextareaRenderable,
   MouseEvent,
   PasteEvent,
@@ -34,8 +33,7 @@ import { promptSkillMentions, promptSkillMetadata } from "../../prompt/skill"
 import { usePromptStash } from "../../prompt/stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
-import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import { Locale } from "../../util/locale"
+import { useRenderer, type JSX } from "@opentui/solid"
 import { errorMessage } from "../../util/error"
 import { useDialog } from "../../ui/dialog"
 import { DialogIntegration } from "../dialog-integration"
@@ -79,6 +77,10 @@ export type PromptProps = {
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
+  inset?: {
+    left: number
+    right: number
+  }
   showPlaceholder?: boolean
   placeholders?: {
     normal?: string[]
@@ -167,6 +169,7 @@ export type PromptRef = {
 }
 
 const DRAFT_RETENTION_MIN_CHARS = 20
+const MAX_VISIBLE_INPUT_ROWS = 6
 const defaultPlaceholders = ["Message YCoding…"]
 
 function randomIndex(count: number) {
@@ -181,10 +184,6 @@ function formatShortcut(value: string) {
     .replaceAll("return", "Enter")
     .replaceAll("enter", "Enter")
     .replaceAll("escape", "Esc")
-}
-
-function fadeColor(color: RGBA, alpha: number) {
-  return RGBA.fromValues(color.r, color.g, color.b, color.a * alpha)
 }
 
 function hasEditorRangeSelection(selection: EditorSelection["ranges"][number]) {
@@ -264,16 +263,9 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = Keymap.use()
-  const paletteShortcut = Keymap.useShortcut("command.palette.show")
-  const submitShortcut = Keymap.useShortcut("input.submit")
-  const subagentShortcut = Keymap.useShortcut("session.child.first")
-  const sidebarShortcut = Keymap.useShortcut("session.sidebar.toggle")
-  const interruptShortcut = Keymap.useShortcut("session.interrupt")
-  const parentShortcut = Keymap.useShortcut("session.parent")
   const yoloGoalActive = createMemo(() => props.autonomy?.mode === "yolo" && props.autonomy.goal?.status === "active")
   const renderer = useRenderer()
   const exit = useExit()
-  const dimensions = useTerminalDimensions()
   const { themeV2, syntax } = useTheme()
   const animationsEnabled = createMemo(() => config.animations ?? true)
   const list = createMemo(() => props.placeholders?.normal ?? defaultPlaceholders)
@@ -323,7 +315,6 @@ export function Prompt(props: PromptProps) {
     ],
   }))
   const [cursorVersion, setCursorVersion] = createSignal(0)
-  const hasRightContent = createMemo(() => Boolean(props.right))
 
   function promptModelWarning() {
     toast.show({
@@ -1629,19 +1620,7 @@ export function Prompt(props: PromptProps) {
     return local.agent.color(agent.id)
   })
 
-  const showVariant = createMemo(() => {
-    const variants = local.model.variant.list()
-    if (variants.length === 0) return false
-    const current = local.model.variant.current()
-    return !!current
-  })
-
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
-  const modelMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", animationsEnabled)
-  const variantMetaAlpha = createFadeIn(
-    () => !!local.agent.current() && store.mode === "normal" && showVariant(),
-    animationsEnabled,
-  )
   const borderHighlight = createMemo(() => tint(themeV2.border.default, highlight(), agentMetaAlpha()))
 
   const placeholderText = createMemo(() => {
@@ -1656,15 +1635,21 @@ export function Prompt(props: PromptProps) {
     // `Ask anything... "Message YCoding…"` on the landing screen.
     return list()[store.placeholder % list().length]
   })
-  const maxHeight = createMemo(() => Math.max(6, Math.floor(dimensions().height / 3)))
-
-  const promptBg = createMemo(() => (props.landing ? themeV2.background.default : themeV2.raise(themeV2.background.surface.offset)))
+  const promptBg = themeV2.background.default
 
   return (
     <>
-      <box ref={(r: BoxRenderable) => (anchor = r)} visible={props.visible !== false} width="100%">
+      <box
+        ref={(r: BoxRenderable) => (anchor = r)}
+        visible={props.visible !== false}
+        width="100%"
+        minHeight={props.landing ? 1 : 2}
+        flexShrink={0}
+      >
         <box
           width="100%"
+          minHeight={props.landing ? 1 : 2}
+          flexShrink={0}
           border={props.landing ? [] : ["top"]}
           borderColor={
             props.landing
@@ -1675,11 +1660,12 @@ export function Prompt(props: PromptProps) {
           }
         >
           <box
-            paddingLeft={props.landing ? 3 : 1}
-            paddingRight={2}
-            paddingTop={1}
+            paddingLeft={props.inset?.left ?? (props.landing ? 3 : 1)}
+            paddingRight={props.inset?.right ?? 2}
+            paddingTop={props.landing ? 1 : 2}
+            minHeight={1}
             flexShrink={0}
-            backgroundColor={promptBg()}
+            backgroundColor={promptBg}
             flexGrow={1}
             width="100%"
           >
@@ -1690,7 +1676,7 @@ export function Prompt(props: PromptProps) {
               textColor={leader() ? themeV2.text.subdued : themeV2.text.default}
               focusedTextColor={leader() ? themeV2.text.subdued : themeV2.text.default}
               minHeight={1}
-              maxHeight={maxHeight()}
+              maxHeight={MAX_VISIBLE_INPUT_ROWS}
               onContentChange={() => {
                 const value = input.plainText
                 setStore("prompt", "text", value)
@@ -1762,120 +1748,8 @@ export function Prompt(props: PromptProps) {
               cursorColor={props.disabled ? themeV2.background.surface.offset : themeV2.text.default}
               syntaxStyle={syntax()}
             />
-            <Show when={props.landing && hasRightContent()}>
-            <box flexDirection="row" flexShrink={0} paddingTop={1} gap={1} justifyContent="space-between">
-              <box flexDirection="row" gap={1}>
-                <Show when={!props.landing && local.agent.current()} fallback={<box height={1} />}>
-                  {(agent) => (
-                    <>
-                      <text fg={fadeColor(highlight(), agentMetaAlpha())}>
-                        {store.mode === "shell" ? "Shell" : Locale.titlecase(agent().id)}
-                      </text>
-                      <Show when={store.mode === "normal" && local.permission.mode === "auto"}>
-                        <text fg={fadeColor(themeV2.text.subdued, agentMetaAlpha())}>auto</text>
-                      </Show>
-                      <Show when={store.mode === "normal"}>
-                        <box flexDirection="row" gap={1}>
-                          <text fg={fadeColor(themeV2.text.subdued, modelMetaAlpha())}>·</text>
-                          <text
-                            flexShrink={0}
-                            fg={fadeColor(leader() ? themeV2.text.subdued : themeV2.text.default, modelMetaAlpha())}
-                          >
-                            {local.model.parsed().model}
-                          </text>
-                          <Show when={showVariant()}>
-                            <text fg={fadeColor(themeV2.text.subdued, variantMetaAlpha())}>·</text>
-                            <text>
-                              <span
-                                style={{
-                                  fg: fadeColor(themeV2.text.feedback.warning.default, variantMetaAlpha()),
-                                  bold: true,
-                                }}
-                              >
-                                {local.model.variant.current()}
-                              </span>
-                            </text>
-                          </Show>
-                        </box>
-                      </Show>
-                    </>
-                  )}
-                </Show>
-              </box>
-              <Show when={hasRightContent()}>
-                <box flexDirection="row" gap={1} alignItems="center">
-                  {props.right}
-                </box>
-              </Show>
-            </box>
-            </Show>
           </box>
         </box>
-        <Show when={!props.landing}>
-          <box width="100%" flexDirection="row" gap={2} paddingTop={1} paddingLeft={1} paddingRight={2}>
-            <Show when={submitShortcut()}>{(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} send</text>}</Show>
-            <Show
-              when={yoloGoalActive()}
-              fallback={
-                <>
-                  <Show when={subagentShortcut()}>
-                    {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} subagents</text>}
-                  </Show>
-                  <Show when={sidebarShortcut()}>
-                    {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} sidebar</text>}
-                  </Show>
-                  <Show when={paletteShortcut()}>
-                    {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} commands</text>}
-                  </Show>
-                </>
-              }
-            >
-              <PromptYoloHint />
-            </Show>
-          </box>
-        </Show>
-        <Show when={props.landing}>
-          <box height={1} flexShrink={0} />
-        </Show>
-        <Show when={props.landing}>
-          {/* Every hint in the reference frame is muted; none is emphasised. */}
-          <Show
-            when={props.hint}
-            fallback={
-              <box width="100%" flexDirection="row" gap={3} paddingLeft={3} paddingRight={3}>
-                <Show when={submitShortcut()}>{(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} send</text>}</Show>
-                <Show when={subagentShortcut()}>
-                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} subagents</text>}
-                </Show>
-                <Show when={!subagentShortcut()}>
-                  <text fg={themeV2.text.subdued}>↓ subagents</text>
-                </Show>
-                <Show when={sidebarShortcut()} fallback={<text fg={themeV2.text.subdued}>⌃x b sidebar</text>}>
-                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} sidebar</text>}</Show>
-                <Show when={paletteShortcut()}>
-                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} commands</text>}</Show>
-              </box>
-            }
-          >
-            {(hint) => (
-              <box width="100%" flexDirection="row" gap={3} paddingLeft={1} paddingRight={3}>
-                {hint()}
-                <Show when={interruptShortcut()}>
-                  {(shortcut) => (
-                    <box paddingRight={1}>
-                      <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} leave blocked</text>
-                    </box>
-                  )}
-                </Show>
-                <Show when={parentShortcut()}>
-                  {(shortcut) => <text fg={themeV2.text.subdued}>{formatShortcut(shortcut())} parent</text>}</Show>
-              </box>
-            )}
-          </Show>
-        </Show>
-        <Show when={props.landing}>
-          <box height={1} flexShrink={0} />
-        </Show>
       </box>
       <Autocomplete
         sessionID={props.sessionID}

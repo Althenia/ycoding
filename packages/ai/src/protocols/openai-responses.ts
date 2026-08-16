@@ -104,6 +104,9 @@ const OpenAIResponsesUserInputItem = Schema.Struct({
   content: Schema.Array(OpenAIResponsesInputContent),
 })
 
+const OpenAIResponsesMessagePhase = Schema.Literals(["commentary", "final_answer"])
+type OpenAIResponsesMessagePhase = Schema.Schema.Type<typeof OpenAIResponsesMessagePhase>
+
 const OpenAIResponsesInputItem = Schema.Union([
   // Plain string content is the default (backward-compatible with every
   // existing cassette); the array-of-blocks form is only produced when a
@@ -113,6 +116,7 @@ const OpenAIResponsesInputItem = Schema.Union([
   Schema.Struct({
     role: Schema.tag("assistant"),
     content: Schema.Union([Schema.Array(OpenAIResponsesOutputText), Schema.Array(OpenAIResponsesInputText)]),
+    phase: Schema.optional(OpenAIResponsesMessagePhase),
   }),
   OpenAIResponsesReasoningItem,
   OpenAIResponsesCompactionItem,
@@ -287,6 +291,7 @@ const OpenAIResponsesStreamItem = Schema.Struct({
   output: Schema.optional(Schema.Unknown),
   result: Schema.optional(Schema.String),
   output_format: Schema.optional(Schema.Literals(["png", "jpeg", "webp"])),
+  phase: Schema.optional(OpenAIResponsesMessagePhase),
   error: Schema.optional(Schema.Unknown),
   encrypted_content: optionalNull(Schema.String),
 })
@@ -340,6 +345,7 @@ interface ParserState {
   readonly tools: ToolStream.State<string>
   readonly hasFunctionCall: boolean
   readonly lifecycle: Lifecycle.State
+  readonly messagePhases: Readonly<Record<string, OpenAIResponsesMessagePhase>>
   readonly reasoningItems: Readonly<Record<string, ReasoningStreamItem>>
   readonly store: boolean | undefined
 }
@@ -465,6 +471,15 @@ const hostedToolReplay = (part: ToolResultPart): OpenAIResponsesHostedToolReplay
 }
 
 const cacheBreakpoint = (cache: CacheHint | undefined) => (cache ? { mode: "explicit" as const } : undefined)
+
+const assistantPhase = (parts: ReadonlyArray<TextPart>): OpenAIResponsesMessagePhase | undefined => {
+  const openai = parts.findLast((part) => {
+    const value = part.providerMetadata?.openai
+    return ProviderShared.isRecord(value) && (value.phase === "commentary" || value.phase === "final_answer")
+  })?.providerMetadata?.openai
+  if (!ProviderShared.isRecord(openai)) return undefined
+  return openai.phase === "commentary" || openai.phase === "final_answer" ? openai.phase : undefined
+}
 
 const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
   part: LLMRequest["messages"][number]["content"][number],
@@ -594,8 +609,10 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
       const hostedToolReferences = new Set<string>()
       const flushText = () => {
         if (content.length === 0) return
+        const phase = assistantPhase(content)
         input.push({
           role: "assistant",
+          ...(phase === undefined ? {} : { phase }),
           content:
             supportsBreakpoints && content.some((part) => part.cache)
               ? content.map((part) => ({
@@ -904,8 +921,19 @@ const TERMINAL_TYPES = new Set(["response.completed", "response.incomplete", "re
 const onOutputTextDelta = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   if (!event.delta) return [state, NO_EVENTS]
   const events: LLMEvent[] = []
+  const itemID = event.item_id ?? "text-0"
+  const phase = state.messagePhases[itemID]
   return [
-    { ...state, lifecycle: Lifecycle.textDelta(state.lifecycle, events, event.item_id ?? "text-0", event.delta) },
+    {
+      ...state,
+      lifecycle: Lifecycle.textDelta(
+        state.lifecycle,
+        events,
+        itemID,
+        event.delta,
+        phase === undefined ? undefined : openaiMetadata({ phase }),
+      ),
+    },
     events,
   ]
 }
@@ -914,15 +942,41 @@ const onOutputTextAnnotationAdded = (state: ParserState, event: OpenAIResponsesE
   const text = urlCitationText(event.annotation)
   if (text === undefined) return [state, NO_EVENTS]
   const events: LLMEvent[] = []
+  const itemID = event.item_id ?? "text-0"
+  const phase = state.messagePhases[itemID]
   return [
-    { ...state, lifecycle: Lifecycle.textDelta(state.lifecycle, events, event.item_id ?? "text-0", text) },
+    {
+      ...state,
+      lifecycle: Lifecycle.textDelta(
+        state.lifecycle,
+        events,
+        itemID,
+        text,
+        phase === undefined ? undefined : openaiMetadata({ phase }),
+      ),
+    },
     events,
   ]
 }
 
 const onOutputTextDone = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   const events: LLMEvent[] = []
-  return [{ ...state, lifecycle: Lifecycle.textEnd(state.lifecycle, events, event.item_id ?? "text-0") }, events]
+  const itemID = event.item_id ?? "text-0"
+  const phase = state.messagePhases[itemID]
+  const { [itemID]: _phase, ...messagePhases } = state.messagePhases
+  return [
+    {
+      ...state,
+      messagePhases,
+      lifecycle: Lifecycle.textEnd(
+        state.lifecycle,
+        events,
+        itemID,
+        phase === undefined ? undefined : openaiMetadata({ phase }),
+      ),
+    },
+    events,
+  ]
 }
 
 const urlCitationText = (annotation: OpenAIResponsesAnnotation | undefined) =>
@@ -970,6 +1024,8 @@ const compactionMetadata = (item: OpenAIResponsesStreamItem & { encrypted_conten
 // best-effort, not guaranteed.
 const onOutputItemAdded = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   const item = event.item
+  if (item?.type === "message" && item.id && item.phase)
+    return [{ ...state, messagePhases: { ...state.messagePhases, [item.id]: item.phase } }, NO_EVENTS]
   if (item && isReasoningItem(item)) {
     const events: LLMEvent[] = []
     return [
@@ -1292,6 +1348,7 @@ export const protocol = Protocol.make({
       hasFunctionCall: false,
       tools: ToolStream.empty<string>(),
       lifecycle: Lifecycle.initial(),
+      messagePhases: {},
       reasoningItems: {},
       store: OpenAIOptions.store(request),
     }),

@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { TextRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
-import type { SessionAutonomyState, SessionCacheDiagnostics, SessionTodoInfo } from "@ycoding-ai/client"
+import type { GuardrailStatusOutput, SessionAutonomyState, SessionCacheDiagnostics, SessionTodoInfo } from "@ycoding-ai/client"
 import { expect, test } from "bun:test"
 import { createSignal, type JSX } from "solid-js"
 import { useTheme } from "../src/context/theme"
@@ -89,7 +89,7 @@ test("keeps the SESSION header separate from its session title", async () => {
 
   try {
     const [header] = app.captureCharFrame().split("\n")
-    expect(header?.trim()).toBe("− SESSION")
+    expect(header).toMatch(/^− SESSION +New session — cache audit$/)
   } finally {
     app.renderer.destroy()
   }
@@ -112,15 +112,12 @@ test("renders aggregate context rows when diagnostics are unavailable", async ()
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Input")
-    expect(frame).toContain("1,411")
-    expect(frame).toContain("Output")
-    expect(frame).toContain("53")
-    expect(frame).toContain("Spent")
+    expect(frame).toContain("SPEND")
+    expect(frame).toContain("Total")
     expect(frame).toContain("$9.08")
+    expect(frame).not.toContain("Spent")
     expect(frame).not.toContain("CACHE")
-    expect(frame).not.toContain("Used")
-    expect(frame).not.toContain("Hit ratio")
+    expect(frame).not.toContain("Context")
   } finally {
     app.renderer.destroy()
   }
@@ -142,6 +139,206 @@ test("renders a summary on both expanded and collapsed headers", async () => {
     const frame = app.captureCharFrame()
     expect(frame).toContain("56% · 71% hit")
     expect(frame).toContain("3 connected")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders compact operational rail summaries from live component state", async () => {
+  const [{ RailProvider }, { SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }, { SkillsRailContent }] =
+    await Promise.all([
+      import("../src/routes/session/rail-section"),
+      import("../src/routes/session/sidebar"),
+      import("../src/feature-plugins/sidebar/todo"),
+      import("../src/feature-plugins/sidebar/subagents"),
+      import("../src/feature-plugins/sidebar/shells"),
+      import("../src/feature-plugins/sidebar/skills"),
+    ])
+  const autonomy: SessionAutonomyState = {
+    mode: "yolo",
+    goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+  }
+  const skills: SessionSkill[] = [
+    {
+      id: "review",
+      name: "review",
+      activatedBy: "tool",
+      activationMessageID: "msg_review",
+      content: "",
+      conflicts: [{ type: "skill", id: "test", name: "test" }],
+      declarations: {},
+      state: "active",
+    },
+    {
+      id: "test",
+      name: "test",
+      activatedBy: "tool",
+      activationMessageID: "msg_test",
+      content: "",
+      conflicts: [],
+      declarations: {},
+      state: "active",
+    },
+  ]
+  const app = await mount(
+    () => (
+      <box width={50}>
+        <RailProvider allExpanded goal autonomy>
+          <SessionRailContent sessionID="ses_summary" title="Summary session" />
+          <AutonomyRailContent autonomy={autonomy} />
+          <TodoRailContent list={[{ content: "Done", status: "completed", priority: "low" }, { content: "Open", status: "pending", priority: "low" }]} />
+          <SubagentRailContent
+            tasks={[
+              { sessionID: "ses_running", description: "running", state: "running", elapsed: "2m" },
+              { sessionID: "ses_waiting", description: "waiting", state: "waiting", question: { id: "question_ses_waiting", text: "Need input", time: 60_000 }, elapsed: "1m" },
+            ]}
+            summary={{ total: 12, active: 5, running: 3, waiting: 2 }}
+            position="top"
+            onLoadOlder={() => undefined}
+          />
+          <ShellRailContent
+            groups={[
+              { owner: { label: "Main chat" }, shells: [{ id: "running", status: "running" }] },
+              { owner: { label: "Unknown session" }, shells: [{ id: "orphan", status: "failed" }] },
+            ]}
+            terminalCount={1}
+          />
+          <SkillsRailContent skills={skills} />
+        </RailProvider>
+      </box>
+    ),
+    { width: 189, height: 69 },
+  )
+  await app.waitForFrame((frame) => frame.includes("Summary session"))
+
+  try {
+    const frame = app.captureCharFrame()
+    const expectations = [
+      ["SESSION", "Summary session"],
+      ["GOAL", "active"],
+      ["AUTONOMY", "YOLO"],
+      ["TODO LIST", "1/2 open"],
+      ["SUBAGENTS", "3/12 running · 2 waiting"],
+      ["SHELLS", "1/2 running · 1 orphaned"],
+      ["SKILLS", "2/2 active · 1 conflict"],
+    ]
+    for (const [title, summary] of expectations) {
+      const header = frame.split("\n").find((line) => line.includes(title))
+      expect(header).toContain(summary)
+    }
+    expect(frame).toContain("+10 more")
+    expect(frame).not.toContain("0 / 5")
+    expect(frame).not.toContain("█")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("keeps guardrail profile identity and surfaces only its highest-priority exception", async () => {
+  const { guardrailSummary } = await import("../src/feature-plugins/sidebar/guardrails")
+  const base: GuardrailStatusOutput = {
+    rootSessionID: "ses_guardrail",
+    profile: "standard",
+    customRules: 0,
+    approvals: 0,
+    blocked: 0,
+    counters: [],
+    invalidFiles: [],
+  }
+  expect(guardrailSummary({ ...base, blocked: 2, invalidFiles: ["bad.md"] }).header).toBe("Standard · 2 blocked")
+  expect(guardrailSummary({ ...base, invalidFiles: ["bad.md"] }).header).toBe("Standard · 1 invalid")
+  expect(guardrailSummary(base).header).toBe("Standard")
+})
+
+test("leaves one blank row after normal expanded SUBAGENTS content", async () => {
+  const [{ RailProvider, RailSection }, { SubagentRailContent }] = await Promise.all([
+    import("../src/routes/session/rail-section"),
+    import("../src/feature-plugins/sidebar/subagents"),
+  ])
+  const app = await mount(() => (
+    <RailProvider>
+      <SubagentRailContent
+        tasks={[
+          { sessionID: "ses_running", description: "Running task", state: "running", elapsed: "2m" },
+          { sessionID: "ses_completed", description: "Completed task", state: "completed", elapsed: "1m" },
+        ]}
+      />
+      <RailSection section="mcp" title="NEXT" summary="next" />
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
+
+  try {
+    const header = app.captureCharFrame().split("\n").findIndex((line) => line.includes("SUBAGENTS"))
+    await app.mockMouse.click(2, header)
+    await app.waitForFrame((frame) => frame.includes("Completed task"))
+
+    const lines = app.captureCharFrame().split("\n")
+    const completed = lines.findIndex((line) => line.includes("Completed task"))
+    const next = lines.findIndex((line) => line.includes("NEXT"))
+    expect(lines[completed + 1]?.trim()).toBe("")
+    // The next section's three-row band vertically centers its title, so the title appears two rows
+    // after the single separator. There is no second component-owned spacer.
+    expect(next - completed).toBe(3)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("applies one outer surface row around populated normal rail sections", async () => {
+  const [{ RailProvider, RailRow, RailSection }, { SubagentRailContent }, { ShellRailContent }, { SkillsRailContent }] =
+    await Promise.all([
+      import("../src/routes/session/rail-section"),
+      import("../src/feature-plugins/sidebar/subagents"),
+      import("../src/feature-plugins/sidebar/shells"),
+      import("../src/feature-plugins/sidebar/skills"),
+    ])
+  const app = await mount(() => (
+    <RailProvider>
+      <SubagentRailContent tasks={[{ sessionID: "ses_subagent", description: "subagent row", state: "running", elapsed: "2m" }]} />
+      <ShellRailContent groups={[{ owner: { label: "Main chat" }, shells: [{ id: "shell", status: "running" }] }]} terminalCount={0} />
+      <SkillsRailContent
+        skills={[
+          {
+            id: "writer",
+            name: "writer row",
+            activatedBy: "tool",
+            activationMessageID: "msg_writer",
+            content: "",
+            conflicts: [],
+            declarations: {},
+            state: "active",
+          },
+        ]}
+      />
+      <RailSection section="mcp" title="MCP" summary="1/1 connected">
+        <RailRow label="server row" value="Connected" />
+      </RailSection>
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("SUBAGENTS") && frame.includes("MCP"))
+
+  try {
+    for (const title of ["SUBAGENTS", "SHELLS", "SKILLS"]) {
+      const row = app.captureCharFrame().split("\n").findIndex((line) => line.includes(title))
+      await app.mockMouse.click(2, row)
+    }
+    await app.waitForFrame((frame) => frame.includes("writer row"))
+
+    const lines = app.captureCharFrame().split("\n")
+    const pairs = [
+      ["SUBAGENTS", "subagent row", "SHELLS"],
+      ["SHELLS", "Main chat", "SKILLS"],
+      ["SKILLS", "writer row", "MCP"],
+    ]
+    for (const [header, content, nextHeader] of pairs) {
+      const headerRow = lines.findIndex((line) => line.includes(header))
+      const contentRow = lines.findIndex((line) => line.includes(content))
+      const nextRow = lines.findIndex((line) => line.includes(nextHeader))
+      expect(contentRow - headerRow).toBe(3)
+      expect(nextRow - contentRow).toBe(3)
+      expect(lines[contentRow + 1]?.trim()).toBe("")
+    }
   } finally {
     app.renderer.destroy()
   }
@@ -178,7 +375,7 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
   const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
   const diagnostics: SessionCacheDiagnostics = {
     model: { providerID: "openai", id: "gpt-5.6" },
-    context: { total: 1_464, percent: 56 },
+    context: { total: 1_464, limit: 200_000, percent: 56 },
     tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 220_672, cacheWrite: 4_096 },
     cache: {
       eligible: 220_672,
@@ -212,9 +409,18 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
 
   try {
     const frame = app.captureCharFrame()
-    const indexes = ["Input", "Output", "Used", "Spent", "· subagents", "CACHE", "Hit ratio", "Prefix", "Reads", "Writes"].map(
-      (label) => frame.indexOf(label),
-    )
+    const indexes = [
+      "Model",
+      "Context",
+      "Cache",
+      "SPEND",
+      "Total",
+      "· subagents",
+      "CACHE",
+      "Prefix",
+      "Reads",
+      "Writes",
+    ].map((label) => frame.indexOf(label))
     const rendered = descendants(app.renderer.root).filter(
       (item): item is TextRenderable => item instanceof TextRenderable,
     )
@@ -233,6 +439,11 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
     expect(frame).not.toContain("Cached tokens still occupy context.")
     expect(frame).not.toContain("Current model context")
     expect(frame).not.toContain("Last step provider cache")
+    expect(frame).not.toContain("Limit")
+    expect(frame).not.toContain("Input")
+    expect(frame).not.toContain("Output")
+    expect(frame).not.toContain("Used")
+    expect(frame).not.toContain("Hit ratio")
   } finally {
     app.renderer.destroy()
   }
@@ -240,7 +451,7 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
   const noReadOrPrefix = {
     ...diagnostics,
     tokens: { ...diagnostics.tokens, cacheWrite: 7 },
-    cache: { ...diagnostics.cache, readReported: false },
+    cache: { ...diagnostics.cache, hitRatio: undefined, readReported: false },
     requests: undefined,
   }
   const missing = await mount(() => (
@@ -251,9 +462,12 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
   await missing.waitForFrame((frame) => frame.includes("CONTEXT"))
   try {
     const frame = missing.captureCharFrame()
+    expect(frame.split("\n").find((line) => line.includes("Cache"))?.trimEnd()).toMatch(/^ +Cache +unreported$/)
     expect(frame).not.toContain("Reads")
     expect(frame).not.toContain("Prefix")
-    expect(frame).not.toContain("0")
+    // Unreported telemetry must never be coerced to zero. Match a standalone 0 value rather than the
+    // digit anywhere, so a legitimate figure such as the 200K context limit does not trip it.
+    expect(frame).not.toMatch(/\b0\b/)
   } finally {
     missing.renderer.destroy()
   }
@@ -410,12 +624,12 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
         <SessionRailContent sessionID="ses_0085fc701234567" title="Provider cache audit" />
         <AutonomyRailContent autonomy={autonomy} />
         <TodoRailContent list={todos} />
-        <SubagentRailContent tasks={[{ sessionID: "ses_docs", description: "docs-sync", elapsed: "2m14s" }]} />
+        <SubagentRailContent tasks={[{ sessionID: "ses_docs", description: "docs-sync", state: "running", elapsed: "2m14s" }]} />
         <ShellRailContent groups={[{ owner: { label: "docs-sync" }, shells: [{ id: "running" }] }]} terminalCount={0} />
         <SkillsRailContent skills={skills} />
       </>
     )
-  }, { width: 40, height: 40 })
+  }, { width: 40, height: 60 })
   await app.waitForFrame((frame) => frame.includes("Fix provider cache accounting"))
 
   try {
@@ -436,7 +650,8 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
     expect(indexes.every((index) => index >= 0)).toBe(true)
     expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
 
-    expect(frame).toContain("3 / 5")
+    // The GOAL no-progress count is hidden by explicit user instruction.
+    expect(frame).not.toContain("3 / 5")
     expect(frame).toContain("Fix provider cache accounting")
     expect(frame).toContain("Status")
     expect(frame).toContain("active")
@@ -444,23 +659,19 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
     expect(frame).toContain("auto")
     expect(frame).toContain("Guardrails")
     expect(frame).toContain("enforced")
-    expect(frame).toContain("ses_0085fc701…")
+    expect(frame).not.toContain("ses_0085fc701234567")
     expect(frame).not.toContain("workspace")
     expect(frame).toContain("docs-sync")
-    expect(frame).not.toContain("1 active")
+    expect(frame).toContain("1/1 active")
     const subagentHeader = frame.split("\n").find((line) => line.includes("SUBAGENTS"))
-    expect(subagentHeader).toContain("1")
+    expect(subagentHeader).toContain("1/1 running")
     expect(subagentHeader).not.toContain("subagents")
     expect(rendered.find((item) => item.plainText === "2m14s")?.fg.toInts()).toEqual(
       themeV2()!.text.feedback.info.default.toInts(),
     )
-    expect(
-      rendered.some(
-        (item) =>
-          item.plainText === "1" &&
-          item.fg.toInts().every((value, index) => value === themeV2()!.text.feedback.info.default.toInts()[index]),
-      ),
-    ).toBe(true)
+    expect(rendered.find((item) => item.plainText === "docs-sync")?.fg.toInts()).toEqual(
+      themeV2()!.text.subdued.toInts(),
+    )
   } finally {
     app.renderer.destroy()
   }
@@ -473,51 +684,6 @@ function descendants(root: { getChildren(): readonly unknown[] }): unknown[] {
 function hasChildren(value: unknown): value is { getChildren(): readonly unknown[] } {
   return typeof value === "object" && value !== null && "getChildren" in value && typeof value.getChildren === "function"
 }
-
-test("renders a five-segment meter in the GOAL section with correct filled/empty counts and colours", async () => {
-  const { RailProvider } = await import("../src/routes/session/rail-section")
-  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
-  const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
-  const autonomy: SessionAutonomyState = {
-    mode: "yolo",
-    goal: {
-      text: "Fix provider cache accounting",
-      status: "active",
-      iteration: 3,
-      noProgress: 3,
-      maxNoProgress: 5,
-    },
-  }
-  const app = await mount(() => {
-    setThemeV2(useTheme().themeV2)
-    return (
-      <RailProvider goal>
-        <AutonomyRailContent autonomy={autonomy} />
-      </RailProvider>
-    )
-  })
-  await app.waitForFrame((frame) => frame.includes("Fix provider cache accounting"))
-
-  try {
-    const frame = app.captureCharFrame()
-    // The section header summary shows "3 / 5"
-    expect(frame).toContain("3 / 5")
-    // The meter renders as 5 segments — 3 filled (success) and 2 empty (dim)
-    const rendered = descendants(app.renderer.root).filter(
-      (item): item is TextRenderable => item instanceof TextRenderable,
-    )
-    const filledSegments = rendered.filter(
-      (item) => item.plainText === "█" && item.fg.toInts().every((v, i) => v === themeV2()!.text.feedback.success.default.toInts()[i]),
-    )
-    const emptySegments = rendered.filter(
-      (item) => item.plainText === "█" && item.fg.toInts().every((v, i) => v === themeV2()!.border.default.toInts()[i]),
-    )
-    expect(filledSegments).toHaveLength(3)
-    expect(emptySegments).toHaveLength(2)
-  } finally {
-    app.renderer.destroy()
-  }
-})
 
 test("an attention event preserves every expanded section", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
@@ -606,7 +772,7 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
           orphaned()
             ? [
                 { owner: { label: "Main chat" }, shells: [{ id: "running" }] },
-                { owner: { label: "Unknown session" }, shells: [{ id: "orphan" }] },
+                { owner: { label: "Unknown session" }, shells: [{ id: "orphan", status: "failed" }] },
               ]
             : [{ owner: { label: "Main chat" }, shells: [{ id: "running" }] }]
         }
@@ -619,9 +785,9 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
 
   try {
     let frame = app.captureCharFrame()
-    expect(frame).toContain("1 running")
-    expect(frame).not.toContain("1 running, 1 terminal")
-    expect(frame).not.toContain("1 active")
+    expect(frame).toContain("1/2 running")
+    expect(frame).not.toContain("orphaned")
+    expect(frame).toContain("1/1 active")
 
     setOrphaned(true)
     await app.waitForFrame((value) => value.includes("Unknown session 1"))
@@ -629,8 +795,7 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
     setOrphaned(false)
     await app.waitForFrame((value) => !value.includes("Unknown session 1"))
     frame = app.captureCharFrame()
-    expect(frame).toContain("1 running")
-    expect(frame).not.toContain("1 running, 1 terminal")
+    expect(frame).toContain("1/2 running")
   } finally {
     app.renderer.destroy()
   }
@@ -659,7 +824,7 @@ test("prioritizes and expands SHELLS only while the Shell composer surface is ac
   try {
     const frame = app.captureCharFrame()
 
-    expect(frame).toContain("− SHELLS")
+    expect(frame).toContain("SHELLS")
     expect(frame).toContain("Main chat")
     expect(frame).toContain("docs-sync")
   } finally {

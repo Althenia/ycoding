@@ -1,22 +1,19 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`TUI inline tool wrapping snapshots consecutive grep, glob, and read rows at a narrow width 1`] = `
-"   ✱ Grep "YCODING.*DB|database|sqlite|drizzle|dev.*db|data.
-     *dir|xdg|APPDATA" in packages/core/src (151 matches)
-   ✱ Glob "**/*db*" in packages/core (6 matches)
-   → Read packages/core/src/database/database.ts [offset=1, limit=130]
-   → Read packages/core/src/index.ts [offset=1, limit=100]
-   ✱ Grep "export const YCODING_DB|YCODING_DB|YCODING_DEV|Global\\.Path\\.
-     data|data =" in packages/core/src (115 matches)"
+" ok     Grep "YCODING.*DB|database|sql...packages/core/src (151 matches)
+ ok     Glob "**/*db*" in packages/core (6 matches)
+ ok     Read packages/core/src/databas...tabase.ts [offset=1, limit=130]
+ !!     Read packages/core/src/index.ts [offset=1, limit=100]
+ ok     Grep "export const YCODING_DB|...packages/core/src (115 matches)"
 `;
 
 exports[`TUI inline tool wrapping snapshots expanded tool errors under the tool text 1`] = `
-"   ✱ Grep "YCODING.*DB|database|sqlite|drizzle|dev.*db|data.
-     *dir|xdg|APPDATA" in packages/core/src (151 matches)
-   ✱ Glob "**/*db*" in packages/core (6 matches)
-   → Read packages/core/src/database/database.ts [offset=1, limit=130]
-   → Read packages/core/src/index.ts [offset=1, limit=100]
-     No LSP server available for this file type.
-   ✱ Grep "export const YCODING_DB|YCODING_DB|YCODING_DEV|Global\\.Path\\.
-     data|data =" in packages/core/src (115 matches)"
+" ok     Grep "YCODING.*DB|database|sql...packages/core/src (151 matches)
+ ok     Glob "**/*db*" in packages/core (6 matches)
+ ok     Read packages/core/src/databas...tabase.ts [offset=1, limit=130]
+ !!     Read packages/core/src/index.ts [offset=1, limit=100]
+
+        No LSP server available for this file type.
+ ok     Grep "export const YCODING_DB|...packages/core/src (115 matches)"
 `;

@@ -29,6 +29,7 @@ import PROMPT_DEFAULT from "./runner/prompt/base.txt"
 import { toLLMMessages } from "./runner/to-llm-message"
 import { SessionContinuation } from "./runner/continuation"
 import { Hash } from "../util/hash"
+import { SessionMessage } from "./message"
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -53,6 +54,7 @@ type ToolCallResolution =
 
 interface Prepared {
   readonly request: LLMRequest
+  readonly inputIDs: ReadonlyArray<SessionMessage.ID>
   readonly cache: {
     readonly promptCacheKey: string
     readonly systemDigest: string
@@ -73,6 +75,7 @@ interface PrepareInput {
   readonly messages?: ReadonlyArray<Message>
   readonly execution?: number
   readonly disableContinuation?: boolean
+  readonly terminalResponseRecovery?: boolean
 }
 
 export const baseSystem = (context: Pick<SessionContext.Loaded, "agent" | "initial">) =>
@@ -128,12 +131,14 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const model = resolved.model
         const providerMetadataKey = model.route.providerMetadataKey ?? model.provider
         const stepLimitReached = agent.info.steps !== undefined && input.step >= agent.info.steps
+        const terminalResponseRecovery = input.terminalResponseRecovery === true
+        const toolsDisabled = terminalResponseRecovery || stepLimitReached
         const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [])
-        const executableTools = stepLimitReached ? undefined : yield* registry.materialize(permissions)
+        const executableTools = toolsDisabled ? undefined : yield* registry.materialize(permissions)
         const system = baseSystem(input.context)
         const history = toLLMMessages(input.context.messages, resolved.ref, providerMetadataKey)
         const messages = [
-          ...(stepLimitReached ? [...history, Message.assistant(MAX_STEPS_PROMPT)] : history),
+          ...(stepLimitReached && !terminalResponseRecovery ? [...history, Message.assistant(MAX_STEPS_PROMPT)] : history),
           ...(input.messages ?? []),
         ]
         const toolDefinitions = executableTools?.definitions ?? []
@@ -174,11 +179,12 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
         const ttl = yield* cacheRuntime.policy({
           namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
-          modelID: resolved.ref.id,
+          modelID: model.id,
           configured: efficiency.anthropicTtl,
         })
         const cache = SessionRunnerCache.providerOptions({
           ...namespaceInput,
+          apiModelID: model.id,
           sessionID: session.id,
           routeID: resolved.model.route.id,
           anthropicTtlSeconds: ttl.ttlSeconds,
@@ -195,7 +201,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           system: contextEvent.system,
           messages: contextEvent.messages,
           tools: hookedTools,
-          toolChoice: stepLimitReached ? "none" : undefined,
+          toolChoice: toolsDisabled ? "none" : undefined,
         })
         const effectiveRequest = LLMRequest.update(baseRequest, {
           generation: mergeGenerationOptions(
@@ -251,9 +257,9 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           continuationMode !== "off" &&
           OpenAIOptions.store(effectiveRequest) === true &&
           SessionContinuation.isResponsesRoute(model.route.id)
-        if (input.disableContinuation === true) yield* continuation.clear(session.id)
+        if (input.disableContinuation === true || terminalResponseRecovery) yield* continuation.clear(session.id)
         let state =
-          input.execution === undefined || input.disableContinuation === true
+          input.execution === undefined || input.disableContinuation === true || terminalResponseRecovery
             ? undefined
             : yield* continuation.select({
                 ...continuationFingerprint,
@@ -275,11 +281,32 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                   },
                 }),
               })
+        const userMessageIDs = new Set(
+          input.context.messages.flatMap((message) => (message.type === "user" ? [message.id] : [])),
+        )
+        // LLM.request preserves the hook-final messages and their order. Read receipt membership
+        // from that input rather than re-reading the constructed request.
+        const inputIDs = [
+          ...new Set(
+            contextEvent.messages
+              .slice(state?.representedMessages ?? 0)
+              .flatMap((message) =>
+                message.role === "user" && message.id && userMessageIDs.has(SessionMessage.ID.make(message.id))
+                  ? [SessionMessage.ID.make(message.id)]
+                  : [],
+              ),
+          ),
+        ]
         const resolveToolCall = (name: string): ToolCallResolution => {
           if (!executableTools)
             return {
               type: "reject",
-              error: { type: "tool.execution", message: "Tools are disabled after the maximum agent steps" },
+              error: {
+                type: "tool.execution",
+                message: terminalResponseRecovery
+                  ? "Tools are disabled for terminal response recovery"
+                  : "Tools are disabled after the maximum agent steps",
+              },
             }
           if (toolsByName.has(name) && !Object.hasOwn(contextEvent.tools, name))
             return {
@@ -290,9 +317,10 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         }
         return {
           request,
+          inputIDs,
           continuation: {
             fingerprint: continuationFingerprint,
-            eligible,
+            eligible: terminalResponseRecovery ? false : eligible,
             used: state !== undefined,
           },
           cache: {

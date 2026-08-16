@@ -95,17 +95,6 @@ const layer = Layer.effect(
         }
       }
     })
-    const compactBeforeStep = Effect.fn("SessionRunner.compactBeforeStep")(function* (
-      input: SessionCompaction.AutoInput,
-      request?: LLMRequest,
-    ) {
-      if (!compaction.required(input, request) || (yield* SessionPending.compaction(db, input.session.id))) return false
-      yield* continuation.clear(input.session.id)
-      const compacted = yield* compaction.compact(input)
-      if (compacted.status === "completed") return true
-      return yield* new StepFailedError({ error: compacted.error })
-    })
-
     // Declining an interactive prompt halts the drain instead of becoming model-facing tool output.
     const isUserDeclined = (cause: Cause.Cause<unknown>) =>
       cause.reasons.some(
@@ -120,45 +109,39 @@ const layer = Layer.effect(
       step: number,
       requestTrackerState: RequestTrackerState,
       execution: number,
-      recoverOverflow?: typeof compaction.compact,
       assistantMessageID?: SessionMessage.ID,
+      terminalResponseRecovery = false,
+      onPromotion?: () => void,
     ) {
       const selected = yield* context.select(sessionID)
       // Establish what the model knows before admitting what the user said, so
       // a blocked first step leaves pending inputs untouched.
       yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
       let currentStep = step
+      let promoted = 0
       if (promotion) {
-        let promoted = 0
         if (promotion === "steer") promoted = yield* SessionPending.promoteSteers(db, events, selected.session.id)
         if (promotion === "queue") {
           promoted += Number(yield* SessionPending.promoteNextQueued(db, events, selected.session.id))
           promoted += yield* SessionPending.promoteSteers(db, events, selected.session.id)
         }
-        if (promoted > 0) currentStep = 1
+        if (promoted > 0) {
+          currentStep = 1
+          onPromotion?.()
+        }
       }
       const loaded = yield* context.load(selected)
       const session = loaded.session
       const agent = loaded.agent
       const resolved = loaded.model
       const model = resolved.model
-      const compactionInput = {
-        session,
-        messages: loaded.messages,
-        model,
-        cost: resolved.cost,
-        system: SessionModelRequest.baseSystem(loaded),
-      }
-      if (yield* compactBeforeStep(compactionInput))
-        return { _tag: "RestartAfterCompaction", step: currentStep } as const
       const originalPrepared = yield* modelRequests.prepare({
         context: loaded,
         step: currentStep,
         execution,
-        disableContinuation: requestTrackerState.continuationFallback === true,
+        disableContinuation: requestTrackerState.continuationFallback === true || terminalResponseRecovery,
+        terminalResponseRecovery,
       })
-      if (yield* compactBeforeStep(compactionInput, originalPrepared.request))
-        return { _tag: "RestartAfterCompaction", step: currentStep } as const
       let requestTracker = requestTrackerState.current
       if (!requestTracker) {
         requestTracker = yield* providerRequests.next({
@@ -179,6 +162,12 @@ const layer = Layer.effect(
         ...originalPrepared,
         request: LLMRequest.update(originalPrepared.request, { id: requestTracker.requestID }),
       }
+      const unreadInputIDs = new Set(
+        loaded.messages.flatMap((message) =>
+          message.type === "user" && message.time.consumed === undefined ? [message.id] : [],
+        ),
+      )
+      const consumedInputIDs = prepared.inputIDs.filter((inputID) => unreadInputIDs.has(inputID))
       const effective = resolved
       const effectiveModel = effective.model
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
@@ -200,9 +189,20 @@ const layer = Layer.effect(
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => publication.withPermit(effect)
       const publish = (event: LLMEvent, error?: SessionError.Error) => serialized(publisher.publish(event, error))
       let overflowFailure: ProviderErrorEvent | undefined
+      const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
+      let inputConsumptionPending = consumedInputID !== undefined
       const providerStream = llm.stream(prepared.request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
+            if (inputConsumptionPending && consumedInputID) {
+              inputConsumptionPending = false
+              yield* serialized(
+                events.publish(SessionEvent.InputConsumed, {
+                  sessionID: session.id,
+                  inputIDs: [consumedInputID, ...remainingConsumedInputIDs],
+                }),
+              )
+            }
             if (overflowFailure || publisher.hasProviderError()) return
             if (LLMEvent.is.providerError(event) && isContextOverflowFailure(event) && !publisher.hasRetryEvidence()) {
               overflowFailure = event
@@ -217,6 +217,7 @@ const layer = Layer.effect(
             const tool = prepared.resolveToolCall(event.name)
             if (tool.type === "reject") {
               yield* serialized(publisher.failUnsettledTools(tool.error))
+              if (terminalResponseRecovery) yield* serialized(publisher.failAssistant(tool.error))
               return
             }
             needsContinuation = true
@@ -361,30 +362,8 @@ const layer = Layer.effect(
           // Note: Exit.hasInterrupts is a type guard whose false branch unsoundly narrows
           // away non-interrupt failures, so both interrupt checks stay Cause-based.
           const streamInterrupted = stream._tag === "Failure" && Cause.hasInterrupts(stream.cause)
-
-          // A context overflow before any assistant output is recoverable: compact and
-          // restart the step instead of surfacing the provider error.
-          if (
-            recoverOverflow &&
-            !publisher.hasRetryEvidence() &&
-            isContextOverflowFailure(overflowFailure ?? streamFailure) &&
-            (yield* restore(
-              continuation.clear(session.id).pipe(
-                Effect.andThen(
-                  recoverOverflow({
-                    session,
-                    messages: loaded.messages,
-                    model: effectiveModel,
-                    cost: effective.cost,
-                    system: prepared.request.system,
-                  }),
-                ),
-              ),
-            )).status === "completed"
-          ) {
-            yield* completeProviderRequest(undefined, "retry-fallback")
-            return { _tag: "RestartAfterOverflowCompaction", step: currentStep } as const
-          }
+          const streamSettlementFailure =
+            streamFailure ?? (stream._tag === "Failure" && !streamInterrupted ? Cause.squash(stream.cause) : undefined)
 
           if (
             originalPrepared.continuation.used &&
@@ -393,7 +372,12 @@ const layer = Layer.effect(
             streamFailure.reason._tag === "InvalidRequest"
           ) {
             yield* continuation.clear(session.id)
-            return { _tag: "RestartWithoutContinuation", step: currentStep } as const
+            return {
+              _tag: "RestartWithoutContinuation",
+              step: currentStep,
+              promoted,
+              assistantMessageID: publisher.hasStepStarted() ? yield* publisher.startAssistant() : undefined,
+            } as const
           }
 
           // An unrecovered held-back overflow becomes the step's durable provider error. A
@@ -413,6 +397,8 @@ const layer = Layer.effect(
             }
             yield* serialized(publisher.failAssistant(error))
           }
+          if (streamSettlementFailure && !llmFailure && !streamInterrupted && !publisher.hasProviderError())
+            yield* serialized(publisher.failAssistant(toSessionError(streamSettlementFailure)))
           // Provider error events only arrive from the stream, so the flag is final here.
           const providerFailed = publisher.hasProviderError()
 
@@ -479,10 +465,40 @@ const layer = Layer.effect(
               }),
             )
 
-          const stepFailure = publisher.stepFailure()
+          const missingSettlement =
+            stream._tag === "Success" && !providerFailed && publisher.stepSettlement() === undefined
+          let carriedStepFailure: SessionError.Error | undefined
+          if (missingSettlement && !publisher.stepFailure()) {
+            const error = { type: "provider.invalid-output", message: "Provider did not settle the step" } as const
+            if (publisher.hasStepStarted()) yield* serialized(publisher.failAssistant(error))
+            if (!publisher.hasStepStarted() && assistantMessageID !== undefined) {
+              carriedStepFailure = error
+              yield* serialized(
+                events.publish(SessionEvent.Step.Failed, {
+                  sessionID: session.id,
+                  assistantMessageID,
+                  error,
+                  ...(yield* captureStepEnd()),
+                }),
+              )
+            }
+          }
+          const existingStepFailure = publisher.stepFailure() ?? carriedStepFailure
+          if (
+            terminalResponseRecovery &&
+            !existingStepFailure &&
+            (!publisher.stepSettlement() || !publisher.hasAssistantText() || needsContinuation)
+          )
+            yield* serialized(
+              publisher.failAssistant({
+                type: "provider.invalid-output",
+                message: "Terminal response recovery requires non-whitespace assistant text",
+              }),
+            )
+          const stepFailure = publisher.stepFailure() ?? carriedStepFailure
           const stepSettlement = publisher.stepSettlement()
           if (stepSettlement && !stepFailure) yield* publishStepEnd(stepSettlement, yield* captureStepEnd())
-          if (stepFailure) {
+          if (stepFailure && carriedStepFailure === undefined) {
             yield* continuation.clear(session.id)
             const end = yield* captureStepEnd()
             const cache = stepSettlement ? providerCache(stepSettlement) : undefined
@@ -500,16 +516,32 @@ const layer = Layer.effect(
             yield* completeProviderRequest(undefined, "provider-not-reported")
           }
 
+          const recoverableTerminalSilence =
+            !terminalResponseRecovery &&
+            missingSettlement &&
+            !publisher.hasAssistantText() &&
+            !needsContinuation &&
+            (!publisher.hasStepStarted() || stepFailure?.type === "provider.invalid-output")
+          const promotePendingSteerAfterExhaustedRecovery =
+            terminalResponseRecovery &&
+            !publisher.hasAssistantText() &&
+            !needsContinuation &&
+            stepFailure?.type === "provider.invalid-output" &&
+            (yield* SessionPending.has(db, session.id, "steer"))
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
             return yield* Effect.failCause(settledFailure)
           if (toolsInterrupted && settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
-          if (stepFailure) return yield* new StepFailedError({ error: stepFailure })
+          if (stepFailure && !recoverableTerminalSilence && !promotePendingSteerAfterExhaustedRecovery)
+            return yield* new StepFailedError({ error: stepFailure })
           return {
             _tag: "Completed",
-            needsContinuation,
+            needsContinuation: needsContinuation || promotePendingSteerAfterExhaustedRecovery,
             step: currentStep,
+            promoted,
+            terminalSilence:
+              recoverableTerminalSilence || (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
           } as const
         }),
       )
@@ -520,14 +552,12 @@ const layer = Layer.effect(
       promotion: SessionPending.Delivery | undefined,
       step: number,
       execution: number,
+      terminalResponseRecovery = false,
     ) {
-      // Compaction restarts rebuild the request from compacted history without re-promoting.
-      // Overflow recovery is one-shot: a post-compaction attempt must not recover another
-      // overflow, so the recovery hook is dropped after it fires.
-      let recoverOverflow: typeof compaction.compact | undefined = compaction.compact
       let currentPromotion = promotion
       let currentStep = step
       let assistantMessageID: SessionMessage.ID | undefined
+      let promoted = false
       const requestTrackerState: RequestTrackerState = {}
       const completeRetryFallback = () =>
         requestTrackerState.current?.complete({
@@ -544,8 +574,11 @@ const layer = Layer.effect(
             currentStep,
             requestTrackerState,
             execution,
-            recoverOverflow,
             assistantMessageID,
+            terminalResponseRecovery,
+            () => {
+              promoted = true
+            },
           ),
         ).pipe(
           Effect.tapError((error) =>
@@ -575,15 +608,12 @@ const layer = Layer.effect(
           return {
             needsContinuation: attempt.needsContinuation,
             step: attempt.step,
+            promoted,
+            terminalSilence: attempt.terminalSilence,
           }
-        if (attempt._tag === "RestartWithoutContinuation") requestTrackerState.continuationFallback = true
-        if (attempt._tag === "RestartAfterOverflowCompaction") {
-          recoverOverflow = undefined
-          requestTrackerState.current = undefined
-        }
-        if (attempt._tag === "RestartAfterCompaction" && requestTrackerState.current) {
-          yield* completeRetryFallback()
-          requestTrackerState.current = undefined
+        if (attempt._tag === "RestartWithoutContinuation") {
+          requestTrackerState.continuationFallback = true
+          assistantMessageID = attempt.assistantMessageID ?? assistantMessageID
         }
         yield* Effect.yieldNow
         currentPromotion = undefined
@@ -597,7 +627,7 @@ const layer = Layer.effect(
       const pending = yield* SessionPending.compaction(db, sessionID)
       if (!pending) return
       const session = yield* getSession(sessionID)
-      return yield* Effect.uninterruptibleMask((restore) =>
+      yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const compacted = yield* restore(
             Effect.gen(function* () {
@@ -630,7 +660,7 @@ const layer = Layer.effect(
                   : { type: "compaction.failed", message: Cause.pretty(compacted.cause) },
                 inputID: unsettled.id,
               })
-            return yield* Effect.failCause(compacted.cause)
+            yield* Effect.failCause(compacted.cause)
           }
         }),
       )
@@ -651,23 +681,39 @@ const layer = Layer.effect(
       yield* failInterruptedTools(input.sessionID)
       let promotion: SessionPending.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
       let shouldRun = input.force || hasSteer || hasQueue
+      let terminalResponseRecoveryUsed = false
       while (shouldRun) {
         let needsContinuation = true
         let step = 1
+        let terminalResponseRecovery = false
         // Repeat steps while continuation is needed. A step needs continuation only
         // when it recorded local tool calls whose results the model has not yet seen;
         // a provider error suppresses it. Pending steers also continue the loop so
         // interjections are answered before the session goes idle.
         while (needsContinuation) {
-          const result = yield* runStep(input.sessionID, promotion, step, execution)
+          const result = yield* runStep(input.sessionID, promotion, step, execution, terminalResponseRecovery)
           // Steer/queue promotion inside runStep has already made the pending input a visible
           // user message by this point, so the first-user-message check below is reliable.
           if (!titleAttempted.has(input.sessionID)) {
             titleAttempted.add(input.sessionID)
             forkTitle(title.generateForFirstPrompt(yield* getSession(input.sessionID)).pipe(Effect.ignore))
           }
+          if (result.promoted) terminalResponseRecoveryUsed = false
           needsContinuation = result.needsContinuation
           step = result.step + 1
+          terminalResponseRecovery = false
+          if (result.terminalSilence && !needsContinuation && !terminalResponseRecoveryUsed) {
+            if (yield* SessionPending.has(db, input.sessionID, "steer")) {
+              needsContinuation = true
+              promotion = "steer"
+              continue
+            }
+            terminalResponseRecoveryUsed = true
+            terminalResponseRecovery = true
+            needsContinuation = true
+            promotion = undefined
+            continue
+          }
           if (needsContinuation) {
             yield* runPendingCompaction(input.sessionID)
             promotion = "steer"

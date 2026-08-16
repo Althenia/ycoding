@@ -1,5 +1,7 @@
+import { TextAttributes } from "@opentui/core"
 import { createMemo, createSignal, onCleanup } from "solid-js"
 import { useLocal } from "../context/local"
+import { useTheme } from "../context/theme"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 import { DialogIntegration } from "./dialog-integration"
@@ -33,10 +35,15 @@ export function completeModelSelection(input: {
   return { providerID: input.providerID, modelID: input.modelID }
 }
 
-export function DialogModel(props: { providerID?: string; onComplete?: (result: DialogModelResult) => void }) {
+export function DialogModel(props: {
+  providerID?: string
+  order?: readonly { providerID: string; modelID: string }[]
+  onComplete?: (result: DialogModelResult) => void
+}) {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
+  const { themeV2 } = useTheme().contextual("elevated")
   const [query, setQuery] = createSignal("")
   let settled = false
   let selectingVariant = false
@@ -71,7 +78,7 @@ export function DialogModel(props: { providerID?: string; onComplete?: (result: 
             releaseDate: model.time.released,
             description: provider?.name ?? model.providerID,
             category,
-            footer: free(model) ? "Free" : undefined,
+            footer: model.enabled ? formatContext(model.limit.context) : "Unavailable",
             onSelect: () => {
               onSelect(model.providerID, model.id)
             },
@@ -88,7 +95,7 @@ export function DialogModel(props: { providerID?: string; onComplete?: (result: 
       "Recent",
     )
 
-    const modelOptions = sortModelOptions(
+    const sortedModelOptions = sortModelOptions(
       models()
         .filter((model) => model.status !== "deprecated")
         .filter((model) => (props.providerID ? model.providerID === props.providerID : true))
@@ -98,13 +105,27 @@ export function DialogModel(props: { providerID?: string; onComplete?: (result: 
             value: { providerID: model.providerID, modelID: model.id },
             providerID: model.providerID,
             providerName: provider?.name ?? model.providerID,
+            enabled: model.enabled,
             title: model.name,
             releaseDate: model.time.released,
-            description: favorites.some((item) => item.providerID === model.providerID && item.modelID === model.id)
-              ? "(Favorite)"
-              : undefined,
+            description: model.family
+              ? `${model.family}${model.enabled && model.capabilities.tools ? " · tools" : ""}`
+              : favorites.some((item) => item.providerID === model.providerID && item.modelID === model.id)
+                ? "(Favorite)"
+                : model.capabilities.tools
+                  ? "tools"
+                  : undefined,
             category: connected() ? (provider?.name ?? model.providerID) : undefined,
-            footer: free(model) ? "Free" : undefined,
+            categoryView:
+              model.enabled || !connected() ? undefined : (
+                <box height={1}>
+                  <text fg={themeV2.text.feedback.info.default} attributes={TextAttributes.BOLD}>
+                    {provider?.name ?? model.providerID}
+                  </text>
+                </box>
+              ),
+            footer: model.enabled ? formatContext(model.limit.context) : "Unavailable",
+            state: model.enabled ? ("connected" as const) : ("disabled" as const),
             onSelect() {
               onSelect(model.providerID, model.id)
             },
@@ -125,6 +146,21 @@ export function DialogModel(props: { providerID?: string; onComplete?: (result: 
           return true
         }),
     )
+    const order = props.order
+    const modelOptions = order
+      ? sortedModelOptions.toSorted((a, b) => {
+          const index = (option: typeof a) =>
+            order.findIndex(
+              (item) => item.providerID === option.value.providerID && item.modelID === option.value.modelID,
+            )
+          const left = index(a)
+          const right = index(b)
+          if (left === -1 && right === -1) return 0
+          if (left === -1) return 1
+          if (right === -1) return -1
+          return left - right
+        })
+      : sortedModelOptions
 
     if (needle) {
       return fuzzysort.go(needle, modelOptions, { keys: ["title", "category"] }).map((item) => item.obj)
@@ -226,9 +262,12 @@ export function DialogModel(props: { providerID?: string; onComplete?: (result: 
 }
 
 export function sortModelOptions<
-  T extends { providerID?: string; providerName?: string; releaseDate: string | number; title: string },
+  T extends { providerID?: string; providerName?: string; releaseDate: string | number; title: string; enabled?: boolean },
 >(options: T[]) {
   return options.toSorted((a, b) => {
+    const availability = Number(a.enabled === false) - Number(b.enabled === false)
+    if (availability !== 0) return availability
+
     const provider =
       Number(a.providerID !== "opencode") - Number(b.providerID !== "opencode") // YCODING_EXTERNAL_OPENCODE
     if (provider !== 0) return provider
@@ -243,6 +282,8 @@ export function sortModelOptions<
   })
 }
 
-function free(model: { cost: Array<{ input: number }> }) {
-  return model.cost.length > 0 && model.cost.every((cost) => cost.input === 0)
+function formatContext(tokens: number) {
+  if (tokens >= 1_000_000) return `${tokens / 1_000_000}m`
+  if (tokens >= 1_000) return `${tokens / 1_000}k`
+  return String(tokens)
 }

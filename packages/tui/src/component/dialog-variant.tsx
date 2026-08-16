@@ -3,7 +3,12 @@ import { useLocal } from "../context/local"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 
-export function DialogVariant(props: { variants?: string[]; onSelect?: (variant: string) => void; onCancel?: () => void }) {
+export function DialogVariant(props: {
+  variants?: string[]
+  current?: string
+  onSelect?: (variant: string) => void
+  onCancel?: () => void
+}) {
   const local = useLocal()
   const dialog = useDialog()
 
@@ -16,6 +21,15 @@ export function DialogVariant(props: { variants?: string[]; onSelect?: (variant:
     variants().map((variant) => ({
       value: variant,
       title: variant,
+      description:
+        variant === "max"
+          ? "deep reasoning · highest cost"
+          : variant === "balanced"
+            ? "default"
+            : variant === "fast"
+              ? "lower latency"
+              : undefined,
+      state: (props.current ?? local.model.variant.current()) === variant ? ("connected" as const) : undefined,
       onSelect: () => {
         if (props.onSelect) {
           selected = true
@@ -32,7 +46,7 @@ export function DialogVariant(props: { variants?: string[]; onSelect?: (variant:
     <DialogSelect<string>
       options={options()}
       title={"Select variant"}
-      current={props.variants ? undefined : local.model.variant.current()}
+      footerHints={[{ title: "cycle", label: "⌃t" }]}
       flat={true}
     />
   )

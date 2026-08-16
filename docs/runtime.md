@@ -25,11 +25,17 @@ A drain discovers the session's Location when execution starts. There is no clus
 
 ### Steps and provider attempts
 
-One step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Context-overflow recovery completes the old request as a fallback, compacts the context, and rebuilds a new logical request.
+One step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Context-overflow failures complete the affected step as an error; they never compact history or rebuild a request automatically.
+
+Every started logical Step closes with exactly one durable terminal event. A provider stream that omits required step settlement fails a started assistant as `provider.invalid-output`; a non-LLM stream failure also closes a started assistant with its normalized Session error before the original cause propagates. A valid settled terminal response containing no non-whitespace assistant text and no local-tool continuation receives one bounded text-only recovery Step. Recovery disables tools, omits synthetic max-step text, disables stored Responses continuation, and fails rather than creating a third Step when it is silent, tool-only, malformed, or provider-failed.
 
 Transport, rate-limit, and provider-internal failures retry only before observable assistant output. Status-less provider messages with a recognized code prefix, including OpenAI `server_error:`, retain their provider-internal classification and use the bounded exponential retry schedule instead of immediately ending the Session response.
 
 The durable provider-request ledger stores identifiers, model and route identity, stable prompt/cache digests, attempt counts, normalized tokens, cost, continuation mode, and invalidation reason. It does not store prompt, message, tool-result, or response text.
+
+Terminal-silence recovery is one additional logical `step` request and is recorded as a full request, not as a physical retry or continuation fallback. Its tool-prefix change may produce the existing cache-invalidation vocabulary.
+
+Before each physical Session-step attempt, the runner derives the exact previously unread promoted user-message IDs that remain in the final model-visible request after history selection, compaction, continuation slicing, and `session:context` hook shaping. It invokes `llm.stream(request)` eagerly once, but records the public durable `session.input.consumed` fact only after the first provider stream event confirms dispatch and before projecting that event; a transport failure before any stream event creates no receipt. The projected user message stores only its first consumption time, so retries do not repeat the fact, and helper-model requests do not create user-message receipts.
 
 The runtime reloads projected history before durable continuation. It does not delegate V2 orchestration to a legacy in-memory prompt loop.
 
@@ -41,11 +47,13 @@ Session titles and goal text are local by default:
 - local goal synthesis collapses whitespace without changing the request's meaning and makes no provider request;
 - model-generated title and goal behavior requires explicit `efficiency` modes;
 - `title: "off"` keeps the initial generated Session title;
-- compaction remains model-based.
+- conversation summarization is model-based and starts only from the always-registered `conversation_summarize` tool. The stable main-chat guidance treats a genuinely completed phase whose verbatim detail is no longer needed as proactive hygiene rather than a last resort: a durable TOON summary preserves the objective, decisions, constraints, completed and pending work, blockers, and exact identifiers. It still requires the agent to preserve recent and verbatim-needed material, choose a completed-phase boundary rather than summarize merely old history, and treat successful history deletion as irreversible.
 
-Model-based helpers resolve the hidden agent's explicit model first, then the matching `efficiency.helper_models.title`, `.goal`, or `.compaction` selection. A missing role or the explicit value `session` uses the current Session model. Helper provider requests use the same content-free request ledger as normal Session steps.
+Model-based titles and goals resolve the hidden agent's explicit model first, then the matching `efficiency.helper_models.title` or `.goal` selection. Explicit summary resolution uses `efficiency.helper_models.compaction.main` for main chats and `.subagent` for child Sessions: an explicit configured value wins over an agent-pinned model, while a missing value or `session` retains agent-model then that Session's own-model precedence. Helper provider requests use the same content-free request ledger as normal Session steps.
 
-Compaction bounds the summary request to the selected compaction model's declared context minus its output reserve. History that does not fit the summary request remains verbatim in the checkpoint's recent-context suffix, so selecting a smaller compaction model reduces the summary chunk without dropping Session history.
+The explicit summarizer validates its requested boundary before provider work, keeps `keep_recent_messages` projected rows after that boundary, and batches oversized source ranges in memory. Each generated batch must declare summary schema `version: 1` and validate as a complete TOON `conversation_memory` document through its exact sequence; it preserves the objective, decisions, constraints, completed and pending work, blockers, and exact identifiers needed to continue without the covered rows. No history is deleted unless the final TOON checkpoint validates. The write phase uses `BEGIN IMMEDIATE`, rechecks the captured range fingerprint, then atomically replaces only covered message-producing events and projections. Protected lifecycle, instruction, task, provider-request, and permission history remains durable; sequence counters and surviving message sequence values are never reset or renumbered. After the tool succeeds, the TUI reloads the canonical projection and releases covered resident messages, so both the visible transcript and the next model request start from the latest summary plus retained recent messages.
+
+Before a model request, the context hook estimates the current system instructions, tool definitions, and model-visible messages against the selected model's safe input budget. It applies the configured `compaction.context_safety_margin_tokens` explicitly. Below 25% it appends nothing. At 25%, 50%, 75%, and 90% it appends one trailing volatile advisory that escalates from informational to a good opportunity, a recommendation to summarize soon, and strong advice. At 100% or higher, the safe input budget is exhausted: the configured safety margin is being consumed, the next provider request risks rejection, and the advisory states that a completed boundary needs summary to continue reliably. Every level remains advisory only; no automatic compaction or recovery exists. This context is not a durable transcript message, receives no cache breakpoint, and does not change the stable system or tool prefix.
 
 ### Shell resource control
 
@@ -65,11 +73,15 @@ MCP server instruction blocks are sorted by server ID, normalized to LF line end
 
 ### Provider prompt caching
 
-The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v5`, so requests created under older placement rules do not silently share the same namespace. Compaction helpers add an internal `compaction` namespace scope, so their provider-cache key cannot share normal Session-step state; ordinary Session-step key bytes remain unchanged.
+The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v6`, so requests created under older placement rules do not silently share the same namespace. Explicit summarizer helpers add an internal `summarizer` namespace scope while retaining their exact system and tool digest bytes, so their provider-cache key cannot share normal Session-step state; ordinary Session-step key bytes remain unchanged.
+
+The namespace and durable diagnostics retain the selected catalog model identity. Provider cache capability and model-profile decisions use the executable API model ID, so an aliased catalog model receives the cache controls and limits of the provider model it invokes.
 
 Anthropic-compatible requests start with a concrete five-minute policy. The process-local cache runtime tracks provider-reported read and write usage by stable namespace. Two reusable observations within five minutes promote later requests for an extended-TTL-capable model to one hour. Missing telemetry, stale observations, namespace rotation, and unsupported model profiles remain at five minutes. The state is bounded, non-durable, and never required to reconstruct a Session.
 
-Direct OpenAI Responses requests on GPT-5.6 and later use a stable prompt-cache key. YCoding generates one combined system-text breakpoint and selected user/assistant text breakpoints inside the configured raw message window. Responses uses `input_text` EasyInput blocks for a marked assistant message and otherwise preserves its `output_text` replay shape. Tools and tool results remain cacheable inside a later prefix but receive no generated explicit markers. `openai_mode: "auto"` sends request-wide `{ mode: "implicit", ttl: "30m" }`, so OpenAI retains its managed latest-message breakpoint and selects its current latest three explicit write candidates; `openai_mode: "explicit"` disables that managed breakpoint and lets OpenAI select its current latest four explicit write candidates. Earlier explicit markers remain provider read candidates. YCoding does not impose a client read-lookback or write-slot cap. `30m` is a minimum reuse lifetime, not a hard expiry; OpenAI may retain state longer up to its separate 24-hour maximum. Older public OpenAI models remain implicit and use opt-in `24h` retention only on supported families. The ChatGPT Codex backend has its own `openai-codex-responses` capability identity and receives the supported stable `prompt_cache_key`, but not public-API `prompt_cache_options`, `prompt_cache_breakpoint`, or `prompt_cache_retention` fields. Compatible gateways and unsupported families also omit GPT-5.6-only fields. Model-based title, goal, and compaction calls use the same policy and observation runtime as normal Session steps.
+Direct OpenAI Responses requests on GPT-5.6 and later use a stable prompt-cache key. YCoding generates one combined system-text breakpoint and retains explicit breakpoints on every non-volatile user/assistant text boundary, preserving matching candidates across intervening tool calls and results. Responses uses `input_text` EasyInput blocks for a marked assistant message and otherwise preserves its `output_text` replay shape. Tools and tool results remain cacheable inside a later prefix but receive no generated explicit markers. `openai_mode: "auto"` sends request-wide `{ mode: "implicit", ttl: "30m" }`, so OpenAI retains its managed latest-message breakpoint and selects its current latest three explicit write candidates; `openai_mode: "explicit"` disables that managed breakpoint and lets OpenAI select its current latest four explicit write candidates. Earlier explicit markers remain provider read candidates. YCoding does not impose a client read-lookback or write-slot cap because current OpenAI references conflict on the exact read-window size. `30m` is a minimum reuse lifetime, not a hard expiry; OpenAI may retain state longer up to its separate 24-hour maximum. Older public OpenAI models remain implicit and use opt-in `24h` retention only on supported families. The ChatGPT Codex backend has its own `openai-codex-responses` capability identity and receives YCoding's stable `prompt_cache_key`, but not public-API `prompt_cache_options`, `prompt_cache_breakpoint`, or `prompt_cache_retention` fields; public documentation does not contract those fields for subscription access. Compatible gateways and unsupported families also omit GPT-5.6-only fields. Model-based title, goal, and compaction calls use the same policy and observation runtime as normal Session steps.
+
+OpenAI Responses assistant `phase` metadata is preserved through durable message projection and replayed as `commentary` or `final_answer` on later requests. This applies to direct OpenAI and the ChatGPT Codex Responses route when the backend reports a phase.
 
 Direct GPT-5.6 Responses requests enable server-side context management with a `200000`-token compaction threshold. When OpenAI returns an encrypted compaction item on a stateless request, YCoding retains the opaque state for the same model, includes it in the next input, and omits the earlier input items from that request. Stored-response continuation remains separate and still requires explicit provider storage.
 
@@ -80,7 +92,12 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 - **Steer** inputs promote at the next safe step boundary and require the active drain to continue.
 - **Queue** inputs remain pending until the session would otherwise become idle.
 - Promoting new user input resets the selected agent's step allowance.
-- Durable pending user and synthetic inputs are projected back into the hot transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
+- Durable pending user and synthetic inputs are projected back into the resident transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
+- Outbound user bubbles render lifecycle receipts from durable state only: a clock while the admitted input remains pending, one subdued check after promotion, and two info-colored checks after a physical model request consumed that exact message. Assistant, synthetic, and system rows do not render these receipts. Historical promoted messages without a consumption event remain in the sent state; assistant activity is not treated as proof of consumption.
+
+### Tool activity lifecycle
+
+The TUI derives tool activity state and duration from each durable tool's `time.created`, `time.ran`, and `time.completed` fields. Streaming input renders as pending, active execution renders as running with a live elapsed duration, and terminal success, failure, or cancellation freezes the completed duration. Execute child calls, exploration groups, shell and direct CLI rows, and generic tools use the same status grammar; parsed command-result failures override a transport-level completed state. Expanding request or response details never removes the lifecycle status from the primary row.
 
 ### Restart safety
 
@@ -152,6 +169,10 @@ Current behavior:
 - Configured and managed subagents materialize the Location's registered tool catalog through their ordered permission rules and inherited parent ceiling. Empty managed-agent rules resolve to safe defaults with shell requiring approval; final `subagent` and `subagent_control` denies prevent nested orchestration.
 - Nested subagents are bounded by `experimental.subagent_depth`; the default depth is one.
 - Session restart and TUI rehydration use durable orchestration state rather than requiring the user to open every child chat.
+
+The public managed-subagent list returns one page of at most 10 direct durable task records plus exact family-wide `total`, `active`, `running`, and `waiting` counts. `active` includes `waiting`, `starting`, `running`, and `cancelling`. Rows sort by `waiting`, `starting`, `running`, `cancelling`, then the terminal group, with each group ordered by durable update time descending and Session ID ascending; opaque previous and next cursors preserve that order in either direction.
+
+The TUI keeps one such page resident per parent and replaces it rather than appending when the user moves older or newer. The rail and composer use the exact summary independently from the resident row count. Sibling navigation loads adjacent pages only when crossing a page boundary or locating a child absent from the current page; paging never deletes or truncates durable child Session, task, message, ownership, permission, nesting, or background-execution state.
 
 Subagents do not synchronously return their final result to the initiating tool call. Parent notification and child-session inspection are the completion paths.
 
@@ -229,32 +250,17 @@ Adapters expose active artifacts to the existing agent, command, skill, and plug
 
 ## Transcript history
 
-The TUI keeps transcript memory bounded without changing durable history.
+The TUI keeps transcript memory bounded by retaining only the current projection. Explicit summarization changes that projection by replacing covered message history with its validated summary.
 
-### Resident windows
+### Resident transcript
 
-- The hot window retains the latest **50 completed messages** plus every active or incomplete boundary.
-- One expanded archive page retains up to **1000 older messages**.
-- Older pages are represented by lightweight placeholders containing cursor and page metadata, not transcript payloads.
-- Only one archive page is resident at a time.
-
-### Expand and collapse
-
-Expanding an archive placeholder:
-
-1. refreshes stale history metadata when required;
-2. requests the canonical page with a limit of 1000;
-3. removes duplicate messages already resident in the hot window;
-4. retains the page and marks its placeholder `expanded`;
-5. adds a following placeholder when another cursor exists.
-
-Collapsing history releases the resident archive payload and returns all placeholders to `collapsed` while preserving cursor, count, oldest ID, and newest ID metadata. Re-expanding the same placeholder reloads the same canonical page.
+Implemented: opening or refreshing a Session fetches its complete current projected transcript in one canonical ascending-order request. The TUI retains that complete transcript while the Session is resident, then releases it on navigation or explicit session eviction. A successful `conversation_summarize` call immediately reloads that projection and drops the covered rows from resident memory. A long Session that has never been summarized therefore consumes TUI memory proportional to all current projected messages; a summarized Session retains only the latest summary and surviving recent messages.
 
 ### Rendering guarantees
 
-Transcript rows are reduced from resident messages and placeholders. A row whose backing message or assistant part has been evicted is not mounted, so it consumes no blank terminal block during archive collapse, page replacement, navigation, resume, or reconnect.
+Transcript rows are reduced from resident messages. A row whose backing message or assistant part has been evicted is not mounted, so it consumes no blank terminal block during navigation, resume, or reconnect.
 
-Timeline selection is preserved by option value rather than list index because history expansion and new messages can reorder the list.
+Timeline selection is preserved by option value rather than list index because new messages can reorder the list.
 
 ## Provider caching and diagnostics
 
@@ -280,15 +286,19 @@ Continuation state is cleared when the execution ends, is interrupted, compacts,
 
 ### Anthropic and compatible routes
 
-Anthropic cache-control placement is normalized across direct and compatible provider routes. Volatile TeamView state is appended after stable history and does not receive a cache breakpoint.
+Anthropic cache-control placement is normalized across direct and compatible provider routes. Volatile TeamView state and context-pressure advisories are appended after stable history and do not receive cache breakpoints.
 
 ### Telemetry
 
 The runtime preserves provider-reported cache reads, writes, creation detail, mechanisms, and model/context identity where available. Missing provider telemetry is reported as unreported rather than silently treated as zero.
 
-The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost. Cost is calculated from the selected catalog model's input, output, cache-read, cache-write, and eligible context-tier prices. ChatGPT/Codex and Claude Code subscription routes retain those catalog prices, so their nonzero total is an API-equivalent usage estimate rather than a claim about the subscription invoice. Parent and child Sessions can reuse a prefix only when every model-visible namespace input matches; changing provider, model, variant, policy, permission ceiling, system, or tool definitions creates a distinct key.
+The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost. Context and provider-cache fields describe the latest assistant step after the latest completed compaction, while request-summary totals cover the Session's lifetime durable provider-request ledger. Cost is calculated from the selected catalog model's input, output, cache-read, cache-write, and eligible context-tier prices. ChatGPT/Codex and Claude Code subscription routes retain those catalog prices, so their nonzero total is an API-equivalent usage estimate rather than a claim about the subscription invoice. Parent and child Sessions can reuse a prefix only when every model-visible namespace input matches; changing provider, model, variant, policy, permission ceiling, system, or tool definitions creates a distinct key.
 
 Session diagnostics also expose a bounded request summary: logical requests, transport attempts, helper calls, continued requests, fallbacks, raw token categories, estimated cost, and the latest cache invalidation reason. The reader recognizes historical records without an explicit variant as the default variant. For a new request, `compaction-reset` takes precedence over `model-switched`, which takes precedence over `model-variant-switched`; unchanged model identity then reports system, tool, or generic prefix changes. Only the first eight characters of the latest prompt-cache namespace are exposed; prompt content, full cache keys, system digests, tool digests, and internal provider-request events remain private. When any request lacks catalog pricing, estimated request cost is absent and the TUI renders `Estimated cost unavailable` instead of `$0.00`.
+
+### Model-switch context admission
+
+Before changing a Session model, the runtime resolves the target model in the Session Location catalog and estimates the persisted rolling summary plus active recent history against its safe input budget. The budget reserves the target maximum output and the effective `compaction.context_safety_margin_tokens`; an absent margin is explicitly zero. A fitting switch appends the normal durable model-selection event. An over-budget switch returns structured `ModelSwitchBlockedError` data and leaves the selected model, summary, transcript, and compaction state unchanged. It never triggers summarization; an optional `maximumSafeSummaryBoundary` is advisory and exists only when configured `keep_recent_messages` leaves a fitting recent tail. Selection waits for an active drain to settle, so the started provider request retains its original model and the new model applies to the following request boundary.
 
 ## Provider quota and credit diagnostics
 
@@ -298,13 +308,16 @@ Provider usage is a read-only Location service separate from Session-local token
 - OpenAI organization usage uses documented usage and cost endpoints when an explicitly marked admin credential is available.
 - Claude subscription state combines live unified response headers with a cached OAuth usage snapshot for cold start, session, all-model, model-specific, and extra-usage buckets. Reported Pro/Max type is included in the safe label.
 - Codex and Spark preserve weekly and every additional named limit lane from a configured app-server client contract, with a ChatGPT OAuth backend fallback. Reported Plus/Pro type is included in the safe label.
+- **Implemented:** GitHub Copilot reporting uses its existing OAuth credential without a configuration key. A read-only, best-effort refresh reads paid quota snapshots or free and limited quota windows; token-based-billing seats instead read organization AI-credit billing summaries. GitHub AI credits use the fixed rate of `$0.01` USD each. A remembered organization is re-discovered if it no longer returns AI-credit data.
 - snapshots are cached by provider and credential identity; concurrent refreshes are deduplicated;
 - a failed refresh retains the last valid snapshot as `stale`;
 - provider failures never block Session execution;
 - unknown amounts remain absent and render as `Not reported`, not zero;
 - Protocol and TUI state contain normalized values only, not credential values or provider response bodies.
 
-The Session command palette exposes a **Provider Usage** dialog when a provider selected by any Session in the current root family has visible quota data, including idle family members, or when local request diagnostics exist. It keeps external quota windows separate from the local **YCoding requests** section, shows provider windows with freshness and stability, separates Spark and other named lanes, and uses stable ten-character ASCII progress bars for reported percentages. Missing windows and account tiers remain unreported rather than becoming zero or being inferred.
+The Session command palette exposes a **Provider Usage** dialog when a provider selected by any Session in the current root family has visible quota data, including idle family members, or when local request diagnostics exist. It keeps external quota windows separate from the local **YCoding requests** section, shows provider windows with freshness and stability, separates Spark and other named lanes, and uses stable ten-character ASCII progress bars for reported percentages. Each provider quota section has a provider header followed by one indented row per quota window; it adds an indented `Reset` row only for the nearest known upcoming reset, formatted as `in 12m`, `in 5h`, or `in 2d 3h`.
+
+For GitHub Copilot models with a non-tiered registry cost, each local token bucket—raw input, raw output, cache read, and cache write—adds an AI-credit column calculated from that model's registry rate and the fixed `$0.01`-per-credit conversion. Other providers retain a single token column. No context-length price multiplier is applied: the presentation selects no context-tiered rate. Missing windows, resets, account tiers, and prices remain unreported rather than becoming zero or being inferred.
 
 ## Shell output
 
@@ -341,29 +354,29 @@ The TUI provides sibling-subagent navigation within a parent Session's child fam
 
 ### Sibling switcher
 
-A `SubagentSiblingSwitcher` renders at the top of a child session's content area when its parent has child tasks. Each child is a row with:
+A `SubagentSiblingSwitcher` renders at the top of a child session's content area when its parent has child tasks. It uses the parent's current bounded task page and renders:
 
-- a clickable agent label (title-cased);
-- the agent model;
-- inline economics (cost and token count) when available;
-- a warning bullet indicator when the subagent is waiting with a question.
+- a clickable compact agent chip for each visible task on that page;
+- the current child first when it is resident;
+- a warning-colored `?` prefix when a task is waiting with a question;
+- fixed parent, previous-page, and next-page navigation hints plus an overflow count when all chips do not fit.
 
-The parent session is shown as an ↑-prefixed clickable row above the siblings. The active child is highlighted with the primary action background color. A blocked task (state `waiting` with a question) renders the row with a warning background and a `●` marker.
+The parent Session is an ↑-prefixed clickable item in the same strip. The active child uses info-colored text, and a blocked task uses warning-colored text. Arrow navigation lazily replaces the resident page when it crosses a page boundary and wraps only after reaching the corresponding family edge.
 
 ### Child-session economics and durable state
 
-The session route does not mount `SubagentFooter`. For a child session, it mounts `SubagentEconomicsSurface` below the composer and `SubagentDurableChip` after it. The economics surface renders the available detailed strip: context, reported or unreported cache telemetry, cost, and parent rollup. The durable chip displays `durable`.
+The session route does not mount `SubagentFooter`. For an unblocked child Session, it mounts `SubagentEconomicsSurface` below the composer. The economics surface renders the available detailed strip: context, reported or unreported cache telemetry, cost, and parent rollup.
 
 ### Economics computation
 
-`subagentEconomics` computes a summary string and a detailed strip from session info and cache diagnostics. The mounted `SubagentEconomicsSurface` uses the detailed strip, which includes context, reported or unreported cache telemetry, cost, and parent rollup. Tokens are formatted with `Intl.NumberFormat` and cost with `Intl.NumberFormat` currency formatting. Diagnostics are derived from the same `SessionCacheDiagnostics` type used by the main session.
+`subagentEconomics` computes a summary string and a detailed strip from Session info and cache diagnostics. The mounted `SubagentEconomicsSurface` uses the detailed strip, which includes context, reported or unreported cache telemetry, cost, and parent rollup. Tokens are formatted with `Intl.NumberFormat` and cost with `Intl.NumberFormat` currency formatting. Diagnostics are derived from the same `SessionCacheDiagnostics` type used by the main Session.
 
 ### Blocked subagent answer presentation
 
 A subagent is considered blocked when its orchestration task state is `waiting` and a `question` is present. The TUI surfaces blocked state in:
 
-- **Sibling switcher** — warning-colored background, ● marker, and ? prefix on the agent label.
-- **Child session** — `SubagentBlockedSurface` appears above the transcript, and `SubagentAnswerComposer` replaces the normal composer only while the child is waiting with a question. The mounted economics strip uses warning text while the child has a question.
+- **Sibling switcher** — warning-colored text and a `?` prefix on the agent chip.
+- **Child Session** — `SubagentBlockedSurface` appears above the transcript, and `SubagentAnswerComposer` replaces the normal composer only while the child is waiting with a question. The ordinary economics surface is withheld while blocked.
 - **Sidebar rail** — an `awaitingInput` glyph, warning-colored value text showing the question text, and the `attention` prop on the rail section header.
 - **Composer subagent tab** — an `awaitingInput` glyph rendered in warning color, the question text shown as detail.
 
@@ -399,11 +412,11 @@ The sidebar shells section (`SHELLS`) summarizes running shells grouped by owner
 
 ### Subagents section
 
-The sidebar subagents section (`SUBAGENTS`) lists subagent tasks ordered by creation time. Each row shows the agent description with a glyph, the elapsed time or question text, and a warning color when awaiting input. The section summary shows the count of awaiting-input subagents, or total subagent count. An attention state highlights when any subagent is waiting for input.
+The sidebar subagents section (`SUBAGENTS`) renders the current managed-task page in API order: `waiting`, `starting`, `running`, `cancelling`, then the terminal group, with durable update time descending and Session ID ascending inside each group. Each row shows the task description with a glyph, the elapsed time or question text, and a warning color when awaiting input. Its exact family summary is `running/total running`, with an additional waiting count when nonzero; older and newer controls replace the resident page. An attention state highlights when any subagent is waiting for input.
 
 ### Goal section
 
-The goal section (`GOAL`) appears when the session has an active goal. It shows the goal text, no-progress count, maximum no-progress, and status. The summary shows `noProgress / maxNoProgress`.
+The goal section (`GOAL`) appears when goal state exists. It shows the goal text and status; the header summary is the goal status, not a no-progress count.
 
 ### Autonomy section
 
@@ -417,7 +430,7 @@ Rail placement follows terminal width:
 - 100–119 columns: overlay (floating over the main pane).
 - 120 columns and above: docked (fixed sidebar).
 
-Rail width is 32 columns at 120-129 columns, then grows by one column per 10 terminal columns to 36 columns at 160 columns and above.
+Rail width grows linearly from 32 columns at a 120-column terminal to the 50-column design width at 160 columns, then remains capped at 50.
 
 ## Terminal release behavior
 
@@ -426,14 +439,14 @@ The TUI is the only release surface and currently includes:
 - session transcript and timeline;
 - normal, yolo, and goal mode controls;
 - subagent tabs, status, notifications, navigation, and sibling switcher;
-- child-session sibling switcher, economics surface, durable chip, and blocked-answer composer;
+- child-session sibling switcher, economics surface, and blocked-answer composer;
 - session skills and project artifacts;
 - distinct guardrail, permission, and form prompts;
 - MCP and provider connection flows;
 - prompt file, agent, command, skill, and reference autocomplete;
 - cache, context, memory, cost, provider quota, and guardrail diagnostics;
 - theme and keymap customization;
-- bounded archived transcript expansion;
+- complete resident transcript loading;
 - dedicated shell output view with kill/back actions;
 - rail sidebar with priority-based expanded-state management.
 
@@ -442,5 +455,5 @@ TUI-visible state must rehydrate from durable or canonical API state after proce
 ## Known boundaries
 
 - Session execution placement is process-local; clustering is not implemented.
-- One archive page is resident at a time by design.
+- Resident transcript memory is proportional to the complete projected transcript for each open Session.
 - V1 compatibility is intentionally absent.

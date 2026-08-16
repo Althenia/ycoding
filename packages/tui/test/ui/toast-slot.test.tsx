@@ -29,61 +29,65 @@ const variants = [
 const overlay = [37, 42, 51, 255] satisfies [number, number, number, number]
 const messageInk = [242, 244, 247, 255] satisfies [number, number, number, number]
 
-for (const current of variants) {
-  test(`renders the measured ${current.variant} toast treatment`, async () => {
-    const message = `${current.variant} toast message`
+for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
+  for (const current of variants) {
+    test(`renders the measured ${current.variant} toast treatment at ${viewport.width} columns`, async () => {
+      const message = `${current.variant} toast message`
 
-    function ToastFixture() {
-      const toast = useToast()
-      onMount(() => toast.show({ variant: current.variant, message, duration: 60_000 }))
-      return <Toast />
-    }
+      function ToastFixture() {
+        const toast = useToast()
+        onMount(() => toast.show({ variant: current.variant, message, duration: 60_000 }))
+        return <Toast />
+      }
 
-    const app = await testRender(
-      () => (
-        <TestTuiContexts>
-          <ConfigProvider config={createTuiResolvedConfig()}>
-            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <RouteProvider initialRoute={{ type: "home" }}>
-                <ToastProvider>
-                  <ToastFixture />
-                </ToastProvider>
-              </RouteProvider>
-            </ThemeProvider>
-          </ConfigProvider>
-        </TestTuiContexts>
-      ),
-      DESIGN_VIEWPORT,
-    )
-    app.renderer.start()
-    await app.waitForFrame((frame) => frame.includes(message))
+      const app = await testRender(
+        () => (
+          <TestTuiContexts>
+            <ConfigProvider config={createTuiResolvedConfig()}>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <RouteProvider initialRoute={{ type: "home" }}>
+                  <ToastProvider>
+                    <ToastFixture />
+                  </ToastProvider>
+                </RouteProvider>
+              </ThemeProvider>
+            </ConfigProvider>
+          </TestTuiContexts>
+        ),
+        viewport,
+      )
+      app.renderer.start()
+      await app.waitForFrame((frame) => frame.includes(message))
 
-    try {
-      const toast = findToast(app.renderer.root, current.title)
-      const rows = app.captureCharFrame().split("\n")
-      const titleRow = rows.findIndex((row) => row.includes(current.title))
-      const messageRow = rows.findIndex((row) => row.includes(message))
-      const titleColumn = rows[titleRow]?.indexOf(current.title) ?? -1
-      const title = spanFor(app, current.title)
-      const body = spanFor(app, message)
-      const border = spans(app).filter((span) => span.text.includes("│"))
+      try {
+        const toast = findToast(app.renderer.root, current.title)
+        const rows = app.captureCharFrame().split("\n")
+        const titleRow = rows.findIndex((row) => row.includes(current.title))
+        const messageRow = rows.findIndex((row) => row.includes(message))
+        const titleColumn = rows[titleRow]?.indexOf(current.title) ?? -1
+        const title = spanFor(app, current.title)
+        const body = spanFor(app, message)
+        const border = spans(app).filter((span) => span.text.includes("│"))
 
-      expect(toast.width).toBe(92)
-      expect(toast.height).toBe(7)
-      expect(titleRow).toBe(toast.y + 2)
-      expect(messageRow).toBe(toast.y + 4)
-      expect(titleColumn).toBe(toast.x + 3)
-      expect(messageRow - titleRow).toBe(2)
-      expect(title.fg.toInts()).toEqual(current.accent)
-      expect(title.bg.toInts()).toEqual(overlay)
-      expect(body.fg.toInts()).toEqual(messageInk)
-      expect(body.bg.toInts()).toEqual(overlay)
-      expect(border).toHaveLength(toast.height * 2)
-      expect(border.every((span) => span.fg.toInts().every((value, index) => value === current.borderAccent[index]))).toBe(true)
-    } finally {
-      app.renderer.destroy()
-    }
-  })
+        expect(toast.width).toBe(60)
+        expect(toast.height).toBe(7)
+        expect(toast.y).toBe(3)
+        expect(toast.x + toast.width).toBe(viewport.width - 2)
+        expect(titleRow).toBe(toast.y + 2)
+        expect(messageRow).toBe(toast.y + 4)
+        expect(titleColumn).toBe(toast.x + 3)
+        expect(messageRow - titleRow).toBe(2)
+        expect(title.fg.toInts()).toEqual(current.accent)
+        expect(title.bg.toInts()).toEqual(overlay)
+        expect(body.fg.toInts()).toEqual(messageInk)
+        expect(body.bg.toInts()).toEqual(overlay)
+        expect(border).toHaveLength(toast.height * 2)
+        expect(border.every((span) => span.fg.toInts().every((value, index) => value === current.borderAccent[index]))).toBe(true)
+      } finally {
+        app.renderer.destroy()
+      }
+    })
+  }
 }
 
 test("keeps a capped toast clear of the docked session rail", async () => {
@@ -137,7 +141,8 @@ test("keeps a capped toast clear of the docked session rail", async () => {
     const toastWidth = toast?.width ?? Infinity
     const toastRight = (toast?.x ?? Infinity) + toastWidth
     const railStart = sessionRail?.x ?? -Infinity
-    expect(toastWidth).toBe(92)
+    expect(toastWidth).toBe(60)
+    expect(toast?.y).toBe(3)
     expect(toastRight).toBe(railStart - 2)
     expect(app.captureCharFrame()).toContain(title)
   } finally {

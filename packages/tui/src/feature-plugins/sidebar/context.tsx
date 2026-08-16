@@ -1,9 +1,12 @@
 import type { SessionCacheDiagnostics } from "@ycoding-ai/client"
+import { useTerminalDimensions } from "@opentui/solid"
 import { Plugin } from "@ycoding-ai/plugin/tui"
-import { createMemo, Show } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
-import { cacheHitPercent, cachePrefixLabel } from "../../util/cache-diagnostics"
-import { RailRow, RailSection, RailSubheading } from "../../routes/session/rail-section"
+import { cacheHitPercent, cachePrefixLabel, contextModelLabel } from "../../util/cache-diagnostics"
+import { Locale } from "../../util/locale"
+import { railMetrics, railWidth } from "../../routes/session/rail"
+import { RailRow, RailSection, RailSubheading, useRail } from "../../routes/session/rail-section"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -18,8 +21,19 @@ export function SidebarCacheContent(props: {
   subagentCost?: () => number | undefined
 }) {
   const { themeV2 } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const rail = useRail()
   const diagnostics = createMemo(props.diagnostics)
   const fallback = createMemo(() => props.fallback?.())
+  // A rail row right-aligns its value, so an over-long model identity would run into it. Rows are bounded
+  // by the docked rail width minus its horizontal padding; outside a rail the section spans the terminal.
+  const rowWidth = createMemo(() => {
+    if (!rail) return dimensions().width
+    const metrics = railMetrics(dimensions().width)
+    return Math.floor(railWidth(dimensions().width)) - metrics.paddingLeft - metrics.paddingRight
+  })
+  const modelText = (model: SessionCacheDiagnostics["model"], opposite: string) =>
+    Locale.truncateWidth(contextModelLabel(model), Math.max(1, rowWidth() - opposite.length - 1))
   const summary = createMemo(() => {
     const value = diagnostics()
     return value
@@ -31,16 +45,6 @@ export function SidebarCacheContent(props: {
           .join(" · ")
       : undefined
   })
-  const input = createMemo(() => {
-    const measurement = diagnostics()
-    const value = measurement ? measurement.tokens.uncachedInput : fallback()?.tokens.input
-    return value === undefined ? undefined : { value }
-  })
-  const output = createMemo(() => {
-    const measurement = diagnostics()
-    const value = measurement ? measurement.tokens.output : fallback()?.tokens.output
-    return value === undefined ? undefined : { value }
-  })
   const spent = createMemo(() => {
     const value = diagnostics() ? props.cost?.() : fallback()?.cost
     return value === undefined ? undefined : { value }
@@ -49,6 +53,23 @@ export function SidebarCacheContent(props: {
     const value = props.subagentCost?.()
     return value === undefined || value === 0 ? undefined : { value }
   })
+  const context = createMemo(() => {
+    const value = diagnostics()?.context
+    if (!value || value.limit === undefined) return "unreported"
+    return `${value.total.toLocaleString()} / ${value.limit.toLocaleString()}`
+  })
+  const cache = createMemo(() => {
+    const percent = cacheHitPercent(diagnostics()?.cache.hitRatio)
+    return percent === undefined ? "unreported" : `${percent}%`
+  })
+  // Provider telemetry that never reported a cost stays unreported; zero would claim a free request.
+  const modelSpend = createMemo(() =>
+    (diagnostics()?.requests?.models ?? []).map((entry) => {
+      const value = entry.cost === undefined ? "unreported" : money.format(entry.cost)
+      return { label: modelText(entry.model, value), value }
+    }),
+  )
+  const hasSpend = createMemo(() => Boolean(diagnostics() ?? fallback()))
   const hasCacheDetails = createMemo(() => {
     const value = diagnostics()
     if (!value) return false
@@ -59,71 +80,44 @@ export function SidebarCacheContent(props: {
 
   return (
     <RailSection section="context" title="CONTEXT" summary={summary()}>
-      <Show when={input()}>
-        {(input) => (
-          <>
-            <RailRow label="Input" value={input().value.toLocaleString()} />
-            <box height={1} flexShrink={0} />
-          </>
-        )}
-      </Show>
-      <Show when={output()}>
-        {(output) => (
-          <>
-            <RailRow label="Output" value={output().value.toLocaleString()} />
-            <box height={1} flexShrink={0} />
-          </>
-        )}
-      </Show>
       <Show when={diagnostics()}>
         {(value) => (
           <>
-            <Show when={value().context.percent !== undefined}>
-              <RailRow label="Used" value={`${value().context.percent}%`} />
-            </Show>
-            <Show when={input() || output()}>
-              <box height={1} flexShrink={0} />
-            </Show>
+            <RailRow label="Model" value={modelText(value().model, "Model")} />
+            <RailRow label="Context" value={context()} />
+            <RailRow label="Cache" value={cache()} valueColor={themeV2.text.feedback.success.default} />
           </>
         )}
       </Show>
-      <Show when={spent()}>{(spent) => <RailRow label="Spent" value={money.format(spent().value)} />}</Show>
-      <Show when={subagentCost()}>
-        {(subagentCost) => <RailRow label="· subagents" value={money.format(subagentCost().value)} />}
+      <Show when={hasSpend()}>
+        <>
+          <Show when={diagnostics()}>
+            <box height={1} flexShrink={0} />
+          </Show>
+          <RailSubheading>SPEND</RailSubheading>
+          <For each={modelSpend()}>{(entry) => <RailRow label={entry.label} value={entry.value} />}</For>
+          <Show when={spent()} fallback={<RailRow label="Total" value="unreported" />}>
+            {(total) => <RailRow label="Total" value={money.format(total().value)} />}
+          </Show>
+          <Show when={subagentCost()}>
+            {(subagentCost) => <RailRow label="· subagents" value={money.format(subagentCost().value)} />}
+          </Show>
+        </>
       </Show>
       <Show when={hasCacheDetails()}>
         <>
-          <box height={3} flexShrink={0} />
-          <RailSubheading>CACHE</RailSubheading>
           <box height={1} flexShrink={0} />
+          <RailSubheading>CACHE</RailSubheading>
         </>
       </Show>
       <Show when={diagnostics()}>
         {(value) => (
           <>
-            <Show when={!hasCacheDetails()}>
-              <box height={1} flexShrink={0} />
-            </Show>
-            <Show when={cacheHitPercent(value().cache.hitRatio) !== undefined}>
-              <RailRow
-                label="Hit ratio"
-                value={`${cacheHitPercent(value().cache.hitRatio)}%`}
-                valueColor={themeV2.text.feedback.success.default}
-              />
-            </Show>
             <Show when={cachePrefixLabel(value().requests?.latestInvalidation)}>
-              {(prefix) => (
-                <>
-                  <RailRow label="Prefix" value={prefix()} valueColor={themeV2.text.feedback.success.default} />
-                  <box height={1} flexShrink={0} />
-                </>
-              )}
+              {(prefix) => <RailRow label="Prefix" value={prefix()} valueColor={themeV2.text.feedback.success.default} />}
             </Show>
             <Show when={value().cache.readReported}>
-              <>
-                <RailRow label="Reads" value={value().tokens.cacheRead.toLocaleString()} />
-                <box height={1} flexShrink={0} />
-              </>
+              <RailRow label="Reads" value={value().tokens.cacheRead.toLocaleString()} />
             </Show>
             <Show when={value().cache.writeReported}>
               <RailRow label="Writes" value={value().tokens.cacheWrite.toLocaleString()} />
@@ -131,7 +125,6 @@ export function SidebarCacheContent(props: {
           </>
         )}
       </Show>
-      <box height={2} flexShrink={0} />
     </RailSection>
   )
 }

@@ -62,6 +62,8 @@ export async function renderScreen(input: {
     frame: () => setup.captureCharFrame(),
     lines: () => setup.captureCharFrame().split("\n"),
     spans: () => setup.captureSpans(),
+    input: setup.mockInput,
+    mouse: setup.mockMouse,
     /** Foreground ints of the first span containing `text`, or undefined. */
     colorOf: (text: string) =>
       setup

@@ -188,18 +188,19 @@ export function PermissionPrompt(props: { request: PermissionV2Request; director
           )
           const presentationBody =
             props.request.action === "edit" ? (
-              <EditBody file={current.file} diff={current.diff} patch={current.patch} />
+              <box paddingLeft={3} paddingRight={3}>
+                <EditBody file={current.file} diff={current.diff} patch={current.patch} />
+              </box>
             ) : props.request.action === "external_directory" ? (
               <Show when={current.lines.length > 0}>
-                <box paddingLeft={1} gap={1}>
-                  <text fg={themeV2.text.subdued}>Patterns</text>
+                <box paddingLeft={6} paddingRight={3} gap={1}>
                   <box>
                     <For each={current.lines}>{(line) => <text fg={themeV2.text.default}>{line}</text>}</For>
                   </box>
                 </box>
               </Show>
             ) : (
-              <box paddingLeft={1}>
+              <box paddingLeft={6} paddingRight={3}>
                 <For each={current.lines}>
                   {(line) => (
                     <text
@@ -211,45 +212,36 @@ export function PermissionPrompt(props: { request: PermissionV2Request; director
                           : themeV2.text.subdued
                       }
                     >
-                      {line}
+                      {line.replace(/^(?:- |\$ )/, "")}
                     </text>
                   )}
                 </For>
               </box>
             )
 
-          const header = () => (
-            <box flexDirection="column" gap={0}>
-              <box flexDirection="row" gap={1} flexShrink={0}>
-                <text fg={themeV2.text.feedback.warning.default}>{"△"}</text>
-                <text fg={themeV2.text.default}>Permission required</text>
-              </box>
-              <Show when={props.request.action !== "shell" && current.title}>
-                <box flexDirection="row" gap={1} paddingLeft={2} flexShrink={0}>
-                  <text fg={themeV2.text.subdued} flexShrink={0}>
-                    {current.icon}
-                  </text>
-                  <text fg={themeV2.text.default}>{current.title}</text>
-                </box>
-              </Show>
-            </box>
-          )
-
           const body = (
             <Prompt
               title="Permission required"
               semanticLabel={permissionSemanticLabel(props.request.action, current.title)}
               instance={props.request.id}
-              header={header()}
-              body={presentationBody}
+              body={
+                <box flexDirection="column">
+                  <box paddingLeft={3} paddingRight={3}>
+                    <text fg={themeV2.text.feedback.info.default}>
+                      {props.request.action === "shell" ? "bash wants to run" : current.title}
+                    </text>
+                  </box>
+                  {presentationBody}
+                </box>
+              }
               options={
                 props.request.save?.length
                   ? {
                       once: permissionOptionLabel("once"),
-                      always: permissionOptionLabel("always"),
-                      reject: permissionOptionLabel("reject"),
+                      always: "Allow for this session",
+                      reject: "Deny",
                     }
-                  : { once: permissionOptionLabel("once"), reject: permissionOptionLabel("reject") }
+                  : { once: permissionOptionLabel("once"), reject: "Deny" }
               }
               escapeKey="reject"
               onSelect={(option) => {
@@ -422,21 +414,22 @@ export function Prompt<const T extends Record<string, string>>(props: {
   kind?: "permission" | "guardrail"
   semanticLabel?: string
   instance: string
-  header?: JSX.Element
   body: JSX.Element
+  footer?: JSX.Element
   options: T
   defaultOption?: keyof T
   escapeKey?: keyof T
   onSelect: (option: keyof T) => void
 }) {
   const { themeV2 } = useTheme().contextual("elevated")
-  const dimensions = useTerminalDimensions()
   const kind = props.kind ?? "permission"
   const keys = Object.keys(props.options) as (keyof T)[]
   const [store, setStore] = createStore({
     selected: props.defaultOption ?? keys[0],
   })
-  const narrow = createMemo(() => dimensions().width < 80)
+  const footer = () =>
+    props.footer ??
+    (kind === "guardrail" ? <text fg={themeV2.text.subdued}>guardrails apply even in YOLO mode.</text> : undefined)
 
   Keymap.createLayer(() => ({
     mode: "base",
@@ -519,100 +512,99 @@ export function Prompt<const T extends Record<string, string>>(props: {
         role: "dialog",
         label: props.semanticLabel ?? props.title,
       }))}
+      width="100%"
       backgroundColor={themeV2.background.surface.offset}
       paddingTop={1}
+      paddingRight={1}
     >
-      <box paddingLeft={2} paddingRight={2} gap={1} flexGrow={1}>
-        <box flexDirection="row" justifyContent="space-between">
-          <Show
-            when={props.header}
-            fallback={
-              <box flexDirection="row" gap={1} paddingLeft={1} flexShrink={0}>
-                <text fg={themeV2.text.feedback.warning.default}>{"△"}</text>
-                <text fg={themeV2.text.default}>{props.title}</text>
-              </box>
-            }
-          >
-            <box paddingLeft={1} flexShrink={0}>
-              {props.header}
-            </box>
-          </Show>
+      <box width="100%" paddingLeft={3} paddingRight={3} flexDirection="row" justifyContent="space-between">
+        <text fg={themeV2.text.default}>{props.title}</text>
+        <box flexGrow={1} />
+        <box width={3} flexShrink={0}>
           <text fg={themeV2.text.subdued} onMouseUp={() => props.onSelect(props.escapeKey ?? keys[keys.length - 1])}>
             esc
           </text>
         </box>
+      </box>
+      <box width="100%" paddingTop={2} paddingLeft={6} paddingRight={3}>
+        <text>
+          <span style={{ fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }}>S</span>
+          <span style={{ fg: themeV2.text.subdued }}>earch</span>
+        </text>
+      </box>
+      <box height={2} flexShrink={0} />
+      <box width="100%" flexDirection="column" flexShrink={0}>
         {props.body}
       </box>
-      <box
-        flexDirection={narrow() ? "column" : "row"}
-        flexShrink={0}
-        gap={1}
-        paddingTop={1}
-        paddingLeft={2}
-        paddingRight={3}
-        paddingBottom={1}
-        backgroundColor={themeV2.raise(themeV2.background.surface.offset)}
-        justifyContent={narrow() ? "flex-start" : "space-between"}
-        alignItems={narrow() ? "flex-start" : "center"}
-      >
-        <box
-          id={`session.${kind}.actions`}
-          ref={SimulationSemantics.bind(() => ({
-            instance: props.instance,
-            role: "listbox",
-            label: kind === "guardrail" ? "Guardrail choices" : "Permission choices",
-          }))}
-          flexDirection="row"
-          gap={1}
-          flexShrink={0}
-        >
-          <For each={keys}>
-            {(option) => (
-              <box
-                id={`session.${kind}.action.${String(option)}`}
-                ref={SimulationSemantics.bind(() => ({
-                  instance: props.instance,
-                  role: "option",
-                  label: props.options[option],
-                  focused: option === store.selected,
-                  selected: option === store.selected,
-                  disabled: false,
-                }))}
-                paddingLeft={1}
-                paddingRight={1}
-                backgroundColor={
-                  option === store.selected
-                    ? themeV2.background.action.primary.focused
-                    : themeV2.background.action.primary.default
-                }
-                onMouseOver={() => setStore("selected", option)}
-                onMouseUp={() => {
-                  setStore("selected", option)
-                  props.onSelect(option)
-                }}
-              >
-                <text
-                  fg={
-                    option === store.selected
-                      ? themeV2.text.action.primary.focused
-                      : themeV2.text.action.primary.default
-                  }
-                >
-                  {props.options[option]}
-                </text>
-              </box>
-            )}
-          </For>
-        </box>
-        <box flexDirection="row" gap={2} flexShrink={0}>
-          <text fg={themeV2.text.default}>
-            {"⇆"} <span style={{ fg: themeV2.text.subdued }}>select</span>
-          </text>
-          <text fg={themeV2.text.default}>
-            enter <span style={{ fg: themeV2.text.subdued }}>confirm</span>
-          </text>
-        </box>
+      <box height={2} flexShrink={0} />
+      <box width="100%" paddingLeft={3} flexShrink={0}>
+        <text fg={themeV2.text.feedback.info.default}>Choose</text>
       </box>
+      <box
+        width="100%"
+        id={`session.${kind}.actions`}
+        ref={SimulationSemantics.bind(() => ({
+          instance: props.instance,
+          role: "listbox",
+          label: kind === "guardrail" ? "Guardrail choices" : "Permission choices",
+        }))}
+        flexDirection="column"
+        flexShrink={0}
+      >
+        <For each={keys}>
+          {(option, index) => (
+            <box
+              id={`session.${kind}.action.${String(option)}`}
+              ref={SimulationSemantics.bind(() => ({
+                instance: props.instance,
+                role: "option",
+                label: props.options[option],
+                focused: option === store.selected,
+                selected: option === store.selected,
+                disabled: false,
+              }))}
+              width="100%"
+              height={2}
+              onMouseOver={() => setStore("selected", option)}
+              onMouseUp={() => {
+                setStore("selected", option)
+                props.onSelect(option)
+              }}
+            >
+              <Show
+                when={option === store.selected}
+                fallback={
+                  <>
+                    <box height={1} paddingLeft={6} paddingRight={3}>
+                      <text fg={option === "reject" ? themeV2.text.feedback.error.default : themeV2.text.default}>
+                        {props.options[option]}
+                      </text>
+                    </box>
+                    <box height={1} backgroundColor={themeV2.background.surface.offset} />
+                  </>
+                }
+              >
+                <box id={`session.${kind}.action.${String(option)}.spacer`} height={1} backgroundColor={themeV2.background.surface.offset} />
+                <box
+                  id={`session.${kind}.action.${String(option)}.band`}
+                  width="100%"
+                  height={1}
+                  paddingLeft={6}
+                  paddingRight={3}
+                  backgroundColor={themeV2.background.action.primary.focused}
+                >
+                  <text fg={themeV2.text.action.primary.focused}>{props.options[option]}</text>
+                </box>
+              </Show>
+            </box>
+          )}
+        </For>
+      </box>
+      <Show when={footer()}>
+        <box width="100%" height={2} paddingTop={1} paddingLeft={6} paddingRight={3} flexShrink={0}>
+          {footer()}
+        </box>
+      </Show>
     </box>
   )
 

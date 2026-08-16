@@ -70,12 +70,19 @@ jobs:
         env:
           YCODING_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+      # The compiled binaries embed the OpenTUI native library built from the vendor/opentui Zig sources.
+      - name: Setup Zig
+        if: always()
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
       - name: Verify compiled service lifecycle
         if: always()
         timeout-minutes: 10
         working-directory: packages/cli
         run: |
-          bun run script/build.ts --single --skip-install
+          bun run script/build.ts --single
           bun run script/service-smoke.ts
 
       - name: Setup Node build runtime

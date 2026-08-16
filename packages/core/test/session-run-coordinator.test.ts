@@ -378,9 +378,10 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
-  it.effect("starts one follow-up when a wake races with failure", () =>
+  it.effect("starts one coalesced successor after a wake races with failure", () =>
     Effect.scoped(
       Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
         const gate = yield* Deferred.make<void>()
         const secondStarted = yield* Deferred.make<void>()
         const failure = new Error("failed")
@@ -390,19 +391,89 @@ describe("SessionRunCoordinator", () => {
             Effect.sync(() => ++runs).pipe(
               Effect.flatMap((run) =>
                 run === 1
-                  ? Deferred.await(gate).pipe(Effect.andThen(Effect.fail(failure)))
+                  ? Deferred.succeed(firstStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(gate)),
+                      Effect.andThen(Effect.fail(failure)),
+                    )
                   : Deferred.succeed(secondStarted, undefined),
               ),
             ),
         })
 
         const resumed = yield* coordinator.run("session").pipe(Effect.forkChild)
-        yield* Effect.yieldNow
-        yield* coordinator.wake("session")
+        yield* Deferred.await(firstStarted)
+        yield* Effect.all([coordinator.wake("session"), coordinator.wake("session"), coordinator.wake("session")], {
+          concurrency: "unbounded",
+        })
         yield* Deferred.succeed(gate, undefined)
 
         expect(yield* Fiber.join(resumed).pipe(Effect.flip)).toBe(failure)
         yield* Deferred.await(secondStarted)
+        yield* coordinator.awaitIdle("session")
+        expect(runs).toBe(2)
+      }),
+    ),
+  )
+
+  it.effect("keeps a coalesced successor visible to an old waiter's awaitIdle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
+        const failureGate = yield* Deferred.make<void>()
+        const originalResolved = yield* Deferred.make<void>()
+        const successorStarted = yield* Deferred.make<void>()
+        const successorGate = yield* Deferred.make<void>()
+        const idle = yield* Deferred.make<void>()
+        const failure = new Error("failed")
+        let idleBeforeSuccessor = false
+        let runs = 0
+        const coordinator = yield* SessionRunCoordinator.make({
+          drain: () =>
+            Effect.sync(() => ++runs).pipe(
+              Effect.flatMap((run) =>
+                run === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(
+                      Effect.andThen(Deferred.await(failureGate)),
+                      Effect.andThen(Effect.fail(failure)),
+                    )
+                  : Deferred.await(originalResolved).pipe(
+                      Effect.andThen(Deferred.succeed(successorStarted, undefined)),
+                      Effect.andThen(Deferred.await(successorGate)),
+                    ),
+              ),
+            ),
+        })
+
+        const resumed = yield* coordinator.run("session").pipe(Effect.forkChild)
+        const oldWaiter = yield* Fiber.join(resumed).pipe(
+          Effect.exit,
+          Effect.tap((exit) =>
+            Effect.sync(() => {
+              expect(Exit.isFailure(exit)).toBe(true)
+              if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBe(failure)
+            }).pipe(
+              Effect.andThen(Deferred.succeed(originalResolved, undefined)),
+            ),
+          ),
+          Effect.andThen(coordinator.awaitIdle("session")),
+          Effect.andThen(
+            Effect.sync(() => {
+              idleBeforeSuccessor = true
+            }),
+          ),
+          Effect.andThen(Deferred.succeed(idle, undefined)),
+          Effect.forkChild,
+        )
+        yield* Deferred.await(firstStarted)
+        yield* coordinator.wake("session")
+        yield* Deferred.succeed(failureGate, undefined)
+        yield* Deferred.await(originalResolved)
+        yield* Deferred.await(successorStarted)
+
+        expect(idleBeforeSuccessor).toBe(false)
+        yield* Deferred.succeed(successorGate, undefined)
+        yield* Deferred.await(idle)
+        yield* Fiber.join(oldWaiter)
         expect(runs).toBe(2)
       }),
     ),

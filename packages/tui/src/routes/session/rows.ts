@@ -1,7 +1,7 @@
 import type { SessionMessageAssistant, SessionMessageInfo } from "@ycoding-ai/client"
 import { createEffect, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
-import { useData, type DataMessageHistoryPlaceholder } from "../../context/data"
+import { useData } from "../../context/data"
 import { useClient } from "../../context/client"
 import { isActiveSubagent } from "../../util/subagent"
 
@@ -10,10 +10,7 @@ export type PartRef = {
   partID: string
 }
 
-export type SessionHistoryRow = { type: "history"; placeholders: DataMessageHistoryPlaceholder[] }
-
 export type SessionRow =
-  | SessionHistoryRow
   | { type: "message"; messageID: string }
   | { type: "compaction-queued"; inputID: string }
   | { type: "guardrail"; requestID: string; reason: string }
@@ -34,22 +31,6 @@ export type SessionRow =
       completed: boolean
     }
   | { type: "assistant-footer"; messageID: string }
-
-export function groupHistoryRows(placeholders: DataMessageHistoryPlaceholder[]) {
-  return placeholders.reduce<SessionHistoryRow[]>((rows, placeholder) => {
-    const previous = rows.at(-1)
-    if (placeholder.state === "collapsed" && previous?.placeholders.every((item) => item.state === "collapsed")) {
-      previous.placeholders.push(placeholder)
-      return rows
-    }
-    rows.push({ type: "history", placeholders: [placeholder] })
-    return rows
-  }, [])
-}
-
-export function historyTogglePlaceholder(row: SessionHistoryRow) {
-  return row.placeholders.find((placeholder) => placeholder.state !== "loading")
-}
 
 export async function resolveMessageJump(input: {
   resident: () => boolean
@@ -78,10 +59,7 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     const messages = data.session.message.list(sessionID())
     const inputs = new Set(data.session.input.list(sessionID()))
     const boundary = revertBoundary()
-    const rows = [
-      ...groupHistoryRows(data.session.message.history(sessionID())),
-      ...reduceSessionRows(boundary ? messages.filter((message) => message.id < boundary) : messages, inputs),
-    ]
+    const rows = reduceSessionRows(boundary ? messages.filter((message) => message.id < boundary) : messages, inputs)
     const activityBoundary = rows.findLastIndex((row) => {
       if (row.type !== "message") return false
       return data.session.message.get(sessionID(), row.messageID)?.type === "compaction"
@@ -114,8 +92,9 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
       ...data.session.guardrail
         .list(sessionID())
         .map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason })),
-      ...data.session.subagent
-        .list(sessionID())
+      ...(data.session.subagent
+        .page(sessionID())
+        ?.data
         .filter((task) => isActiveSubagent(task.state))
         .map(
           (task): SessionRow => ({
@@ -124,7 +103,7 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
             agent: task.agent,
             created: task.time.created,
           }),
-        ),
+        ) ?? []),
       ...(transcriptTasks.length > 0
         ? transcriptTasks
         : data.session.todo
@@ -170,23 +149,11 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   createEffect(
     on(
       () => [
-        ...data.session.message
-          .history(sessionID())
-          .map((item) => `${item.cursor}:${item.state}:${item.count}:${item.oldestID}:${item.newestID}`),
-        ...data.session.message.page(sessionID()).map((item) => item.id),
-      ],
-      () => setRows(reconcile(reduce())),
-    ),
-  )
-
-  createEffect(
-    on(
-      () => [
         activity(),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
-        ...data.session.subagent
-          .list(sessionID())
-          .map((task) => `${task.sessionID}:${task.agent}:${task.state}:${task.time.created}`),
+        ...(data.session.subagent
+          .page(sessionID())
+          ?.data.map((task) => `${task.sessionID}:${task.agent}:${task.state}:${task.time.created}`) ?? []),
         ...data.session.todo.get(sessionID()).map((task) => `${task.content}:${task.status}`),
       ],
       () => setRows(reconcile(reduce())),

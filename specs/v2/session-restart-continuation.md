@@ -32,7 +32,7 @@ A non-null `time_suspended` means:
 
 > A managed server suspended this Session during graceful shutdown, at this time. The next managed server may make one attempt to resume it.
 
-The name records the fact rather than one consumer's policy, and it follows the Session table's existing nullable-timestamp idiom (`time_compacting`, `time_archived`). The timestamp also gives operators suspension age for free, which later policy may use without a schema change.
+The name records the fact rather than one consumer's policy, and it follows the Session table's existing nullable-timestamp idiom. The timestamp also gives operators suspension age for free, which later policy may use without a schema change.
 
 The field does not appear in public `Session.Info` and does not drive UI activity.
 

@@ -25,6 +25,7 @@ A plan, deleted package, stale generated file, or upstream page does not overrid
 | [`product-direction.md`](./product-direction.md)       | TUI-only product scope, priorities, and compatibility policy.                                          |
 | [`architecture.md`](./architecture.md)                 | Active package graph, ownership, runtime flow, and constraints.                                        |
 | [`runtime.md`](./runtime.md)                           | Implemented Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior. |
+| [`tui-redesign-backlog.md`](./tui-redesign-backlog.md) | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog. |
 | [`provider-efficiency.md`](./provider-efficiency.md)   | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks. |
 | [`configuration.md`](./configuration.md)               | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.         |
 | [`repository-resources.md`](./repository-resources.md) | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules. |
