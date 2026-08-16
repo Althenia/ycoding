@@ -108,6 +108,7 @@ export const SessionProviderRequestTable = sqliteTable(
     attempts: integer().notNull(),
     invalidation: text().$type<ProviderRequest.Invalidation>().notNull(),
     continuation: text().$type<ProviderRequest.Continuation>().notNull(),
+    cache_read_reported: integer({ mode: "boolean" }),
     cost: real(),
     tokens: text({ mode: "json" }).$type<TokenUsage.Info>().notNull(),
     time_created: integer().notNull(),
@@ -380,7 +381,6 @@ export const SessionCompactionJobTable = sqliteTable(
       .references(() => SessionTable.id, { onDelete: "cascade" }),
     legacy_input_id: text().$type<SessionMessage.ID>(),
     trigger: text().$type<SessionCompaction.Trigger>().notNull(),
-    admission_mode: text().$type<SessionCompaction.AdmissionMode>().notNull(),
     requested_through_message_id: text().$type<SessionMessage.ID>().notNull(),
     requested_through_seq: integer().notNull(),
     base_context_revision: integer().notNull(),
@@ -417,7 +417,6 @@ export const SessionCompactionJobTable = sqliteTable(
       "session_compaction_job_trigger_check",
       sql`${table.trigger} IN ('consider', 'advised', 'mandatory', 'manual')`,
     ),
-    check("session_compaction_job_admission_check", sql`${table.admission_mode} IN ('background', 'mandatory')`),
     check("session_compaction_job_requested_message_check", nonempty(table.requested_through_message_id)),
     check(
       "session_compaction_job_counts_check",

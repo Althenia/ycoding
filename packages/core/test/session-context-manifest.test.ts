@@ -1159,7 +1159,7 @@ describe("ContextManifest activation integration", () => {
           fixture.sessionID,
           fixture.db
             .update(SessionTable)
-            .set({ autonomy: { mode: "yolo" }, autonomy_revision: 1 })
+            .set({ autonomy: { mode: "normal", yolo: 2 }, autonomy_revision: 1 })
             .where(eq(SessionTable.id, fixture.sessionID))
             .run()
             .pipe(Effect.orDie, Effect.asVoid),
@@ -1294,7 +1294,6 @@ describe("ContextManifest activation integration", () => {
           id: SessionCompaction.ID.make("cmp_manifest_lease_reclaimed"),
           sessionID: fixture.sessionID,
           trigger: "manual",
-          admissionMode: "background",
           requestedThrough: fixture.manifest.coveredThrough,
           baseContextRevision: fixture.manifest.baseContextRevision,
           targetMaxInputTokens: 100,

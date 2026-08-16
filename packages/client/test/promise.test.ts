@@ -69,9 +69,7 @@ test("VCS branch uses the public HTTP contract", async () => {
     },
   })
 
-  expect(await client.vcs.branch()).toEqual(
-    expect.objectContaining({ data: { current: "feature", default: "main" } }),
-  )
+  expect(await client.vcs.branch()).toEqual(expect.objectContaining({ data: { current: "feature", default: "main" } }))
   expect(request && new URL(request.url).pathname).toBe("/api/vcs/branch")
 })
 
@@ -91,7 +89,10 @@ test("provider usage methods use the public HTTP contract", async () => {
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return Response.json({ location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } }, data: request.url.includes("/openai/") ? snapshot : [snapshot] })
+      return Response.json({
+        location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } },
+        data: request.url.includes("/openai/") ? snapshot : [snapshot],
+      })
     },
   })
 
@@ -574,15 +575,18 @@ test("event.subscribe exposes the Promise event stream wire projection", async (
     baseUrl: "http://localhost:3000",
     fetch: async () =>
       new Response(
-        `: heartbeat\n\ndata: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {} })}\n\n` +
-          `data: ${JSON.stringify(modelSwitchedEvent)}\n\n`,
+        `: heartbeat\n\ndata: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {}, sourceEpoch: "source_test" })}\n\n` +
+          `data: ${JSON.stringify({ ...modelSwitchedEvent, sourceEpoch: "source_test" })}\n\n`,
         { headers: { "content-type": "text/event-stream" } },
       ),
   })
   const events = []
   for await (const event of client.event.subscribe()) events.push(event)
 
-  expect(events).toEqual([{ id: "evt_connected", created: 0, type: "server.connected", data: {} }, modelSwitchedEvent])
+  expect(events).toEqual([
+    { id: "evt_connected", created: 0, type: "server.connected", data: {}, sourceEpoch: "source_test" },
+    { ...modelSwitchedEvent, sourceEpoch: "source_test" },
+  ])
   expect(events[1]?.type === "session.model.selected" && events[1].created).toBe(1_717_171_717_000)
 })
 
@@ -648,9 +652,12 @@ test("session methods use the public HTTP contract", async () => {
         })
       }
       if (url.includes("/log")) {
-        return new Response(`data: ${JSON.stringify(modelSwitchedEvent)}\n\ndata: ${JSON.stringify(synced)}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        })
+        return new Response(
+          `data: ${JSON.stringify({ ...modelSwitchedEvent, sourceEpoch: "source_test" })}\n\ndata: ${JSON.stringify({ ...synced, sourceEpoch: "source_test" })}\n\n`,
+          {
+            headers: { "content-type": "text/event-stream" },
+          },
+        )
       }
       if (url.includes("/prompt")) return Response.json(admission)
       if (url.includes("/generate")) return Response.json({ data: { text: "A transient answer" } })
@@ -704,13 +711,15 @@ test("session methods use the public HTTP contract", async () => {
     id: expect.stringMatching(/^cmp_/),
     sessionID: "ses_test",
     trigger: "manual",
-    admissionMode: "background",
-    status: "pending",
+    status: "ended",
   })
   expect(compacted).not.toHaveProperty("summary")
   expect(compacted).not.toHaveProperty("type")
   expect(context).toEqual([])
-  expect(log).toEqual([modelSwitchedEvent, synced])
+  expect(log).toEqual([
+    { ...modelSwitchedEvent, sourceEpoch: "source_test" },
+    { ...synced, sourceEpoch: "source_test" },
+  ])
   expect(message).toEqual(modelSwitchedMessage)
   expect(requests.map((request) => [request.init?.method, request.url])).toEqual([
     ["GET", "http://localhost:3000/api/session?limit=10&order=desc&parentID=null"],
@@ -828,8 +837,7 @@ const compactionAdmission = {
     id: "cmp_compaction",
     sessionID: "ses_test",
     trigger: "manual",
-    admissionMode: "background",
-    status: "pending",
+    status: "ended",
     requestedThrough: { messageID: "msg_compaction_request", seq: 1 },
     timeCreated: 1_717_171_717_000,
   },

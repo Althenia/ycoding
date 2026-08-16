@@ -19,6 +19,14 @@ export type Info = Agent.Info
 
 export const Event = Agent.Event
 
+export function isSelectable(agent: Info): boolean {
+  return agent.mode !== "subagent" && !agent.hidden && agent.id !== "btw"
+}
+
+export function isAutocompleteSelectable(agent: Info): boolean {
+  return !agent.hidden && agent.mode !== "primary" && agent.id !== "btw"
+}
+
 export interface Selection {
   readonly id: ID
   readonly info: Info | undefined
@@ -73,7 +81,7 @@ const layer = Layer.effect(
       finalize: () => events.publish(Event.Updated, {}).pipe(Effect.asVoid),
     })
     const selectable = (agent: Info | undefined) =>
-      agent && agent.mode !== "subagent" && !agent.hidden ? agent : undefined
+      agent && isSelectable(agent) ? agent : undefined
     const selectedDefault = () => {
       const data = state.get()
       const configured = data.default ? selectable(data.agents.get(data.default)) : undefined

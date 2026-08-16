@@ -2,6 +2,7 @@ import { Effect, Encoding, Schema } from "effect"
 import { Route } from "../route/client"
 import { Auth } from "../route/auth"
 import { Endpoint } from "../route/endpoint"
+import { Framing } from "../route/framing"
 import { HttpTransport, WebSocketTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
@@ -9,10 +10,10 @@ import {
   LLMEvent,
   Message,
   Usage,
+  LLMRequest,
   type CacheHint,
   type FinishReason,
   type JsonSchema,
-  type LLMRequest,
   type ProviderMetadata,
   type ReasoningPart,
   type TextPart,
@@ -1422,12 +1423,70 @@ const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>) =
     return yield* decodeWebSocketMessage({ ...message, type: "response.create" })
   })
 
+const requestWebSocketMessage = (
+  request: LLMRequest,
+  messages: LLMRequest["messages"],
+  system: LLMRequest["system"],
+) =>
+  fromRequest(LLMRequest.update(request, { messages, system })).pipe(Effect.flatMap(webSocketMessage))
+
+const normalizedWebSocketOutput = (value: unknown): unknown | undefined => {
+  if (!ProviderShared.isRecord(value) || typeof value.type !== "string") return undefined
+  if (value.type === "message") {
+    if (!Array.isArray(value.content)) return undefined
+    const content = value.content.flatMap((part) => {
+      if (!ProviderShared.isRecord(part) || part.type !== "output_text" || typeof part.text !== "string") return []
+      return [{ type: "output_text" as const, text: part.text }]
+    })
+    if (content.length === 0) return undefined
+    return {
+      role: "assistant",
+      ...(value.phase === "commentary" || value.phase === "final_answer" ? { phase: value.phase } : {}),
+      content,
+    }
+  }
+  if (value.type === "function_call") {
+    if (typeof value.call_id !== "string" || typeof value.name !== "string" || typeof value.arguments !== "string")
+      return undefined
+    return { type: "function_call", call_id: value.call_id, name: value.name, arguments: value.arguments }
+  }
+  if (value.type === "reasoning") {
+    if (!Array.isArray(value.summary)) return undefined
+    return {
+      type: "reasoning",
+      summary: value.summary,
+      ...(value.encrypted_content === undefined ? {} : { encrypted_content: value.encrypted_content }),
+    }
+  }
+  const { id: _id, status: _status, ...item } = value
+  return item
+}
+
 export const webSocketTransport = WebSocketTransport.jsonTransport.with<
   OpenAIResponsesBody,
   OpenAIResponsesWebSocketMessage
 >({
   toMessage: webSocketMessage,
   encodeMessage: encodeWebSocketMessage,
+  continuation: {
+    session: (request) => {
+      const session = OpenAIOptions.responsesWebSocket(request)
+      return session === undefined
+        ? undefined
+        : {
+            key: session.sessionKey,
+            fingerprint: session.fingerprint,
+            messageBoundary: session.messageBoundary,
+            fullReplay: session.fullReplay,
+          }
+    },
+    replayMessage: (request, messageCount) =>
+      requestWebSocketMessage(request, request.messages.slice(0, messageCount), request.system),
+    deltaMessage: (request, messageStart) =>
+      requestWebSocketMessage(request, request.messages.slice(messageStart), []),
+    normalizeOutput: normalizedWebSocketOutput,
+    fallback: Framing.sse,
+  },
 })
 
 export const webSocketRoute = Route.make({

@@ -8,7 +8,7 @@ import { InlineToolRow } from "../src/routes/session"
 
 const sessionRoute = await Bun.file(new URL("../src/routes/session/index.tsx", import.meta.url)).text()
 
-test("renders completed Skill titles bright and pending-style titles subdued", async () => {
+test("renders user and agent-invoked completed Skill titles with the same treatment", async () => {
   const bright = RGBA.fromHex("#ffffff")
   const app = await testRender(() => (
     <ConfigProvider config={resolve({}, { terminalSuspend: true })} service={{ get: async () => ({}), update: async () => ({}) }}>
@@ -25,6 +25,8 @@ test("renders completed Skill titles bright and pending-style titles subdued", a
     expect(sessionRoute).toContain(
       'completeColor={props.part.state.status === "completed" ? themeV2.text.default : undefined}',
     )
+    expect(sessionRoute).toContain('color={themeV2.text.default}')
+    expect(sessionRoute).toContain('status={<StatusBadge color={accent()}>Loaded</StatusBadge>}')
   } finally {
     app.renderer.destroy()
   }

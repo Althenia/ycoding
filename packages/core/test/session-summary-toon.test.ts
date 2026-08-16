@@ -7,6 +7,9 @@ const sample: SessionSummaryToon.Memory = {
   version: 1,
   through_sequence: 42,
   objective: 'Fix the "quote" bug: done, mostly',
+  requirements: ["Preserve exact protected state"],
+  acceptance_criteria: ["Focused tests pass"],
+  progress: ["Regression reproduced"],
   current_state: "In progress\nwith a second line",
   facts: [
     { text: 'Uses TOON, with "quotes" and \\backslash', confidence: "confirmed" },
@@ -22,6 +25,7 @@ const sample: SessionSummaryToon.Memory = {
   completed: ["module", "tests"],
   pending: ["review", "Don't stop now"],
   blockers: [],
+  skills: ["typescript-developer"],
   unresolved: ["cache eviction"],
   important_identifiers: ["sum-1"],
   continuation: "Next: write docs. Then ship.",
@@ -32,6 +36,41 @@ describe("SessionSummaryToon", () => {
     const result = SessionSummaryToon.parse(SessionSummaryToon.encode(sample), options)
     expect(result).toEqual(sample)
     expect(result).not.toBeInstanceOf(SessionSummaryToon.InvalidToonError)
+  })
+
+  test("encodes omitted advisor sections in canonical field order", () => {
+    const encoded = SessionSummaryToon.encode({
+      version: sample.version,
+      through_sequence: sample.through_sequence,
+      objective: sample.objective,
+      current_state: sample.current_state,
+      facts: sample.facts,
+      decisions: sample.decisions,
+      preferences: sample.preferences,
+      constraints: sample.constraints,
+      completed: sample.completed,
+      pending: sample.pending,
+      blockers: sample.blockers,
+      unresolved: sample.unresolved,
+      important_identifiers: sample.important_identifiers,
+      continuation: sample.continuation,
+    })
+    const parsed = SessionSummaryToon.parse(encoded, options)
+
+    expect("_tag" in parsed).toBe(false)
+    if ("_tag" in parsed) throw parsed
+    expect(SessionSummaryToon.encode(parsed)).toBe(encoded)
+  })
+
+  test("requires the advisor checkpoint sections", () => {
+    const input = SessionSummaryToon.encode(sample)
+      .split("\n")
+      .filter((line) => !line.includes("acceptance_criteria"))
+      .join("\n")
+    const result = SessionSummaryToon.parse(input, options)
+    expect(result).toBeInstanceOf(SessionSummaryToon.MissingFieldError)
+    if (result instanceof SessionSummaryToon.MissingFieldError)
+      expect(result.fields).toContain("acceptance_criteria")
   })
 
   test("rejects input that is not valid TOON", () => {
@@ -71,6 +110,9 @@ describe("SessionSummaryToon", () => {
       "  version: 1",
       "  through_sequence: 42",
       '  objective: "o"',
+      "  requirements: []",
+      "  acceptance_criteria: []",
+      "  progress: []",
       '  current_state: "s"',
       "  facts: []",
       "  decisions: []",
@@ -79,6 +121,7 @@ describe("SessionSummaryToon", () => {
       "  completed: []",
       "  pending: []",
       "  blockers: []",
+      "  skills: []",
       "  unresolved: []",
       "  important_identifiers: []",
       '  continuation: "c"',
@@ -93,6 +136,9 @@ describe("SessionSummaryToon", () => {
       "  version: 1",
       "  through_sequence: 42",
       '  objective: ""',
+      "  requirements: []",
+      "  acceptance_criteria: []",
+      "  progress: []",
       '  current_state: ""',
       "  facts: []",
       "  decisions: []",
@@ -101,6 +147,7 @@ describe("SessionSummaryToon", () => {
       "  completed: []",
       "  pending: []",
       "  blockers: []",
+      "  skills: []",
       "  unresolved: []",
       "  important_identifiers: []",
       '  continuation: ""',
@@ -109,12 +156,19 @@ describe("SessionSummaryToon", () => {
     expect(result).toBeInstanceOf(SessionSummaryToon.EmptySummaryError)
   })
 
-  test("rejects input above maxSummaryBytes", () => {
+  test("accepts canonical TOON above the former byte target", () => {
     const result = SessionSummaryToon.parse(SessionSummaryToon.encode(sample), { ...options, maxSummaryBytes: 64 })
-    expect(result).toBeInstanceOf(SessionSummaryToon.SummaryTooLargeError)
+    expect(result).toEqual(sample)
   })
 
-  test("rejects Markdown code fences anywhere in the input", () => {
+  test("round trips Markdown fences stored inside encoded field content", () => {
+    const memory = { ...sample, current_state: "Inspect this source:\n```ts\nconst value = 1\n```" }
+    const encoded = SessionSummaryToon.encode(memory)
+
+    expect(SessionSummaryToon.parse(encoded, options)).toEqual(memory)
+  })
+
+  test("rejects a Markdown-fenced document wrapper", () => {
     const input = "```\n" + SessionSummaryToon.encode(sample) + "\n```"
     const result = SessionSummaryToon.parse(input, options)
     expect(result).toBeInstanceOf(SessionSummaryToon.CodeFenceError)

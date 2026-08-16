@@ -114,7 +114,7 @@ async function renderOverlayRail(width: number, height: number) {
                         <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                           <PluginProvider packages={{ resolve: async () => undefined }}>
                             <box width={width} height={height} alignItems="flex-end">
-                              <Sidebar sessionID={sessionID} autonomy={{ mode: "normal" }} overlay />
+                              <Sidebar sessionID={sessionID} autonomy={{ mode: "normal", yolo: false }} overlay />
                             </box>
                           </PluginProvider>
                         </ThemeProvider>

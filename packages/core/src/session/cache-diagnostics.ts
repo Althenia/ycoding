@@ -68,6 +68,7 @@ export function mechanism(
       case "azure":
       case "github-copilot":
       case "ycoding":
+      case "meta":
         return "openai-prefix-cache"
       case "openrouter":
         return "openrouter-cache-control"

@@ -75,7 +75,7 @@ describe("session footer identity", () => {
               <Keymap.Provider config={config}>
                 <ClientProvider api={createApi(calls.fetch)}>
                   <DataProvider>
-                    <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={{ mode: "normal" }} />
+                    <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={{ mode: "normal", yolo: false }} />
                   </DataProvider>
                 </ClientProvider>
               </Keymap.Provider>
@@ -161,7 +161,6 @@ describe("subagent economics band", () => {
               strip: [],
               context: "54.0K/1.0M",
               cacheHit: "74%",
-              prefix: "1.0K",
               reads: "900",
               writes: "12",
               spent: "$0.13",
@@ -180,14 +179,14 @@ describe("subagent economics band", () => {
       expect(lines.findIndex((line) => line.includes("SUBAGENT ECONOMICS"))).toBe(1)
       expect(lines.findIndex((line) => line.includes("Context"))).toBe(3)
       expect(lines.findIndex((line) => line.includes("54.0K/1.0M"))).toBe(5)
-      // Board 15 columns: Context 3, Cache hit 31, Prefix 58, Reads 85, Writes 112, Spent 139, Rolls up to 167.
+      // Board 15 columns: Context 3, Cache hit 31, Reads 58, Writes 85, Spent 112, Rolls up to 140.
       expect(lines[3]?.indexOf("Context")).toBe(3)
       expect(lines[3]?.indexOf("Cache hit")).toBe(31)
-      expect(lines[3]?.indexOf("Prefix")).toBe(58)
-      expect(lines[3]?.indexOf("Reads")).toBe(85)
-      expect(lines[3]?.indexOf("Writes")).toBe(112)
-      expect(lines[3]?.indexOf("Spent")).toBe(139)
-      expect(lines[3]?.indexOf("Rolls up to")).toBe(167)
+      expect(lines[3]?.indexOf("Reads")).toBe(58)
+      expect(lines[3]?.indexOf("Writes")).toBe(85)
+      expect(lines[3]?.indexOf("Spent")).toBe(112)
+      expect(lines[3]?.indexOf("Rolls up to")).toBe(140)
+      expect(lines[3]).not.toContain("Prefix")
       expect(lines[6]?.trim()).toBe("")
 
       const rule = app

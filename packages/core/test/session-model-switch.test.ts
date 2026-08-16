@@ -53,6 +53,7 @@ import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { and, eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
+import { FileAttachment } from "@ycoding-ai/schema/prompt"
 
 const createSession = () => {
   const sessionID = SessionV2.ID.create()
@@ -78,6 +79,32 @@ const catalogModels = [
   info("anthropic", "claude-haiku-4-5", 64_000, 8_192),
   info("openai", "gpt-5.6", 400_000, 100_000),
 ]
+
+test("model-switch history estimation is independent of managed payload size", () => {
+  const message = (bytes: number) =>
+    SessionMessage.User.make({
+      id: SessionMessage.ID.make("msg_attachment_estimate"),
+      type: "user",
+      text: "Inspect the attachment",
+      files: [
+        FileAttachment.make({
+          content: {
+            type: "managed",
+            digest: "a".repeat(64),
+            bytes,
+            path: `attachments/sha256/aa/${"a".repeat(64)}`,
+          },
+          mime: "image/png",
+          name: "image.png",
+        }),
+      ],
+      time: { created: DateTime.makeUnsafe(0) },
+    })
+
+  expect(SessionModelSwitch.estimateContextTokens([message(1)], sonnet)).toBe(
+    SessionModelSwitch.estimateContextTokens([message(20 * 1024 * 1024)], sonnet),
+  )
+})
 const promptCatalog = Layer.mock(Catalog.Service, {
   provider: {
     get: () => Effect.succeed(undefined),
@@ -146,7 +173,11 @@ const sonnetRouteModel = Model.make({ id: "claude-sonnet-4-5", provider: "anthro
 const gptRouteModel = Model.make({ id: "gpt-5.6", provider: "openai", route: OpenAIChat.route })
 const models = SessionRunnerModel.layerWith((session) =>
   Effect.succeed(
-    SessionRunnerModel.resolved(session.model?.id === "gpt-5.6" ? gptRouteModel : sonnetRouteModel, session.model?.variant, []),
+    SessionRunnerModel.resolved(
+      session.model?.id === "gpt-5.6" ? gptRouteModel : sonnetRouteModel,
+      session.model?.variant,
+      [],
+    ),
   ),
 )
 const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })
@@ -171,10 +202,7 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
-const pluginSupervisor = Layer.succeed(
-  PluginSupervisor.Service,
-  PluginSupervisor.Service.of({ flush: Effect.void }),
-)
+const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
 // Model switches do not generate compaction manifests.
 const compaction = Layer.succeed(
   SessionCompaction.Service,
@@ -345,7 +373,12 @@ const eventCountFor = (sessionID: SessionV2.ID, type?: string) =>
 const pendingRows = (sessionID: SessionV2.ID) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
-    return yield* db.select().from(SessionPendingTable).where(eq(SessionPendingTable.session_id, sessionID)).all().pipe(Effect.orDie)
+    return yield* db
+      .select()
+      .from(SessionPendingTable)
+      .where(eq(SessionPendingTable.session_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)
   })
 
 describe("SessionV2.switchModel context validation", () => {
@@ -354,7 +387,11 @@ describe("SessionV2.switchModel context validation", () => {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({ sessionID, summary: "S1", posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }] })
+      yield* seedTranscript({
+        sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
 
@@ -392,7 +429,11 @@ describe("SessionV2.switchModel context validation", () => {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({ sessionID, summary: "S1", posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }] })
+      yield* seedTranscript({
+        sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
 
@@ -515,26 +556,31 @@ describe("SessionV2.switchModel context validation", () => {
       })
       const { db } = yield* Database.Service
       const eventsBefore = yield* eventCountFor(sessionID)
-      const messagesBefore = (
-        yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).all().pipe(Effect.orDie)
-      ).length
+      const messagesBefore = (yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)).length
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
       expect(outcome.status).toBe("blocked")
       expect(yield* eventCountFor(sessionID)).toBe(eventsBefore)
       expect(
-        (yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).all().pipe(Effect.orDie))
-          .length,
+        (yield* db
+          .select()
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)).length,
       ).toBe(messagesBefore)
       expect(
-        (
-          yield* db
-            .select()
-            .from(SessionProviderRequestTable)
-            .where(eq(SessionProviderRequestTable.session_id, sessionID))
-            .all()
-            .pipe(Effect.orDie)
-        ).length,
+        (yield* db
+          .select()
+          .from(SessionProviderRequestTable)
+          .where(eq(SessionProviderRequestTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)).length,
       ).toBe(0)
       expect((yield* pendingRows(sessionID)).length).toBe(0)
     }),
@@ -556,32 +602,41 @@ describe("SessionV2.switchModel context validation", () => {
     }),
   )
 
-  it.effect("changing the summarizer helper model config neither changes the main-chat model nor regenerates the summary", () =>
-    Effect.gen(function* () {
-      const { sessionID, location } = createSession()
-      efficiencyConfig = new ConfigEfficiency.Info({
-        helper_models: new ConfigEfficiency.HelperModels({
-          compaction: new ConfigEfficiency.CompactionHelperModels({ main: "session" }),
-        }),
-      })
-      const session = yield* SessionV2.Service
-      yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({ sessionID, summary: "S1", posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }] })
+  it.effect(
+    "changing the summarizer helper model config neither changes the main-chat model nor regenerates the summary",
+    () =>
+      Effect.gen(function* () {
+        const { sessionID, location } = createSession()
+        efficiencyConfig = new ConfigEfficiency.Info({
+          helper_models: new ConfigEfficiency.HelperModels({
+            compaction: new ConfigEfficiency.CompactionHelperModels({ main: "session" }),
+          }),
+        })
+        const session = yield* SessionV2.Service
+        yield* session.create({ id: sessionID, location, model: sonnet })
+        yield* seedTranscript({
+          sessionID,
+          summary: "S1",
+          posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+        })
 
-      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
+        expect((yield* session.get(sessionID)).model).toMatchObject({
+          id: "claude-sonnet-4-5",
+          providerID: "anthropic",
+        })
 
-      const outcome = yield* session.switchModel({ sessionID, model: gpt })
-      expect(outcome).toEqual({ status: "switched" })
-      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "gpt-5.6", providerID: "openai" })
+        const outcome = yield* session.switchModel({ sessionID, model: gpt })
+        expect(outcome).toEqual({ status: "switched" })
+        expect((yield* session.get(sessionID)).model).toMatchObject({ id: "gpt-5.6", providerID: "openai" })
 
-      const messages = yield* session.context(sessionID)
-      expect(
-        messages.filter((message) => message.type === "compaction" && message.status === "completed"),
-      ).toHaveLength(1)
-      expect(
-        messages.find((message) => message.type === "compaction" && message.status === "completed"),
-      ).toMatchObject({ summary: "S1", recent: "R1" })
-    }),
+        const messages = yield* session.context(sessionID)
+        expect(
+          messages.filter((message) => message.type === "compaction" && message.status === "completed"),
+        ).toHaveLength(1)
+        expect(
+          messages.find((message) => message.type === "compaction" && message.status === "completed"),
+        ).toMatchObject({ summary: "S1", recent: "R1" })
+      }),
   )
 })
 

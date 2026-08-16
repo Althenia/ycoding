@@ -184,12 +184,15 @@ Percentage windows show stable ten-character ASCII progress bars, reset times, f
 
 Unknown values render as `Not reported`; they are never rendered as zero.
 
+For Meta Model API credentials, YCoding sums the USD cost buckets reported for the adapter's current UTC calendar-month query into one **Current bill** row. When current-period cost data is present, the row labels the next UTC month boundary as **Bill due**, following Meta's documented automatic charge on the first of each month. Missing cost data or an unverified billing period leaves the amount or date unreported; YCoding does not estimate either from local Session tokens.
+
 ### Sources
 
 | Provider | Source | Stability |
 | --- | --- | --- |
 | OpenRouter | Current-key API; optional account credits for a management credential | stable provider API |
 | OpenAI API | Organization usage and cost endpoints for an explicitly marked admin credential | stable provider API |
+| Meta Model API | Organization usage and USD cost buckets for the current-bill and weekly/monthly request and token views | stable provider API |
 | Claude subscription | Unified response headers from normal Claude Code requests | observed live state |
 | Claude subscription | OAuth usage snapshot for cold start and model-specific buckets | best-effort provider-internal API |
 | Codex / Spark | Configured Codex app-server `account/rateLimits/read` | official local client contract |

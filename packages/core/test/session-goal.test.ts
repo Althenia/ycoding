@@ -100,6 +100,7 @@ const cacheRuntime = Layer.succeed(
         return { ttlSeconds: 300 as const, promoted: false }
       }),
     observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
+    generation: () => Effect.succeed(0),
   }),
 )
 const config = Layer.succeed(
@@ -279,7 +280,6 @@ it.effect("preserves conversation-aware goal synthesis when model mode is enable
     if (typeof promptCacheKey !== "string") return yield* Effect.die("prompt cache key missing")
     expect(cachePolicies).toHaveLength(1)
     expect(cachePolicies[0]).toMatchObject({
-      namespace: promptCacheKey,
       modelID: "goal-model",
       configured: "adaptive",
     })
@@ -356,8 +356,9 @@ setIt.effect(
       yield* events.publish(SessionEvent.InputPromoted, { sessionID: created.id, inputID })
       const before = yield* session.context(created.id)
 
-      expect(yield* session.autonomy.set({ sessionID: created.id, mode: "goal", goal: rawText })).toMatchObject({
-        mode: "goal",
+      expect(yield* session.autonomy.set({ sessionID: created.id, goal: rawText })).toMatchObject({
+        mode: "normal",
+        yolo: 0,
         goal: {
           text: "Repair the migration and verify the suite passes.",
           rawText,
@@ -365,9 +366,10 @@ setIt.effect(
       })
       expect(yield* session.context(created.id)).toEqual(before)
       expect(
-        yield* session.autonomy.set({ sessionID: created.id, mode: "goal", goal: "  Use the fallback  " }),
+        yield* session.autonomy.set({ sessionID: created.id, goal: "  Use the fallback  " }),
       ).toMatchObject({
-        mode: "goal",
+        mode: "normal",
+        yolo: 0,
         goal: { text: "Use the fallback", rawText: "Use the fallback" },
       })
     }),
@@ -378,10 +380,38 @@ setIt.effect("propagates goal synthesis interruption without storing a raw-text 
     const session = yield* SessionV2.Service
     const created = yield* session.create({ location })
     const outcome = yield* session.autonomy
-      .set({ sessionID: created.id, mode: "goal", goal: "Interrupt synthesis" })
+      .set({ sessionID: created.id, goal: "Interrupt synthesis" })
       .pipe(Effect.exit)
 
     expect(outcome._tag).toBe("Failure")
-    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal" })
+    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: 0 })
+  }),
+)
+
+setIt.effect("re-evaluates an active goal for every newly admitted user prompt", () =>
+  Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const created = yield* session.create({ location })
+
+    yield* session.autonomy.set({ sessionID: created.id, goal: "Initial request" })
+    yield* session.prompt({
+      id: SessionMessage.ID.create(),
+      sessionID: created.id,
+      text: "Second request",
+      resume: false,
+    })
+    expect(yield* session.autonomy.get(created.id)).toMatchObject({
+      goal: { text: "Repair the migration and verify the suite passes.", rawText: "Second request", status: "active" },
+    })
+
+    yield* session.prompt({
+      id: SessionMessage.ID.create(),
+      sessionID: created.id,
+      text: "Third request",
+      resume: false,
+    })
+    expect(yield* session.autonomy.get(created.id)).toMatchObject({
+      goal: { text: "Repair the migration and verify the suite passes.", rawText: "Third request", status: "active" },
+    })
   }),
 )

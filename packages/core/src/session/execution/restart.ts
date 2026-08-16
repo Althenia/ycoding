@@ -5,7 +5,6 @@ import { makeGlobalNode } from "../../effect/app-node"
 import { SessionOrchestration } from "../orchestration"
 import { SessionExecution } from "../execution"
 import { SessionStore } from "../store"
-import { SessionCompactionExecution } from "../compaction-execution"
 
 export interface Interface {
   /**
@@ -28,14 +27,12 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
-    const compactionExecution = yield* Effect.serviceOption(SessionCompactionExecution.Service)
     const orchestration = yield* Effect.serviceOption(SessionOrchestration.Service)
     return Service.of({
       suspendActiveSessions: Effect.gen(function* () {
         yield* store.suspend(yield* execution.active)
       }),
       resumeSuspendedSessions: Effect.gen(function* () {
-        if (Option.isSome(compactionExecution)) yield* compactionExecution.value.recover
         if (Option.isSome(orchestration)) yield* orchestration.value.recover
         const sessions = yield* store.listSuspended()
         yield* Effect.forEach(
@@ -58,5 +55,5 @@ export const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [SessionStore.node, SessionExecution.node, SessionCompactionExecution.node, SessionOrchestration.node],
+  deps: [SessionStore.node, SessionExecution.node, SessionOrchestration.node],
 })

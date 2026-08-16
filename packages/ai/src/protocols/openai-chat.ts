@@ -104,6 +104,8 @@ const OpenAIChatMessage = Schema.Union([
     reasoning: Schema.optional(Schema.String),
     reasoning_text: Schema.optional(Schema.String),
     reasoning_details: optionalArray(Schema.Unknown),
+    thought: Schema.optional(Schema.String),
+    thinking: Schema.optional(Schema.String),
   }),
   Schema.Struct({ role: Schema.Literal("tool"), tool_call_id: Schema.String, content: Schema.String }),
 ]).pipe(Schema.toTaggedUnion("role"))
@@ -188,6 +190,8 @@ const OpenAIChatDelta = Schema.Struct({
   reasoning: optionalNull(Schema.String),
   reasoning_text: optionalNull(Schema.String),
   reasoning_details: optionalNull(Schema.Array(Schema.Unknown)),
+  thought: optionalNull(Schema.String),
+  thinking: optionalNull(Schema.String),
   tool_calls: optionalNull(Schema.Array(OpenAIChatToolCallDelta)),
 })
 
@@ -221,10 +225,12 @@ export interface ParserState {
   readonly usage?: Usage
   readonly finishReason?: FinishReason
   readonly lifecycle: Lifecycle.State
-  readonly reasoningField?: "reasoning" | "reasoning_content" | "reasoning_text"
+  readonly reasoningField?: "reasoning" | "reasoning_content" | "reasoning_text" | "thought" | "thinking"
   readonly reasoningDetails: Array<unknown>
   readonly reasoningDetailsObserved: boolean
   readonly reasoningEmitted: boolean
+  readonly thinkInside: boolean
+  readonly thinkBuffer: string
 }
 
 // =============================================================================
@@ -269,7 +275,14 @@ const openAICompatibleReasoningContent = (native: unknown) =>
 
 const reasoningField = (part: ReasoningPart) => {
   const field = part.providerMetadata?.openai?.reasoningField
-  if (field === "reasoning" || field === "reasoning_content" || field === "reasoning_text") return field
+  if (
+    field === "reasoning" ||
+    field === "reasoning_content" ||
+    field === "reasoning_text" ||
+    field === "thought" ||
+    field === "thinking"
+  )
+    return field
 }
 
 const reasoningDetails = (parts: ReadonlyArray<ReasoningPart>, native: unknown) => {
@@ -368,6 +381,8 @@ const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(func
     reasoning_content: reasoningContent,
     reasoning: reasoning.length > 0 && field === "reasoning" ? text : undefined,
     reasoning_text: reasoning.length > 0 && field === "reasoning_text" ? text : undefined,
+    thought: reasoning.length > 0 && field === "thought" ? text : undefined,
+    thinking: reasoning.length > 0 && field === "thinking" ? text : undefined,
     reasoning_details: details,
   }
 })
@@ -564,6 +579,8 @@ const reasoningDelta = (delta: Schema.Schema.Type<typeof OpenAIChatDelta> | null
   if (delta?.reasoning_content) return { field: "reasoning_content", text: delta.reasoning_content } as const
   if (delta?.reasoning) return { field: "reasoning", text: delta.reasoning } as const
   if (delta?.reasoning_text) return { field: "reasoning_text", text: delta.reasoning_text } as const
+  if (delta?.thought) return { field: "thought", text: delta.thought } as const
+  if (delta?.thinking) return { field: "thinking", text: delta.thinking } as const
 }
 
 const detailText = (details: ReadonlyArray<unknown>) => {
@@ -619,6 +636,62 @@ const reasoningMetadata = (field: ParserState["reasoningField"], details?: Reado
   },
 })
 
+const thinkOpen = "<think>"
+const thinkClose = "</think>"
+
+const thinkPrefixLength = (value: string, marker: string) => {
+  const max = Math.min(value.length, marker.length - 1)
+  for (let len = max; len > 0; len--) if (value.endsWith(marker.slice(0, len))) return len
+  return 0
+}
+
+const parseThinkContent = (input: string, initialInside: boolean) => {
+  let reasoning = ""
+  let text = ""
+  let buffer = input
+  let inside = initialInside
+  let nextBuffer = ""
+  while (buffer.length > 0) {
+    if (inside) {
+      const closeIdx = buffer.indexOf(thinkClose)
+      if (closeIdx !== -1) {
+        reasoning += buffer.slice(0, closeIdx)
+        buffer = buffer.slice(closeIdx + thinkClose.length)
+        inside = false
+        continue
+      }
+      const prefix = thinkPrefixLength(buffer, thinkClose)
+      if (prefix > 0) {
+        reasoning += buffer.slice(0, buffer.length - prefix)
+        nextBuffer = buffer.slice(buffer.length - prefix)
+      } else {
+        reasoning += buffer
+        nextBuffer = ""
+      }
+      buffer = ""
+      break
+    }
+    const openIdx = buffer.indexOf(thinkOpen)
+    if (openIdx !== -1) {
+      text += buffer.slice(0, openIdx)
+      buffer = buffer.slice(openIdx + thinkOpen.length)
+      inside = true
+      continue
+    }
+    const prefix = thinkPrefixLength(buffer, thinkOpen)
+    if (prefix > 0) {
+      text += buffer.slice(0, buffer.length - prefix)
+      nextBuffer = buffer.slice(buffer.length - prefix)
+    } else {
+      text += buffer
+      nextBuffer = ""
+    }
+    buffer = ""
+    break
+  }
+  return { reasoning, text, thinkInside: inside, thinkBuffer: nextBuffer }
+}
+
 const step = (state: ParserState, event: OpenAIChatEvent) =>
   Effect.gen(function* () {
     const events: LLMEvent[] = []
@@ -631,6 +704,8 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     let pendingTools = state.pendingTools
 
     let lifecycle = state.lifecycle
+    let thinkInside = state.thinkInside
+    let thinkBuffer = state.thinkBuffer
 
     const reasoning = reasoningDelta(delta)
     const reasoningField = state.reasoningField ?? (!state.lifecycle.text.has("text-0") ? reasoning?.field : undefined)
@@ -647,16 +722,38 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
       (Boolean(delta?.content) || toolDeltas.length > 0)
     )
       lifecycle = Lifecycle.reasoningStart(lifecycle, events, "reasoning-0", deltaMetadata)
-    const reasoningEmitted = state.reasoningEmitted || lifecycle.reasoning.has("reasoning-0")
+    let reasoningEmitted = state.reasoningEmitted || lifecycle.reasoning.has("reasoning-0")
 
-    if (delta?.content) {
+    let contentText: string | undefined
+    let contentReasoning: string | undefined
+    if (delta?.content !== undefined && delta.content !== null) {
+      const parsed = parseThinkContent(thinkBuffer + delta.content, thinkInside)
+      thinkInside = parsed.thinkInside
+      thinkBuffer = parsed.thinkBuffer
+      contentReasoning = parsed.reasoning || undefined
+      contentText = parsed.text || undefined
+      if (contentReasoning) {
+        lifecycle = Lifecycle.reasoningDelta(lifecycle, events, "reasoning-0", contentReasoning, deltaMetadata)
+        reasoningEmitted = true
+      }
+    }
+    if (contentText) {
       lifecycle = Lifecycle.reasoningEnd(
         lifecycle,
         events,
         "reasoning-0",
         reasoningMetadata(reasoningField, reasoningDetailsObserved ? state.reasoningDetails : undefined),
       )
-      lifecycle = Lifecycle.textDelta(lifecycle, events, "text-0", delta.content)
+      lifecycle = Lifecycle.textDelta(lifecycle, events, "text-0", contentText)
+    } else if (contentReasoning && thinkInside) {
+      // keep reasoning open when think block is still inside
+    } else if (contentReasoning && !contentText) {
+      lifecycle = Lifecycle.reasoningEnd(
+        lifecycle,
+        events,
+        "reasoning-0",
+        reasoningMetadata(reasoningField, reasoningDetailsObserved ? state.reasoningDetails : undefined),
+      )
     }
 
     for (const tool of toolDeltas) {
@@ -708,6 +805,8 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
         reasoningDetails: state.reasoningDetails,
         reasoningDetailsObserved,
         reasoningEmitted,
+        thinkInside,
+        thinkBuffer,
       },
       events,
     ] as const
@@ -721,14 +820,24 @@ const finishEvents = (state: ParserState): ReadonlyArray<LLMEvent> => {
     state.reasoningField,
     state.reasoningDetailsObserved ? state.reasoningDetails : undefined,
   )
+  let lifecycle = state.lifecycle
+  let pendingText: string | undefined
+  if (state.thinkBuffer) {
+    if (state.thinkInside) {
+      lifecycle = Lifecycle.reasoningDelta(lifecycle, events, "reasoning-0", state.thinkBuffer, reasoningMetadata(state.reasoningField))
+    } else {
+      pendingText = state.thinkBuffer
+    }
+  }
   const started =
-    state.reasoningDetailsObserved && !state.reasoningEmitted
-      ? Lifecycle.reasoningStart(state.lifecycle, events, "reasoning-0", reasoningMetadata(state.reasoningField))
-      : state.lifecycle
+    state.reasoningDetailsObserved && !state.reasoningEmitted && !lifecycle.reasoning.has("reasoning-0")
+      ? Lifecycle.reasoningStart(lifecycle, events, "reasoning-0", reasoningMetadata(state.reasoningField))
+      : lifecycle
   const ended = Lifecycle.reasoningEnd(started, events, "reasoning-0", metadata)
-  const lifecycle = state.toolCallEvents.length ? Lifecycle.stepStart(ended, events) : ended
+  let finalLifecycle = state.toolCallEvents.length ? Lifecycle.stepStart(ended, events) : ended
+  if (pendingText) finalLifecycle = Lifecycle.textDelta(finalLifecycle, events, "text-0", pendingText)
   events.push(...state.toolCallEvents)
-  if (reason) Lifecycle.finish(lifecycle, events, { reason, usage: state.usage })
+  if (reason) Lifecycle.finish(finalLifecycle, events, { reason, usage: state.usage })
   return events
 }
 
@@ -758,6 +867,8 @@ export const protocol = Protocol.make({
       reasoningDetails: [],
       reasoningDetailsObserved: false,
       reasoningEmitted: false,
+      thinkInside: false,
+      thinkBuffer: "",
     }),
     step,
     onHalt: finishEvents,

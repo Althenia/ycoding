@@ -32,7 +32,8 @@ const builtIns = [
   },
   {
     id: "architech",
-    description: "Pragmatic evidence-led architect that finds material system gaps, connects every relevant boundary, and implements sound trade-offs.",
+    description:
+      "Pragmatic evidence-led architect that finds material system gaps, connects every relevant boundary, and implements sound trade-offs.",
     mode: "primary",
     temperature: 0.3,
     color: "#3498db",
@@ -40,7 +41,8 @@ const builtIns = [
   },
   {
     id: "god",
-    description: "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
+    description:
+      "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
     mode: "primary",
     temperature: 0.2,
     color: "#f1c40f",
@@ -48,7 +50,8 @@ const builtIns = [
   },
   {
     id: "yangi",
-    description: "Seasoned old master who speaks concisely, decides precisely, and completes engineering work without wasted motion.",
+    description:
+      "Seasoned old master who speaks concisely, decides precisely, and completes engineering work without wasted motion.",
     mode: "primary",
     temperature: 0.1,
     color: "#2ecc71",
@@ -80,7 +83,8 @@ const builtIns = [
   },
   {
     id: "zeus",
-    description: "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
+    description:
+      "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
     mode: "subagent",
     temperature: 0.2,
     color: "#f1c40f",
@@ -199,7 +203,12 @@ export const Plugin = define({
           item.mode = definition.mode
           item.request.body = { temperature: definition.temperature }
           item.color = definition.color
-          item.system = definition.system
+          const mainchatCapabilities =
+            "\n\nMainchat responsibilities and capabilities:\n- You are the primary session controller. Goals are started by the user only (via /goal command or UI). Use the `goal` tool to manage the active goal: `get` to inspect, `update` to change text or status, `complete` to mark done, `stop`/`clear` to remove. Do not use `set` to create a goal; it will be rejected. When a goal is stopped or completed it disappears from the sidebar.\n- Keep autonomy explicit: yolo 0 manual, 1 auto-answers questions/forms, 2 also auto-approves permissions, 3 also auto-approves guardrail reviews. Goal active auto-answers questions/permissions at yolo 0; yolo changes are via /yolo or the YOLO toggle (no arrow keys).\n- Prefer durable subagents for isolated work; they run in the background and notify when done — don't poll.\n- Keep early cache prefixes stable per OpenAI model via the per-model namespace; never invent provider cache semantics.\n- For Meta Llama models (maverick/scout/behemoth) ensure reasoning/thought is preserved as `reasoning` parts so the TUI shows Thought/Thinking correctly; provider quota now reports current billing via the Meta usage adapter."
+          item.system =
+            definition.mode === "primary"
+              ? `${definition.system}\n\nSubagents run in the background and will notify back when subagents finished — don't need to keep polling.${mainchatCapabilities}`
+              : definition.system
           item.permissions.splice(
             0,
             item.permissions.length,

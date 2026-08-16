@@ -69,7 +69,7 @@ function defer<T = void>() {
 }
 
 function connected(id = "evt_connected") {
-  return { id, type: "server.connected", data: {} } satisfies RunV2Event
+  return { id, type: "server.connected", data: {}, sourceEpoch: "source_test" } satisfies RunV2Event
 }
 
 function durable(sessionID: string, seq?: number): { aggregateID: string; seq: number; version: 1 }
@@ -503,7 +503,7 @@ describe("V2 mini transport", () => {
     await transport.close()
   })
 
-  test("sends local file and directory mentions as structured prompt files", async () => {
+  test("sends initial files and local mentions as URI-only structured prompt files", async () => {
     await using tmp = await tmpdir()
     const filePath = path.join(tmp.path, "note.ts")
     const contextPath = path.join(tmp.path, "context.txt")
@@ -580,8 +580,9 @@ describe("V2 mini transport", () => {
       includeFiles: true,
     })
 
-    expect(request?.text).toBe('Review @note.ts and @docs\n\n<file name="context.txt">\ncontext body\n</file>')
+    expect(request?.text).toBe("Review @note.ts and @docs")
     expect(request?.files).toEqual([
+      { uri: pathToFileURL(contextPath).href, name: "context.txt" },
       { uri: "file:///tmp/image.png", name: "image.png" },
       {
         uri: pathToFileURL(filePath).href,
@@ -967,14 +968,14 @@ describe("V2 mini transport", () => {
       replacementHydrating = true
       await hydration
       return ok([
-          {
-            id: "msg_assistant",
-            type: "assistant",
-            agent: "build",
-            model: { providerID: "test", id: "model" },
-            content: [{ type: "text", text: "partial replacement" }],
-            time: { created: 1 },
-          },
+        {
+          id: "msg_assistant",
+          type: "assistant",
+          agent: "build",
+          model: { providerID: "test", id: "model" },
+          content: [{ type: "text", text: "partial replacement" }],
+          time: { created: 1 },
+        },
       ])
     })
     const current: YCodingClient[] = []
@@ -2416,9 +2417,7 @@ describe("V2 mini transport", () => {
         ],
         command: { name: "deploy", arguments: "prod" },
       },
-      files: [
-        { type: "file", url: "file:///tmp/context.txt", filename: "context.txt", mime: "text/plain" },
-      ],
+      files: [{ type: "file", url: "file:///tmp/context.txt", filename: "context.txt", mime: "text/plain" }],
       includeFiles: true,
     })
 
@@ -2928,7 +2927,11 @@ describe("V2 mini transport", () => {
       { sessionID: "ses_child", label: "Explore", title: "Find files", status: "running" },
     ])
 
-    expect(states().at(-1)?.details.ses_child?.commits.filter((item) => item.text === "child answer")).toHaveLength(1)
+    expect(
+      states()
+        .at(-1)
+        ?.details.ses_child?.commits.filter((item) => item.text === "child answer"),
+    ).toHaveLength(1)
 
     events.push({
       id: "evt_child_text_replayed",
@@ -2942,7 +2945,11 @@ describe("V2 mini transport", () => {
       },
     })
     await Bun.sleep(0)
-    expect(states().at(-1)?.details.ses_child?.commits.filter((item) => item.text === "child answer")).toHaveLength(1)
+    expect(
+      states()
+        .at(-1)
+        ?.details.ses_child?.commits.filter((item) => item.text === "child answer"),
+    ).toHaveLength(1)
 
     events.push({
       id: "evt_child_text_suffix",
@@ -2955,7 +2962,9 @@ describe("V2 mini transport", () => {
         delta: " suffix",
       },
     })
-    while (!states().some((state) => state.details.ses_child?.commits.some((item) => item.text === "child answer suffix")))
+    while (
+      !states().some((state) => state.details.ses_child?.commits.some((item) => item.text === "child answer suffix"))
+    )
       await Bun.sleep(0)
 
     events.push({
@@ -3114,22 +3123,22 @@ describe("V2 mini transport", () => {
       }
       await retry
       return ok([
-          {
-            id: "msg_overflow_assistant",
-            type: "assistant" as const,
-            agent: "explore",
-            model: { providerID: "test", id: "model" },
-            content: [{ type: "text" as const, id: "txt_overflow_64", text: "live 64" }],
-            time: { created: 2, completed: 3 },
-          },
-          {
-            id: "msg_overflow_baseline",
-            type: "user" as const,
-            text: "baseline history",
-            files: [],
-            agents: [],
-            time: { created: 1 },
-          },
+        {
+          id: "msg_overflow_assistant",
+          type: "assistant" as const,
+          agent: "explore",
+          model: { providerID: "test", id: "model" },
+          content: [{ type: "text" as const, id: "txt_overflow_64", text: "live 64" }],
+          time: { created: 2, completed: 3 },
+        },
+        {
+          id: "msg_overflow_baseline",
+          type: "user" as const,
+          text: "baseline history",
+          files: [],
+          agents: [],
+          time: { created: 1 },
+        },
       ])
     })
     const ui = footer()

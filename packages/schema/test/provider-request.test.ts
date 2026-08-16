@@ -32,6 +32,9 @@ test("decodes content-free provider request records", () => {
   expect(decoded.tokens.cache.read).toBe(900)
   expect(decoded).not.toHaveProperty("prompt")
   expect(decoded).not.toHaveProperty("body")
+  expect(decode({ ...record, cacheReadReported: true }).cacheReadReported).toBe(true)
+  expect(decode({ ...record, cacheReadReported: false }).cacheReadReported).toBe(false)
+  expect(decoded).not.toHaveProperty("cacheReadReported")
 })
 
 test("rejects unknown sources and non-positive counters", () => {

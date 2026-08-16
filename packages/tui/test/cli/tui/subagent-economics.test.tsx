@@ -73,7 +73,6 @@ async function renderEconomics(width = 120) {
                     strip: [
                       "Context 54.0K/1.0M",
                       "74% hit",
-                      "prefix 1.0K",
                       "900 read",
                       "12 write",
                       "$0.13",
@@ -109,7 +108,6 @@ test("renders footer economics, picker attachment metadata, and parent subagent 
     const frame = app.captureCharFrame()
     expect(frame).toContain("1.6K (5%) · 74% hit · $0.13")
     expect(frame).toContain("Context 54.0K/1.0M")
-    expect(frame).toContain("prefix 1.0K")
     expect(frame).toContain("rolls up to Parent session")
     expect(frame).toContain("◦ Reviewer $0.13 · 1.6K")
     expect(frame).toContain("openai/gpt-5.6-terra#high")
@@ -133,6 +131,7 @@ test("renders footer economics, picker attachment metadata, and parent subagent 
     expect(frame).not.toContain("Output")
     expect(frame).not.toContain("Hit ratio")
     expect(frame).not.toContain("Prefix")
+    expect(frame).not.toContain("prefix stable")
     expect(frame).toContain("Model")
     expect(frame).toContain("Context")
     expect(frame).toContain("Cache")
@@ -143,14 +142,13 @@ test("renders footer economics, picker attachment metadata, and parent subagent 
   }
 })
 
-test("does not invent hit or prefix telemetry for a child with zero or missing usage", async () => {
+test("does not invent hit telemetry for a child with zero or missing usage", async () => {
   const app = await renderEconomics()
 
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("openai/gpt-5.6-terra#high")
     expect(frame).not.toContain("0% hit")
-    expect(frame).not.toContain("prefix 0")
   } finally {
     app.renderer.destroy()
   }

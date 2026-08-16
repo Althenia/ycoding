@@ -103,7 +103,6 @@ it("rejects every request fingerprint mismatch", () =>
       { instructionsDigest: digest("7") },
       { toolsDigest: digest("8") },
       { optionsDigest: digest("9") },
-      { volatileContextDigest: digest("a") },
     ]
 
     for (const mismatch of mismatches) {
@@ -113,6 +112,48 @@ it("rejects every request fingerprint mismatch", () =>
         yield* continuation.select(selectInput({ ...fingerprint, ...mismatch, mode: "on", store: true })),
       ).toBeUndefined()
     }
+  }),
+)
+
+it("fingerprints every stable Codex socket identity field while leaving transcript extension to the transport", () =>
+  Effect.sync(() => {
+    const baseline = SessionContinuation.transportFingerprint(fingerprint)
+    const mismatches: ReadonlyArray<Partial<SessionContinuation.Fingerprint>> = [
+      { sessionID: otherSessionID },
+      { contextRevision: 1 },
+      { continuationGeneration: 1 },
+      { provider: "other" },
+      { routeID: "openai-responses-websocket" },
+      { modelID: "gpt-5.5" },
+      { variant: "high" },
+      { connectionIdentityDigest: digest("6") },
+      { promptCacheKey: "other-cache" },
+      { instructionsDigest: digest("7") },
+      { toolsDigest: digest("8") },
+      { optionsDigest: digest("9") },
+    ]
+
+    for (const mismatch of mismatches)
+      expect(SessionContinuation.transportFingerprint({ ...fingerprint, ...mismatch })).not.toBe(baseline)
+    expect(
+      SessionContinuation.transportFingerprint({
+        ...fingerprint,
+        representedThroughMessageID: SessionMessage.ID.make("msg_next"),
+        representedMessageCount: 4,
+        volatileContextDigest: digest("a"),
+      }),
+    ).toBe(baseline)
+  }),
+)
+
+it("tolerates volatile context digest churn for stored Responses continuation", () =>
+  Effect.gen(function* () {
+    yield* seedSessions()
+    const continuation = yield* makeContinuation()
+    yield* continuation.remember(state)
+    expect(
+      yield* continuation.select(selectInput({ ...fingerprint, volatileContextDigest: digest("a"), mode: "on", store: true })),
+    ).toEqual(state)
   }),
 )
 

@@ -2,7 +2,7 @@ export * as SessionCompaction from "./session-compaction.js"
 
 import { Schema } from "effect"
 import { ascending } from "./identifier.js"
-import { NonNegativeInt, DateTimeUtcFromMillis, statics } from "./schema.js"
+import { NonNegativeInt, DateTimeUtcFromMillis, optional, statics } from "./schema.js"
 import { SessionID } from "./session-id.js"
 import { ID as SessionMessageID } from "./session-message-id.js"
 
@@ -14,9 +14,6 @@ export type ID = typeof ID.Type
 
 export const Trigger = Schema.Literals(["consider", "advised", "mandatory", "manual"])
 export type Trigger = typeof Trigger.Type
-
-export const AdmissionMode = Schema.Literals(["background", "mandatory"])
-export type AdmissionMode = typeof AdmissionMode.Type
 
 export const FailureCode = Schema.Literals([
   "cancelled",
@@ -48,8 +45,18 @@ export const Admission = Schema.Struct({
   id: ID,
   sessionID: SessionID,
   trigger: Trigger,
-  admissionMode: AdmissionMode,
   status: Schema.Literal("pending"),
   requestedThrough: Boundary,
   timeCreated: DateTimeUtcFromMillis,
 }).annotate({ identifier: "SessionCompaction.Admission" })
+
+export interface Result extends Schema.Schema.Type<typeof Result> {}
+export const Result = Schema.Struct({
+  id: ID,
+  sessionID: SessionID,
+  trigger: Trigger,
+  status: Schema.Literals(["ended", "failed"]),
+  requestedThrough: Boundary,
+  timeCreated: DateTimeUtcFromMillis,
+  failure: optional(FailureCode),
+}).annotate({ identifier: "SessionCompaction.Result" })

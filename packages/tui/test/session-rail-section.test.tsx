@@ -97,6 +97,50 @@ test("renders the session title only inside the section body", async () => {
   }
 })
 
+test("renders guardrail auto-approval only at effective YOLO 3", async () => {
+  const { AutonomyRailContent } = await import("../src/routes/session/sidebar")
+  const cases = [
+    { name: "normal", autonomy: { mode: "normal", yolo: 0 }, expected: "enforced" },
+    { name: "YOLO 0", autonomy: { mode: "normal", yolo: 0 }, expected: "enforced" },
+    { name: "YOLO 1", autonomy: { mode: "normal", yolo: 1 }, expected: "enforced" },
+    { name: "YOLO 2", autonomy: { mode: "normal", yolo: 2 }, expected: "enforced" },
+    {
+      name: "active goal below YOLO 3",
+      autonomy: {
+        mode: "normal",
+        yolo: 2,
+        goal: { text: "Ship safely", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 3 },
+      },
+      expected: "enforced",
+    },
+    { name: "YOLO 3", autonomy: { mode: "normal", yolo: 3 }, expected: "auto · YOLO 3" },
+  ] satisfies { name: string; autonomy: SessionAutonomyState; expected: string }[]
+
+  for (const item of cases) {
+    const app = await mount(() => <AutonomyRailContent autonomy={item.autonomy} />, { width: 40, height: 24 })
+    await app.waitForFrame((frame) => frame.includes("Guardrails"))
+
+    try {
+      const row = app.captureCharFrame().split("\n").find((line) => line.includes("Guardrails"))
+      expect(row?.trimEnd(), item.name).toEndWith(item.expected)
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+})
+
+test("keeps autonomy semantics out of generic rail sections", async () => {
+  const { RailSection } = await import("../src/routes/session/rail-section")
+  const app = await mount(() => <RailSection section="autonomy" title="AUTONOMY" />)
+  await app.waitForFrame((frame) => frame.includes("AUTONOMY"))
+
+  try {
+    expect(app.captureCharFrame()).not.toContain("Guardrails")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("renders aggregate context rows when diagnostics are unavailable", async () => {
   const [{ RailProvider }, { SidebarCacheContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
@@ -156,9 +200,7 @@ test("renders compact operational rail summaries from live component state", asy
       import("../src/feature-plugins/sidebar/shells"),
       import("../src/feature-plugins/sidebar/skills"),
     ])
-  const autonomy: SessionAutonomyState = {
-    mode: "yolo",
-    goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+  const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
   }
   const skills: SessionSkill[] = [
     {
@@ -417,7 +459,6 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
       "SPEND",
       "Total",
       "CACHE",
-      "Prefix",
       "Reads",
       "Writes",
     ].map((label) => frame.indexOf(label))
@@ -430,11 +471,10 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
     expect(rendered.find((item) => item.plainText === "71%")?.fg.toInts()).toEqual(
       themeV2()!.text.feedback.success.default.toInts(),
     )
-    expect(rendered.find((item) => item.plainText === "stable")?.fg.toInts()).toEqual(
-      themeV2()!.text.feedback.success.default.toInts(),
-    )
     expect(rendered.find((item) => item.plainText === "220,672")?.fg.toInts()).toEqual(themeV2()!.text.default.toInts())
     expect(rendered.find((item) => item.plainText === "4,096")?.fg.toInts()).toEqual(themeV2()!.text.default.toInts())
+    expect(frame).not.toContain("Prefix")
+    expect(frame).not.toContain("prefix stable")
     expect(frame).not.toContain("Last step context")
     expect(frame).not.toContain("Cached tokens still occupy context.")
     expect(frame).not.toContain("Current model context")
@@ -594,9 +634,7 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
       import("../src/feature-plugins/sidebar/skills"),
     ])
   const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
-  const autonomy: SessionAutonomyState = {
-    mode: "yolo",
-    goal: {
+  const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: {
       text: "Fix provider cache accounting",
       status: "active",
       iteration: 3,

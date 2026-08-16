@@ -123,7 +123,7 @@ test("keeps subagent and shell footer counts as independent segments", async () 
   function FooterFixture() {
     const data = useData()
     onMount(() => void data.session.subagent.sync("ses_footer"))
-    return <Footer branch="main" sessionID="ses_footer" autonomy={{ mode: "normal" }} />
+    return <Footer branch="main" sessionID="ses_footer" autonomy={{ mode: "normal", yolo: false }} />
   }
 
   const app = await testRender(

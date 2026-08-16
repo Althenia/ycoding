@@ -16,6 +16,8 @@ import type {
   SessionActiveOutput,
   SessionGetInput,
   SessionGetOutput,
+  SessionSnapshotInput,
+  SessionSnapshotOutput,
   SessionDiagnosticsInput,
   SessionDiagnosticsOutput,
   SessionAutonomyGetInput,
@@ -555,6 +557,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      snapshot: (input: SessionSnapshotInput, requestOptions?: RequestOptions) =>
+        request<SessionSnapshotOutput>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/snapshot`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
       diagnostics: (input: SessionDiagnosticsInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionDiagnosticsOutput }>(
           {

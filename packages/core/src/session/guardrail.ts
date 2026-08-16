@@ -12,6 +12,7 @@ import { EventV2 } from "../event"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Hash } from "../util/hash"
+import { SessionAutonomy } from "./autonomy"
 import { SessionErrors } from "./error"
 import { SessionStore } from "./store"
 import { SessionGuardrailCounter } from "./guardrail-counter"
@@ -147,6 +148,7 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const events = yield* EventV2.Service
     const sessions = yield* SessionStore.Service
+    const autonomy = yield* SessionAutonomy.Service
     const entries = yield* config.entries()
     const settings = Config.latest(entries, "guardrails")
     const counters = SessionGuardrailCounter.make({
@@ -331,7 +333,14 @@ export const layer = Layer.effect(
         const admission = yield* withRootLock(
           result.rootSessionID,
           Effect.gen(function* () {
-            if (result.decision === "allow" || reusableApprovals.has(reusableApprovalKey)) {
+            const autoGuardrail = yield* autonomy
+              .canAutoGuardrail(result.rootSessionID)
+              .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
+            if (
+              result.decision === "allow" ||
+              reusableApprovals.has(reusableApprovalKey) ||
+              (result.decision === "ask" && autoGuardrail)
+            ) {
               const reservation = yield* reserveActionUnlocked(result.rootSessionID, input.action)
               yield* events.publish(Guardrail.Event.Decided, {
                 rootSessionID: result.rootSessionID,
@@ -513,5 +522,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, FSUtil.node, Global.node, EventV2.node, SessionStore.node],
+  deps: [Config.node, FSUtil.node, Global.node, EventV2.node, SessionStore.node, SessionAutonomy.node],
 })

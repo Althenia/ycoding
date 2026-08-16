@@ -90,6 +90,18 @@ function route(url: URL) {
         },
       },
     })
+  if (url.pathname === `/api/session/${sessionID}/usage`)
+    return json({
+      data: {
+        logical: 1,
+        physical: 1,
+        helpers: 0,
+        continued: 0,
+        fallback: 0,
+        cost: session.cost,
+        tokens: session.tokens,
+      },
+    })
   if (url.pathname === "/api/vcs/branch") return json({ location, data: { current: "main", default: "main" } })
   if (url.pathname === "/api/model")
     return json({
@@ -137,17 +149,19 @@ async function expectRailDesign(viewport: typeof DESIGN_VIEWPORT) {
     const rowOf = (label: string) => lines.findIndex((line) => line.includes(label))
     expect(rowOf("Provider cache audit")).toBe(7)
     expect(lines[9]?.slice(railStart)).not.toContain("ses_")
-    expect(rowOf("CONTEXT")).toBe(10)
-    expect(rowOf("Model")).toBe(12)
-    expect(rowOf("Context")).toBe(13)
+    expect(rowOf("CONTEXT")).toBe(13)
+    expect(rowOf("Model")).toBe(16)
+    expect(rowOf("Context")).toBe(17)
     const cache = rowOf("Cache")
-    expect(cache).toBe(14)
-    expect(rowOf("SPEND")).toBe(16)
-    expect(rowOf("Total")).toBe(17)
-    expect(rowOf("CACHE")).toBe(19)
-    expect(rowOf("Prefix")).toBe(20)
-    expect(rowOf("Reads")).toBe(21)
-    expect(rowOf("Writes")).toBe(22)
+    expect(cache).toBe(18)
+    expect(rowOf("SPEND")).toBe(20)
+    expect(rowOf("Total")).toBe(21)
+    expect(rowOf("CACHE")).toBe(23)
+    expect(rowOf("Reads")).toBe(24)
+    expect(rowOf("Writes")).toBe(25)
+    const rail = lines.map((line) => line.slice(railStart)).join("\n")
+    expect(rail).not.toContain("Prefix")
+    expect(rail).not.toContain("prefix stable")
     expect(rowOf("TODO LIST")).toBe(-1)
     expect(rowOf("SUBAGENTS")).toBe(-1)
     expect(rowOf("SHELLS")).toBe(-1)

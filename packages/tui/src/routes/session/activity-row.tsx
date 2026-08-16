@@ -4,8 +4,10 @@ import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "so
 import { SPINNER_FRAMES } from "../../component/spinner-frames"
 import { useConfigOptional } from "../../config"
 import { useTheme } from "../../context/theme"
+import { useData } from "../../context/data"
 import { Locale } from "../../util/locale"
 import { stringWidth } from "../../util/string-width"
+import { isActiveSubagent } from "../../util/subagent"
 import type { SessionRow } from "./rows"
 
 type ActivityRow = Extract<SessionRow, { type: "guardrail" | "subagent" | "task" }>
@@ -103,10 +105,48 @@ export function SessionActivityRow(props: {
 }) {
   const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
+  let data: ReturnType<typeof useData> | undefined
+  try {
+    data = useData()
+  } catch {
+    data = undefined
+  }
+  const [now, setNow] = createSignal(Date.now())
+  const subagentTask = createMemo(() => {
+    const row = props.row
+    if (row.type !== "subagent" || !data) return undefined
+    const subRow = row as Extract<SessionRow, { type: "subagent" }>
+    const session = data.session.get(subRow.sessionID)
+    const parentID = session?.parentID
+    if (parentID) {
+      const found = data.session.subagent.page(parentID)?.data.find((t) => t.sessionID === subRow.sessionID)
+      if (found) return found
+    }
+    return undefined
+  })
+  const subagentActive = createMemo(() => {
+    const row = props.row
+    if (row.type !== "subagent") return false
+    const task = subagentTask()
+    if (task) return isActiveSubagent(task.state)
+    if (data) {
+      const subRow = row as Extract<SessionRow, { type: "subagent" }>
+      const status = data.session.status(subRow.sessionID)
+      if (status) return status === "running"
+    }
+    return false
+  })
+  createEffect(() => {
+    if (props.row.type !== "subagent" || !subagentActive()) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    onCleanup(() => clearInterval(timer))
+  })
   // A todo stays in_progress after the Session goes idle, so the row's own status cannot drive the
   // spinner: it kept animating on an idle Session and read as stuck work.
+  // For subagents, spinner must freeze when task is terminal (cancelled/completed/failed/lost).
   const running = () =>
-    props.row.type === "subagent" ||
+    (props.row.type === "subagent" ? subagentActive() : false) ||
     (props.row.type === "task" && props.row.status === "in_progress" && props.running === true)
   const markerColor = () => {
     if (props.row.type === "guardrail") return themeV2.text.feedback.warning.default
@@ -121,19 +161,32 @@ export function SessionActivityRow(props: {
     return themeV2.text.feedback.success.default
   }
   const open = () => {
-    if (props.row.type === "guardrail") props.onGuardrail?.(props.row.requestID)
-    if (props.row.type === "subagent") props.onSubagent?.(props.row.sessionID)
+    const row = props.row
+    if (row.type === "guardrail") props.onGuardrail?.(row.requestID)
+    if (row.type === "subagent") props.onSubagent?.((row as Extract<SessionRow, { type: "subagent" }>).sessionID)
   }
   const status = () => {
-    if (props.row.type === "guardrail") return "needs approval"
-    if (props.row.type === "subagent")
-      return `running ${Locale.duration(Math.max(0, Date.now() - props.row.created))} · ↓ open`
-    return props.row.status === "completed" ? "done" : "active"
+    const row = props.row
+    if (row.type === "guardrail") return "needs approval"
+    if (row.type === "subagent") {
+      const task = subagentTask()
+      const subRow = row as Extract<SessionRow, { type: "subagent" }>
+      const created = subRow.created
+      const frozenEnd = task?.time.updated ?? data?.session.get(subRow.sessionID)?.time.updated ?? created
+      const end = subagentActive() ? now() : frozenEnd
+      const duration = Locale.duration(Math.max(0, end - created))
+      if (subagentActive()) return `running ${duration} · ↓ open`
+      const label = task?.state ?? "done"
+      return `${label} ${duration} · ↓ open`
+    }
+    const taskRow = row as Extract<SessionRow, { type: "task" }>
+    return taskRow.status === "completed" ? "done" : "active"
   }
   const label = () => {
-    if (props.row.type === "guardrail") return `guardrail · ${props.row.reason}`
-    if (props.row.type === "subagent") return `subagent ${props.row.agent}`
-    return props.row.content
+    const r = props.row
+    if (r.type === "guardrail") return `guardrail · ${r.reason}`
+    if (r.type === "subagent") return `subagent ${(r as Extract<SessionRow, { type: "subagent" }>).agent}`
+    return (r as Extract<SessionRow, { type: "task" }>).content
   }
   const labelWidth = () =>
     Math.max(1, (props.width ?? dimensions().width) - 1 - 2 - 5 - 1 - stringWidth(status()))
@@ -145,7 +198,7 @@ export function SessionActivityRow(props: {
       paddingLeft={1}
       onMouseUp={open}
     >
-      <box width="100%" border={["top"]} borderColor={themeV2.border.default} flexDirection="row">
+      <box width="100%" border={[`top`]} borderColor={themeV2.border.default} flexDirection="row">
         <text width={2} flexShrink={0} fg={markerColor()}>
           {props.row.type === "guardrail"
             ? "!!"
@@ -246,7 +299,7 @@ export function SessionToolActivityRow(props: {
       onMouseUp={toggle}
       onKeyDown={onKeyDown}
     >
-      <box width="100%" border={["top"]} borderColor={themeV2.border.default} flexDirection="row">
+      <box width="100%" border={[`top`]} borderColor={themeV2.border.default} flexDirection="row">
         <text width={2} flexShrink={0} fg={color()}>{marker()}</text>
         <SessionActivitySpacer running={active()} color={color()} />
         <text

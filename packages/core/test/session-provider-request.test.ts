@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { eq, sql } from "drizzle-orm"
-import { DateTime, Effect, Exit, Layer } from "effect"
+import { Cause, Clock, DateTime, Effect, Exit, Layer } from "effect"
+import { TestClock } from "effect/testing"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -11,12 +12,20 @@ import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
 import { SessionV2 } from "@ycoding-ai/core/session"
-import { SessionMessageTable, SessionTable } from "@ycoding-ai/core/session/sql"
+import {
+  CompactionManifestBlobTable,
+  SessionCompactionJobTable,
+  SessionMessageTable,
+  SessionTable,
+} from "@ycoding-ai/core/session/sql"
+import { Hash } from "@ycoding-ai/core/util/hash"
 import { Money } from "@ycoding-ai/schema/money"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { testEffect } from "./lib/effect"
 
@@ -52,7 +61,38 @@ const insertSession = (id: SessionV2.ID) =>
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
+    yield* SessionContextState.initialize(db, id, Date.now())
   })
+
+it.effect("rejects step ownership when the prepared context revision is stale", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionV2.ID.make("ses_provider_request_stale_context")
+    yield* insertSession(sessionID)
+
+    const service = yield* SessionProviderRequest.Service
+    const exit = yield* Effect.exit(
+      service.next({
+        sessionID,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+        routeID: "openai-responses",
+        promptCacheKey: "cache-key",
+        systemDigest: "system-digest",
+        toolDigest: "tool-digest",
+        expectedContextRevision: 1,
+      }),
+    )
+
+    expect(exit._tag).toBe("Failure")
+    expect(exit._tag === "Failure" ? Cause.squash(exit.cause) : undefined).toMatchObject({
+      _tag: "SessionProviderRequest.StaleContextRevision",
+      expected: 1,
+      actual: 0,
+    })
+    expect(yield* service.list(sessionID)).toEqual([])
+  }),
+)
 
 itWithFailingLedger.effect("contains provider-request persistence defects", () =>
   Effect.gen(function* () {
@@ -188,6 +228,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
     yield* tracker.complete({
       invalidation: "first-request",
       continuation: "full",
+      cacheReadReported: true,
       cost: Money.USD.make(0.0123),
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
     })
@@ -215,6 +256,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
     expect(Object.keys(records[0] ?? {}).sort()).toEqual([
       "agent",
       "attempts",
+      "cacheReadReported",
       "continuation",
       "cost",
       "id",
@@ -252,6 +294,35 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       latestInvalidation: "first-request",
       latestNamespace: "cache-ke",
     })
+  }),
+)
+
+it.effect("persists true, false, and absent cache-read telemetry", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionV2.ID.make("ses_provider_request_cache_read_reported")
+    yield* insertSession(sessionID)
+    const service = yield* SessionProviderRequest.Service
+    const model = ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") })
+
+    for (const cacheReadReported of [true, false, undefined]) {
+      const tracker = yield* service.next({
+        sessionID,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model,
+        routeID: "openai-responses",
+        promptCacheKey: "cache-key",
+        systemDigest: "system",
+        toolDigest: "tools",
+      })
+      yield* tracker.complete({
+        continuation: "full",
+        ...(cacheReadReported === undefined ? {} : { cacheReadReported }),
+        tokens: { input: 2_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    }
+
+    expect((yield* service.list(sessionID)).map((record) => record.cacheReadReported)).toEqual([true, false, undefined])
   }),
 )
 
@@ -293,7 +364,9 @@ it.effect("maintains a token and known-cost aggregate separate from raw provider
           cache_read: number
           cache_write: number
           cost: number | null
-        }>(sql`SELECT logical, input, output, reasoning, cache_read, cache_write, cost FROM session_usage WHERE session_id = ${sessionID}`)
+        }>(
+          sql`SELECT logical, input, output, reasoning, cache_read, cache_write, cost FROM session_usage WHERE session_id = ${sessionID}`,
+        )
         .pipe(Effect.orDie),
     ).toEqual({ logical: 2, input: 120, output: 14, reasoning: 6, cache_read: 80, cache_write: 10, cost: null })
   }),
@@ -447,7 +520,12 @@ it.effect("marks a grouped cost current-catalog when any request was derived", (
     }
     expect(
       SessionProviderRequest.summarize([
-        { ...record, id: ProviderRequest.ID.make("prq_provider_request_recorded"), request: 1, cost: Money.USD.make(0.01) },
+        {
+          ...record,
+          id: ProviderRequest.ID.make("prq_provider_request_recorded"),
+          request: 1,
+          cost: Money.USD.make(0.01),
+        },
         {
           ...record,
           id: ProviderRequest.ID.make("prq_provider_request_catalog"),
@@ -509,6 +587,73 @@ it.effect("prioritizes compaction and model cache reset diagnostics while normal
       "compaction-reset",
       "model-switched",
       "model-variant-switched",
+    ])
+  }),
+)
+
+it.effect("records a parent cache reset after provider-isolated hidden compaction ends", () =>
+  Effect.gen(function* () {
+    const sessionID = SessionV2.ID.make("ses_provider_request_hidden_compaction")
+    yield* insertSession(sessionID)
+    const service = yield* SessionProviderRequest.Service
+    const model = ModelV2.Ref.make({
+      id: ModelV2.ID.make("gpt-5.6"),
+      providerID: ProviderV2.ID.make("openai"),
+    })
+    const record = Effect.fnUntraced(function* () {
+      const tracker = yield* service.next({
+        sessionID,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model,
+        routeID: "openai-responses",
+        promptCacheKey: "stable-cache-key",
+        systemDigest: "stable-system",
+        toolDigest: "stable-tools",
+      })
+      yield* tracker.complete({
+        continuation: "full",
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+    })
+
+    yield* record()
+    yield* TestClock.adjust(1)
+    const db = (yield* Database.Service).db
+    const digest = Hash.sha256("hidden compaction manifest")
+    const ended = yield* Clock.currentTimeMillis
+    yield* db
+      .insert(CompactionManifestBlobTable)
+      .values({ digest, schema_version: 1, content: {}, input_tokens: 1, retained_tokens: 1, time_created: ended })
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionCompactionJobTable)
+      .values({
+        id: SessionCompaction.ID.make("cmp_provider_request_hidden_compaction"),
+        session_id: sessionID,
+        trigger: "mandatory",
+        requested_through_message_id: SessionMessage.ID.make("msg_provider_request_hidden_compaction"),
+        requested_through_seq: 1,
+        base_context_revision: 0,
+        target_max_input_tokens: 1,
+        config_digest: Hash.sha256("hidden compaction config"),
+        status: "ended",
+        attempts: 1,
+        manifest_digest: digest,
+        time_created: ended,
+        time_started: ended,
+        time_ended: ended,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* record()
+    yield* record()
+
+    expect((yield* service.list(sessionID)).map((item) => item.invalidation)).toEqual([
+      "first-request",
+      "compaction-reset",
+      "provider-not-reported",
     ])
   }),
 )

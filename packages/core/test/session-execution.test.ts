@@ -300,7 +300,8 @@ describe("SessionExecution lifecycle", () => {
 
           expect(drains).toBe(1)
           expect(yield* autonomy.get(parentID)).toMatchObject({
-            mode: "goal",
+            mode: "normal",
+            yolo: 0,
             goal: { status: "active", iteration: 0 },
           })
           expect(yield* admittedInputs(database)).toEqual([])
@@ -385,7 +386,7 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID).pipe(Effect.exit)
       yield* execution.awaitIdle(sessionID)
 
-      expect(yield* autonomy.get(sessionID)).toMatchObject({ mode: "goal", goal: { status: "active", iteration: 0 } })
+      expect(yield* autonomy.get(sessionID)).toMatchObject({ mode: "normal", yolo: 0, goal: { status: "active", iteration: 0 } })
       expect(yield* admittedInputs(database)).toEqual([])
       yield* Scope.close(scope, Exit.void)
     }),
@@ -584,11 +585,7 @@ function buildExecution(
 }
 
 function noopCompactionExecution() {
-  return SessionCompactionExecution.Service.of({
-    active: Effect.succeed(new Set()),
-    wake: () => Effect.void,
-    wait: () => Effect.die("unused"),
-    cancel: () => Effect.succeed(undefined),
-    recover: Effect.void,
-  })
+  const start: SessionCompactionExecution.Interface["start"] = () => Effect.die("unused")
+  const run: SessionCompactionExecution.Interface["run"] = () => Effect.die("unused")
+  return SessionCompactionExecution.Service.of({ start, run })
 }

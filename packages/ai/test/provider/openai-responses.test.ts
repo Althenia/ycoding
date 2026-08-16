@@ -916,7 +916,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("marks cached system/user content on direct GPT-5.6 Luna only", () =>
+  it.effect("marks cached system/user content on direct GPT-5.6 Luna", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const preparedLegacy = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
@@ -947,7 +947,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("keeps GPT-5.6 Codex requests key-only when inline breakpoints are unsupported", () =>
+  it.effect("keeps GPT-5.6 Codex caching key-only", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const direct = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).model("gpt-5.6-luna")
@@ -961,7 +961,16 @@ describe("OpenAI Responses route", () => {
       )
 
       expect(prepared.body.prompt_cache_key).toBe("codex-key")
-      expect(prepared.body.input[0]).toEqual({ role: "system", content: "static prefix" })
+      expect(prepared.body.prompt_cache_options).toBeUndefined()
+      expect(prepared.body.prompt_cache_retention).toBeUndefined()
+      expect(prepared.body.input[0]).toEqual({
+        role: "system",
+        content: "static prefix",
+      })
+      expect(prepared.body.input[1]).toEqual({
+        role: "user",
+        content: [{ type: "input_text", text: "hi" }],
+      })
       expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
     }),
   )

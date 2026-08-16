@@ -311,6 +311,18 @@ describe("SessionProjector", () => {
       expect(
         (yield* sessions.context(sessionID)).map((message) => (message.type === "user" ? message.text : message.type)),
       ).toEqual(["first", "second"])
+
+      const projection = yield* sessions.snapshot(sessionID)
+      expect(projection.session.id).toBe(sessionID)
+      expect(projection.messages.map((message) => (message.type === "user" ? message.text : message.type))).toEqual([
+        "first",
+        "second",
+      ])
+      expect(projection.watermark).toEqual({
+        type: "log.synced",
+        aggregateID: sessionID,
+        seq: EventV2.Seq.make(yield* EventV2.latestSequence((yield* Database.Service).db, sessionID)),
+      })
     }).pipe(Effect.provide(sessionsLayer)),
   )
 

@@ -72,7 +72,7 @@ it.effect("renders canonical protected state and returns every required content-
       content: [
         {
           type: "text",
-          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"permissionCeiling":[],"todos":[]}',
+          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[]}',
         },
       ],
     })

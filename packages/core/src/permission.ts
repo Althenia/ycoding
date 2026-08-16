@@ -255,16 +255,17 @@ const layer = Layer.effect(
     )
 
     const autonomy = yield* SessionAutonomy.Service
-    const autonomous = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+    const autonomousPermission = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
       return yield* autonomy
-        .isAutonomous(sessionID)
+        .canAutoPermission(sessionID)
         .pipe(Effect.mapError(() => new SessionErrors.NotFoundError({ sessionID })))
     })
 
     const ask = Effect.fn("PermissionV2.ask")(function* (input: AssertInput) {
       const result = yield* evaluateInput(input)
       const value = request(input)
-      if (result.effect === "ask" && (yield* autonomous(input.sessionID))) return { id: value.id, effect: "allow" as const }
+      if (result.effect === "ask" && (yield* autonomousPermission(input.sessionID)))
+        return { id: value.id, effect: "allow" as const }
       if (result.effect === "ask") yield* create(value, input.agent)
       return { id: value.id, effect: result.effect }
     })
@@ -281,7 +282,7 @@ const layer = Layer.effect(
             })
           }
           if (result.effect === "allow") return
-          if (yield* autonomous(input.sessionID)) return
+          if (yield* autonomousPermission(input.sessionID)) return
           const item = yield* create(request(input), input.agent)
           return yield* restore(Deferred.await(item.deferred)).pipe(
             Effect.catchTag("PermissionV2.DeclinedError", (error) => Effect.die(error)),

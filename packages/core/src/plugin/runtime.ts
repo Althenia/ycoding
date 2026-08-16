@@ -57,7 +57,10 @@ export const layerWithCell = (cell: Cell) =>
         resume: (sessionID) => require(cell, (runtime) => runtime.session.resume(sessionID)),
         interrupt: (sessionID) => require(cell, (runtime) => runtime.session.interrupt(sessionID)),
         synthetic: (input) => require(cell, (runtime) => runtime.session.synthetic(input)),
-        compact: (input) => require(cell, (runtime) => runtime.session.compact(input)),
+        compact: ((input: SessionV2.AdvisorCompactInput | SessionV2.ManualCompactInput) => {
+          if (input.trigger === undefined) return require(cell, (runtime) => runtime.session.compact(input))
+          return require(cell, (runtime) => runtime.session.compact(input))
+        }) as SessionV2.Interface["compact"],
       },
       job: {
         start: (input) => require(cell, (runtime) => runtime.job.start(input)),

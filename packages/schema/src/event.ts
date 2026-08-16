@@ -5,6 +5,7 @@ import { optional } from "./schema.js"
 import { ascending } from "./identifier.js"
 import { Location } from "./location.js"
 import { DateTimeUtcFromMillis, statics } from "./schema.js"
+import { SourceEpoch } from "./source-epoch.js"
 
 export const ID = Schema.String.check(Schema.isStartsWith("evt_")).pipe(
   Schema.brand("Event.ID"),
@@ -102,6 +103,7 @@ export function durable<
     id: ID,
     created: DateTimeUtcFromMillis,
     metadata: optional(Schema.Record(Schema.String, Schema.Unknown)),
+    sourceEpoch: optional(SourceEpoch),
     type: Schema.Literal(input.type),
     durable,
     location: optional(Location.Ref),
@@ -127,6 +129,7 @@ export function ephemeral<
     id: ID,
     created: DateTimeUtcFromMillis,
     metadata: optional(Schema.Record(Schema.String, Schema.Unknown)),
+    sourceEpoch: optional(SourceEpoch),
     type: Schema.Literal(input.type),
     location: optional(Location.Ref),
     data,

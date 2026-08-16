@@ -2,6 +2,7 @@ export * as SessionRunnerCache from "./cache"
 
 import type { CachePolicy, LLMRequest } from "@ycoding-ai/ai"
 import { OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT } from "@ycoding-ai/ai/cache-policy"
+import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
 import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
 import type { ConfigEfficiency } from "../../config/efficiency"
 import type { PermissionV2 } from "../../permission"
@@ -46,7 +47,37 @@ export const toolDigest = (tools: LLMRequest["tools"]): string =>
     ),
   )
 
-export const promptCacheNamespace = (input: PromptCacheNamespaceInput): string =>
+export const PROMPT_CACHE_ROTATION_INTERVAL_MS = 10 * 60 * 1000
+
+// Deprecated: rotation window is retained only for test compatibility;
+// promptCacheNamespace is now stable and does not include a time window.
+// New code should not depend on rotation.
+export const promptCacheRotationWindow = (_now = Date.now()): number => 0
+
+// Routes that wire `prompt_cache_key` through the provider request. Keep
+// the set explicit so a new route does not silently inherit rotation before
+// it has a verified cache capability.
+const PROMPT_CACHE_KEY_ROUTES = new Set([
+  "openai-chat",
+  "openai-responses",
+  "openai-responses-websocket",
+  "openai-codex-responses",
+  "openai-compatible-chat",
+  "openai-compatible-responses",
+  "ai-sdk:@openrouter/ai-sdk-provider",
+  "openrouter",
+])
+
+const supportsPromptCacheKey = (routeID: string | undefined): boolean => {
+  if (routeID === undefined) return false
+  if (PROMPT_CACHE_KEY_ROUTES.has(routeID)) return true
+  return routeID.includes("openai") || routeID.includes("openrouter")
+}
+
+export const promptCacheNamespace = (
+  input: PromptCacheNamespaceInput & { readonly routeID?: string },
+  _now = Date.now(),
+): string =>
   Hash.sha256(
     canonicalJson({
       namespace: "session-prompt-cache/v2",
@@ -78,6 +109,18 @@ export const promptCacheNamespace = (input: PromptCacheNamespaceInput): string =
       })),
     }),
   )
+
+export const promptCacheKeyForGeneration = (sessionID: string, baselineKey: string, generation = 0): string => {
+  if (generation === 0) return baselineKey
+  return Hash.sha256(
+    canonicalJson({
+      namespace: "session-prompt-cache-generation/v1",
+      sessionID,
+      baselineKey,
+      generation,
+    }),
+  )
+}
 
 export interface ProviderSessionNamespaceInput {
   readonly projectID: string
@@ -111,6 +154,7 @@ export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
   readonly apiModelID: string
   readonly sessionID: string
   readonly routeID: string
+  readonly generation?: number
   readonly anthropicTtlSeconds?: 300 | 3600
   readonly openaiMode?: "auto" | "implicit" | "explicit"
   readonly openaiExtendedRetention?: boolean
@@ -123,10 +167,16 @@ const ANTHROPIC_CACHE_ROUTES = new Set([
   "ai-sdk:@ai-sdk/google-vertex/anthropic",
   "ai-sdk:@ai-sdk/amazon-bedrock",
   "bedrock-converse",
+  "openrouter",
+  "ai-sdk:@openrouter/ai-sdk-provider",
 ])
+const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set(["openrouter", "ai-sdk:@openrouter/ai-sdk-provider"])
 
-export const providerOptions = (input: ProviderOptionsInput) => {
-  const promptCacheKey = promptCacheNamespace(input)
+export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) => {
+  const baselineKey = promptCacheNamespace(input, now)
+  const promptCacheKey = supportsPromptCacheKey(input.routeID)
+    ? promptCacheKeyForGeneration(input.sessionID, baselineKey, input.generation)
+    : baselineKey
   const providerSessionID = providerSessionNamespace({
     projectID: input.projectID,
     sessionID: input.sessionID,
@@ -167,7 +217,10 @@ export const providerOptions = (input: ProviderOptionsInput) => {
         // selects the newest eligible boundaries within this provider limit.
         messages: { tail: OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT },
       }
-    : input.anthropicTtlSeconds !== undefined && ANTHROPIC_CACHE_ROUTES.has(input.routeID)
+    : input.anthropicTtlSeconds !== undefined &&
+        ANTHROPIC_CACHE_ROUTES.has(input.routeID) &&
+        (!PROFILE_GATED_ANTHROPIC_CACHE_ROUTES.has(input.routeID) ||
+          cacheProfile(input.apiModelID)?.extendedTtl === true)
       ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }
       : undefined
   return {

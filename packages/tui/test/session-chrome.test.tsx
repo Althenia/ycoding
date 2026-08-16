@@ -76,10 +76,9 @@ describe("header status", () => {
     [{ type: "waiting", count: 2 }, 100, "waiting · 2 subagents"],
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
-    [{ type: "provider-error", code: 429 }, 100, "provider error \u00b7 429"],
-    [{ type: "provider-error" }, 100, "provider error"],
-    [{ type: "autonomy", mode: "yolo", state: { type: "ready" } }, 100, "YOLO \u00b7 auto-approve · ready"],
-    [{ type: "autonomy", mode: "goal", state: { type: "working", elapsed: 4.14 } }, 120, "Goal · autonomous · cooking 4.1s"],
+    [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
+    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO \u00b7 auto-approve · ready"],
+    [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "Goal · autonomous · cooking 4.1s"],
   ]
 
   for (const [state, width, expected] of cases) {
@@ -97,20 +96,30 @@ describe("header status", () => {
   })
 
   test("reports the retry attempt and countdown", () => {
-    expect(headerStatusLabel({ type: "retrying", attempt: 2, at: 15_000 }, 100, undefined, 10_000)).toBe(
+    expect(headerStatusLabel({ type: "retry-scheduled", attempt: 2, at: 15_000 }, 100, undefined, 10_000)).toBe(
       "1 failed · retry 2 · in 5s",
     )
+  })
+
+  test("reports retrying without countdown", () => {
+    expect(headerStatusLabel({ type: "retrying", attempt: 2 }, 100)).toBe("retrying · attempt 2")
   })
 
   test("keeps active autonomy and retry status visible together", () => {
     expect(
       headerStatusLabel(
-        { type: "autonomy", mode: "goal", state: { type: "retrying", attempt: 2, at: 15_000 } },
+        { type: "autonomy", yolo: 0, goalActive: true, state: { type: "retry-scheduled", attempt: 2, at: 15_000 } },
         100,
         undefined,
         10_000,
       ),
     ).toBe("Goal · autonomous · 1 failed · retry 2 · in 5s")
+  })
+
+  test("keeps active autonomy and retrying visible together", () => {
+    expect(
+      headerStatusLabel({ type: "autonomy", yolo: 0, goalActive: true, state: { type: "retrying", attempt: 2 } }, 100, undefined, 10_000),
+    ).toBe("Goal · autonomous · retrying · attempt 2")
   })
 })
 
@@ -200,14 +209,14 @@ async function renderHeader(
 
 describe("autonomy mode chips", () => {
   test("shows both modes off for a normal session", () => {
-    expect(modeChips({ autonomy: { mode: "normal" } })).toEqual([
+    expect(modeChips({ autonomy: { mode: "normal", yolo: 0 } })).toEqual([
       { key: "goal", label: "goal off", tone: "off" },
       { key: "yolo", label: "YOLO off", tone: "off" },
     ])
   })
 
   test("inverts YOLO because it auto-approves", () => {
-    expect(modeChips({ autonomy: { mode: "yolo" } })[1]).toEqual({
+    expect(modeChips({ autonomy: { mode: "normal", yolo: 2 } })[1]).toEqual({
       key: "yolo",
       label: "YOLO",
       tone: "danger",
@@ -215,9 +224,7 @@ describe("autonomy mode chips", () => {
   })
 
   test("shows only the goal label while goal mode is active", () => {
-    const autonomy = {
-      mode: "goal",
-      goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
+    const autonomy = { mode: "normal", yolo: 0, goal: { text: "ship", status: "active", iteration: 7, noProgress: 3, maxNoProgress: 5 },
     } as const
     const chip = modeChips({ autonomy })[0]
     expect(chip).toEqual({ key: "goal", label: "goal", tone: "on" })
@@ -225,9 +232,7 @@ describe("autonomy mode chips", () => {
   })
 
   test("shows goal off after leaving goal mode with retained terminal state", () => {
-    const autonomy = {
-      mode: "normal",
-      goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
+    const autonomy = { mode: "normal", yolo: 0, goal: { text: "ship", status: "completed", iteration: 7, noProgress: 0, maxNoProgress: 5 },
     } as const
     expect(modeChips({ autonomy })[0]).toEqual({ key: "goal", label: "goal off", tone: "off" })
   })
@@ -245,7 +250,7 @@ describe("autonomy mode chips", () => {
           <ConfigProvider config={config}>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <box flexDirection="row" gap={2}>
-                <ModeChips autonomy={{ mode: "yolo" }} />
+                <ModeChips autonomy={{ mode: "normal", yolo: 2 }} />
               </box>
             </ThemeProvider>
           </ConfigProvider>
@@ -312,10 +317,11 @@ describe("header rendering", () => {
       [{ type: "tool-running", elapsed: 4.1 }, "tool running · 4.1s", theme.text.feedback.info.default],
       [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
-      [{ type: "provider-error" }, "provider error", theme.text.feedback.error.default],
-      [{ type: "autonomy", mode: "yolo", state: { type: "ready" } }, "YOLO · auto-approve · ready", theme.text.feedback.error.default],
-      [{ type: "autonomy", mode: "goal", state: { type: "ready" } }, "Goal · autonomous · ready", theme.text.feedback.success.default],
-      [{ type: "retrying", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
+      [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, "provider error", theme.text.feedback.error.default],
+      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "YOLO · auto-approve · ready", theme.text.feedback.error.default],
+      [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } }, "Goal · autonomous · ready", theme.text.feedback.success.default],
+      [{ type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
+      [{ type: "retrying", attempt: 2 }, "retrying · attempt 2", theme.text.feedback.warning.default],
     ]
 
     for (const [state, label, color] of cases) {
@@ -326,6 +332,14 @@ describe("header rendering", () => {
       expect(status?.fg.toInts()).toEqual([colorInts[0], colorInts[1], colorInts[2], colorInts[3]])
       app.renderer.destroy()
     }
+  })
+
+  test("renders the generic provider failure label instead of the detailed message", async () => {
+    const app = await renderHeader(160, { type: "provider-error", message: "Provider overloaded; retry in 30 seconds." })
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("provider error")
+    expect(frame).not.toContain("Provider overloaded; retry in 30 seconds.")
+    app.renderer.destroy()
   })
 
   test("shows the brand mark, mint dot trail, version, identity, and cooking status on the strip at 160 columns", async () => {
@@ -356,7 +370,7 @@ describe("header rendering", () => {
   })
 
   test("renders the danger rule as a full-width filled band under the header in YOLO", async () => {
-    const app = await renderHeader(100, { type: "autonomy", mode: "yolo", state: { type: "ready" } })
+    const app = await renderHeader(100, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
@@ -372,20 +386,41 @@ describe("header rendering", () => {
   })
 
   test("counts down the top-right retry indicator", async () => {
-    const app = await renderHeader(160, { type: "retrying", attempt: 2, at: Date.now() + 1_500 })
+    const app = await renderHeader(160, { type: "retry-scheduled", attempt: 2, at: Date.now() + 1_500 })
     await app.waitForFrame((frame) => frame.includes("1 failed · retry 2 · in 2s"))
     await Bun.sleep(600)
     await app.waitForFrame((frame) => frame.includes("1 failed · retry 2 · in 1s"))
+    expect(app.captureCharFrame()).not.toMatch(/\.\.●|\.●\.|●\.\./)
     app.renderer.destroy()
   })
 
-  test("renders the failed glyph in error ink while retry text remains warning", async () => {
-    const app = await renderHeader(160, { type: "retrying", attempt: 2, at: Date.now() + 5_000 })
-    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
-    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+  test("scheduled retry shows countdown without animation", async () => {
+    const app = await renderHeader(160, { type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 })
+    expect(app.captureCharFrame()).toContain("1 failed · retry 2 · in")
+    expect(app.captureCharFrame()).not.toMatch(/\.\.●|\.●\.|●\.\./)
+    app.renderer.destroy()
+  })
 
-    expect(spans.find((span) => span.text === getGlyph("failed").glyph)?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
-    expect(spans.find((span) => span.text.includes("1 failed · retry 2 · in"))?.fg.toInts()).toEqual(
+  test("animates retrying with the warning dot trail without countdown", async () => {
+    const app = await renderHeader(160, { type: "retrying", attempt: 2 })
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const initial = app.captureCharFrame()
+    const initialTrail = initial.match(/\.\.●|\.●\.|●\.\./)?.[0]
+
+    expect(initialTrail).toBeDefined()
+    expect(initial).toContain("retrying · attempt 2")
+    expect(initial).not.toContain(" in ")
+    expect(initial).not.toContain(getGlyph("failed").glyph)
+    await app.waitForFrame((frame) => {
+      const trail = frame.match(/\.\.●|\.●\.|●\.\./)?.[0]
+      return !!trail && trail !== initialTrail && frame.includes("retrying · attempt 2")
+    })
+
+    const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+    expect(spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))?.fg.toInts()).toEqual(
+      theme.text.feedback.warning.default.toInts(),
+    )
+    expect(spans.find((span) => span.text.includes("retrying · attempt 2"))?.fg.toInts()).toEqual(
       theme.text.feedback.warning.default.toInts(),
     )
     app.renderer.destroy()
@@ -500,7 +535,7 @@ describe("header rendering", () => {
   })
 
   test("uses the YOLO error token for the dot trail and adjacent working status", async () => {
-    const app = await renderHeader(160, { type: "autonomy", mode: "yolo", state: { type: "working", elapsed: 4.1 } })
+    const app = await renderHeader(160, { type: "autonomy", yolo: 2, goalActive: false, state: { type: "working", elapsed: 4.1 } })
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))

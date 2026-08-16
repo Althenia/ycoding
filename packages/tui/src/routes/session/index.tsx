@@ -44,6 +44,7 @@ import type {
 } from "@ycoding-ai/client"
 import { useLocal } from "../../context/local"
 import { Locale } from "../../util/locale"
+import { contextCompositionBar } from "../../util/provider-usage"
 import { FilePath } from "../../ui/file-path"
 import {
   canonicalToolName,
@@ -103,6 +104,8 @@ import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { useLocation } from "../../context/location"
 import {
+  compactionMessageTranscriptVisible,
+  compactionTranscriptVisible,
   createSessionRows,
   messageBoundaryIDs,
   resolveMessageJump,
@@ -119,6 +122,7 @@ import {
   currentSessionAutonomy,
   type SessionAutonomyResponse,
   stripGoalCompletionMarker,
+  yoloLevel,
 } from "../../util/session-autonomy"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
@@ -157,7 +161,16 @@ function use() {
   return ctx
 }
 
-export function Session() {
+export type SessionViewportState = {
+  scrollTop: number
+  follow: boolean
+  navigationMessage?: string
+  navigationSlack: number
+}
+
+export type SessionViewportStore = Map<string, SessionViewportState>
+
+export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const setEpilogue = useEpilogue()
   const clipboard = useClipboard()
   const writeExport = async (file: string, content: string) => {
@@ -166,6 +179,7 @@ export function Session() {
   }
   const pluginRuntime = usePluginRuntime()
   const route = useRouteData("session")
+  const mountedSessionID = route.sessionID
   const { navigate } = useRoute()
   const data = useData()
   const local = useLocal()
@@ -238,7 +252,7 @@ export function Session() {
   const dimensions = useTerminalDimensions()
   const sidebar = createMemo(() => config.session?.sidebar ?? "auto")
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
-  const thinkingMode = createMemo<ThinkingMode>(() => config.session?.thinking ?? "hide")
+  const thinkingMode = createMemo<ThinkingMode>(() => config.session?.thinking ?? "show")
   const showThinking = createMemo(() => true)
   const showScrollbar = createMemo(() => config.session?.scrollbar ?? false)
   const diffWrapMode = createMemo(() => config.diffs?.wrap ?? "word")
@@ -281,11 +295,19 @@ export function Session() {
     setAutonomyResponse({ sessionID, state })
     return true
   }
-  const updateAutonomy = (input: { mode: "normal" | "yolo" } | { mode: "goal"; goal: string }) => {
+  const updateAutonomy = (input: { yolo?: number; goal?: string | null; maxNoProgress?: number }) => {
     const sessionID = route.sessionID
     autonomyRefresh.invalidate()
+    const payload = (() => {
+      if (input.yolo !== undefined && input.goal !== undefined)
+        return { yolo: input.yolo, goal: input.goal, ...(input.maxNoProgress !== undefined ? { maxNoProgress: input.maxNoProgress } : {}) } as const
+      if (input.yolo !== undefined) return { yolo: input.yolo } as const
+      if (input.goal !== undefined) return { goal: input.goal, ...(input.maxNoProgress !== undefined ? { maxNoProgress: input.maxNoProgress } : {}) } as const
+      return undefined
+    })()
+    if (!payload) return
     void client.api.session.autonomy
-      .set({ sessionID, payload: input })
+      .set({ sessionID, payload } as never)
       .then((state) => {
         if (!acceptAutonomy(sessionID, state)) return
         toast.show({ message: `${autonomyModeLabel(state)} mode activated`, variant: "success", duration: 3000 })
@@ -334,10 +356,22 @@ export function Session() {
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   const autoApproved = new Set<string>()
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
-    const retry = messages().findLast(
-      (item): item is SessionMessageAssistant => item.type === "assistant" && item.retry !== undefined,
-    )?.retry
-    if (retry) return { type: "retrying", attempt: retry.attempt, at: retry.at }
+    const lastAssistant = messages().findLast(
+      (item): item is SessionMessageAssistant => item.type === "assistant",
+    ) as SessionMessageAssistant | undefined
+    const retry = lastAssistant?.retry
+    if (retry) {
+      if (retry.at > Date.now()) return { type: "retry-scheduled", attempt: retry.attempt, at: retry.at }
+      const hasProgress =
+        lastAssistant.content.length > 0 &&
+        lastAssistant.content.some(
+          (part) =>
+            (part.type === "text" && part.text.length > 0) ||
+            part.type === "reasoning" ||
+            part.type === "tool",
+        )
+      if (!hasProgress) return { type: "retrying", attempt: retry.attempt }
+    }
     const parentID = session()?.parentID
     const child = parentID
       ? data.session.subagent.page(parentID)?.data.find((task) => task.sessionID === route.sessionID)
@@ -364,16 +398,18 @@ export function Session() {
     if (data.session.status(route.sessionID) === "running") return { type: "working" } as const
     const latest = messages().findLast((item) => item.type === "assistant")
     if (latest?.type === "assistant" && latest.error?.type.startsWith("provider."))
-      return { type: "provider-error" } as const
+      return { type: "provider-error", message: safeProviderErrorMessage(latest.error.message) } as const
     const waiting = data.session.subagent.summary(route.sessionID)?.active ?? 0
     if (waiting) return { type: "waiting", count: waiting } as const
     return { type: "ready" } as const
   })
   const headerState = createMemo<SessionHeaderState>(() => {
     const state = operationalHeaderState()
-    const mode = autonomy().mode
-    if (mode === "normal") return state
-    return { type: "autonomy", mode, state }
+    const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
+    const level = typeof raw === "number" ? raw : raw === true ? 2 : 0
+    const goalActive = autonomy().goal?.status === "active"
+    if (level === 0 && !goalActive) return state
+    return { type: "autonomy", yolo: level, goalActive, state }
   })
   const headerMessage = createMemo(() => {
     const message = messages().findLast((item) => item.type === "assistant")
@@ -407,7 +443,14 @@ export function Session() {
   const siblings = createMemo(() => {
     const parent = parentID()
     if (!parent) return []
-    return data.session.subagent.page(parent)?.data ?? []
+    const tasks = data.session.subagent.page(parent)?.data ?? []
+    if (session()?.agent === "btw") return tasks
+    // include btw child sessions created via session.create for navigation
+    const btw = data.session
+      .list()
+      .filter((s) => s.parentID === parent && s.agent === "btw")
+      .map((s) => ({ sessionID: s.id, agent: s.agent, state: "running" as const, title: s.title })) as unknown as typeof tasks
+    return [...tasks, ...btw]
   })
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
   createEffect(
@@ -436,6 +479,7 @@ export function Session() {
   }
   const assistantIdentity = createMemo(() => {
     if (!session()?.parentID) return { label: "YCODING", subagent: false }
+    if (session()?.agent === "btw") return { label: "BTW SIDE CHAT", subagent: true }
     return {
       label: `${(currentTask()?.agent ?? session()?.title ?? "Subagent").toUpperCase()} SUBAGENT`,
       subagent: true,
@@ -473,7 +517,11 @@ export function Session() {
   const editor = useEditorContext()
   const rows = createSessionRows(
     () => route.sessionID,
-    () => !session()?.parentID && autonomy().mode !== "yolo",
+    () => {
+      const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
+      const lvl = typeof raw === "number" ? raw : raw === true ? 2 : 0
+      return !session()?.parentID && lvl === 0
+    },
   )
   createEffect(
     on(
@@ -526,6 +574,7 @@ export function Session() {
     void (async () => {
       await Promise.all([
         data.session.sync(sessionID),
+        data.session.message.sync(sessionID),
         data.session.permission.sync(sessionID),
         data.session.guardrail.sync(sessionID),
         data.session.form.sync(sessionID),
@@ -541,7 +590,7 @@ export function Session() {
         return
       }
       editor.reconnect(info.location.directory)
-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
+      restoreViewport(sessionID)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
       toast.show({
@@ -555,6 +604,31 @@ export function Session() {
 
   let seeded = false
   let scroll: ScrollBoxRenderable
+  const restoreViewport = (sessionID: string) => {
+    const saved = props.viewports?.get(sessionID)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (route.sessionID !== sessionID || !scroll || scroll.isDestroyed || !rows.length) return
+        if (saved && !saved.follow) {
+          setNavigationSlack(saved.navigationSlack)
+          setNavigationMessage(saved.navigationMessage)
+          scroll.scrollTo(saved.scrollTop)
+          return
+        }
+        clearMessageNavigation()
+        scroll.scrollTo(scroll.scrollHeight)
+      })
+    })
+  }
+  onCleanup(() => {
+    if (!props.viewports || !scroll || scroll.isDestroyed) return
+    props.viewports.set(mountedSessionID, {
+      scrollTop: scroll.scrollTop,
+      follow: !navigationMessage() && scroll.scrollTop >= Math.max(0, scroll.scrollHeight - scroll.viewport.height) - 1,
+      navigationMessage: navigationMessage(),
+      navigationSlack: navigationSlack(),
+    })
+  })
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -641,7 +715,7 @@ export function Session() {
   function toBottom() {
     clearMessageNavigation()
     setTimeout(() => {
-      if (!scroll || scroll.isDestroyed) return
+      if (!scroll || scroll.isDestroyed || !rows.length) return
       scroll.scrollTo(scroll.scrollHeight)
     }, 50)
   }
@@ -806,18 +880,39 @@ export function Session() {
       },
     },
     {
-      title: `Set mode: Normal${autonomy().mode === "normal" ? " (active)" : ""}`,
-      id: "session.autonomy.normal",
-      group: "Session",
-      slash: { name: "normal" },
-      run: () => updateAutonomy({ mode: "normal" }),
-    },
-    {
-      title: `Set mode: YOLO${autonomy().mode === "yolo" ? " (active)" : ""}`,
-      id: "session.autonomy.yolo",
+      title: (() => {
+        const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
+        return `YOLO: ${lvl > 0 ? `${lvl} on` : "off"} (cycle 0→1→2→3, /yolo 0|1|2|3)`
+      })(),
+      id: "session.autonomy.yolo.toggle",
       group: "Session",
       slash: { name: "yolo" },
-      run: () => updateAutonomy({ mode: "yolo" }),
+      run: (input?: string) => {
+        const token = input?.trim().split(/\s+/)[0]
+        const parsed = token !== undefined && token !== "" ? Number.parseInt(token, 10) : Number.NaN
+        if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 3) {
+          updateAutonomy({ yolo: parsed as 0 | 1 | 2 | 3 })
+          return
+        }
+        const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
+        const next = ((lvl + 1) % 4) as 0 | 1 | 2 | 3
+        updateAutonomy({ yolo: next })
+      },
+    },
+    {
+      title: autonomy().goal?.status === "active" ? "Goal: on (toggle off)" : "Goal: off (toggle on)",
+      id: "session.autonomy.goal.toggle",
+      group: "Session",
+      run: () => {
+        const isActive = autonomy().goal?.status === "active"
+        if (isActive) {
+          updateAutonomy({ goal: null })
+        } else {
+          const existing = autonomy().goal?.text
+          const text = existing?.trim() || "Autonomous goal"
+          updateAutonomy({ goal: text })
+        }
+      },
     },
     {
       title: "Compact session",
@@ -828,7 +923,7 @@ export function Session() {
         aliases: ["summarize"],
       },
       run: () => {
-        void client.api.session.compact({ sessionID: route.sessionID })
+        void client.api.session.compact({ sessionID: route.sessionID }).catch(toast.error)
         dialog.clear()
       },
     },
@@ -1208,18 +1303,6 @@ export function Session() {
     bindings: [...baseAndUnfocusedCommands, ...baseCommands()].map((command) => command.id),
   }))
 
-  // snap to bottom when session changes
-  createEffect(on(() => route.sessionID, toBottom))
-  createEffect(
-    on(
-      () => route.sessionID,
-      () => {
-        setComposer("open", false)
-        clearMessageNavigation()
-      },
-    ),
-  )
-
   return (
     <context.Provider
       value={{
@@ -1269,7 +1352,7 @@ export function Session() {
                     foregroundColor: themeV2.border.default,
                   },
                 }}
-                stickyScroll={!navigationMessage()}
+                stickyScroll={rows.length > 0 && !navigationMessage()}
                 stickyStart="bottom"
                 marginTop={session()?.parentID ? 1 : 0}
                 flexGrow={1}
@@ -1292,6 +1375,7 @@ export function Session() {
                       row={row}
                       message={(messageID) => data.session.message.get(route.sessionID, messageID)}
                       compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
+                      compactions={() => data.session.compaction.list(route.sessionID)}
                       assistantIdentity={assistantIdentity()}
                       boundaryID={boundaries()[index()]}
                       width={contentWidth()}
@@ -1493,6 +1577,7 @@ export function SessionRowView(props: {
   row: SessionRow
   message: (messageID: string) => SessionMessageInfo | undefined
   compaction?: (jobID: string) => DataSessionCompactionLifecycle | undefined
+  compactions?: () => DataSessionCompactionLifecycle[]
   assistantIdentity?: { label: string; subagent: boolean }
   boundaryID?: string
   width?: number
@@ -1506,7 +1591,15 @@ export function SessionRowView(props: {
   // before mounting its component so stale refs consume no space.
   const visible = createMemo(() => {
     const row = props.row
-    if (row.type === "message") return props.message(row.messageID) !== undefined
+    if (row.type === "message") {
+      const message = props.message(row.messageID)
+      if (message?.type === "compaction") return compactionMessageTranscriptVisible(message)
+      return message !== undefined
+    }
+    if (row.type === "compaction") {
+      const lifecycle = props.compaction?.(row.jobID)
+      return lifecycle !== undefined && compactionTranscriptVisible(lifecycle)
+    }
     if (row.type === "assistant-footer") return props.message(row.messageID)?.type === "assistant"
     if (row.type === "part") {
       const message = props.message(row.ref.messageID)
@@ -1538,7 +1631,7 @@ export function SessionRowView(props: {
           <Match when={props.row.type === "compaction" ? props.row : undefined}>
             {(row) => (
               <Show when={props.compaction?.(row().jobID)}>
-                {(item) => <CompactionLifecycleMessage lifecycle={item()} />}
+                {(item) => <CompactionLifecycleMessage lifecycle={item()} compactions={props.compactions?.()} />}
               </Show>
             )}
           </Match>
@@ -1936,7 +2029,7 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
       <Show when={providerError()}>
         <box paddingLeft={3} flexDirection="column">
           <text fg={themeV2.text.feedback.error.default}>{Locale.titlecase(props.message.agent)}</text>
-          <text fg={themeV2.text.feedback.error.default}>{safeProviderErrorMessage()}</text>
+          <text fg={themeV2.text.feedback.error.default}>{safeProviderErrorMessage(props.message.error?.message ?? "")}</text>
         </box>
       </Show>
       <AssistantRetry retry={props.message.retry} />
@@ -2061,12 +2154,12 @@ function SessionSkillMessage(props: { message: Extract<SessionMessageInfo, { typ
     <>
       <InlineToolRow
         icon="✦"
-        color={accent()}
+        color={themeV2.text.default}
         pending="Loading skill..."
         complete={true}
         status={<StatusBadge color={accent()}>Loaded</StatusBadge>}
       >
-        <span style={{ fg: accent(), bold: true }}>Skill "{props.message.name}"</span>
+        Skill "{props.message.name}"
       </InlineToolRow>
     </>
   )
@@ -2078,27 +2171,17 @@ function CompactionMessage(props: { message: Extract<SessionMessageInfo, { type:
     const current = message()
     return current?.status === "failed" && current.error.type === "aborted"
   }
-  const text = () => {
-    const current = message()
-    if (!current) return ""
-    if (current.status === "failed") return cancelled() ? "" : current.error.message
-    return current.summary
-  }
-  const content = createMemo(() => text().trim())
   return (
     <Show when={message()}>
       {(item) => (
-        <>
-          <CompactionMarker message={item()} cancelled={cancelled()} />
-          <Show when={content()}>{(value) => <CompactionSummary content={value()} />}</Show>
-        </>
+        <CompactionMarker message={item()} cancelled={cancelled()} />
       )}
     </Show>
   )
 }
 
 function legacyCompaction(message: Extract<SessionMessageInfo, { type: "compaction" }>) {
-  if (!("reason" in message)) return undefined
+  if (!("reason" in message) || !compactionMessageTranscriptVisible(message)) return undefined
   return message
 }
 
@@ -2109,29 +2192,50 @@ function compactTokenCount(tokens: number) {
 
 function compactionLabel(lifecycle: {
   trigger?: string
-  admissionMode?: string
   status: "pending" | "running" | "completed" | "failed"
   metrics?: { excludedMessages: number; inputTokens: number; retainedTokens: number }
   code?: string
 }) {
-  if (lifecycle.status === "pending")
-    return lifecycle.admissionMode ? `~ compaction queued · ${lifecycle.admissionMode}` : "~ compaction queued"
+  if (lifecycle.status === "pending") return "~ compaction pending"
   if (lifecycle.status === "running") {
-    if (!lifecycle.trigger || !lifecycle.admissionMode) return "~ compacting"
-    return `~ compacting · ${lifecycle.trigger} · ${lifecycle.admissionMode}`
+    if (!lifecycle.trigger) return "~ compacting"
+    return `~ compacting · ${lifecycle.trigger}`
   }
   if (lifecycle.status === "completed") {
     if (!lifecycle.metrics) return "~ compacted"
     return `~ compacted · ${lifecycle.metrics.excludedMessages} items excluded · ${compactTokenCount(lifecycle.metrics.inputTokens)} → ${compactTokenCount(lifecycle.metrics.retainedTokens)} tokens`
   }
-  return `~ compaction failed · ${lifecycle.code ?? "compaction.failed"}`
+  if (lifecycle.code === "cancelled") return "~ compaction cancelled"
+  if (lifecycle.code === "superseded") return "~ compaction superseded"
+  return ""
 }
 
-function CompactionLifecycleMessage(props: { lifecycle: DataSessionCompactionLifecycle }) {
+function CompactionLifecycleMessage(props: {
+  lifecycle: DataSessionCompactionLifecycle
+  compactions?: DataSessionCompactionLifecycle[]
+}) {
   const { themeV2 } = useTheme()
-  const color = () => (props.lifecycle.status === "failed" ? themeV2.text.feedback.error.default : themeV2.text.hint)
+  const color = () => themeV2.text.hint
+  const completed = createMemo(() =>
+    (props.compactions?.length ? props.compactions : [props.lifecycle]).filter(
+      (lifecycle): lifecycle is DataSessionCompactionLifecycle & { metrics: NonNullable<DataSessionCompactionLifecycle["metrics"]> } =>
+        lifecycle.status === "completed" && lifecycle.metrics !== undefined,
+    ),
+  )
+  const compression = createMemo(() => completed().findIndex((lifecycle) => lifecycle.jobID === props.lifecycle.jobID))
+  const saved = createMemo(() => completed().reduce((total, lifecycle) => total + lifecycle.metrics.inputTokens - lifecycle.metrics.retainedTokens, 0))
+  const reduction = createMemo(() => {
+    const metrics = props.lifecycle.metrics
+    if (!metrics || metrics.inputTokens === 0) return 0
+    return Math.round(((metrics.inputTokens - metrics.retainedTokens) / metrics.inputTokens) * 100)
+  })
+  const composition = createMemo(() => {
+    const metrics = props.lifecycle.metrics
+    if (!metrics) return { retained: "", removed: "" }
+    return contextCompositionBar(metrics.inputTokens, metrics.retainedTokens)
+  })
   return (
-    <box paddingLeft={1}>
+    <box paddingLeft={1} flexDirection="column">
       <box flexDirection="row" alignItems="center">
         <box border={["top"]} borderColor={color()} flexGrow={1} />
         <box paddingLeft={1} paddingRight={1}>
@@ -2139,6 +2243,25 @@ function CompactionLifecycleMessage(props: { lifecycle: DataSessionCompactionLif
         </box>
         <box border={["top"]} borderColor={color()} flexGrow={1} />
       </box>
+      <Show when={props.lifecycle.status === "completed" && props.lifecycle.metrics}>
+        {(metrics) => (
+          <box paddingLeft={3} paddingTop={1} flexDirection="column">
+            <text fg={themeV2.text.subdued}>~{compactTokenCount(saved())} tokens saved total</text>
+            <box border width="100%" flexDirection="row" borderColor={themeV2.border.default}>
+              <box flexGrow={Math.max(1, metrics().inputTokens - metrics().retainedTokens)} backgroundColor={themeV2.text.subdued}>
+                <text fg={themeV2.background.default}>{composition().removed}</text>
+              </box>
+              <box flexGrow={Math.max(1, metrics().retainedTokens)} backgroundColor={themeV2.background.surface.offset}>
+                <text fg={themeV2.text.subdued}>{composition().retained}</text>
+              </box>
+            </box>
+            <text fg={themeV2.text.default}>
+              Compression #{compression() + 1} (~{compactTokenCount(metrics().inputTokens - metrics().retainedTokens)} tokens removed, {reduction()}% reduction)
+            </text>
+            <text fg={themeV2.text.subdued}>Items: {metrics().excludedMessages} messages compressed · {Locale.todayTimeOrDateTime(props.lifecycle.time.created)}</text>
+          </box>
+        )}
+      </Show>
     </box>
   )
 }
@@ -2159,8 +2282,7 @@ function CompactionMarker(props: {
       props.message.status === "completed" && "messages" in props.message ? props.message.messages : undefined
     return messages === undefined ? undefined : `${messages} messages`
   })
-  const color = () =>
-    props.message.status === "failed" && !props.cancelled ? themeV2.text.feedback.error.default : themeV2.text.hint
+  const color = () => themeV2.text.hint
   return (
     <box paddingLeft={1}>
       <box flexDirection="row" alignItems="center">
@@ -2169,9 +2291,6 @@ function CompactionMarker(props: {
           <Switch>
             <Match when={props.message.status === "running"}>
               <CompactionSpinner color={color()} />
-            </Match>
-            <Match when={props.message.status === "failed" && !props.cancelled}>
-              <text fg={color()}>✗</text>
             </Match>
           </Switch>
           <text fg={color()}>
@@ -2198,24 +2317,6 @@ function CompactionSpinner(props: { color: RGBA }) {
   )
 }
 
-function CompactionSummary(props: { content: string }) {
-  const ctx = use()
-  const { themeV2, syntax } = useTheme()
-  return (
-    <box paddingTop={1} paddingLeft={3}>
-      <markdown
-        syntaxStyle={syntax()}
-        streaming={true}
-        internalBlockMode="top-level"
-        content={props.content}
-        tableOptions={{ style: "grid" }}
-        conceal={true}
-        fg={themeV2.markdown.text}
-        bg={themeV2.background.default}
-      />
-    </box>
-  )
-}
 
 function statusLabel(status: "added" | "modified" | "deleted") {
   if (status === "added") return "A"
@@ -2351,7 +2452,12 @@ function ShellMessage(props: { message: Extract<SessionMessageInfo, { type: "she
 function UserMessage(props: { message: SessionMessageUser }) {
   const ctx = use()
   const data = useData()
-  const files = createMemo(() => props.message.files ?? [])
+  const files = createMemo(() =>
+    (projectedPromptInput(props.message).files ?? []).map((file, index) => ({
+      ...file,
+      mime: props.message.files?.[index]?.mime,
+    })),
+  )
   const subagent = createMemo(() => Boolean(data.session.get(ctx.sessionID)?.parentID))
   const { themeV2, mode } = useTheme().contextual("elevated")
   const [hover, setHover] = createSignal(false)
@@ -2437,7 +2543,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
                       </span>
                       <span style={{ bg: themeV2.raise(themeV2.background.default), fg: themeV2.text.subdued }}>
                         {" "}
-                        {file.name ?? (file.source.type === "uri" ? file.source.uri : "attachment")}{" "}
+                        {file.name ?? file.uri}{" "}
                       </span>
                     </text>
                   )
@@ -2465,7 +2571,7 @@ function AssistantRetry(props: { retry: SessionMessageAssistant["retry"] }) {
       {(retry) => (
         <box paddingLeft={3} marginTop={1}>
           <text fg={themeV2.text.subdued}>
-            Retry attempt {retry().attempt} scheduled after a provider request failed.
+            Retry attempt {retry().attempt} scheduled: {safeProviderErrorMessage(retry().error.message)}
           </text>
         </box>
       )}
@@ -3121,8 +3227,8 @@ function safeToolDetailText(value: string) {
   return text
 }
 
-function safeProviderErrorMessage() {
-  return "Provider request failed."
+function safeProviderErrorMessage(value: string) {
+  return safeToolDetailText(value) || "Provider request failed."
 }
 
 function GenericTool(props: ToolProps) {

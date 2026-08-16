@@ -1,7 +1,7 @@
 export * as SessionContextState from "./context-state"
 
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
-import { and, eq } from "drizzle-orm"
+import { and, eq, lte } from "drizzle-orm"
 import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -299,10 +299,25 @@ const activate = Effect.fn("SessionContextState.activate")(function* (
   const revision = state.revision + 1
   const timeActivated = Date.now()
   const jobID = input.jobID ?? SessionCompaction.ID.make(`cmp_${manifestDigest}`)
+  const checkpointMessages = input.manifest.summary
+    ? yield* db
+        .select({ id: SessionMessageTable.id })
+        .from(SessionMessageTable)
+        .where(
+          and(
+            eq(SessionMessageTable.session_id, input.sessionID),
+            lte(SessionMessageTable.seq, input.manifest.summary.coveredThrough.seq),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+    : []
   const metrics = {
-    excludedMessages: input.manifest.exclusions.filter(
-      (exclusion) => exclusion.reason !== "provider_rebase" && exclusion.target.kind === "message",
-    ).length,
+    excludedMessages:
+      checkpointMessages.length +
+      input.manifest.exclusions.filter(
+        (exclusion) => exclusion.reason !== "provider_rebase" && exclusion.target.kind === "message",
+      ).length,
     excludedParts: input.manifest.exclusions.filter(
       (exclusion) => exclusion.reason !== "provider_rebase" && exclusion.target.kind === "part",
     ).length,

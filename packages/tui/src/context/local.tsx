@@ -87,7 +87,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
     function createAgent() {
       const agents = createMemo(() =>
         (data.location.agent.list(activeLocation()) ?? []).filter(
-          (agent) => agent.mode !== "subagent" && !agent.hidden,
+          (agent) => agent.mode !== "subagent" && !agent.hidden && agent.id !== "btw",
         ),
       )
       const visibleAgents = createMemo(() =>

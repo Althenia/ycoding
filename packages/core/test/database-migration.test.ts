@@ -15,6 +15,10 @@ import previousSchema from "./fixture/database-current-2026-07-25"
 import dropApplicationCache from "../src/database/migration/20260725062914_drop-application-cache"
 import dropSessionArchived from "../src/database/migration/20260801114207_drop-session-archived"
 import retireSelfImprovement from "../src/database/migration/20260726182810_retire-self-improvement"
+import selectiveCompactionHarness from "../src/database/migration/20260804120956_selective-compaction-harness"
+import continuationGenerationFence from "../src/database/migration/20260804123002_continuation-generation-fence"
+import sessionAuthorityRevisions from "../src/database/migration/20260804142728_session-authority-revisions"
+import dropCompactionAdmissionMode from "../src/database/migration/20260806071025_drop-compaction-admission-mode"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   Effect.runPromise(
@@ -41,6 +45,8 @@ const currentMigrations = [
   { id: "20260804120956_selective-compaction-harness" },
   { id: "20260804123002_continuation-generation-fence" },
   { id: "20260804142728_session-authority-revisions" },
+  { id: "20260806071025_drop-compaction-admission-mode" },
+  { id: "20260808031138_provider-request-cache-read-reported" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -422,6 +428,16 @@ describe("DatabaseMigration", () => {
           INSERT INTO credential (id, integration_id, label, value, time_created, time_updated)
           VALUES ('cred_legacy', 'test', 'legacy', '{"type":"key","key":"redacted"}', 1, 1)
         `)
+        yield* db.run(sql`
+          INSERT INTO session_provider_request (
+            id, session_id, input_id, source, agent, model, route_id, prompt_cache_key,
+            system_digest, tool_digest, request, attempts, invalidation, continuation, cost, tokens, time_created
+          ) VALUES (
+            'prq_legacy', 'ses_upgrade', NULL, 'step', 'agent', '{"providerID":"openai","id":"gpt-5.6"}',
+            'openai-chat-completions', 'legacy-cache', 'system', 'tools', 1, 1, 'prefix-changed', 'none', NULL,
+            '{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}', 1
+          )
+        `)
         const canonicalMessage = yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_upgrade_boundary'`)
 
         yield* DatabaseMigration.apply(db)
@@ -431,6 +447,9 @@ describe("DatabaseMigration", () => {
         expect(yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_upgrade_boundary'`)).toEqual(
           canonicalMessage,
         )
+        expect(yield* db.get(sql`SELECT cache_read_reported FROM session_provider_request WHERE id = 'prq_legacy'`)).toEqual({
+          cache_read_reported: null,
+        })
         expect(yield* db.get(sql`SELECT status, revision, manifest_digest, error_code FROM session_context_state`)).toEqual({
           status: "active",
           revision: 0,
@@ -439,7 +458,7 @@ describe("DatabaseMigration", () => {
         })
         expect(
           yield* db.get(sql`
-            SELECT legacy_input_id, trigger, admission_mode, requested_through_message_id,
+            SELECT legacy_input_id, trigger, requested_through_message_id,
                    requested_through_seq, base_context_revision, target_max_input_tokens,
                    config_digest, status, attempts
             FROM session_compaction_job
@@ -447,7 +466,6 @@ describe("DatabaseMigration", () => {
         ).toEqual({
           legacy_input_id: "msg_legacy_compaction",
           trigger: "manual",
-          admission_mode: "background",
           requested_through_message_id: "msg_upgrade_boundary",
           requested_through_seq: 4,
           base_context_revision: 0,
@@ -472,6 +490,67 @@ describe("DatabaseMigration", () => {
         expect(yield* db.all(sql`SELECT id FROM session_compaction_job`)).toEqual([])
         expect(yield* db.all(sql`SELECT session_id FROM session_context_state`)).toEqual([])
         expect(yield* db.all(sql`SELECT session_id FROM session_context_revision`)).toEqual([])
+      }),
+    )
+  })
+
+  test("drops compaction admission mode without changing existing job rows, foreign keys, or indexes", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* seedPreviousDatabase(db)
+        yield* seedSession(db, "ses_compaction_rebuild")
+        yield* seedMessage(db, {
+          id: "msg_compaction_rebuild",
+          sessionID: "ses_compaction_rebuild",
+          type: "user",
+          seq: 4,
+          data: { text: "preserve this job" },
+        })
+        yield* db.run(sql`
+          INSERT INTO session_pending (id, session_id, type, data, delivery, admitted_seq, time_created)
+          VALUES ('msg_compaction_rebuild_pending', 'ses_compaction_rebuild', 'compaction', '{}', NULL, 5, 2)
+        `)
+        yield* DatabaseMigration.applyOnly(db, [
+          selectiveCompactionHarness,
+          continuationGenerationFence,
+          sessionAuthorityRevisions,
+        ])
+        yield* db.run(sql`
+          INSERT INTO compaction_manifest_blob (
+            digest, schema_version, content, input_tokens, retained_tokens, time_created
+          ) VALUES (${"a".repeat(64)}, 1, '{}', 4096, 2048, 8)
+        `)
+        yield* db.run(sql`
+          UPDATE session_compaction_job
+          SET trigger = 'advised', admission_mode = 'mandatory', target_max_input_tokens = 4096,
+              config_digest = ${"b".repeat(64)}, status = 'ended', attempts = 3,
+              manifest_digest = ${"a".repeat(64)}, time_started = 10, time_ended = 20
+          WHERE legacy_input_id = 'msg_compaction_rebuild_pending'
+        `)
+        const before = yield* compactionJobWithoutAdmissionMode(db)
+        const foreignKeys = yield* db.all(sql`PRAGMA foreign_key_list('session_compaction_job')`)
+        const indexes = yield* db.all(sql`
+          SELECT name, sql FROM sqlite_master
+          WHERE type = 'index' AND tbl_name = 'session_compaction_job' AND sql IS NOT NULL
+          ORDER BY name
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [dropCompactionAdmissionMode])
+
+        expect(yield* compactionJobWithoutAdmissionMode(db)).toEqual(before)
+        expect(yield* db.all(sql`PRAGMA foreign_key_list('session_compaction_job')`)).toEqual(foreignKeys)
+        expect(
+          yield* db.all(sql`
+            SELECT name, sql FROM sqlite_master
+            WHERE type = 'index' AND tbl_name = 'session_compaction_job' AND sql IS NOT NULL
+            ORDER BY name
+          `),
+        ).toEqual(indexes)
+        expect(yield* db.all(sql`PRAGMA foreign_key_check`)).toEqual([])
+        expect(yield* db.all(sql`PRAGMA table_info('session_compaction_job')`)).not.toContainEqual(
+          expect.objectContaining({ name: "admission_mode" }),
+        )
       }),
     )
   })
@@ -882,3 +961,13 @@ describe("DatabaseMigration", () => {
     }, 30_000)
   }
 })
+
+function compactionJobWithoutAdmissionMode(db: EffectDrizzleSqlite.EffectSQLiteDatabase) {
+  return db.get(sql`
+    SELECT id, session_id, legacy_input_id, trigger, requested_through_message_id, requested_through_seq,
+           base_context_revision, target_max_input_tokens, config_digest, status, lease_owner, lease_expires_at,
+           attempts, manifest_digest, error_code, error_message, time_created, time_started, time_ended
+    FROM session_compaction_job
+    WHERE legacy_input_id = 'msg_compaction_rebuild_pending'
+  `)
+}

@@ -24,7 +24,9 @@ import {
   SessionTable,
   SessionTaskNotificationTable,
   SessionTaskTable,
+  SessionContextStateTable,
 } from "./sql"
+import { EventTable } from "../event/sql"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionContextState } from "./context-state"
@@ -329,7 +331,13 @@ function run(db: DatabaseService, event: MessageEvent) {
             .pipe(Effect.orDie)
           if (!row) return
           const message = decodeRow(row)
-          return message.type === "assistant" && !message.time.completed ? message : undefined
+          if (message.type !== "assistant") return
+          if (!message.time.completed) return message
+          // Succeeded executions complete the assistant before the terminal event clears `retry`;
+          // still surface the completed row when it carries a pending retry so the header can
+          // clear and reset to `ready` (next failure must start at attempt 1).
+          if (message.retry) return message
+          return undefined
         })
       },
       getAssistant(messageID) {
@@ -772,6 +780,7 @@ const layer = Layer.effectDiscard(
             attempts: event.data.attempts,
             invalidation: event.data.invalidation,
             continuation: event.data.continuation,
+            cache_read_reported: event.data.cacheReadReported,
             cost: event.data.cost,
             tokens: event.data.tokens,
             time_created: DateTime.toEpochMillis(event.data.time),
@@ -1048,5 +1057,67 @@ const layer = Layer.effectDiscard(
     )
   }),
 )
+
+
+// Durable compaction boundary is read from SessionCompactionManifest (SessionContextState) and
+// durable session.compaction.ended events. Must be queried on every fetch/switch, never cached.
+export function latestCompactionBoundary(
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  return Effect.gen(function* () {
+    const ctx = yield* db
+      .select({ seq: SessionContextStateTable.covered_through_seq })
+      .from(SessionContextStateTable)
+      .where(eq(SessionContextStateTable.session_id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    const ctxSeq = (ctx?.seq as number | null | undefined) ?? undefined
+    const normalizedCtxSeq = ctxSeq === null ? undefined : ctxSeq
+    const eventRow = yield* db
+      .select({ data: EventTable.data, seq: EventTable.seq })
+      .from(EventTable)
+      .where(and(eq(EventTable.aggregate_id, sessionID), sql`${EventTable.type} LIKE 'session.compaction.ended%'`))
+      .orderBy(desc(EventTable.seq))
+      .limit(1)
+      .get()
+      .pipe(Effect.orDie)
+    let eventSeq: number | undefined
+    if (eventRow?.data && typeof eventRow.data === "object") {
+      const d = eventRow.data as Record<string, unknown>
+      const b = (d as { boundary?: { seq?: unknown } }).boundary
+      if (b && typeof b.seq === "number") eventSeq = b.seq
+      else if (typeof (d as { through?: unknown }).through === "number") eventSeq = (d as { through: number }).through
+      else {
+        const ct = (d as { coveredThrough?: { seq?: unknown } }).coveredThrough
+        if (ct && typeof ct.seq === "number") eventSeq = ct.seq
+      }
+    }
+    if (normalizedCtxSeq !== undefined && eventSeq !== undefined) return Math.max(normalizedCtxSeq, eventSeq)
+    return normalizedCtxSeq ?? eventSeq
+  })
+}
+
+export function selectTranscript(db: DatabaseService, sessionID: SessionSchema.ID) {
+  return Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(SessionMessageTable)
+      .where(eq(SessionMessageTable.session_id, sessionID))
+      .orderBy(asc(SessionMessageTable.seq))
+      .all()
+      .pipe(Effect.orDie)
+    const boundary: number | undefined = yield* latestCompactionBoundary(db, sessionID)
+    const filtered = boundary === undefined ? rows : rows.filter((row) => row.seq > boundary)
+    return filtered.map((row) => decodeMessage({ ...row.data, id: row.id, type: row.type }))
+  })
+}
+
+// Convenience overload that fetches boundary via Database.Service for direct sessionID callers (session switch path).
+export const selectTranscriptForSession = (sessionID: SessionSchema.ID) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    return yield* selectTranscript(db, sessionID)
+  })
 
 export const node = makeGlobalNode({ name: "session-projector", layer, deps: [EventV2.node, Database.node] })

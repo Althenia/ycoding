@@ -186,7 +186,7 @@ async function boot(viewport: { width: number; height: number }) {
                           />
                           <box flexGrow={1} />
                           <Composer sessionID={sessionID} open={true} defaultTab="subagents" />
-                          <Footer branch="main" sessionID={sessionID} autonomy={{ mode: "normal" }} />
+                          <Footer branch="main" sessionID={sessionID} autonomy={{ mode: "normal", yolo: false }} />
                         </box>
                       </ToastProvider>
                     </Keymap.Provider>

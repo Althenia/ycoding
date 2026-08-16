@@ -706,12 +706,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
-    const yoloSet = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { mode: "yolo" } })
-    if (yoloSet.mode !== "yolo") throw new Error(`YOLO mode was not persisted: ${yoloSet.mode}`)
+    const yoloSet = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: 2 } })
+    if (yoloSet.yolo !== true) throw new Error(`YOLO mode was not persisted: ${yoloSet.yolo}`)
     const yoloRead = await client.session.autonomy.get({ sessionID: yoloSession.id })
-    if (yoloRead.mode !== "yolo") throw new Error(`YOLO mode did not round-trip: ${yoloRead.mode}`)
-    const normal = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { mode: "normal" } })
-    if (normal.mode !== "normal") throw new Error(`Normal mode was not restored: ${normal.mode}`)
+    if (yoloRead.yolo !== true) throw new Error(`YOLO mode did not round-trip: ${yoloRead.yolo}`)
+    const normal = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: 0 } })
+    if (normal.yolo !== false) throw new Error(`Normal mode was not restored: ${normal.yolo}`)
 
     phase = "goal autonomous continuation"
     const goalSession = await client.session.create({
@@ -721,9 +721,9 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     const goalText = "Choose the safest database default and finish the task"
     const goalSet = await client.session.autonomy.set({
       sessionID: goalSession.id,
-      payload: { mode: "goal", goal: goalText, maxNoProgress: 2 },
+      payload: { goal: goalText, maxNoProgress: 2 },
     })
-    if (goalSet.mode !== "goal" || goalSet.goal?.status !== "active")
+    if (goalSet.goal?.status !== "active")
       throw new Error("Goal mode was not activated")
     const canonicalGoal = goalSet.goal.text
     await client.session.prompt({ sessionID: goalSession.id, text: "Begin autonomous goal" })

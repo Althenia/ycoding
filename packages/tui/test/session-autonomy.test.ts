@@ -61,33 +61,37 @@ test("renders assistant text through the completion-marker filter", async () => 
 })
 
 test("labels normal, yolo, and goal modes", () => {
-  expect(autonomyModeLabel({ mode: "normal" })).toBe("Normal")
-  expect(autonomyModeLabel({ mode: "yolo" })).toBe("YOLO")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState)).toBe("Normal")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 2 } as unknown as SessionAutonomyState)).toBe("YOLO 2")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 1 } as unknown as SessionAutonomyState)).toBe("YOLO 1")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 3 } as unknown as SessionAutonomyState)).toBe("YOLO 3")
+  // legacy boolean true maps to YOLO 2, false to Normal
+  expect(autonomyModeLabel({ mode: "normal", yolo: 2 as unknown as number } as unknown as SessionAutonomyState)).toBe("YOLO 2")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 0 as unknown as number } as unknown as SessionAutonomyState)).toBe("Normal")
   expect(
-    autonomyModeLabel({
-      mode: "goal",
-      goal: {
+    autonomyModeLabel({ mode: "normal", yolo: 0, goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 2,
         noProgress: 0,
         maxNoProgress: 3,
       },
-    }),
+    } as unknown as SessionAutonomyState),
   ).toBe("Goal")
-  // A finished goal leaves goal mode but keeps its terminal status, so the label still reports it.
-  expect(autonomyModeLabel(terminal("completed"))).toBe("Goal completed")
-  expect(autonomyModeLabel(terminal("exhausted"))).toBe("Goal exhausted")
-  expect(autonomyModeLabel(terminal("stopped"))).toBe("Goal stopped")
+  expect(autonomyModeLabel({ mode: "normal", yolo: 2, goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 } } as unknown as SessionAutonomyState)).toBe("YOLO 2 + Goal")
+  // A terminal goal no longer appears in the autonomy label.
+  expect(autonomyModeLabel(terminal("completed"))).toBe("Normal")
+  expect(autonomyModeLabel(terminal("exhausted"))).toBe("Normal")
+  expect(autonomyModeLabel(terminal("stopped"))).toBe("Normal")
+  expect(autonomyModeLabel({ ...terminal("stopped"), yolo: 3 } as unknown as SessionAutonomyState)).toBe("YOLO 3")
+  expect(autonomyModeLabel({ ...terminal("completed"), yolo: 2 } as unknown as SessionAutonomyState)).toBe("YOLO 2")
 })
 
 function terminal(
   status: "completed" | "exhausted" | "stopped",
   overrides: { iteration?: number; noProgress?: number; maxNoProgress?: number } = {},
 ): SessionAutonomyState {
-  return {
-    mode: "normal",
-    goal: {
+  return { mode: "normal", yolo: 0, goal: {
       text: "Finish the migration",
       status,
       iteration: overrides.iteration ?? 3,
@@ -99,9 +103,7 @@ function terminal(
 
 test("formats goal progress", () => {
   expect(
-    autonomyProgressLabel({
-      mode: "goal",
-      goal: {
+    autonomyProgressLabel({ mode: "normal", yolo: 0, goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 2,
@@ -110,14 +112,12 @@ test("formats goal progress", () => {
       },
     }),
   ).toBe("2 · no progress 1/3")
-  expect(autonomyProgressLabel({ mode: "normal" })).toBeUndefined()
+  expect(autonomyProgressLabel({ mode: "normal", yolo: 0 })).toBeUndefined()
 })
 
 test("renders goal iteration separately from no-progress", () => {
   expect(
-    autonomyProgressLabel({
-      mode: "goal",
-      goal: {
+    autonomyProgressLabel({ mode: "normal", yolo: 0, goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 50,
@@ -128,11 +128,10 @@ test("renders goal iteration separately from no-progress", () => {
   ).toBe("50 · no progress 1/3")
 })
 
-test("keeps the goal panel visible after the run leaves goal mode", async () => {
+test("hides the goal panel when the goal is not active", async () => {
   const source = await Bun.file(new URL("../src/routes/session/sidebar.tsx", import.meta.url)).text()
-  // Gating the panel on the mode hides the goal the instant it finishes, which is exactly when its
-  // outcome matters most.
-  expect(source).toContain("<Show when={props.autonomy.goal}>")
+  expect(source).toContain('props.autonomy.goal?.status === "active"')
+  expect(source).not.toContain("<Show when={props.autonomy.goal}>")
 })
 
 test("reports how a finished goal ended", () => {
@@ -161,13 +160,11 @@ test("admits a goal before setting mode and wakes only after mode is active", as
     goal: "Finish the migration",
     get: async () => {
       calls.push("get")
-      return { mode: "normal" }
+      return { mode: "normal", yolo: 0 }
     },
     set: async () => {
       calls.push("set")
-      return {
-        mode: "goal",
-        goal: {
+      return { mode: "normal", yolo: 0, goal: {
           text: "Finish the migration",
           status: "active",
           iteration: 0,
@@ -185,7 +182,7 @@ test("admits a goal before setting mode and wakes only after mode is active", as
 
 test("retries a lost goal wake without resetting an identical active goal", async () => {
   const calls: string[] = []
-  let state: SessionAutonomyState = { mode: "normal" }
+  let state: SessionAutonomyState = { mode: "normal", yolo: 0 }
   let failWake = true
   const run = () =>
     activateGoal({
@@ -198,9 +195,7 @@ test("retries a lost goal wake without resetting an identical active goal", asyn
       },
       set: async () => {
         calls.push("set")
-        state = {
-          mode: "goal",
-          goal: {
+        state = { mode: "normal", yolo: 0, goal: {
             text: "Finish the migration",
             status: "active",
             iteration: 0,
@@ -231,9 +226,7 @@ test("does not reset an active goal when its original text is re-activated", asy
     sessionID: "ses_123",
     id: "msg_goal",
     goal: "Fix the migration failure",
-    get: async () => ({
-      mode: "goal" as const,
-      goal: {
+    get: async () => ({ mode: "normal" as const, yolo: 0, goal: {
         text: "Repair the migration and verify the suite passes.",
         rawText: "Fix the migration failure",
         status: "active" as const,
@@ -260,9 +253,7 @@ test("resets a completed goal with identical original text to active", async () 
     sessionID: "ses_123",
     id: "msg_goal",
     goal: "Fix the migration failure",
-    get: async () => ({
-      mode: "normal" as const,
-      goal: {
+    get: async () => ({ mode: "normal" as const, yolo: 0, goal: {
         text: "Repair the migration and verify the suite passes.",
         rawText: "Fix the migration failure",
         status: "completed" as const,
@@ -273,9 +264,7 @@ test("resets a completed goal with identical original text to active", async () 
     }),
     set: async () => {
       calls.push("set")
-      return {
-        mode: "goal" as const,
-        goal: {
+      return { mode: "normal" as const, yolo: 0, goal: {
           text: "Fix the migration failure",
           status: "active" as const,
           iteration: 0,
@@ -290,9 +279,7 @@ test("resets a completed goal with identical original text to active", async () 
   })
 
   expect(calls).toEqual(["admit", "set", "wake"])
-  expect(state).toMatchObject({
-    mode: "goal",
-    goal: { status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
+  expect(state).toMatchObject({ mode: "normal", yolo: 0, goal: { status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
   })
   expect(autonomyProgressLabel(state)).toBe("0 · no progress 0/3")
 })
@@ -310,10 +297,8 @@ test("retains the admitted goal when changed content is submitted after a lost w
       sessionID: original.sessionID,
       id: original.promptID,
       goal: original.payload.goal,
-      get: async () => ({ mode: "normal" }),
-      set: async () => ({
-        mode: "goal",
-        goal: {
+      get: async () => ({ mode: "normal", yolo: 0 }),
+      set: async () => ({ mode: "normal", yolo: 0, goal: {
           text: original.payload.goal,
           status: "active",
           iteration: 0,
@@ -348,9 +333,7 @@ test("exposes autonomy only for the connected active session", async () => {
   expect(typeof currentSessionAutonomy).toBe("function")
   if (typeof currentSessionAutonomy !== "function") return
 
-  const goal: SessionAutonomyState = {
-    mode: "goal",
-    goal: {
+  const goal: SessionAutonomyState = { mode: "normal", yolo: 0, goal: {
       text: "Old session goal",
       status: "active",
       iteration: 1,
@@ -360,7 +343,7 @@ test("exposes autonomy only for the connected active session", async () => {
   }
   const response = { sessionID: "ses_old", state: goal }
 
-  expect(currentSessionAutonomy("ses_new", true, response)).toEqual({ mode: "normal" })
-  expect(currentSessionAutonomy("ses_old", false, response)).toEqual({ mode: "normal" })
+  expect(currentSessionAutonomy("ses_new", true, response)).toEqual({ mode: "normal", yolo: 0 })
+  expect(currentSessionAutonomy("ses_old", false, response)).toEqual({ mode: "normal", yolo: 0 })
   expect(currentSessionAutonomy("ses_old", true, response)).toEqual(goal)
 })

@@ -1,5 +1,5 @@
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { LLMClient, RequestExecutor } from "@ycoding-ai/ai/route"
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@ycoding-ai/ai/route"
 import { FileSystem, Path } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { HttpClient } from "effect/unstable/http"
@@ -14,10 +14,15 @@ export const requestExecutor = makeGlobalNode({
   layer: RequestExecutor.layer,
   deps: [httpClient],
 })
+export const webSocketExecutor = makeGlobalNode({
+  service: WebSocketExecutor.Service,
+  layer: WebSocketExecutor.layer,
+  deps: [],
+})
 export const llmClient = makeGlobalNode({
   service: LLMClient.Service,
   layer: LLMClient.configured({ observeAttempt: ProviderRequestObserver.observe }),
-  deps: [requestExecutor],
+  deps: [requestExecutor, webSocketExecutor],
 })
 
 export * as LayerNodePlatform from "./app-node-platform"

@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { afterAll, describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import { mkdtemp, rm } from "fs/promises"
 import { tmpdir } from "os"
@@ -28,6 +28,11 @@ import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
+import { AttachmentStore } from "@ycoding-ai/core/attachment-store"
+import { Global } from "@ycoding-ai/core/global"
+
+const attachmentRoot = await mkdtemp(path.join(tmpdir(), "ycoding-session-prompt-store-"))
+afterAll(() => rm(attachmentRoot, { recursive: true, force: true }))
 
 const executionCalls: SessionV2.ID[] = []
 const interruptCalls: SessionV2.ID[] = []
@@ -63,10 +68,18 @@ const locations = Layer.effect(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionV2.node,
+      AttachmentStore.node,
+    ]),
     [
       [SessionExecution.node, execution],
       [LocationServiceMap.node, locations],
+      [Global.node, Global.layerWith({ data: attachmentRoot })],
     ],
   ),
 )
@@ -278,15 +291,13 @@ describe("SessionV2.prompt", () => {
         resume: false,
       })
 
-      expect(message.data.files).toEqual([
-        {
-          data: uri.slice(uri.indexOf(",") + 1),
-          mime: "image/png",
-          source: { type: "inline" },
-          name: "image.png",
-          mention: { start: 8, end: 17, text: "[Image 1]" },
-        },
-      ])
+      expect(message.data.files?.[0]).not.toHaveProperty("data")
+      expect(message.data.files?.[0]).toMatchObject({
+        content: { type: "managed", bytes: 68 },
+        mime: "image/png",
+        name: "image.png",
+        mention: { start: 8, end: 17, text: "[Image 1]" },
+      })
       const stored = yield* admitted(message.id)
       expect(stored?.type).toBe("user")
       if (stored?.type === "user") expect(stored.data.files).toEqual(message.data.files)
@@ -313,14 +324,16 @@ describe("SessionV2.prompt", () => {
       expect(message.data.files).toHaveLength(1)
       expect(message.data.files?.[0]).toMatchObject({
         mime: "text/plain",
-        source: { type: "uri", uri: sourceUri.href },
         name: "main.ts",
       })
+      const store = yield* AttachmentStore.Service
+      const file = message.data.files?.[0]
       expect(
-        Buffer.from(message.data.files?.[0]?.data ?? "", "base64")
-          .toString("utf8")
-          .replace(/\r$/, ""),
-      ).toBe('import { describe, expect } from "bun:test"')
+        file &&
+          Buffer.from(yield* store.read(file.content))
+            .toString("utf8")
+            .replace(/\r$/, ""),
+      ).toBe('import { afterAll, describe, expect } from "bun:test"')
     }),
   )
 
@@ -340,12 +353,11 @@ describe("SessionV2.prompt", () => {
       expect(message.data.files).toHaveLength(1)
       expect(message.data.files?.[0]).toMatchObject({
         mime: "application/x-directory",
-        source: { type: "uri", uri },
         name: "source",
       })
-      expect(Buffer.from(message.data.files?.[0]?.data ?? "", "base64").toString("utf8")).toContain(
-        "session-prompt.test.ts",
-      )
+      const store = yield* AttachmentStore.Service
+      const file = message.data.files?.[0]
+      expect(file && Buffer.from(yield* store.read(file.content)).toString("utf8")).toContain("session-prompt.test.ts")
     }),
   )
 
@@ -371,16 +383,47 @@ describe("SessionV2.prompt", () => {
         resume: false,
       })
 
-      expect(message.data.files).toEqual([
-        {
-          data: bytes.toString("base64"),
-          mime: "image/png",
-          source: { type: "uri", uri: pathToFileURL(source).href },
-          name: "image.png",
+      expect(message.data.files?.[0]).not.toHaveProperty("data")
+      expect(message.data.files?.[0]).not.toHaveProperty("source")
+      expect(message.data.files?.[0]).toMatchObject({
+        content: {
+          type: "managed",
+          bytes: bytes.byteLength,
         },
-      ])
+        mime: "image/png",
+        name: "image.png",
+      })
+      expect(JSON.stringify(message)).not.toContain(bytes.toString("base64"))
       const stored = yield* admitted(message.id)
       expect(stored?.type === "user" ? stored.data.files : undefined).toEqual(message.data.files)
+      const content = message.data.files?.[0]?.content
+      expect(content).toBeDefined()
+      yield* Effect.promise(() => rm(source))
+      const restartedStore = AttachmentStore.make(attachmentRoot)
+      expect(content && Buffer.from(yield* restartedStore.read(content))).toEqual(bytes)
+      expect(content && (yield* restartedStore.resolveURI(AttachmentStore.managedURI(content)))).toEqual(content)
+    }),
+  )
+
+  it.effect("redetects MIME when admitting an opaque managed URI", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const store = yield* AttachmentStore.Service
+      const bytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      )
+      const content = yield* store.import(bytes)
+
+      const message = yield* session.prompt({
+        sessionID,
+        text: "Inspect the managed image",
+        files: [{ uri: AttachmentStore.managedURI(content) }],
+        resume: false,
+      })
+
+      expect(message.data.files?.[0]).toMatchObject({ content, mime: "image/png" })
     }),
   )
 
@@ -397,14 +440,12 @@ describe("SessionV2.prompt", () => {
         resume: false,
       })
 
-      expect(message.data.files).toEqual([
-        {
-          data: Buffer.from("export const value = 1\n").toString("base64"),
-          mime: "text/plain",
-          source: { type: "inline" },
-          name: "main.ts",
-        },
-      ])
+      expect(message.data.files?.[0]).not.toHaveProperty("data")
+      expect(message.data.files?.[0]).toMatchObject({
+        content: { type: "managed", bytes: Buffer.byteLength("export const value = 1\n") },
+        mime: "text/plain",
+        name: "main.ts",
+      })
     }),
   )
 
@@ -997,9 +1038,7 @@ describe("SessionV2.pending", () => {
         _tag: "Session.CompactionConflictError",
       })
 
-      expect(yield* session.pending(sessionID)).toMatchObject([
-        { id: input.id, type: "synthetic", delivery: "queue" },
-      ])
+      expect(yield* session.pending(sessionID)).toMatchObject([{ id: input.id, type: "synthetic", delivery: "queue" }])
     }),
   )
 })

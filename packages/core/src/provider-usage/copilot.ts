@@ -86,7 +86,7 @@ export interface BillingResult {
 export async function load(input: LoadInput): Promise<LoadResult> {
   const status = requireSuccess(await input.request(userStatusPath))
   const decoded = userStatus(status.body)
-  if (tokenBasedBilling(decoded)) return orgUsage(input)
+  if (tokenBasedBilling(decoded)) return orgUsage(input, resetDate(decoded.quota_reset_date ?? decoded.quota_reset_date_utc))
   return {
     snapshot: normalizeQuota({
       providerID: input.providerID,
@@ -126,55 +126,42 @@ export function normalizeBilling(input: NormalizeBillingInput): BillingResult {
   return billingResult(input, aiCreditEntries(summary))
 }
 
-async function orgUsage(input: LoadInput): Promise<LoadResult> {
+async function orgUsage(input: LoadInput, resetAt: number | undefined): Promise<LoadResult> {
   if (input.matchedOrg) {
-    const remembered = await orgSummary(input, input.matchedOrg)
+    const remembered = await orgSummary(input, input.matchedOrg, resetAt)
     if (remembered) return remembered
   }
   const orgs = undefine(decodeOrgs(requireSuccess(await input.request(orgsPath)).body))
   const logins = (orgs ?? []).map((entry) => entry.login).filter((login) => login !== input.matchedOrg)
   for (const login of logins) {
-    const result = await orgSummary(input, login)
+    const result = await orgSummary(input, login, resetAt)
     if (result) return result
   }
   return { snapshot: available(input, []), matchedOrg: undefined }
 }
 
-async function orgSummary(input: LoadInput, login: string): Promise<LoadResult | undefined> {
+async function orgSummary(input: LoadInput, login: string, resetAt: number | undefined): Promise<LoadResult | undefined> {
   const response = await input.request(`/orgs/${encodeURIComponent(login)}/settings/billing/usage/summary`)
   if (response.status < 200 || response.status >= 300) return undefined
   const summary = undefine(decodeBilling(response.body))
   if (!summary) return undefined
-  const result = billingResult(input, aiCreditEntries(summary))
+  const result = billingResult(input, aiCreditEntries(summary), resetAt)
   return result.matched ? { snapshot: result.snapshot, matchedOrg: login } : undefined
 }
 
-function billingResult(input: SnapshotInput, entries: ReadonlyArray<UsageItemType>): BillingResult {
+function billingResult(input: SnapshotInput, entries: ReadonlyArray<UsageItemType>, resetAt?: number): BillingResult {
   const credits = total(entries, (entry) => nonNegative(entry.aic_quantity, "aic_quantity"))
-  const spend = total(entries, (entry) => nonNegative(entry.aic_gross_amount, "aic_gross_amount"))
-  const derivedSpend = spend ?? (credits === undefined ? undefined : round(credits * CREDIT_TO_USD))
-  const windows = [
-    ...(credits === undefined
-      ? []
-      : [
-          new ProviderUsage.Window({
-            id: "ai-credits",
-            label: "AI credits",
-            unit: "count",
-            used: credits,
-          }),
-        ]),
-    ...(derivedSpend === undefined
-      ? []
-      : [
-          new ProviderUsage.Window({
-            id: "ai-credit-spend",
-            label: "AI credit spend",
-            unit: "usd",
-            used: derivedSpend,
-          }),
-        ]),
-  ]
+  const windows = entries.length
+    ? [
+        new ProviderUsage.Window({
+          id: "monthly-ai-credits",
+          label: "Monthly AI credits",
+          unit: "count",
+          ...(credits === undefined ? {} : { used: credits }),
+          ...(resetAt === undefined ? {} : { resetAt }),
+        }),
+      ]
+    : []
   return { matched: entries.length > 0, snapshot: available(input, windows) }
 }
 
@@ -241,9 +228,10 @@ function quotaWindows(key: string, value: QuotaSnapshotType, resetAt: number | u
 }
 
 function aiCreditEntries(summary: BillingSummaryType) {
-  return summary.usageItems.filter(
-    (entry) => entry.aic_quantity !== undefined || entry.aic_gross_amount !== undefined,
-  )
+  return summary.usageItems.filter((entry) => {
+    nonNegative(entry.aic_gross_amount, "aic_gross_amount")
+    return entry.aic_quantity !== undefined || entry.aic_gross_amount !== undefined
+  })
 }
 
 function total(values: ReadonlyArray<UsageItemType>, select: (value: UsageItemType) => number | undefined) {
@@ -326,7 +314,7 @@ function laneLabel(key: string) {
   const names: Readonly<Record<string, string>> = {
     chat: "Chat",
     completions: "Completions",
-    premium_interactions: "Premium interactions",
+    premium_interactions: "Premium requests",
   }
   return (
     names[key] ??

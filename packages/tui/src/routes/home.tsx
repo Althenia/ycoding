@@ -18,6 +18,8 @@ import { ModeChips } from "../component/prompt/mode-chips"
 import { Header } from "./session/header"
 import { useClient } from "../context/client"
 import { BrandMark } from "../component/logo"
+import { useToast } from "../ui/toast"
+import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -59,7 +61,7 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
   return <Show when={!props.overlay}>{props.children}</Show>
 }
 
-export function LandingFooter() {
+export function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
   const { themeV2 } = useTheme()
   const shortcut = Keymap.useShortcut("command.palette.show")
 
@@ -77,7 +79,7 @@ export function LandingFooter() {
     >
       <box flexDirection="row" gap={3}>
         <text fg={themeV2.text.subdued}>main</text>
-        <ModeChips />
+        <ModeChips autonomy={props.autonomy} />
         <text fg={themeV2.text.subdued}>subagents 0</text>
       </box>
       <Show when={shortcut()}>
@@ -99,7 +101,11 @@ export function Home() {
   const location = useLocation()
   const dialog = useDialog()
   const client = useClient()
+  const toast = useToast()
   const [promptOverlay, setPromptOverlay] = createSignal(false)
+  const [landingYolo, setLandingYolo] = createSignal(false)
+  const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
+  const landingAutonomy = createMemo(() => ({ mode: "normal" as const, yolo: landingYolo(), goal: landingGoal() ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }) as SessionAutonomyState)
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
@@ -178,6 +184,9 @@ export function Home() {
               ref={bind}
               placeholders={landingPlaceholder}
               landing
+              autonomy={landingAutonomy()}
+              onLandingYoloToggle={(next) => setLandingYolo(next)}
+              onLandingGoalToggle={(next) => setLandingGoal(next ?? undefined)}
               onOverlayChange={setPromptOverlay}
               disabled={forms().length > 0}
             />
@@ -185,7 +194,7 @@ export function Home() {
         </LandingComposer>
         <PluginSlot name="home.bottom" />
       </box>
-      <LandingFooter />
+      <LandingFooter autonomy={landingAutonomy()} />
       <Show when={forms()[0]?.id} keyed>
         {(_) => {
           const form = forms()[0]

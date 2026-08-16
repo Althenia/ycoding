@@ -6,7 +6,6 @@ import { useData } from "../../context/data"
 import { useTheme } from "../../context/theme"
 import {
   cacheHitPercent,
-  cachePrefixLabel,
   contextModelLabel,
   formatDiagnosticsModel,
 } from "../../util/cache-diagnostics"
@@ -91,9 +90,7 @@ export function SidebarCacheContent(props: {
   const hasCacheDetails = createMemo(() => {
     const value = diagnostics()
     if (!value) return false
-    return Boolean(
-      cachePrefixLabel(value.requests?.latestInvalidation) || value.cache.readReported || value.cache.writeReported,
-    )
+    return value.cache.readReported || value.cache.writeReported
   })
 
   return (
@@ -131,11 +128,6 @@ export function SidebarCacheContent(props: {
       <Show when={diagnostics()}>
         {(value) => (
           <>
-            <Show when={cachePrefixLabel(value().requests?.latestInvalidation)}>
-              {(prefix) => (
-                <RailRow label="Prefix" value={prefix()} valueColor={themeV2.text.feedback.success.default} />
-              )}
-            </Show>
             <Show when={value().cache.readReported}>
               <RailRow label="Reads" value={value().tokens.cacheRead.toLocaleString()} />
             </Show>

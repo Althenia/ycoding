@@ -1,6 +1,8 @@
-import { Cause, Context, Effect, Layer, Queue, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Queue, Schema, Semaphore, Stream } from "effect"
 import { Headers } from "effect/unstable/http"
-import { LLMError, TransportReason } from "../../schema"
+import { LLMError, TransportReason, type LLMRequest } from "../../schema"
+import * as ProviderShared from "../../protocols/shared"
+import { Framing } from "../framing"
 import * as HttpTransport from "./http"
 import type { Transport } from "./index"
 import { TransportAttempt } from "./attempt"
@@ -207,47 +209,169 @@ export const fromWebSocket = (
 export const messageText = (message: string | Uint8Array, decoder: TextDecoder) =>
   typeof message === "string" ? message : decoder.decode(message)
 
-export interface JsonPrepared {
+export interface JsonPrepared<Message extends Record<string, unknown>> {
   readonly url: string
   readonly headers: Headers.Headers
-  readonly message: string
+  readonly message: Message
+  readonly encodedMessage: string
+  readonly http: HttpTransport.HttpPrepared<string>
 }
 
-export interface JsonInput<Body, Message> {
+export interface JsonContinuation<Message extends Record<string, unknown>> {
+  readonly session: (request: LLMRequest) =>
+    | {
+        readonly key: string
+        readonly fingerprint: string
+        readonly messageBoundary: number
+        readonly fullReplay: boolean
+      }
+    | undefined
+  readonly replayMessage: (request: LLMRequest, messageCount: number) => Effect.Effect<Message, LLMError>
+  readonly deltaMessage: (request: LLMRequest, messageStart: number) => Effect.Effect<Message, LLMError>
+  readonly normalizeOutput: (item: unknown) => unknown | undefined
+  readonly fallback: Framing.Definition<string>
+}
+
+export interface JsonInput<Body, Message extends Record<string, unknown>> {
   readonly toMessage: (body: Body | Record<string, unknown>) => Effect.Effect<Message, LLMError>
   readonly encodeMessage: (message: Message) => string
+  readonly continuation?: JsonContinuation<Message>
 }
 
-export type JsonPatch<Body, Message> = Partial<JsonInput<Body, Message>>
+export type JsonPatch<Body, Message extends Record<string, unknown>> = Partial<JsonInput<Body, Message>>
 
-export interface JsonTransport<Body, Message> extends Transport<Body, JsonPrepared, string> {
+export interface JsonTransport<Body, Message extends Record<string, unknown>>
+  extends Transport<Body, JsonPrepared<Message>, string> {
   readonly with: (patch: JsonPatch<Body, Message>) => JsonTransport<Body, Message>
 }
 
-export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransport<Body, Message> => ({
-  id: "websocket-json",
-  with: (patch) => json({ ...input, ...patch }),
-  prepare: (prepareInput) =>
-    Effect.gen(function* () {
-      const parts = yield* HttpTransport.jsonRequestParts({
-        ...prepareInput,
-      })
-      return {
-        url: yield* webSocketUrl(parts.url),
-        headers: parts.headers,
-        message: input.encodeMessage(yield* input.toMessage(parts.jsonBody)),
-      }
-    }),
-  frames: (prepared, request, runtime) => {
+interface JsonSession<Message extends Record<string, unknown>> {
+  readonly permit: Semaphore.Semaphore
+  fingerprint: string
+  fallback: boolean
+  connection?: WebSocketConnection
+  previous?: {
+    readonly message: Message
+    readonly responseID: string
+    readonly output: ReadonlyArray<unknown>
+    readonly messageBoundary: number
+  }
+}
+
+const decodedJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
+
+const canonicalValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (!ProviderShared.isRecord(value)) return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .flatMap((key) => (value[key] === undefined ? [] : [[key, canonicalValue(value[key])]])),
+  )
+}
+
+const canonicalJson = (value: unknown) => ProviderShared.encodeJson(canonicalValue(value))
+
+const messageProperties = (message: Record<string, unknown>) =>
+  Object.fromEntries(
+    Object.entries(message).filter(([key]) => key !== "input" && key !== "previous_response_id" && key !== "type"),
+  )
+
+const incrementalMessage = <Message extends Record<string, unknown>>(
+  request: LLMRequest,
+  previous: NonNullable<JsonSession<Message>["previous"]> | undefined,
+  continuation: JsonContinuation<Message>,
+) =>
+  Effect.gen(function* () {
+    if (!previous) return undefined
+    const representedMessageCount = previous.messageBoundary + 1
+    const representedMessage = yield* continuation.replayMessage(request, representedMessageCount)
+    if (!Array.isArray(representedMessage.input) || !Array.isArray(previous.message.input)) return undefined
+    const representedInput = representedMessage.input
+    const previousInput = previous.message.input
+    if (
+      canonicalJson(messageProperties(previous.message)) !== canonicalJson(messageProperties(representedMessage))
+    )
+      return undefined
+    const represented = [...previousInput, ...previous.output]
+    if (representedInput.length !== represented.length) return undefined
+    if (!represented.every((item, index) => canonicalJson(item) === canonicalJson(representedInput[index])))
+      return undefined
+    const delta = yield* continuation.deltaMessage(request, representedMessageCount)
+    return { ...delta, previous_response_id: previous.responseID }
+  })
+
+const responseErrorText = (event: Record<string, unknown>) => {
+  const error = ProviderShared.isRecord(event.error) ? event.error : undefined
+  const response = ProviderShared.isRecord(event.response) ? event.response : undefined
+  const responseError = response && ProviderShared.isRecord(response.error) ? response.error : undefined
+  return [event.message, event.code, error?.message, error?.code, responseError?.message, responseError?.code]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+}
+
+const invalidPreviousResponse = (message: string) =>
+  /previous[_ ]response(?:_id)?/i.test(message) && /invalid|expired|not found|unknown|missing/i.test(message)
+
+const fallbackError = (method: string, message: string, url: string) =>
+  transportError(method, message, { url, kind: "websocket-fallback" })
+
+const continuationError = (message: string, url: string) =>
+  transportError("continuation", message, { url, kind: "websocket-continuation" })
+
+const isContinuationError = (error: LLMError) =>
+  error.reason._tag === "Transport" && error.reason.kind === "websocket-continuation"
+
+export const json = <Body, Message extends Record<string, unknown>>(
+  input: JsonInput<Body, Message>,
+): JsonTransport<Body, Message> => {
+  const sessions = new Map<string, JsonSession<Message>>()
+
+  const httpFrames = (
+    prepared: JsonPrepared<Message>,
+    request: LLMRequest,
+    runtime: Parameters<JsonTransport<Body, Message>["frames"]>[2],
+  ) =>
+    Stream.unwrap(
+      TransportAttempt.track(
+        {
+          requestID: request.id ?? "request",
+          routeID: request.model.route.id,
+          transport: "http-json",
+          attempt: 1,
+          observer: runtime.observeAttempt,
+        },
+        runtime.http.execute(prepared.http.request),
+      ).pipe(
+        Effect.map((response) =>
+          prepared.http.framing.frame(
+            response.stream.pipe(
+              Stream.mapError((error) =>
+                ProviderShared.eventError(
+                  `${request.model.provider}/${request.model.route.id}`,
+                  `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
+                  ProviderShared.errorText(error),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    )
+
+  const oneShotFrames = (
+    prepared: JsonPrepared<Message>,
+    request: LLMRequest,
+    runtime: Parameters<JsonTransport<Body, Message>["frames"]>[2],
+  ) => {
     const webSocket = runtime.webSocket
-    if (!webSocket) {
+    if (!webSocket)
       return Stream.fail(
         transportError("json", "WebSocket JSON transport requires WebSocketExecutor.Service", {
           url: prepared.url,
           kind: "websocket",
         }),
       )
-    }
     const decoder = new TextDecoder()
     return Stream.unwrap(
       Effect.gen(function* () {
@@ -264,12 +388,162 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
           ),
           (connection) => connection.close,
         )
-        yield* connection.sendText(prepared.message)
+        yield* connection.sendText(prepared.encodedMessage)
         return connection.messages.pipe(Stream.map((message) => messageText(message, decoder)))
       }),
     )
-  },
-})
+  }
+
+  const sessionFrames = (
+    prepared: JsonPrepared<Message>,
+    request: LLMRequest,
+    runtime: Parameters<JsonTransport<Body, Message>["frames"]>[2],
+    metadata: NonNullable<ReturnType<JsonContinuation<Message>["session"]>>,
+  ) => {
+    const state = sessions.get(metadata.key) ?? {
+      permit: Semaphore.makeUnsafe(1),
+      fingerprint: metadata.fingerprint,
+      fallback: false,
+    }
+    sessions.set(metadata.key, state)
+    return Stream.fromEffect(state.permit.take(1)).pipe(
+      Stream.flatMap(() =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            if (state.fingerprint !== metadata.fingerprint) {
+              yield* state.connection?.close ?? Effect.void
+              state.connection = undefined
+              state.previous = undefined
+              state.fallback = false
+              state.fingerprint = metadata.fingerprint
+            }
+            if (metadata.fullReplay) state.previous = undefined
+            if (state.fallback) return httpFrames(prepared, request, runtime)
+
+            const webSocket = runtime.webSocket ?? { open }
+            const connection =
+              state.connection ??
+              (yield* TransportAttempt.track(
+                {
+                  requestID: request.id ?? "request",
+                  routeID: request.model.route.id,
+                  transport: "websocket-json",
+                  attempt: 1,
+                  observer: runtime.observeAttempt,
+                },
+                webSocket.open({ url: prepared.url, headers: prepared.headers }),
+              ).pipe(
+                Effect.mapError((error) => {
+                  state.fallback = true
+                  return fallbackError("open", error.message, prepared.url)
+                }),
+              ))
+            state.connection = connection
+            const continuedMessage = metadata.fullReplay
+              ? undefined
+              : yield* incrementalMessage(request, state.previous, input.continuation!)
+            const sent = continuedMessage ?? prepared.message
+            const continued = continuedMessage !== undefined
+            const replayMessage = yield* input.continuation!.replayMessage(request, metadata.messageBoundary)
+            yield* connection.sendText(input.encodeMessage(sent)).pipe(
+              Effect.mapError((error) => {
+                state.fallback = true
+                return fallbackError("sendText", error.message, prepared.url)
+              }),
+            )
+
+            const decoder = new TextDecoder()
+            const output: unknown[] = []
+            let completedResponseID: string | undefined
+            let terminal = false
+            let rejected = false
+            return connection.messages.pipe(
+              Stream.map((message) => messageText(message, decoder)),
+              Stream.mapEffect((message) =>
+                Effect.gen(function* () {
+                  const decoded = decodedJson(message)
+                  if (decoded._tag === "None" || !ProviderShared.isRecord(decoded.value)) return message
+                  const event = decoded.value
+                  if (event.type === "response.output_item.done") {
+                    const normalized = input.continuation?.normalizeOutput(event.item)
+                    if (normalized !== undefined) output.push(normalized)
+                  }
+                  if (event.type === "response.completed") {
+                    terminal = true
+                    const response = ProviderShared.isRecord(event.response) ? event.response : undefined
+                    completedResponseID = typeof response?.id === "string" && response.id.length > 0 ? response.id : undefined
+                  }
+                  if (event.type === "response.incomplete" || event.type === "response.failed") terminal = true
+                  const error = responseErrorText(event)
+                  if (continued && error.length > 0 && invalidPreviousResponse(error)) {
+                    rejected = true
+                    return yield* continuationError(error, prepared.url)
+                  }
+                  return message
+                }),
+              ),
+              Stream.mapError((error) => {
+                state.previous = undefined
+                if (isContinuationError(error)) return error
+                state.fallback = true
+                return fallbackError("frames", error.message, prepared.url)
+              }),
+              Stream.onEnd(
+                Effect.suspend(() =>
+                  terminal
+                    ? Effect.void
+                    : Effect.fail(fallbackError("frames", "WebSocket closed before a terminal response", prepared.url)),
+                ),
+              ),
+              Stream.ensuring(
+                Effect.gen(function* () {
+                  state.previous =
+                    completedResponseID === undefined
+                      ? undefined
+                      : {
+                          message: replayMessage,
+                          responseID: completedResponseID,
+                          output,
+                          messageBoundary: metadata.messageBoundary,
+                        }
+                  if (terminal || rejected) return
+                  state.connection = undefined
+                  yield* connection.close
+                }),
+              ),
+            )
+          }),
+        ).pipe(Stream.ensuring(state.permit.release(1))),
+      ),
+    )
+  }
+
+  return {
+    id: "websocket-json",
+    with: (patch) => json({ ...input, ...patch }),
+    prepare: (prepareInput) =>
+      Effect.gen(function* () {
+        const parts = yield* HttpTransport.jsonRequestParts({ ...prepareInput })
+        const message = yield* input.toMessage(parts.jsonBody)
+        return {
+          url: yield* webSocketUrl(parts.url),
+          headers: parts.headers,
+          message,
+          encodedMessage: input.encodeMessage(message),
+          http: {
+            request: ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
+            framing: input.continuation?.fallback ?? Framing.sse,
+          },
+        }
+      }),
+    frames: (prepared, request, runtime) => {
+      const metadata = input.continuation?.session(request)
+      return metadata === undefined
+        ? oneShotFrames(prepared, request, runtime)
+        : sessionFrames(prepared, request, runtime, metadata)
+    },
+  }
+}
 
 export const jsonTransport = {
   id: "websocket-json",

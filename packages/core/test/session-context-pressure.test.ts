@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test"
-import { LLM, Model, Message, SystemPart, ToolDefinition } from "@ycoding-ai/ai"
-import { applyCachePolicy } from "@ycoding-ai/ai/cache-policy"
-import { AnthropicMessages } from "@ycoding-ai/ai/protocols"
+import { Message, SystemPart } from "@ycoding-ai/ai"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
@@ -21,11 +19,6 @@ const systemFor = (initial: string) => {
 
 const providerID = ProviderV2.ID.make("test")
 const modelID = ModelV2.ID.make("test-model")
-const model = Model.make({
-  id: modelID,
-  provider: providerID,
-  route: AnthropicMessages.route.with({ limits: { context: 200, output: 0 } }),
-})
 
 const models = (context: number) => [
   {
@@ -54,25 +47,13 @@ const context = (input: { readonly context: number; readonly policy?: ConfigComp
   messages: [],
 })
 
-const text = (message: NonNullable<ReturnType<typeof SessionContextPressure.advisory>>) => {
-  const content = message.content[0]
-  if (!content || content.type !== "text") throw new Error("Expected text advisory")
-  return content.text
-}
-
-test("main-chat prompt defers all pressure policy to the volatile advisor", () => {
+test("main-chat prompt leaves compaction scheduling to the runtime", () => {
   const first = systemFor("first session state")
   const second = systemFor("different session state")
   const prompt = first.map((part) => part.text).join("\n")
-  const compactionPrompt = prompt.slice(prompt.indexOf("# Conversation compaction"), prompt.indexOf("# Tone and style"))
 
-  expect(compactionPrompt).toContain("conversation_compact")
-  expect(compactionPrompt).toContain("accepts no boundary")
-  expect(compactionPrompt).toContain("background")
-  expect(compactionPrompt).toContain("only when a volatile context-pressure advisor appears")
-  expect(compactionPrompt).not.toContain("%")
-  expect(compactionPrompt).not.toContain("conversation_summarize")
-  expect(compactionPrompt).not.toMatch(/summar|replace|irreversible|delet/i)
+  expect(prompt).not.toContain("conversation_compact")
+  expect(prompt).not.toContain("conversation_summarize")
   expect(Buffer.from(first[0].text)).toEqual(Buffer.from(second[0].text))
 })
 
@@ -96,50 +77,6 @@ test("resolves omitted and configured pressure policy through ConfigCompaction.r
   ]
   expect(SessionContextPressure.policy(entries)).toEqual(ConfigCompaction.resolve([entries[0].info.compaction!]))
   expect(SessionContextPressure.contextSafetyMarginTokens(entries)).toBe(20)
-})
-
-test("adds no message at normal pressure", () => {
-  expect(SessionContextPressure.advisory(context({ context: 300 }))).toBeUndefined()
-})
-
-test("adds no advisory below 70% pressure", () => {
-  for (const contextWindow of [300, 200, 100]) {
-    expect(SessionContextPressure.advisory(context({ context: contextWindow }))).toBeUndefined()
-  }
-})
-
-test("adds configured one-line optional advice through the no-boundary background tool", () => {
-  const message = SessionContextPressure.advisory(
-    context({
-      context: 90,
-      policy: resolvedPolicy({ advisory: { consider_percent: 65, strongly_advised_percent: 85 } }),
-    }),
-  )
-
-  expect(message?.volatile).toBe(true)
-  expect(text(message!)).not.toContain("\n")
-  expect(text(message!)).toContain("conversation_compact")
-  expect(text(message!)).toContain("65%")
-  expect(text(message!)).toContain("optional")
-  expect(text(message!)).toContain("no boundary")
-  expect(text(message!)).toContain("background")
-})
-
-test("adds configured one-line strongly-advised advice through the no-boundary background tool", () => {
-  const message = SessionContextPressure.advisory(
-    context({
-      context: 70,
-      policy: resolvedPolicy({ advisory: { consider_percent: 65, strongly_advised_percent: 85 } }),
-    }),
-  )
-
-  expect(message?.volatile).toBe(true)
-  expect(text(message!)).not.toContain("\n")
-  expect(text(message!)).toContain("conversation_compact")
-  expect(text(message!)).toContain("85%")
-  expect(text(message!)).toContain("strongly advised")
-  expect(text(message!)).toContain("no boundary")
-  expect(text(message!)).toContain("background")
 })
 
 test("classifies pressure against configured percentages of the hard input cap", () => {
@@ -166,13 +103,14 @@ test("classifies pressure against configured percentages of the hard input cap",
 })
 
 test("applies the configured safety margin to the hard input cap", () => {
-  expect(SessionContextPressure.advisory(context({ context: 100 }))).toBeUndefined()
-  expect(
-    text(SessionContextPressure.advisory(context({ context: 100, policy: resolvedPolicy({ margin: 20 }) }))!),
-  ).toContain("70%")
-  expect(
-    text(SessionContextPressure.advisory(context({ context: 100, policy: resolvedPolicy({ margin: 35 }) }))!),
-  ).toContain("90%")
+  const classify = (margin: number) => {
+    const policy = resolvedPolicy({ margin })
+    return SessionContextPressure.modelLevel({ ...context({ context: 100, policy }), policy })
+  }
+
+  expect(classify(0)).toBe("normal")
+  expect(classify(20)).toBe("consider")
+  expect(classify(35)).toBe("advised")
 })
 
 test("classifies exact, exceeded, zero, and negative hard input caps as mandatory", () => {
@@ -212,7 +150,6 @@ test("advisory false suppresses soft advice but not mandatory classification", (
       },
     }),
   ).toBe("normal")
-  expect(SessionContextPressure.advisory(context({ context: 100, policy }))).toBeUndefined()
   expect(
     SessionContextPressure.level({
       ...context({ context: 60, policy }),
@@ -223,43 +160,4 @@ test("advisory false suppresses soft advice but not mandatory classification", (
       },
     }),
   ).toBe("mandatory")
-  expect(text(SessionContextPressure.advisory(context({ context: 60, policy }))!)).toContain("mandatory")
-})
-
-test("reports runtime-performed mandatory compaction at the cap", () => {
-  const message = SessionContextPressure.advisory(context({ context: 60 }))
-
-  expect(message?.role).toBe("user")
-  expect(text(message!)).toContain("exhausted")
-  expect(text(message!)).toContain("mandatory")
-})
-
-test("keeps the stable system and tool prefix unchanged and unmarked", () => {
-  const system = [SystemPart.make("stable system")]
-  const tools = [
-    ToolDefinition.make({ name: "stable_tool", description: "Stable tool", inputSchema: { type: "object" } }),
-  ]
-  const request = (message: NonNullable<ReturnType<typeof SessionContextPressure.advisory>>) =>
-    applyCachePolicy(
-      LLM.request({
-        model,
-        system,
-        tools,
-        messages: [Message.user("durable history"), message],
-        cache: "auto",
-      }),
-    )
-  const critical = SessionContextPressure.advisory(context({ context: 65 }))!
-  const terminal = SessionContextPressure.advisory(context({ context: 60 }))!
-  const first = request(critical)
-  const second = request(terminal)
-
-  expect(JSON.stringify(first.system)).toBe(JSON.stringify(second.system))
-  expect(JSON.stringify(first.tools)).toBe(JSON.stringify(second.tools))
-  expect(first.messages.at(-1)?.volatile).toBe(true)
-  expect(second.messages.at(-1)?.volatile).toBe(true)
-  expect(first.messages.at(-1)?.content).toEqual([{ type: "text", text: text(critical) }])
-  expect(second.messages.at(-1)?.content).toEqual([{ type: "text", text: text(terminal) }])
-  expect(first.messages.at(-1)?.content.some((part) => "cache" in part && part.cache !== undefined)).toBe(false)
-  expect(second.messages.at(-1)?.content.some((part) => "cache" in part && part.cache !== undefined)).toBe(false)
 })

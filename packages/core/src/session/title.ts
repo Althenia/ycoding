@@ -52,7 +52,7 @@ const make = (dependencies: Dependencies) => {
     if (session.parentID) return
     const firstUser = yield* SessionHistory.firstUserMessageIfOnly(db, session.id)
     if (!firstUser) return
-    const mode = dependencies.helpers.settings.titleMode
+    const mode = Config.latest(yield* dependencies.config.entries(), "efficiency")?.title ?? dependencies.helpers.settings.titleMode
     if (mode === "off") return
     if (mode === "local") {
       yield* dependencies.events.publish(SessionEvent.Renamed, {
@@ -62,9 +62,21 @@ const make = (dependencies: Dependencies) => {
       return
     }
     const agent = yield* dependencies.agents.get(AgentV2.ID.make("title"))
-    if (!agent) return
+    if (!agent) {
+      yield* dependencies.events.publish(SessionEvent.Renamed, {
+        sessionID: session.id,
+        title: dependencies.helpers.localTitle(firstUser.text),
+      })
+      return
+    }
     const resolved = yield* dependencies.helpers.resolveModel(session, "title", agent)
-    if (!resolved) return
+    if (!resolved) {
+      yield* dependencies.events.publish(SessionEvent.Renamed, {
+        sessionID: session.id,
+        title: dependencies.helpers.localTitle(firstUser.text),
+      })
+      return
+    }
     const baseRequest = LLM.request({
       model: resolved.model,
       http: { headers: SessionModelHeaders.make(session, dependencies.headers) },
@@ -88,6 +100,7 @@ const make = (dependencies: Dependencies) => {
       Config.latest(yield* dependencies.config.entries(), "efficiency"),
     )
     const ttl = yield* dependencies.cacheRuntime.policy({
+      sessionID: session.id,
       namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
       modelID: resolved.model.id,
       configured: efficiency.anthropicTtl,
@@ -170,13 +183,25 @@ const make = (dependencies: Dependencies) => {
     )
     yield* recordUsage
     yield* completeRequest
-    if (!streamed || failed) return
+    if (!streamed || failed) {
+      yield* dependencies.events.publish(SessionEvent.Renamed, {
+        sessionID: session.id,
+        title: dependencies.helpers.localTitle(firstUser.text),
+      })
+      return
+    }
     const title = chunks
       .join("")
       .split("\n")
       .map((line) => line.trim())
       .find((line) => line.length > 0)
-    if (!title) return
+    if (!title) {
+      yield* dependencies.events.publish(SessionEvent.Renamed, {
+        sessionID: session.id,
+        title: dependencies.helpers.localTitle(firstUser.text),
+      })
+      return
+    }
     yield* dependencies.events.publish(SessionEvent.Renamed, {
       sessionID: session.id,
       title: truncate(title),

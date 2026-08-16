@@ -42,4 +42,24 @@ describe("prompt history", () => {
     expect(isDuplicateEntry(a, b)).toBe(false)
   })
 
+  test("strips legacy data attachments while preserving URI attachments and prompt text", () => {
+    const managed = `ycoding-attachment://sha256/${"a".repeat(64)}`
+    const parsed = parsePromptHistory(
+      JSON.stringify(
+        entry("review these", [
+          { name: "legacy.png", uri: "data:image/png;base64,AAA=" },
+          { name: "source.svg", uri: "file:///tmp/source.svg" },
+          { name: "managed.xlsx", uri: managed },
+        ]),
+      ),
+    )
+
+    expect(parsed).toEqual([
+      entry("review these", [
+        { name: "source.svg", uri: "file:///tmp/source.svg" },
+        { name: "managed.xlsx", uri: managed },
+      ]),
+    ])
+    expect(JSON.stringify(parsed)).not.toContain("data:")
+  })
 })

@@ -3,7 +3,7 @@ import { Message } from "@ycoding-ai/ai"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
-import { AgentAttachment, Base64, FileAttachment } from "@ycoding-ai/schema/prompt"
+import { AgentAttachment, FileAttachment } from "@ycoding-ai/schema/prompt"
 import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Shell } from "@ycoding-ai/schema/shell"
@@ -14,6 +14,17 @@ const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = ModelV2.Ref.make({ id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") })
 const build = AgentV2.defaultID
+const managed = (mime: string, name: string, digest = "a".repeat(64), bytes = 4) =>
+  FileAttachment.make({
+    content: {
+      type: "managed",
+      digest,
+      bytes,
+      path: `attachments/sha256/${digest.slice(0, 2)}/${digest}`,
+    },
+    mime,
+    name,
+  })
 
 describe("toLLMMessages", () => {
   test("omits empty assistant turns", () => {
@@ -162,16 +173,14 @@ describe("toLLMMessages", () => {
         `The active agent is now ${build}. This agent's current instructions and permissions apply. Previous agents' instructions no longer apply unless repeated in the current context.`,
       ),
     )
-    expect(messages[2]).toMatchObject({ id: id("build-prompt"), content: [{ type: "text", text: "Implement the plan" }] })
+    expect(messages[2]).toMatchObject({
+      id: id("build-prompt"),
+      content: [{ type: "text", text: "Implement the plan" }],
+    })
   })
 
   test("maps every top-level V2 Session message type", () => {
-    const file = FileAttachment.make({
-      data: Base64.make("aGVsbG8="),
-      mime: "image/png",
-      source: { type: "inline" },
-      name: "hello.png",
-    })
+    const file = managed("image/png", "hello.png")
     const messages = toLLMMessages(
       [
         SessionMessage.AgentSelected.make({
@@ -227,6 +236,12 @@ describe("toLLMMessages", () => {
         }),
       ],
       model,
+      model.providerID,
+      new Map(),
+      {
+        images: new Map([[file.content.digest, Uint8Array.from([104, 101, 108, 108, 111])]]),
+        absolutePath: () => "/managed/hello.png",
+      },
     )
 
     expect(messages.map((message) => message.role)).toEqual(["system", "system", "user", "user", "user", "user"])
@@ -242,7 +257,12 @@ describe("toLLMMessages", () => {
         role: "user",
         content: [
           { type: "text", text: "Inspect this image" },
-          { type: "media", mediaType: "image/png", data: "aGVsbG8=", filename: "hello.png" },
+          {
+            type: "media",
+            mediaType: "image/png",
+            data: Uint8Array.from([104, 101, 108, 108, 111]),
+            filename: "hello.png",
+          },
         ],
         metadata: { agents: [{ name: "build" }] },
       }),
@@ -270,193 +290,89 @@ Earlier work
     ])
   })
 
-  test("lowers text attachments after the prompt in one user message", () => {
-    const file = FileAttachment.make({
-      data: Base64.make(Buffer.from("export const value = 1").toString("base64")),
-      mime: "text/plain",
-      source: { type: "uri", uri: "file:///project/main.ts" },
-      name: "main.ts",
-    })
+  test("makes every non-provider attachment visible as managed path metadata", () => {
+    const files = [
+      managed("application/pdf", "document.pdf", "b".repeat(64), 10),
+      managed("application/vnd.ms-excel", "legacy.xls", "c".repeat(64), 11),
+      managed("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "book.xlsx", "d".repeat(64), 12),
+      managed("image/svg+xml", "diagram.svg", "e".repeat(64), 13),
+      managed("text/plain", "notes.txt", "f".repeat(64), 14),
+      managed("application/x-directory", "src", "1".repeat(64), 15),
+    ]
     const messages = toLLMMessages(
       [
         SessionMessage.User.make({
-          id: id("user-text-file"),
-          type: "user",
-          text: "Review this file",
-          files: [file],
-          time: { created },
-        }),
-      ],
-      model,
-    )
-
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toMatchObject({
-      id: id("user-text-file"),
-      role: "user",
-      content: [
-        { type: "text", text: "Review this file" },
-        {
-          type: "text",
-          text: "\n\nAttached file: main.ts\n\nexport const value = 1",
-          metadata: { attachment: { source: file.source, name: "main.ts" } },
-        },
-      ],
-    })
-  })
-
-  test("decodes inline text attachment content", () => {
-    const messages = toLLMMessages(
-      [
-        SessionMessage.User.make({
-          id: id("user-data-file"),
-          type: "user",
-          text: "Review this file",
-          files: [
-            FileAttachment.make({
-              data: Base64.make(Buffer.from("inline content").toString("base64")),
-              mime: "text/plain",
-              source: { type: "inline" },
-              name: "inline.txt",
-            }),
-          ],
-          time: { created },
-        }),
-      ],
-      model,
-    )
-
-    expect(messages[0]?.content).toMatchObject([
-      { type: "text", text: "Review this file" },
-      {
-        type: "text",
-        text: "\n\nAttached file: inline.txt\n\ninline content",
-      },
-    ])
-  })
-
-  test("lowers directory attachments as directory context", () => {
-    const directory = FileAttachment.make({
-      data: Base64.make(Buffer.from("lib/\nindex.ts").toString("base64")),
-      mime: "application/x-directory",
-      source: { type: "uri", uri: "file:///project/src" },
-      name: "src/",
-    })
-    const messages = toLLMMessages(
-      [
-        SessionMessage.User.make({
-          id: id("user-directory"),
-          type: "user",
-          text: "Review this directory",
-          files: [directory],
-          time: { created },
-        }),
-      ],
-      model,
-    )
-
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toMatchObject({
-      id: id("user-directory"),
-      role: "user",
-      content: [
-        { type: "text", text: "Review this directory" },
-        {
-          type: "text",
-          text: "\n\nAttached directory: src/\n\nlib/\nindex.ts",
-          metadata: { attachment: { source: directory.source, name: "src/" } },
-        },
-      ],
-    })
-  })
-
-  test("preserves attachment order after the prompt", () => {
-    const messages = toLLMMessages(
-      [
-        SessionMessage.User.make({
-          id: id("user-mixed-files"),
+          id: id("user-documents"),
           type: "user",
           text: "Review these attachments",
-          files: [
-            FileAttachment.make({
-              data: Base64.make(Buffer.from("index.ts").toString("base64")),
-              mime: "application/x-directory",
-              source: { type: "uri", uri: "file:///project/src" },
-              name: "src/",
-            }),
-            FileAttachment.make({
-              data: Base64.make(Buffer.from("export const value = 1").toString("base64")),
-              mime: "text/plain",
-              source: { type: "uri", uri: "file:///project/main.ts" },
-              name: "main.ts",
-            }),
-          ],
+          files,
           time: { created },
         }),
       ],
       model,
+      model.providerID,
+      new Map(),
+      {
+        images: new Map(),
+        absolutePath: (file) => `/managed/${file.name}`,
+      },
     )
 
-    expect(messages).toHaveLength(1)
-    expect(messages[0]?.content.map((part) => (part.type === "text" ? part.text : part.type))).toEqual([
-      "Review these attachments",
-      "\n\nAttached directory: src/\n\nindex.ts",
-      "\n\nAttached file: main.ts\n\nexport const value = 1",
-    ])
+    const text = messages[0]?.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+    for (const file of files) {
+      expect(text).toContain(`Attached managed file: ${file.name}`)
+      expect(text).toContain(`MIME: ${file.mime}`)
+      expect(text).toContain(`Path: /managed/${file.name}`)
+      expect(text).toContain(`SHA-256: ${file.content.digest}`)
+      expect(text).toContain(`Bytes: ${file.content.bytes}`)
+    }
   })
 
-  test("omits empty prompt text before an attachment", () => {
-    const messages = toLLMMessages(
-      [
-        SessionMessage.User.make({
-          id: id("user-attachment-only"),
-          type: "user",
-          text: "",
-          files: [
-            FileAttachment.make({
-              data: Base64.make(Buffer.from("index.ts").toString("base64")),
-              mime: "application/x-directory",
-              source: { type: "uri", uri: "file:///project/src" },
-              name: "src/",
-            }),
-          ],
-          time: { created },
-        }),
-      ],
-      model,
-    )
-
-    expect(messages).toHaveLength(1)
-    expect(messages[0]?.content).toMatchObject([{ type: "text", text: "\n\nAttached directory: src/\n\nindex.ts" }])
-  })
-
-  test("uses materialized image data as provider media and drops unsupported attachments", () => {
-    const data = Base64.make("AAECAw==")
+  test("uses transient materialized image bytes as provider media", () => {
+    const image = managed("image/png", "image.png")
+    const data = Uint8Array.from([0, 1, 2, 3])
     const messages = toLLMMessages(
       [
         SessionMessage.User.make({
           id: id("user-local-image"),
           type: "user",
           text: "Inspect this image",
-          files: [
-            FileAttachment.make({ data, mime: "image/png", source: { type: "inline" }, name: "image.png" }),
-            FileAttachment.make({
-              data: Base64.make("JVBERg=="),
-              mime: "application/pdf",
-              source: { type: "inline" },
-              name: "document.pdf",
-            }),
-          ],
+          files: [image],
           time: { created },
         }),
       ],
       model,
+      model.providerID,
+      new Map(),
+      { images: new Map([[image.content.digest, data]]), absolutePath: () => "/managed/image.png" },
     )
 
     expect(messages[0]?.content).toEqual([
       { type: "text", text: "Inspect this image" },
       { type: "media", mediaType: "image/png", data, filename: "image.png" },
     ])
+  })
+
+  test("rejects a provider image without transient materialized bytes", () => {
+    const image = managed("image/png", "image.png")
+
+    expect(() =>
+      toLLMMessages(
+        [
+          SessionMessage.User.make({
+            id: id("user-unmaterialized-image"),
+            type: "user",
+            text: "Inspect this image",
+            files: [image],
+            time: { created },
+          }),
+        ],
+        model,
+        model.providerID,
+        new Map(),
+        { images: new Map(), absolutePath: () => "/managed/image.png" },
+      ),
+    ).toThrow("Provider image was not materialized")
   })
 
   test("replays durable tool media into canonical tool messages without structured base64", () => {

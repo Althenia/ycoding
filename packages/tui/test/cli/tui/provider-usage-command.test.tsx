@@ -182,7 +182,7 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 60, height: 40 },
+    { width: 60, height: 60 },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Provider usage"))
@@ -310,7 +310,7 @@ test("renders durable request usage after diagnostics request details are compac
   }
 })
 
-test("renders family spend by provider, model, and variant without catalog provenance text", async () => {
+test("renders aggregate usage as aligned total and model table rows", async () => {
   const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -324,20 +324,19 @@ test("renders family spend by provider, model, and variant without catalog prove
     helpers: 0,
     continued: 0,
     fallback: 0,
-    tokens: { input: 1_100, output: 60, reasoning: 0, cache: { read: 300, write: 0 } },
+    tokens: { input: 9_000, output: 600, reasoning: 0, cache: { read: 4_000, write: 300 } },
+    cost: 6.5,
     models: [
       {
         model: { providerID: "anthropic", id: "claude-sonnet-4-5", variant: "thinking" },
         requests: 2,
         tokens: { input: 1_000, output: 40, reasoning: 0, cache: { read: 300, write: 0 } },
-        cost: 1.25,
-        costProvenance: "recorded",
       },
       {
         model: { providerID: "openai", id: "gpt-5.6-terra", variant: "high" },
         requests: 1,
-        tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
-        cost: 0.02,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        cost: 0,
         costProvenance: "current_catalog",
       },
     ],
@@ -361,17 +360,104 @@ test("renders family spend by provider, model, and variant without catalog prove
     { width: 80, height: 60 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Family spend"))
+  await app.waitForFrame((frame) => frame.includes("Usage"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("anthropic/claude-sonnet-4-5#thinking")
-    expect(frame).toContain("$1.25")
-    expect(frame).toContain("openai/gpt-5.6-terra#high")
-    expect(frame).toContain("$0.02")
+    const rows = frame.split("\n")
+    const header = rows.find((row) => row.includes("Input") && row.includes("Output") && row.includes("Spent"))
+    const total = rows.find((row) => row.includes("Total"))
+    const anthropic = rows.find((row) => row.includes("anthropic/claude"))
+    const openai = rows.find((row) => row.includes("openai/gpt"))
+    expect(frame).toContain("Usage")
+    expect(frame).not.toContain("Family spend")
+    expect(header).not.toContain("Hit")
+    expect(frame).not.toContain("Unreported")
+    expect(header).toContain("Read")
+    expect(header).toContain("Write")
+    expect(total).toContain("9,000")
+    expect(total).toContain("600")
+    expect(total).toContain("4,000")
+    expect(total).toContain("300")
+    expect(total).toContain("$6.50")
+    expect(anthropic).toContain("1,000")
+    expect(anthropic).toContain("40")
+    expect(anthropic).toContain("300")
+    expect(anthropic).not.toContain("Not reported")
+    expect(openai).toContain("$0.00")
+    expect((total?.indexOf("9,000") ?? 0) + "9,000".length).toBe((anthropic?.indexOf("1,000") ?? 0) + "1,000".length)
+    expect((total?.indexOf("600") ?? 0) + "600".length).toBe((anthropic?.indexOf("40") ?? 0) + "40".length)
+    expect((total?.indexOf("4,000") ?? 0) + "4,000".length).toBe((anthropic?.indexOf("300") ?? 0) + "300".length)
+    expect((total?.indexOf("$6.50") ?? 0) + "$6.50".length).toBe((openai?.indexOf("$0.00") ?? 0) + "$0.00".length)
+    const spentEnd = (header?.indexOf("Spent") ?? 0) + "Spent".length
+    expect(anthropic?.slice(spentEnd - 12, spentEnd).trim()).toBe("")
     expect(frame).not.toContain("Estimated (current catalog)")
     expect(frame).not.toContain("This session")
     expect(frame).not.toContain("Subagents")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("truncates long model identifiers while preserving compact usage columns", async () => {
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider }, { ToastProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+    import("../../../src/context/keymap"),
+    import("../../../src/ui/dialog"),
+    import("../../../src/ui/toast"),
+  ])
+  const usage: ProviderRequestSummary = {
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    tokens: { input: 20, output: 5, reasoning: 0, cache: { read: 10, write: 0 } },
+    models: [
+      {
+        model: {
+          providerID: "very-long-provider-name",
+          id: "very-long-model-identifier-that-wraps-across-terminal-lines",
+          variant: "special-variant",
+        },
+        requests: 1,
+        tokens: { input: 20, output: 5, reasoning: 0, cache: { read: 10, write: 0 } },
+      },
+    ],
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <ProviderUsageDialogContent snapshots={() => []} usage={() => usage} />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 60, height: 40 },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Usage"))
+
+  try {
+    const rows = app.captureCharFrame().split("\n")
+    const header = rows.find((row) => row.includes("Input") && row.includes("Output"))
+    const usageRows = rows.filter((row) => row.includes("20") && row.includes("10"))
+    expect(header).not.toContain("Hit")
+    expect(header).not.toContain("Spent")
+    expect(rows.join("\n")).not.toContain("Unreported")
+    expect(rows.join("\n")).not.toContain("Not reported")
+    expect(usageRows).toHaveLength(2)
+    expect(usageRows.every((row) => row.includes("5") && row.includes("10"))).toBeTrue()
+    expect(rows.some((row) => row.includes("identifier-that-wraps-across-terminal-"))).toBeFalse()
   } finally {
     app.renderer.destroy()
   }

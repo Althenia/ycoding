@@ -1,7 +1,7 @@
 export * as SessionCompactionJob from "./compaction-job"
 
 import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
-import { and, asc, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, lte, sql } from "drizzle-orm"
 import { Context, Data, DateTime, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -25,7 +25,6 @@ export interface Job {
   readonly id: SessionCompaction.ID
   readonly sessionID: SessionSchema.ID
   readonly trigger: SessionCompaction.Trigger
-  readonly admissionMode: SessionCompaction.AdmissionMode
   readonly requestedThrough: SessionCompaction.Boundary
   readonly baseContextRevision: number
   readonly legacyInputID?: NonNullable<Row["legacy_input_id"]>
@@ -47,12 +46,13 @@ export interface AdmitInput {
   readonly id?: SessionCompaction.ID
   readonly sessionID: SessionSchema.ID
   readonly trigger: SessionCompaction.Trigger
-  readonly admissionMode: SessionCompaction.AdmissionMode
   readonly requestedThrough: SessionCompaction.Boundary
   readonly baseContextRevision: number
   readonly targetMaxInputTokens: number
   readonly configDigest: string
 }
+
+export type DeterministicFailureInput = Omit<AdmitInput, "id" | "trigger">
 
 type Lease = {
   readonly owner: string
@@ -83,11 +83,6 @@ export interface FailInput {
   readonly now: number
 }
 
-export interface Recovery {
-  readonly sessionID: SessionSchema.ID
-  readonly at: number
-}
-
 export class Conflict extends Data.TaggedError("SessionCompactionJob.Conflict")<{
   readonly message: string
   readonly id?: SessionCompaction.ID
@@ -109,6 +104,7 @@ export interface Interface {
   ) => Effect.Effect<A, E | Conflict, R>
   readonly get: (id: SessionCompaction.ID) => Effect.Effect<Job | undefined>
   readonly pending: (sessionID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Job>>
+  readonly hasUnchangedDeterministicFailure: (input: DeterministicFailureInput) => Effect.Effect<boolean>
   readonly claim: (input: ClaimInput) => Effect.Effect<Job | undefined, Conflict>
   readonly heartbeat: (
     id: SessionCompaction.ID,
@@ -117,8 +113,6 @@ export interface Interface {
   ) => Effect.Effect<Job, Conflict | Ownership>
   readonly end: (input: EndInput) => Effect.Effect<Job, Conflict | Ownership>
   readonly fail: (input: FailInput) => Effect.Effect<Job, Conflict | Ownership>
-  readonly recoverable: (now: number) => Effect.Effect<ReadonlyArray<SessionSchema.ID>>
-  readonly recoverySchedule: (now: number) => Effect.Effect<ReadonlyArray<Recovery>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionCompactionJob") {}
@@ -189,28 +183,12 @@ const layer = Layer.effect(
       withAdmissionGate,
       get: (id) => findRow(db, id).pipe(Effect.map((row) => (row ? fromRow(row) : undefined))),
       pending: (sessionID) =>
-        db
-          .select()
-          .from(SessionCompactionJobTable)
-          .where(
-            and(
-              eq(SessionCompactionJobTable.session_id, sessionID),
-              inArray(SessionCompactionJobTable.status, ["pending", "running"]),
-              isNull(SessionCompactionJobTable.legacy_input_id),
-            ),
-          )
-          .orderBy(asc(SessionCompactionJobTable.time_created), asc(SessionCompactionJobTable.id))
-          .all()
-          .pipe(
-            Effect.orDie,
-            Effect.map((rows) => rows.map(fromRow)),
-          ),
+        activeRows(db, sessionID).pipe(Effect.map((rows) => rows.map(fromRow))),
+      hasUnchangedDeterministicFailure: (input) => hasUnchangedDeterministicFailure(db, input),
       claim,
       heartbeat,
       end,
       fail,
-      recoverable: (now) => recoverable(db, now),
-      recoverySchedule: (now) => recoverySchedule(db, now),
     })
   }),
 )
@@ -233,21 +211,14 @@ const admitUnlocked = Effect.fn("SessionCompactionJob.admit")(function* (
       return yield* conflict(input.id, "Compaction job ID was reused with different admission input")
     }
   }
+  const active = yield* activeRows(db, input.sessionID)
+  if (input.trigger === "consider" || input.trigger === "advised") {
+    const existing = active.find((row) => row.status === "running") ?? active[0]
+    if (existing) return admissionFromRow(existing)
+  }
   yield* validateAdmission(db, input)
   const now = DateTime.toEpochMillis(yield* DateTime.now)
-  const pending = yield* db
-    .select()
-    .from(SessionCompactionJobTable)
-    .where(
-      and(
-        eq(SessionCompactionJobTable.session_id, input.sessionID),
-        eq(SessionCompactionJobTable.status, "pending"),
-        isNull(SessionCompactionJobTable.legacy_input_id),
-      ),
-    )
-    .orderBy(asc(SessionCompactionJobTable.time_created), asc(SessionCompactionJobTable.id))
-    .all()
-    .pipe(Effect.orDie)
+  const pending = active.filter((row) => row.status === "pending")
   if (pending.length > 1) return yield* conflict(input.id, "Session has more than one pending compaction job")
   const existing = pending[0]
   if (existing && compatible(existing, input)) return yield* advanceBoundary(db, existing, input.requestedThrough)
@@ -277,7 +248,6 @@ const publishAdmission = Effect.fnUntraced(function* (
               id,
               session_id: input.sessionID,
               trigger: input.trigger,
-              admission_mode: input.admissionMode,
               requested_through_message_id: input.requestedThrough.messageID,
               requested_through_seq: input.requestedThrough.seq,
               base_context_revision: input.baseContextRevision,
@@ -295,6 +265,31 @@ const publishAdmission = Effect.fnUntraced(function* (
   const stored = yield* findRow(db, id)
   if (!stored) return yield* conflict(id, "Compaction admission did not create its durable row")
   return admissionFromRow(stored)
+})
+
+const hasUnchangedDeterministicFailure = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  input: DeterministicFailureInput,
+) {
+  return (
+    (yield* db
+      .select({ id: SessionCompactionJobTable.id })
+      .from(SessionCompactionJobTable)
+      .where(
+        and(
+          eq(SessionCompactionJobTable.session_id, input.sessionID),
+          eq(SessionCompactionJobTable.status, "failed"),
+          inArray(SessionCompactionJobTable.error_code, ["context_limit_unresolved", "invalid_manifest"]),
+          eq(SessionCompactionJobTable.requested_through_message_id, input.requestedThrough.messageID),
+          eq(SessionCompactionJobTable.requested_through_seq, input.requestedThrough.seq),
+          eq(SessionCompactionJobTable.base_context_revision, input.baseContextRevision),
+          eq(SessionCompactionJobTable.target_max_input_tokens, input.targetMaxInputTokens),
+          eq(SessionCompactionJobTable.config_digest, input.configDigest),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)) !== undefined
+  )
 })
 
 const claimUnlocked = Effect.fn("SessionCompactionJob.claim")(function* (
@@ -627,64 +622,6 @@ const nextClaimable = Effect.fnUntraced(function* (db: DatabaseService, sessionI
   return rows.find((row) => row.status === "pending")
 })
 
-const recoverable = Effect.fn("SessionCompactionJob.recoverable")(function* (db: DatabaseService, now: number) {
-  if (!isNonnegativeInteger(now)) return []
-  const rows = yield* db
-    .select({ sessionID: SessionCompactionJobTable.session_id })
-    .from(SessionCompactionJobTable)
-    .where(
-      and(
-        isNull(SessionCompactionJobTable.legacy_input_id),
-        or(
-          eq(SessionCompactionJobTable.status, "pending"),
-          and(eq(SessionCompactionJobTable.status, "running"), lte(SessionCompactionJobTable.lease_expires_at, now)),
-        ),
-      ),
-    )
-    .orderBy(asc(SessionCompactionJobTable.session_id))
-    .all()
-    .pipe(Effect.orDie)
-  return [...new Set(rows.map((row) => row.sessionID))]
-})
-
-const recoverySchedule = Effect.fn("SessionCompactionJob.recoverySchedule")(function* (
-  db: DatabaseService,
-  now: number,
-) {
-  if (!isNonnegativeInteger(now)) return []
-  const rows = yield* db
-    .select({
-      sessionID: SessionCompactionJobTable.session_id,
-      status: SessionCompactionJobTable.status,
-      leaseExpiresAt: SessionCompactionJobTable.lease_expires_at,
-    })
-    .from(SessionCompactionJobTable)
-    .where(
-      and(
-        isNull(SessionCompactionJobTable.legacy_input_id),
-        or(
-          eq(SessionCompactionJobTable.status, "pending"),
-          and(eq(SessionCompactionJobTable.status, "running"), isNotNull(SessionCompactionJobTable.lease_expires_at)),
-        ),
-      ),
-    )
-    .orderBy(asc(SessionCompactionJobTable.session_id))
-    .all()
-    .pipe(Effect.orDie)
-  return Array.from(
-    rows
-      .reduce((schedule, row) => {
-        if (row.status === "running" && row.leaseExpiresAt !== null) {
-          schedule.set(row.sessionID, { sessionID: row.sessionID, at: Math.max(now, row.leaseExpiresAt) })
-          return schedule
-        }
-        if (!schedule.has(row.sessionID)) schedule.set(row.sessionID, { sessionID: row.sessionID, at: now })
-        return schedule
-      }, new Map<SessionSchema.ID, Recovery>())
-      .values(),
-  )
-})
-
 const findRow = Effect.fnUntraced(function* (db: DatabaseService, id: SessionCompaction.ID) {
   return yield* db
     .select()
@@ -693,6 +630,21 @@ const findRow = Effect.fnUntraced(function* (db: DatabaseService, id: SessionCom
     .get()
     .pipe(Effect.orDie)
 })
+
+const activeRows = (db: DatabaseService, sessionID: SessionSchema.ID) =>
+  db
+    .select()
+    .from(SessionCompactionJobTable)
+    .where(
+      and(
+        eq(SessionCompactionJobTable.session_id, sessionID),
+        inArray(SessionCompactionJobTable.status, ["pending", "running"]),
+        isNull(SessionCompactionJobTable.legacy_input_id),
+      ),
+    )
+    .orderBy(asc(SessionCompactionJobTable.time_created), asc(SessionCompactionJobTable.id))
+    .all()
+    .pipe(Effect.orDie)
 
 const requireRow = Effect.fnUntraced(function* (
   db: DatabaseService,
@@ -714,7 +666,6 @@ function fromRow(row: Row): Job {
     id: row.id,
     sessionID: row.session_id,
     trigger: row.trigger,
-    admissionMode: row.admission_mode,
     requestedThrough: {
       messageID: row.requested_through_message_id,
       seq: EventV2.Seq.make(row.requested_through_seq),
@@ -741,7 +692,6 @@ function admissionFromRow(row: Row): SessionCompaction.Admission {
     id: row.id,
     sessionID: row.session_id,
     trigger: row.trigger,
-    admissionMode: row.admission_mode,
     status: "pending",
     requestedThrough: {
       messageID: row.requested_through_message_id,
@@ -755,7 +705,6 @@ function matchesAdmission(row: Row, input: AdmitInput) {
   return (
     row.session_id === input.sessionID &&
     row.trigger === input.trigger &&
-    row.admission_mode === input.admissionMode &&
     row.requested_through_message_id === input.requestedThrough.messageID &&
     row.requested_through_seq === input.requestedThrough.seq &&
     row.base_context_revision === input.baseContextRevision &&

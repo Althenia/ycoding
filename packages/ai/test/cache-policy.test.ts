@@ -440,14 +440,19 @@ describe("applyCachePolicy", () => {
     const automatic = marked(apply("implicit"))
     expect(automatic).toHaveLength(49)
     expect(automatic[0]).toBe("Stable system")
+    expect(automatic).toContain("user 0")
+    expect(automatic).toContain("result 0")
     expect(automatic).toContain("result 59")
-    expect(automatic).not.toContain("user 0")
+    expect(automatic).not.toContain("user 1")
+    expect(automatic).not.toContain("result 1")
 
     const explicit = marked(apply("explicit"))
     expect(explicit).toHaveLength(50)
     expect(explicit[0]).toBe("Stable system")
+    expect(explicit).toContain("user 0")
+    expect(explicit).toContain("result 0")
     expect(explicit).toContain("result 59")
-    expect(explicit).not.toContain("user 0")
+    expect(explicit).not.toContain("user 1")
   })
 
   test("bounds pre-marked GPT-5.6 candidates while retaining the system anchor and newest messages", () => {
@@ -474,8 +479,44 @@ describe("applyCachePolicy", () => {
 
     expect(marked).toHaveLength(50)
     expect(marked[0]).toBe("Stable system")
-    expect(marked).not.toContain("user 0")
+    expect(marked).toContain("user 0")
+    expect(marked).toContain("user 1")
     expect(marked).toContain("user 59")
+    expect(marked).not.toContain("user 2")
+  })
+
+  test("retains stable earliest prefix within 50 window for long mainchat history", () => {
+    // Simulate 60 messages (mainchat) vs subagent short history: system + first user must stay cached
+    const longMessages = Array.from({ length: 60 }, (_, i) => Message.user(`user ${i}`))
+    const shortMessages = Array.from({ length: 10 }, (_, i) => Message.user(`user ${i}`))
+    const mk = (msgs: typeof longMessages) =>
+      applyCachePolicy(
+        LLM.request({
+          model: Model.update(openai56Model, { route: openai56Model.route.with({ id: "openai-responses" }) }),
+          system: "Stable system",
+          messages: msgs,
+          cache: { system: true, messages: { tail: 50 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+        }),
+      )
+    const longMarked = [
+      ...mk(longMessages).system.filter((p) => p.cache !== undefined).map((p) => p.text),
+      ...mk(longMessages).messages.flatMap((m) => m.content.flatMap((p) => ("cache" in p && p.cache && p.type === "text" ? [p.text] : []))),
+    ]
+    const shortMarked = [
+      ...mk(shortMessages).system.filter((p) => p.cache !== undefined).map((p) => p.text),
+      ...mk(shortMessages).messages.flatMap((m) => m.content.flatMap((p) => ("cache" in p && p.cache && p.type === "text" ? [p.text] : []))),
+    ]
+    // Long history must still contain system and first two users within 50 window (stable prefix exceeds 1024-token minimum)
+    expect(longMarked).toContain("Stable system")
+    expect(longMarked).toContain("user 0")
+    expect(longMarked).toContain("user 1")
+    expect(longMarked).toContain("user 59")
+    expect(longMarked).not.toContain("user 2")
+    // Short history retains all without eviction
+    expect(shortMarked).toContain("user 0")
+    expect(shortMarked).toContain("user 9")
+    expect(shortMarked).toHaveLength(11)
   })
 
   test("marks GPT-5.6 Chat user and assistant text inside the raw tail window", () => {
@@ -672,7 +713,7 @@ describe("applyCachePolicy", () => {
     }),
   )
 
-  it.effect("explicit tail policy does not search before trailing media", () =>
+  it.effect("explicit tail policy selects the last cacheable message before trailing media", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -689,7 +730,11 @@ describe("applyCachePolicy", () => {
         }),
       )
 
-      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+      const body = prepared.body as {
+        messages: Array<{ content: Array<{ cache_control?: unknown }> }>
+      }
+      expect(body.messages[0]?.content[0]?.cache_control).toEqual({ type: "ephemeral" })
+      expect(body.messages[1]?.content[0]?.cache_control).toBeUndefined()
     }),
   )
 
@@ -1223,7 +1268,7 @@ describe("volatile messages", () => {
     expect(placement(second.messages).at(-1)).toEqual([undefined])
   })
 
-  test("explicit tail policy skips a volatile tail message", () => {
+  test("explicit tail policy anchors the last cacheable message before a volatile tail", () => {
     const applied = applyCachePolicy(
       LLM.request({
         model: anthropicModel,
@@ -1232,7 +1277,31 @@ describe("volatile messages", () => {
       }),
     )
 
-    expect(placement(applied.messages)).toEqual([[undefined], [undefined]])
+    expect(placement(applied.messages)).toEqual([[new CacheHint({ type: "ephemeral" })], [undefined]])
+  })
+
+  test("explicit tail policy preserves two rolling anchors before two volatile messages", () => {
+    const applied = applyCachePolicy(
+      LLM.request({
+        model: anthropicModel,
+        messages: [
+          Message.user("u1"),
+          Message.assistant("a1"),
+          Message.user("u2"),
+          volatileUser("TeamView: child running"),
+          volatileUser("TeamView: approval pending"),
+        ],
+        cache: { messages: { tail: 2 } },
+      }),
+    )
+
+    expect(placement(applied.messages)).toEqual([
+      [undefined],
+      [new CacheHint({ type: "ephemeral" })],
+      [new CacheHint({ type: "ephemeral" })],
+      [undefined],
+      [undefined],
+    ])
   })
 
   test("'latest-user-message' falls back to the newest non-volatile user message", () => {

@@ -1,10 +1,20 @@
 import { execFile, spawn } from "node:child_process"
-import { readFile, rm } from "node:fs/promises"
+import { mkdtemp, open, rm, writeFile } from "node:fs/promises"
 import { platform, release, tmpdir } from "node:os"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
 const exec = promisify(execFile)
+
+export type ClipboardTemporary = Readonly<{ path: string; cleanup(): Promise<void> }>
+export type ClipboardFile = Readonly<{
+  type: "file"
+  uri: string
+  mime: string
+  name: string
+  temporary: ClipboardTemporary
+}>
 
 function command(command: string, args: string[] = [], input?: string) {
   return new Promise<Buffer>((resolve, reject) => {
@@ -28,49 +38,80 @@ function writeOsc52(text: string) {
 
 export async function read() {
   if (platform() === "darwin") {
-    const file = path.join(tmpdir(), "ycoding-clipboard.png")
     try {
-      await exec("osascript", [
-        "-e",
-        'set imageData to the clipboard as "PNGf"',
-        "-e",
-        `set fileRef to open for access POSIX file "${file}" with write permission`,
-        "-e",
-        "set eof fileRef to 0",
-        "-e",
-        "write imageData to fileRef",
-        "-e",
-        "close access fileRef",
-      ])
-      return { data: (await readFile(file)).toString("base64"), mime: "image/png" }
+      return await materializeClipboardImage("/private/tmp", async (file) => {
+        await exec("osascript", [
+          "-e",
+          'set imageData to the clipboard as "PNGf"',
+          "-e",
+          `set fileRef to open for access POSIX file "${file}" with write permission`,
+          "-e",
+          "set eof fileRef to 0",
+          "-e",
+          "write imageData to fileRef",
+          "-e",
+          "close access fileRef",
+        ])
+      })
     } catch {
       // Fall through to text clipboard.
-    } finally {
-      await rm(file, { force: true }).catch(() => {})
     }
   }
 
   if (platform() === "win32" || release().includes("WSL")) {
-    const script =
-      "Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if ($img) { $ms = New-Object System.IO.MemoryStream; $img.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); [System.Convert]::ToBase64String($ms.ToArray()) }"
-    const image = await command("powershell.exe", ["-NonInteractive", "-NoProfile", "-command", script]).catch(() =>
-      Buffer.alloc(0),
-    )
-    if (image.length) return { data: image.toString().trim(), mime: "image/png" }
+    try {
+      return await materializeClipboardImage(tmpdir(), async (file) => {
+        const target = release().includes("WSL") ? (await command("wslpath", ["-w", file])).toString().trim() : file
+        const escaped = target.replaceAll("'", "''")
+        const script = `Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if (-not $img) { exit 1 }; $img.Save('${escaped}', [System.Drawing.Imaging.ImageFormat]::Png)`
+        await command("powershell.exe", ["-NonInteractive", "-NoProfile", "-command", script])
+      })
+    } catch {
+      // Fall through to text clipboard.
+    }
   }
 
   if (platform() === "linux") {
-    const wayland = await command("wl-paste", ["-t", "image/png"]).catch(() => Buffer.alloc(0))
-    if (wayland.length) return { data: wayland.toString("base64"), mime: "image/png" }
-    const x11 = await command("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]).catch(() =>
-      Buffer.alloc(0),
-    )
-    if (x11.length) return { data: x11.toString("base64"), mime: "image/png" }
+    const image = await command("wl-paste", ["-t", "image/png"])
+      .catch(() => command("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]))
+      .catch(() => Buffer.alloc(0))
+    if (image.length) {
+      return materializeClipboardImage(tmpdir(), (file) => writeFile(file, image))
+    }
   }
 
   const { default: clipboardy } = await import("clipboardy")
   const text = await clipboardy.read().catch(() => undefined)
-  if (text) return { data: text, mime: "text/plain" }
+  if (text) return { type: "text" as const, text, mime: "text/plain" as const }
+}
+
+export async function materializeClipboardImage(root: string, write: (file: string) => Promise<void>) {
+  const directory = await mkdtemp(path.join(root, "ycoding-clipboard-"))
+  const file = path.join(directory, "clipboard.png")
+  const handle = await open(file, "wx", 0o600).catch(async (error) => {
+    await rm(directory, { recursive: true, force: true })
+    throw error
+  })
+  await handle.close()
+  let cleaned = false
+  const cleanup = async () => {
+    if (cleaned) return
+    cleaned = true
+    await rm(directory, { recursive: true, force: true })
+  }
+  try {
+    await write(file)
+    return {
+      type: "file" as const,
+      uri: pathToFileURL(file).href,
+      mime: "image/png" as const,
+      name: "clipboard.png",
+      temporary: { path: file, cleanup },
+    }
+  } catch (error) {
+    await cleanup()
+    throw error
+  }
 }
 
 export function copyCommand(

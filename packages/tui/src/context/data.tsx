@@ -69,7 +69,6 @@ export type DataSessionCompactionLifecycle = {
   jobID: string
   messageID?: string
   trigger?: CurrentCompactionMessage["trigger"]
-  admissionMode?: CurrentCompactionMessage["admissionMode"]
   status: "pending" | "running" | "completed" | "failed"
   revision?: number
   boundary?: { messageID: string; seq: number }
@@ -91,7 +90,6 @@ function compactionLifecycle(message: SessionMessageInfo): DataSessionCompaction
     jobID: current.jobID,
     messageID: current.id,
     trigger: current.trigger,
-    admissionMode: current.admissionMode,
     status: current.status,
     time: current.time,
   }
@@ -110,12 +108,10 @@ function mergeCompactionLifecycle(
   const lifecycle = rank[update.status] >= rank[current.status] ? update : current
   const messageID = update.messageID ?? current.messageID
   const trigger = update.trigger ?? current.trigger
-  const admissionMode = update.admissionMode ?? current.admissionMode
   const base = {
     jobID: update.jobID,
     ...(messageID ? { messageID } : {}),
     ...(trigger ? { trigger } : {}),
-    ...(admissionMode ? { admissionMode } : {}),
     time: { created: Math.min(current.time.created, update.time.created) },
   }
   if (lifecycle.status === "completed")
@@ -232,7 +228,6 @@ function messageRevision(message: SessionMessageInfo) {
       revision.push(
         current.jobID,
         current.trigger,
-        current.admissionMode,
         current.status,
         "revision" in current ? current.revision : undefined,
         "boundary" in current ? current.boundary : undefined,
@@ -578,16 +573,40 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     const sync = createSync()
 
     function replaceMessages(sessionID: string, messages: SessionMessageInfo[]) {
-      messageIndex.set(sessionID, new Map(messages.map((item, position) => [item.id, position])))
+      const resident = compactResidentMessages(sessionID, messages)
+      messageIndex.set(sessionID, new Map(resident.map((item, position) => [item.id, position])))
       const mutations = messageMutations.get(sessionID)
       if (mutations) {
-        const resident = new Set(messages.map((item) => item.id))
+        const residentIDs = new Set(resident.map((item) => item.id))
         mutations.forEach((_, id) => {
-          if (!resident.has(id)) mutations.delete(id)
+          if (!residentIDs.has(id)) mutations.delete(id)
         })
       }
-      setStore("session", "message", sessionID, messages)
-      return messages
+      setStore("session", "message", sessionID, resident)
+      return resident
+    }
+
+    function compactResidentMessages(sessionID: string, messages: SessionMessageInfo[]) {
+      const fromStore = Object.values(store.session.compaction[sessionID] ?? {})
+        .filter((lifecycle) => lifecycle.status === "completed" && lifecycle.boundary)
+        .flatMap((lifecycle) => {
+          const position = messages.findIndex((message) => message.id === lifecycle.boundary?.messageID)
+          return position === -1 ? [] : [position]
+        })
+        .reduce((latest, position) => Math.max(latest, position), -1)
+      const fromMessages = messages
+        .filter(
+          (message): message is Extract<SessionMessageInfo, { type: "compaction" }> =>
+            message.type === "compaction" &&
+            "jobID" in message &&
+            (message as unknown as { status: string }).status === "completed" &&
+            !!(message as unknown as { boundary?: unknown }).boundary,
+        )
+        .map((message) => messages.findIndex((item) => item.id === (message as unknown as { boundary: { messageID: string } }).boundary.messageID))
+        .reduce((latest, position) => Math.max(latest, position), -1)
+      const boundary = Math.max(fromStore, fromMessages)
+      if (boundary === -1) return messages
+      return messages.filter((message, position) => position > boundary || message.type === "compaction")
     }
 
     async function syncMessages(sessionID: string) {
@@ -603,14 +622,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             .filter(([, version]) => version > requestVersion)
             .map(([id]) => id),
         )
-        replaceMessages(
-          sessionID,
-          reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active),
-        )
-        response.forEach((item) => {
-          const lifecycle = compactionLifecycle(item)
-          if (!lifecycle) return
-          updateCompaction(sessionID, lifecycle)
+        const reconciled = reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active)
+        batch(() => {
+          response.forEach((item) => {
+            const lifecycle = compactionLifecycle(item)
+            if (!lifecycle) return
+            setCompaction(sessionID, lifecycle)
+          })
+          replaceMessages(sessionID, reconciled)
         })
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)
@@ -636,11 +655,16 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       )
     }
 
-    function updateCompaction(sessionID: string, lifecycle: DataSessionCompactionLifecycle) {
+    function setCompaction(sessionID: string, lifecycle: DataSessionCompactionLifecycle) {
       setStore("session", "compaction", sessionID, {
         ...store.session.compaction[sessionID],
         [lifecycle.jobID]: mergeCompactionLifecycle(store.session.compaction[sessionID]?.[lifecycle.jobID], lifecycle),
       })
+    }
+
+    function updateCompaction(sessionID: string, lifecycle: DataSessionCompactionLifecycle) {
+      setCompaction(sessionID, lifecycle)
+      replaceMessages(sessionID, store.session.message[sessionID] ?? [])
     }
 
     function projectPending(item: SessionPendingInfo) {
@@ -1723,7 +1747,6 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               "session",
               produce((draft) => {
                 delete draft.message[sessionID]
-                delete draft.compaction[sessionID]
               }),
             )
           },

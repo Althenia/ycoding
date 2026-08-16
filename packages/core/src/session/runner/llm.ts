@@ -45,6 +45,10 @@ import { SessionContinuation } from "./continuation"
 import { SessionProviderState } from "../provider-state"
 import { SessionRunnerRetry } from "./retry"
 import { SessionUsage } from "../usage"
+import { SessionAutonomy } from "../autonomy"
+import { SessionTable } from "../sql"
+import { eq } from "drizzle-orm"
+import { Message } from "@ycoding-ai/ai"
 
 type StepEnd = {
   readonly snapshot?: Snapshot.ID
@@ -69,6 +73,7 @@ const layer = Layer.effect(
     const snapshots = yield* Snapshot.Service
     const database = yield* Database.Service
     const db = database.db
+    const compaction = yield* SessionCompaction.Service
     const compactionJobs = yield* SessionCompactionJob.Service
     const config = yield* Config.Service
     const title = yield* SessionTitle.Service
@@ -139,52 +144,68 @@ const layer = Layer.effect(
         }
       }
       const initialContext = yield* context.load(selected)
+      const goalMessages = (sessionID: SessionSchema.ID) =>
+        Effect.gen(function* () {
+          const row = yield* db
+            .select({ autonomy: SessionTable.autonomy })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, sessionID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!row) return [] as ReadonlyArray<Message>
+          const state = SessionAutonomy.read(row.autonomy)
+          if (!state.goal || state.goal.status !== "active") return [] as ReadonlyArray<Message>
+          const text = [
+            `Active autonomous goal (iteration ${state.goal.iteration}, noProgress ${state.goal.noProgress}/${state.goal.maxNoProgress}): ${state.goal.text}`,
+            `The human (mainchat) must explicitly decide completion via goal clear; do not treat ${SessionAutonomy.CompletionMarker} as automatic completion.`,
+            "Continue toward the goal while it is active, but do not claim completion without human confirmation.",
+          ].join("\n")
+          return [Message.make({ role: "system", content: text })] as ReadonlyArray<Message>
+        })
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
-        modelRequests.prepare({
-          context: loaded,
-          step: currentStep,
-          execution,
-          disableContinuation:
-            fullRebase || requestTrackerState.continuationFallback === true || terminalResponseRecovery,
-          terminalResponseRecovery,
+        Effect.gen(function* () {
+          const extra = yield* goalMessages(loaded.session.id)
+          return yield* modelRequests.prepare({
+            context: loaded,
+            step: currentStep,
+            execution,
+            disableContinuation:
+              fullRebase || requestTrackerState.continuationFallback === true || terminalResponseRecovery,
+            terminalResponseRecovery,
+            ...(extra.length > 0 ? { messages: extra } : {}),
+          })
         })
       const initialPrepared = yield* prepare(initialContext)
       const limits = initialContext.model.model.route.defaults.limits
       const compactionPolicy = SessionContextPressure.policy(yield* config.entries())
-      const failPreflight = (error: SessionError.Error) =>
-        Effect.gen(function* () {
-          if (assistantMessageID !== undefined)
-            yield* events.publish(SessionEvent.Step.Failed, { sessionID, assistantMessageID, error })
-          return yield* new StepFailedError({ error })
-        })
-      if (limits?.context === undefined || limits.output === undefined)
-        return yield* failPreflight({
-          type: "context.limit",
-          message: "The selected model must configure both context and output limits to prove the safe input cap",
-        })
-      const candidate = yield* SessionCompactionGate.ensureWithinLimit({
-        sessionID: initialContext.session.id,
-        policy: compactionPolicy,
-        capabilities: {
-          contextWindowTokens: limits.context,
-          maxOutputTokens: limits.output,
-          contextSafetyMarginTokens: compactionPolicy.contextSafetyMarginTokens,
-        },
-        candidate: { context: initialContext, prepared: initialPrepared },
-        force: requestTrackerState.overflowRecovery === "pending",
-        reload: ({ fullRebase }) =>
-          Effect.gen(function* () {
-            if (fullRebase) yield* continuation.clear(sessionID)
-            const selected = yield* context.select(sessionID)
-            yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
-            const loaded = yield* context.load(selected)
-            return { context: loaded, prepared: yield* prepare(loaded, fullRebase) }
-          }),
-      }).pipe(
-        Effect.provideService(Database.Service, database),
-        Effect.provideService(SessionCompactionJob.Service, compactionJobs),
-        Effect.catchIf(isContextLimit, failPreflight),
-      )
+      const candidate =
+        limits?.context === undefined || limits.output === undefined
+          ? { context: initialContext, prepared: initialPrepared, compacted: false }
+          : yield* SessionCompactionGate.ensureWithinLimit({
+              sessionID: initialContext.session.id,
+              policy: compactionPolicy,
+              capabilities: {
+                contextWindowTokens: limits.context,
+                maxOutputTokens: limits.output,
+                contextSafetyMarginTokens: compactionPolicy.contextSafetyMarginTokens,
+              },
+              candidate: { context: initialContext, prepared: initialPrepared },
+              force: requestTrackerState.overflowRecovery === "pending",
+              reload: ({ fullRebase }) =>
+                Effect.gen(function* () {
+                  if (fullRebase) yield* continuation.clear(sessionID)
+                  const selected = yield* context.select(sessionID)
+                  yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
+                  const loaded = yield* context.load(selected)
+                  return { context: loaded, prepared: yield* prepare(loaded, fullRebase) }
+                }),
+            }).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.provideService(SessionCompaction.Service, compaction),
+              Effect.provideService(SessionCompactionJob.Service, compactionJobs),
+            )
+      if (candidate.context.contextRevision !== (yield* context.revision(sessionID)))
+        return { _tag: "RestartAfterCompaction", step: currentStep, promoted } as const
       if (requestTrackerState.overflowRecovery === "pending") requestTrackerState.overflowRecovery = "used"
       const loaded = candidate.context
       const originalPrepared = candidate.prepared
@@ -195,6 +216,7 @@ const layer = Layer.effect(
       if (!requestTracker) {
         requestTracker = yield* providerRequests.next({
           sessionID: session.id,
+          expectedContextRevision: loaded.contextRevision,
           inputID: loaded.messages.findLast((message) => message.type === "user")?.id,
           source: "step",
           agent: agent.id,
@@ -203,7 +225,11 @@ const layer = Layer.effect(
           promptCacheKey: originalPrepared.cache.promptCacheKey,
           systemDigest: originalPrepared.cache.systemDigest,
           toolDigest: originalPrepared.cache.toolDigest,
-        })
+        }).pipe(
+          Effect.catchTag("SessionProviderRequest.StaleContextRevision", () => Effect.succeed(undefined)),
+        )
+        if (!requestTracker)
+          return { _tag: "RestartAfterCompaction", step: currentStep, promoted } as const
         requestTrackerState.current = requestTracker
       }
       const startSnapshot = yield* snapshots.capture()
@@ -223,6 +249,7 @@ const layer = Layer.effect(
       const ownedToolFibers: Array<Fiber.Fiber<void, ToolOutputStore.Error>> = []
       const providerStateCaptures: SessionProviderState.CaptureInput[] = []
       let needsContinuation = false
+      const terminalRecoveryEvidence = { reasoningStarted: false, blocked: false }
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -271,6 +298,15 @@ const layer = Layer.effect(
               overflowFailure = event
               return
             }
+            if (event.type === "reasoning-start") terminalRecoveryEvidence.reasoningStarted = true
+            if (
+              event.type === "reasoning-delta" ||
+              event.type === "text-start" ||
+              event.type === "tool-input-start" ||
+              event.type === "tool-input-error" ||
+              event.type === "tool-call"
+            )
+              terminalRecoveryEvidence.blocked = true
             yield* publish(event)
             if (LLMEvent.is.toolInputError(event)) {
               if (prepared.resolveToolCall(event.name).type === "settle") needsContinuation = true
@@ -350,11 +386,13 @@ const layer = Layer.effect(
           override ??
           (requestTrackerState.continuationFallback === true
             ? "retry-fallback"
-            : settlement && settlement.tokens.cache.read > 0
+            : requestTracker.defaultInvalidation === "compaction-reset"
+              ? "compaction-reset"
+              : settlement && settlement.tokens.cache.read > 0
               ? "stable-hit"
               : cache?.mechanism === "none"
                 ? "cache-disabled"
-                : cache && !cache.readReported && !cache.writeReported
+                : cache && !cache.readReported
                   ? "provider-not-reported"
                   : undefined)
         return Effect.all(
@@ -369,6 +407,7 @@ const layer = Layer.effect(
                     ? "continued"
                     : "full",
               ...(invalidation === undefined ? {} : { invalidation }),
+              ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
             }),
             cacheRuntime.observe({
               namespace: originalPrepared.cache.promptCacheKey,
@@ -486,7 +525,11 @@ const layer = Layer.effect(
           if (overflowFailure && !overflowLimit) yield* publish(overflowFailure)
           if (llmFailure && !publisher.hasProviderError()) {
             const error = toSessionError(llmFailure)
-            if (SessionRunnerRetry.isRetryable(llmFailure) && !publisher.hasRetryEvidence()) {
+            if (
+              !terminalResponseRecovery &&
+              SessionRunnerRetry.isRetryable(llmFailure) &&
+              !publisher.hasRetryEvidence()
+            ) {
               return yield* new SessionRunnerRetry.RetryableFailure({
                 cause: llmFailure,
                 assistantMessageID: yield* publisher.startAssistant(),
@@ -619,6 +662,14 @@ const layer = Layer.effect(
             !publisher.hasAssistantText() &&
             !needsContinuation &&
             (!publisher.hasStepStarted() || stepFailure?.type === "provider.invalid-output")
+          const recoverableFailedTerminalSilence =
+            !terminalResponseRecovery &&
+            llmFailure !== undefined &&
+            llmFailure.reason._tag === "Transport" &&
+            terminalRecoveryEvidence.reasoningStarted &&
+            !terminalRecoveryEvidence.blocked &&
+            !publisher.hasAssistantText() &&
+            !needsContinuation
           const promotePendingSteerAfterExhaustedRecovery =
             terminalResponseRecovery &&
             !publisher.hasAssistantText() &&
@@ -626,12 +677,18 @@ const layer = Layer.effect(
             stepFailure?.type === "provider.invalid-output" &&
             (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
-          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
+          if (stream._tag === "Failure" && !recoverableFailedTerminalSilence)
+            return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
             return yield* Effect.failCause(settledFailure)
           if (toolsInterrupted && settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
-          if (stepFailure && !recoverableTerminalSilence && !promotePendingSteerAfterExhaustedRecovery)
+          if (
+            stepFailure &&
+            !recoverableTerminalSilence &&
+            !recoverableFailedTerminalSilence &&
+            !promotePendingSteerAfterExhaustedRecovery
+          )
             return yield* new StepFailedError({ error: stepFailure })
           return {
             _tag: "Completed",
@@ -640,6 +697,7 @@ const layer = Layer.effect(
             promoted,
             terminalSilence:
               recoverableTerminalSilence ||
+              recoverableFailedTerminalSilence ||
               (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
           } as const
         }),
@@ -819,6 +877,3 @@ export const node = makeLocationNode({
 
 const isInvalidPreviousResponse = (message: string) =>
   /previous[_ ]response(?:_id)?/i.test(message) && /invalid|expired|not found|unknown/i.test(message)
-
-const isContextLimit = (error: unknown): error is SessionError.Error =>
-  typeof error === "object" && error !== null && "type" in error && error.type === "context.limit"

@@ -8,13 +8,13 @@ import {
 } from "@opentui/core"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show } from "solid-js"
 import { registerYCodingSpinner } from "../register-spinner"
-import path from "path"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
 import { useTheme } from "../../context/theme"
 import { tint } from "../../theme/color"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { useClipboard } from "../../context/clipboard"
+import type { ClipboardTemporary } from "../../clipboard"
 import { useClient } from "../../context/client"
 import { useRoute } from "../../context/route"
 import { useEvent } from "../../context/event"
@@ -31,6 +31,7 @@ import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { promptSkillMentions, promptSkillMetadata } from "../../prompt/skill"
 import { usePromptStash } from "../../prompt/stash"
+import { projectedPromptInput } from "../../prompt/codec"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, type JSX } from "@opentui/solid"
@@ -46,20 +47,18 @@ import { useArgs } from "../../context/args"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { submitPromptWithSkills } from "./skill-submission"
 import { useData } from "../../context/data"
 import { useLocation } from "../../context/location"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import {
-  activateGoal,
   confirmSessionCreation,
-  parseGoalCommand,
   restoreSessionSubmission,
   retainSessionSubmission,
-  submitSessionPrompt,
+  yoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
-import { DialogSessionGoal } from "../dialog-session-goal"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
@@ -71,6 +70,8 @@ export type PromptProps = {
   onOverlayChange?: (open: boolean) => void
   autonomy?: SessionAutonomyState
   onAutonomyUpdated?: (sessionID: string, state: SessionAutonomyState) => void
+  onLandingYoloToggle?: (next: boolean) => void
+  onLandingGoalToggle?: (next: string | null) => void
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
@@ -128,7 +129,6 @@ export function PromptYoloHint() {
 
 type PromptSubmissionPayload = {
   inputText: string
-  goal: ReturnType<typeof parseGoalCommand>
   files: PromptInfo["files"]
   agents: PromptInfo["agents"]
   metadata: ReturnType<typeof promptSkillMetadata>
@@ -263,7 +263,7 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = Keymap.use()
-  const yoloGoalActive = createMemo(() => props.autonomy?.mode === "yolo" && props.autonomy.goal?.status === "active")
+  const yoloGoalActive = createMemo(() => yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState)) > 0 || props.autonomy?.goal?.status === "active")
   const renderer = useRenderer()
   const exit = useExit()
   const { themeV2, syntax } = useTheme()
@@ -370,6 +370,20 @@ export function Prompt(props: PromptProps) {
     extmarkToPart: new Map(),
     interrupt: 0,
   })
+  const temporaryAttachments = new Map<string, ClipboardTemporary>()
+
+  function releaseTemporaryAttachment(uri: string) {
+    const temporary = temporaryAttachments.get(uri)
+    if (!temporary) return
+    temporaryAttachments.delete(uri)
+    void temporary.cleanup()
+  }
+
+  function releaseTemporaryAttachments() {
+    for (const uri of temporaryAttachments.keys()) releaseTemporaryAttachment(uri)
+  }
+
+  onCleanup(releaseTemporaryAttachments)
 
   createEffect(
     on(
@@ -449,15 +463,20 @@ export function Prompt(props: PromptProps) {
           event?.preventDefault()
           event?.stopPropagation()
           const content = await clipboard.read?.()
-          if (content?.mime.startsWith("image/")) {
+          if (content?.type === "file") {
             await pasteAttachment({
-              filename: "clipboard",
-              uri: `data:${content.mime};base64,${content.data}`,
+              filename: content.name,
+              uri: content.uri,
+              mime: content.mime,
+              temporary: content.temporary,
+            }).catch(async (error) => {
+              await content.temporary.cleanup()
+              throw error
             })
             return
           }
-          if (content?.mime === "text/plain") {
-            await pasteInputText(content.data)
+          if (content?.type === "text") {
+            await pasteInputText(content.text)
           }
         },
       },
@@ -590,7 +609,8 @@ export function Prompt(props: PromptProps) {
                   },
                 }).then(
                   (session) => route.navigate({ type: "session", sessionID: session.id }),
-                  (error) => toast.show({ title: "Failed to open BTW", message: errorMessage(error), variant: "error" }),
+                  (error) =>
+                    toast.show({ title: "Failed to open BTW", message: errorMessage(error), variant: "error" }),
                 )
               }}
             />
@@ -611,7 +631,13 @@ export function Prompt(props: PromptProps) {
             toast.show({ message: "A conclusion is required", variant: "error" })
             return
           }
-          const error = await steerBtwConclusion({ api: client.api.session, parentID: session.parentID, text }).then(
+          const error = await steerBtwConclusion({
+            api: client.api.session,
+            parentID: session.parentID,
+            text,
+            btwMessages: data.session.message.list(session.id),
+            btwSessionID: session.id,
+          }).then(
             () => undefined,
             (error) => error,
           )
@@ -626,18 +652,60 @@ export function Prompt(props: PromptProps) {
         title: "Set autonomous goal",
         name: "session.autonomy.goal",
         category: "Session",
-        palette: props.sessionID !== undefined,
-        slash: { name: "goal", arguments: true as const },
-        run: () => {
+        palette: true,
+        slash: { name: "goal" },
+        run: async () => {
+          const isActive = props.autonomy?.goal?.status === "active"
           const sessionID = props.sessionID
-          if (!sessionID) return
-          dialog.replace(() => (
-            <DialogSessionGoal
-              sessionID={sessionID}
-              currentGoal={props.autonomy?.goal?.text}
-              onUpdated={(state) => props.onAutonomyUpdated?.(sessionID, state)}
-            />
-          ))
+          if (sessionID) {
+            try {
+              const newGoal = isActive ? null : store.prompt.text.trim() || props.autonomy?.goal?.text || "Autonomous goal"
+              const result = await client.api.session.autonomy.set({ sessionID, payload: { goal: newGoal } })
+              const state = (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
+              props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+              toast.show({ message: isActive ? "Goal deactivated" : "Goal activated", variant: "success", duration: 3000 })
+              } catch (error) {
+              toast.show({ title: "Failed to toggle goal", message: errorMessage(error), variant: "error" })
+            }
+            return
+          }
+          // landing: goal follows prompt adaptively – do not push goal into composer
+          if (isActive) {
+            props.onLandingGoalToggle?.(null)
+            toast.show({ message: "Goal deactivated (landing)", variant: "success", duration: 2000 })
+          } else {
+            const text = store.prompt.text.trim() || props.autonomy?.goal?.text || "Autonomous goal"
+            props.onLandingGoalToggle?.(text)
+            toast.show({ message: "Goal activated (landing)", variant: "success", duration: 2000 })
+          }
+        },
+      },
+      {
+        title: "Toggle YOLO",
+        name: "session.autonomy.yolo.toggle",
+        category: "Session",
+        palette: true,
+        slash: { name: "yolo" },
+        run: async (input?: string) => {
+          const token = input?.trim().split(/\s+/)[0]
+          const parsed = token ? Number.parseInt(token, 10) : Number.NaN
+          const explicit = Number.isInteger(parsed) && parsed >= 0 && parsed <= 3 ? (parsed as 0 | 1 | 2 | 3) : undefined
+          const currentLevel = yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState))
+          const nextLevel = explicit ?? ((currentLevel + 1) % 4 as 0 | 1 | 2 | 3)
+          const sessionID = props.sessionID
+          if (sessionID) {
+            try {
+              const result = await client.api.session.autonomy.set({ sessionID, payload: { yolo: nextLevel } })
+              const state = (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
+              props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+              toast.show({ message: nextLevel > 0 ? `YOLO ${nextLevel} enabled` : "YOLO disabled", variant: "success", duration: 3000 })
+            } catch (error) {
+              toast.show({ title: "Failed to toggle YOLO", message: errorMessage(error), variant: "error" })
+            }
+            return
+          }
+          props.onLandingYoloToggle?.(nextLevel > 0)
+          toast.show({ message: nextLevel > 0 ? `YOLO ${nextLevel} enabled (landing)` : "YOLO disabled (landing)", variant: "success", duration: 2000 })
         },
       },
       {
@@ -862,6 +930,10 @@ export function Prompt(props: PromptProps) {
         draft.prompt.pasted = pasted
       }),
     )
+    const retained = new Set(store.prompt.files?.map((file) => file.uri))
+    for (const uri of temporaryAttachments.keys()) {
+      if (!retained.has(uri)) releaseTemporaryAttachment(uri)
+    }
   }
 
   const stashCommands = createMemo(() =>
@@ -1175,13 +1247,73 @@ export function Prompt(props: PromptProps) {
       })
       return false
     }
-    const goal = parseGoalCommand(inputText)
-    if (goal && !goal.goal) {
-      toast.show({ message: "A goal is required", variant: "error" })
-      return false
+    // /goal and /yolo are toggles with no arguments – handle before generic slash dispatch
+    const normalized = inputText.trim()
+    if (normalized === "/goal" || normalized.startsWith("/goal ") || normalized.startsWith("/goal\n")) {
+      clearPrompt()
+      const isActive = props.autonomy?.goal?.status === "active"
+      const sessionID = props.sessionID
+      if (sessionID) {
+        try {
+          const candidate = normalized.slice(5).trim()
+          const newGoal = isActive ? null : candidate || props.autonomy?.goal?.text || "Autonomous goal"
+          const result = await client.api.session.autonomy.set({ sessionID, payload: { goal: newGoal } })
+          const state = (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
+          props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+          toast.show({ message: isActive ? "Goal deactivated" : "Goal activated", variant: "success", duration: 3000 })
+          if (!isActive && newGoal) {
+            try { input?.setText?.(newGoal) } catch {}
+            setStore("prompt", "text", newGoal)
+          } else if (isActive && store.prompt.text === props.autonomy?.goal?.text) {
+            try { input?.setText?.("") } catch {}
+            setStore("prompt", "text", "")
+          }
+        } catch (error) {
+          toast.show({ title: "Failed to toggle goal", message: errorMessage(error), variant: "error" })
+        }
+      } else {
+        if (isActive) {
+          if (store.prompt.text === props.autonomy?.goal?.text) {
+            try { input?.setText?.("") } catch {}
+            setStore("prompt", "text", "")
+          }
+          props.onLandingGoalToggle?.(null)
+          toast.show({ message: "Goal deactivated (landing)", variant: "success", duration: 2000 })
+        } else {
+          const text = normalized.slice(5).trim() || props.autonomy?.goal?.text || "Autonomous goal"
+          try { input?.setText?.(text) } catch {}
+          setStore("prompt", "text", text)
+          props.onLandingGoalToggle?.(text)
+          toast.show({ message: "Goal activated (landing)", variant: "success", duration: 2000 })
+        }
+      }
+      return true
+    }
+    if (normalized === "/yolo" || normalized.startsWith("/yolo ") || normalized.startsWith("/yolo\n")) {
+      clearPrompt()
+      const arg = normalized.slice(5).trim()
+      const parsed = arg ? Number.parseInt(arg, 10) : NaN
+      const explicit = Number.isInteger(parsed) && parsed >= 0 && parsed <= 3 ? (parsed as 0 | 1 | 2 | 3) : undefined
+      const currentLevel = yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState))
+      const nextLevel = explicit ?? (((currentLevel + 1) % 4) as 0 | 1 | 2 | 3)
+      const sessionID = props.sessionID
+      if (sessionID) {
+        try {
+          const result = await client.api.session.autonomy.set({ sessionID, payload: { yolo: nextLevel } })
+          const state = (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
+          props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+          toast.show({ message: nextLevel > 0 ? `YOLO ${nextLevel} enabled` : "YOLO disabled", variant: "success", duration: 3000 })
+        } catch (error) {
+          toast.show({ title: "Failed to toggle YOLO", message: errorMessage(error), variant: "error" })
+        }
+      } else {
+        props.onLandingYoloToggle?.(nextLevel > 0)
+        toast.show({ message: nextLevel > 0 ? `YOLO ${nextLevel} enabled (landing)` : "YOLO disabled (landing)", variant: "success", duration: 2000 })
+      }
+      return true
     }
     const slash = argumentSlash(inputText, keymapCommands())
-    if (slash && !goal) {
+    if (slash) {
       if (slash.command.id !== "session.btw") clearPrompt()
       await slash.command.run(slash.input)
       return true
@@ -1215,7 +1347,6 @@ export function Prompt(props: PromptProps) {
     const candidateEditorSelection = editorSelection && editor.labelState() === "pending" ? editorSelection : undefined
     const payload: PromptSubmissionPayload = {
       inputText,
-      goal,
       files: promptFiles,
       agents: promptAgents,
       metadata,
@@ -1294,34 +1425,7 @@ export function Prompt(props: PromptProps) {
     const currentMode = submission.payload.mode
     const pendingEditorSelection = submission.payload.editor
 
-    if (submission.payload.goal) {
-      move.startSubmit()
-      const result = await activateGoal({
-        sessionID,
-        id: submission.promptID,
-        goal: submission.payload.goal.goal,
-        get: () => client.api.session.autonomy.get({ sessionID }),
-        set: (payload) => client.api.session.autonomy.set({ sessionID, payload }),
-        prompt: (input) => client.api.session.prompt(input),
-      }).then(
-        (state) => ({ state }),
-        (error) => ({ error }),
-      )
-      if ("error" in result) {
-        toast.show({
-          title: "Failed to set goal",
-          message: errorMessage(result.error),
-          variant: "error",
-        })
-        return false
-      }
-      props.onAutonomyUpdated?.(sessionID, result.state)
-      toast.show({
-        message: "Goal mode activated",
-        variant: "success",
-        duration: 3000,
-      })
-    } else if (submission.payload.mode === "shell") {
+    if (submission.payload.mode === "shell") {
       move.startSubmit()
       void client.api.session.shell({
         sessionID,
@@ -1343,7 +1447,7 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : submission.payload.inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void client.api.session
+      const result = await client.api.session
         .command({
           sessionID,
           command: command.slice(1),
@@ -1353,13 +1457,22 @@ export function Prompt(props: PromptProps) {
           files: submission.payload.files,
           agents: submission.payload.agents,
         })
-        .catch((error) => {
-          toast.show({
-            title: "Failed to run command",
-            message: errorMessage(error),
-            variant: "error",
-          })
+        .then(
+          (admitted) => ({ admitted }),
+          (error) => ({ error }),
+        )
+      if ("error" in result) {
+        toast.show({
+          title: "Failed to run command",
+          message: errorMessage(result.error),
+          variant: "error",
         })
+        return false
+      }
+      const files = projectedPromptInput(result.admitted.data as never).files
+      submission.payload.files = files
+      submission.payload.history.files = files
+      releaseTemporaryAttachments()
     } else if (
       submission.payload.inputText.startsWith("/") &&
       (data.location.skill.list(currentLocation.current) ?? []).some(
@@ -1430,17 +1543,19 @@ export function Prompt(props: PromptProps) {
           return false
         }
       }
-      const prompt = (resume: boolean) =>
-        client.api.session.prompt({
+      const prompt = (resume: boolean, admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>) => {
+        const files = admitted ? projectedPromptInput(admitted.data as never).files : submission.payload.files
+        return client.api.session.prompt({
           id: submission.promptID,
           sessionID,
           text: submission.payload.inputText,
-          files: submission.payload.files,
+          files,
           agents: submission.payload.agents,
           metadata: submission.payload.metadata,
           resume,
         })
-      const error = await submitSessionPrompt({
+      }
+      const result = await submitPromptWithSkills({
         prompt,
         skills: (submission.payload.metadata?.skills ?? []).map(
           (skill, index) => () =>
@@ -1452,18 +1567,28 @@ export function Prompt(props: PromptProps) {
             }),
         ),
       }).then(
-        () => undefined,
-        (error) => error,
+        (admitted) => ({ admitted }),
+        (error) => ({ error }),
       )
-      if (error) {
+      if ("error" in result) {
         toast.show({
           title: "Failed to send prompt or activate skill",
-          message: errorMessage(error),
+          message: errorMessage(result.error),
           variant: "error",
         })
         return false
       }
+      const files = projectedPromptInput(result.admitted.data as never).files
+      submission.payload.files = files
+      submission.payload.history.files = files
+      releaseTemporaryAttachments()
       if (pendingEditorSelection) editor.markSelectionSent()
+    }
+    if (temporaryAttachments.size > 0) {
+      submission.payload.history.files = submission.payload.history.files?.filter(
+        (file) => !temporaryAttachments.has(file.uri),
+      )
+      releaseTemporaryAttachments()
     }
     history.append({
       ...submission.payload.history,
@@ -1525,15 +1650,11 @@ export function Prompt(props: PromptProps) {
     const isUrl = /^(https?):\/\//.test(filepath)
     if (!isUrl) {
       const attachment = await readLocalAttachment(filepath)
-      const filename = path.basename(filepath)
-      if (attachment?.type === "text") {
-        pasteText(attachment.content, `[SVG: ${filename ?? "image"}]`)
-        return
-      }
-      if (attachment?.type === "binary") {
+      if (attachment) {
         await pasteAttachment({
-          filename,
-          uri: `data:${attachment.mime};base64,${Buffer.from(attachment.content).toString("base64")}`,
+          filename: attachment.name,
+          uri: attachment.uri,
+          mime: attachment.mime,
         })
         return
       }
@@ -1554,13 +1675,23 @@ export function Prompt(props: PromptProps) {
     }, 0)
   }
 
-  async function pasteAttachment(file: { filename?: string; uri: string }) {
+  async function pasteAttachment(file: {
+    filename?: string
+    uri: string
+    mime: string
+    temporary?: ClipboardTemporary
+  }) {
     const currentOffset = input.cursorOffset
     const extmarkStart = currentOffset
-    const pdf = file.uri.startsWith("data:application/pdf;")
-    const prefix = pdf ? "data:application/pdf;" : "data:image/"
-    const count = store.prompt.files?.filter((attachment) => attachment.uri.startsWith(prefix)).length ?? 0
-    const virtualText = pdf ? `[PDF ${count + 1}]` : `[Image ${count + 1}]`
+    const label =
+      file.mime === "application/pdf"
+        ? "PDF"
+        : file.mime.includes("excel") || file.mime.includes("spreadsheet")
+          ? "Excel"
+          : "Image"
+    const count =
+      store.prompt.files?.filter((attachment) => attachment.mention?.text.startsWith(`[${label} `)).length ?? 0
+    const virtualText = `[${label} ${count + 1}]`
     const extmarkEnd = extmarkStart + virtualText.length
     const textToInsert = virtualText + " "
 
@@ -1591,6 +1722,7 @@ export function Prompt(props: PromptProps) {
         draft.extmarkToPart.set(extmarkId, { type: "file", index })
       }),
     )
+    if (file.temporary) temporaryAttachments.set(file.uri, file.temporary)
     return
   }
 
@@ -1601,11 +1733,13 @@ export function Prompt(props: PromptProps) {
       (store.prompt.files?.length ?? 0) > 0 ||
       (store.prompt.agents?.length ?? 0) > 0
     ) {
-      history.append({
-        ...store.prompt,
-        mode: store.mode,
-      })
+      if (![...(store.prompt.files ?? [])].some((file) => temporaryAttachments.has(file.uri)))
+        history.append({
+          ...store.prompt,
+          mode: store.mode,
+        })
     }
+    releaseTemporaryAttachments()
     input.clear()
     input.extmarks.clear()
     setStore("prompt", emptyPrompt())
@@ -1654,7 +1788,7 @@ export function Prompt(props: PromptProps) {
           borderColor={
             props.landing
               ? borderHighlight()
-              : props.autonomy?.mode === "yolo"
+              : yoloLevel(props.autonomy ?? ({ yolo: 0 } as unknown as SessionAutonomyState)) > 0
                 ? themeV2.text.feedback.error.default
                 : themeV2.text.feedback.success.default
           }

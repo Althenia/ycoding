@@ -19,6 +19,7 @@ import {
 import { CopilotUsage } from "./provider-usage/copilot"
 import { ClaudeUsage } from "./provider-usage/claude"
 import { CodexUsage } from "./provider-usage/codex"
+import { MetaUsage } from "./provider-usage/meta"
 import { OpenAIUsage } from "./provider-usage/openai"
 import { OpenRouterUsage } from "./provider-usage/openrouter"
 import { ProviderUsageCache } from "./provider-usage/cache"
@@ -182,6 +183,7 @@ const layer = Layer.effect(
           anthropic: (input) => claudeOAuth(http, claude, input),
           openrouter: (input) => openRouter(http, input),
           openai: (input) => openAI(http, input, providerUsage?.codex_app_server),
+          meta: (input) => meta(http, input),
           "github-copilot": (input) => githubCopilot(http, input),
         },
         ttlMs: { anthropic: 5 * minute },
@@ -386,6 +388,36 @@ const openAI = (
       input.credential.value.key,
     )
     return OpenAIUsage.normalize({
+      providerID: input.providerID,
+      label: input.label,
+      updatedAt: input.updatedAt,
+      weekStart,
+      monthStart,
+      usage,
+      costs,
+    })
+  })
+
+const meta = (http: HttpClient.HttpClient, input: AdapterInput) =>
+  Effect.gen(function* () {
+    if (input.credential.value.type !== "key")
+      return yield* Effect.fail(new Error("Meta usage requires an API key credential"))
+    const now = new Date(input.updatedAt)
+    const weekStart = utcWeekStart(now)
+    const monthStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1) / 1000
+    const end = Math.floor(now.getTime() / 1000)
+    const query = `start_time=${Math.min(weekStart, monthStart)}&end_time=${end}&bucket_width=1d&limit=31`
+    const usage = yield* pages(
+      http,
+      `https://api.llama.com/v1/organization/usage/completions?${query}`,
+      input.credential.value.key,
+    )
+    const costs = yield* pages(
+      http,
+      `https://api.llama.com/v1/organization/costs?${query}`,
+      input.credential.value.key,
+    )
+    return MetaUsage.normalize({
       providerID: input.providerID,
       label: input.label,
       updatedAt: input.updatedAt,

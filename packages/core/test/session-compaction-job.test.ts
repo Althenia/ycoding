@@ -91,7 +91,6 @@ describe("SessionCompactionJob", () => {
       expect(yield* jobs.get(first.id)).toMatchObject({
         id: first.id,
         trigger: "manual",
-        admissionMode: "background",
         requestedThrough: fixture.boundaries[1],
         attempts: 0,
       })
@@ -155,14 +154,52 @@ describe("SessionCompactionJob", () => {
         }),
       )
       const advanced = yield* jobs.admit(admission(fixture, { requestedThrough: fixture.boundaries[2] }))
+      const reused = yield* jobs.admit(
+        admission(fixture, { id: SessionCompaction.ID.make("cmp_soft_reuse"), trigger: "consider" }),
+      )
 
       expect(running).toMatchObject({ id: first.id, status: "running", requestedThrough: fixture.boundaries[0] })
       expect(successor.id).not.toBe(first.id)
       expect(advanced.id).toBe(successor.id)
+      expect(reused.id).toBe(first.id)
       expect(yield* jobs.pending(fixture.sessionID)).toMatchObject([
         { id: first.id, status: "running", requestedThrough: fixture.boundaries[0] },
         { id: successor.id, status: "pending", requestedThrough: fixture.boundaries[2] },
       ])
+    }),
+  )
+
+  it.effect("reuses active work for advisory admission and allows fresh work after settlement", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("advisory_active")
+      const jobs = yield* SessionCompactionJob.Service
+      const first = yield* jobs.admit(admission(fixture, { id: SessionCompaction.ID.make("cmp_advisory_running") }))
+      yield* jobs.claim({ jobID: first.id, owner: "worker-a", now: 10, expiresAt: 20 })
+
+      const reused = yield* jobs.admit(
+        admission(fixture, {
+          id: SessionCompaction.ID.make("cmp_advisory_duplicate"),
+          trigger: "advised",
+        }),
+      )
+
+      expect(reused.id).toBe(first.id)
+      expect(yield* jobs.pending(fixture.sessionID)).toMatchObject([{ id: first.id, status: "running" }])
+      expect(yield* eventTypes(fixture.sessionID)).toEqual([
+        "session.compaction.admitted.2",
+        "session.compaction.started.2",
+      ])
+
+      yield* jobs.fail({ id: first.id, owner: "worker-a", code: "provider_failed", now: 21 })
+      const fresh = yield* jobs.admit(
+        admission(fixture, {
+          id: SessionCompaction.ID.make("cmp_advisory_fresh"),
+          trigger: "advised",
+        }),
+      )
+
+      expect(fresh.id).toBe(SessionCompaction.ID.make("cmp_advisory_fresh"))
+      expect(yield* jobs.pending(fixture.sessionID)).toMatchObject([{ id: fresh.id, status: "pending" }])
     }),
   )
 
@@ -278,26 +315,6 @@ describe("SessionCompactionJob", () => {
     }),
   )
 
-  it.effect("returns recoverable Session IDs once in deterministic order", () =>
-    Effect.gen(function* () {
-      const jobs = yield* SessionCompactionJob.Service
-      const z = yield* setup("recover_z")
-      const a = yield* setup("recover_a")
-      const live = yield* setup("recover_live")
-      const expired = yield* setup("recover_expired")
-      yield* jobs.admit(admission(z, { id: SessionCompaction.ID.make("cmp_recover_z") }))
-      yield* jobs.admit(admission(a, { id: SessionCompaction.ID.make("cmp_recover_a") }))
-      const liveJob = yield* jobs.admit(admission(live, { id: SessionCompaction.ID.make("cmp_recover_live") }))
-      const expiredJob = yield* jobs.admit(admission(expired, { id: SessionCompaction.ID.make("cmp_recover_expired") }))
-      yield* jobs.claim({ jobID: liveJob.id, owner: "worker", now: 10, expiresAt: 30 })
-      yield* jobs.claim({ jobID: expiredJob.id, owner: "worker", now: 10, expiresAt: 20 })
-
-      expect(yield* jobs.recoverable(20)).toEqual(
-        [a.sessionID, expired.sessionID, z.sessionID].sort((left, right) => left.localeCompare(right)),
-      )
-    }),
-  )
-
   it.effect("publishes one event for each lifecycle transition across reclaim", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("cardinality")
@@ -380,7 +397,6 @@ function admission(
   return {
     sessionID: fixture.sessionID,
     trigger: "manual",
-    admissionMode: "background",
     requestedThrough: fixture.boundaries[0],
     baseContextRevision: 0,
     targetMaxInputTokens: 4_096,

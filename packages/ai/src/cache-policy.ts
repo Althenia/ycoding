@@ -198,6 +198,24 @@ const lastMarkableMessages = (
   return found.reverse()
 }
 
+const firstMarkableMessages = (
+  messages: ReadonlyArray<Message>,
+  count: number,
+  gpt56Roles: Gpt56MarkerRoles = undefined,
+) => {
+  const found: number[] = []
+  for (let index = 0; index < messages.length && found.length < count; index++) {
+    const message = messages[index]!
+    if (
+      message.volatile !== true &&
+      (gpt56Roles === undefined || (isGpt56MarkerRole(message.role) && gpt56Roles.includes(message.role))) &&
+      message.content.some(gpt56Roles === undefined ? isMarkablePart : isGpt56MarkablePart)
+    )
+      found.push(index)
+  }
+  return found
+}
+
 // Mark the last non-empty text or tool-result part of one message. Other part
 // types do not expose a cache field in the canonical schema and empty text
 // markers are rejected by Anthropic-compatible APIs.
@@ -269,8 +287,26 @@ const markMessages = (
   if (strategy === "latest-assistant")
     return markMessageAt(messages, lastIndexOfRole(messages, "assistant"), hint, reserve, gpt56Roles)
   if (gpt56Roles !== undefined) {
+    const limit = Math.min(strategy.tail, gpt56Limit)
+    if (limit <= 0) return messages
+    // Keep the stable earliest prefix breakpoint within the 50-window even after
+    // history grows beyond the provider read limit. Without this, newest-only
+    // selection evicts the early prefix and the hit drops to 0-20% and stays
+    // poisoned (generation is now stable at 0). Reserve up to 2 slots for the
+    // earliest markable messages to ensure the combined system + early prefix
+    // exceeds the provider's 1024-token minimum and remains cacheable; fill the
+    // remainder with the newest tail. Mainchat with 186k history was hitting
+    // 0-35% because a single early message (often <1024 tokens) was not
+    // cacheable, while short subagent histories stayed below the 50 limit and
+    // kept 80-100% hits.
+    const prefixReserve =
+      limit > 2 && limit === gpt56Limit && messages.length > gpt56Limit ? 2 : limit > 1 && messages.length > gpt56Limit ? 1 : 0
+    const tailCount = limit - prefixReserve
+    const prefixIndices = prefixReserve > 0 ? firstMarkableMessages(messages, prefixReserve, gpt56Roles) : []
+    const tailIndices = lastMarkableMessages(messages, tailCount, gpt56Roles)
+    const combined = [...new Set([...prefixIndices, ...tailIndices])].sort((a, b) => a - b)
     let next: Message[] | undefined
-    for (const index of lastMarkableMessages(messages, Math.min(strategy.tail, gpt56Limit), gpt56Roles)) {
+    for (const index of combined) {
       const current = (next ?? messages)[index]!
       const marked = markMessage(current, index, hint, reserve, gpt56Roles)
       if (marked === current) continue
@@ -279,9 +315,8 @@ const markMessages = (
     }
     return next ?? messages
   }
-  const start = Math.max(0, messages.length - strategy.tail)
   let next: Message[] | undefined
-  for (let index = start; index < messages.length; index++) {
+  for (const index of lastMarkableMessages(messages, strategy.tail)) {
     const current = (next ?? messages)[index]!
     const marked = markMessage(current, index, hint, reserve, gpt56Roles)
     if (marked === current) continue
@@ -291,28 +326,61 @@ const markMessages = (
   return next ?? messages
 }
 
-// Manual hints share OpenAI's read window with generated hints. Keep the newest
-// message candidates and let the separately counted system anchor survive.
+// Manual hints share OpenAI's read window with generated hints. Keep the stable
+// earliest prefix within the 50 window plus the newest tail, evicting the middle
+// when over limit. Previously only the newest were kept, so after history >50
+// the early prefix (system + first user) was evicted and the hit dropped to
+// 0-20% with no recovery (generation is now stable at 0).
 const boundGpt56Messages = (messages: ReadonlyArray<Message>, limit: number): ReadonlyArray<Message> => {
-  let remaining = limit
-  let next: Message[] | undefined
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex--) {
-    const message = messages[messageIndex]!
-    if (!isGpt56MarkerRole(message.role)) continue
-    let content: ContentPart[] | undefined
-    for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex--) {
-      const part = message.content[partIndex]!
-      if (!("cache" in part) || !part.cache || (part.type !== "text" && !isGpt56MarkablePart(part))) continue
-      if (remaining > 0) {
-        remaining -= 1
-        continue
+  if (limit <= 0) {
+    let next: Message[] | undefined
+    for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+      const message = messages[messageIndex]!
+      if (!isGpt56MarkerRole(message.role)) continue
+      let content: ContentPart[] | undefined
+      for (let partIndex = 0; partIndex < message.content.length; partIndex++) {
+        const part = message.content[partIndex]!
+        if (!("cache" in part) || !part.cache || (part.type !== "text" && !isGpt56MarkablePart(part))) continue
+        content ??= message.content.slice()
+        content[partIndex] = { ...part, cache: undefined } as ContentPart
       }
-      content ??= message.content.slice()
-      content[partIndex] = { ...part, cache: undefined } as ContentPart
+      if (!content) continue
+      next ??= messages.slice()
+      next[messageIndex] = new Message({ ...message, content })
     }
-    if (!content) continue
+    return next ?? messages
+  }
+  const positions: Array<{ readonly m: number; readonly p: number }> = []
+  for (let m = 0; m < messages.length; m++) {
+    const message = messages[m]!
+    if (!isGpt56MarkerRole(message.role)) continue
+    for (let p = 0; p < message.content.length; p++) {
+      const part = message.content[p]!
+      if (!("cache" in part) || !part.cache || (part.type !== "text" && !isGpt56MarkablePart(part))) continue
+      positions.push({ m, p })
+    }
+  }
+  if (positions.length <= limit) return messages
+  const prefixReserve = limit > 2 ? 2 : limit > 1 ? 1 : 0
+  const keep = new Set<string>()
+  for (let i = 0; i < Math.min(prefixReserve, positions.length); i++) keep.add(`${positions[i]!.m}:${positions[i]!.p}`)
+  const tailKeep = limit - prefixReserve
+  for (let i = positions.length - tailKeep; i < positions.length; i++) {
+    if (i < prefixReserve) continue
+    keep.add(`${positions[i]!.m}:${positions[i]!.p}`)
+  }
+  let next: Message[] | undefined
+  for (let m = 0; m < messages.length; m++) {
+    const message = messages[m]!
+    if (!isGpt56MarkerRole(message.role)) continue
+    const rebuilt = message.content.map((part, p) => {
+      if (!("cache" in part) || !part.cache || (part.type !== "text" && !isGpt56MarkablePart(part))) return part
+      return keep.has(`${m}:${p}`) ? part : ({ ...part, cache: undefined } as ContentPart)
+    })
+    const changed = rebuilt.some((part, idx) => part !== message.content[idx])
+    if (!changed) continue
     next ??= messages.slice()
-    next[messageIndex] = new Message({ ...message, content })
+    next[m] = new Message({ ...message, content: rebuilt })
   }
   return next ?? messages
 }
@@ -338,12 +406,13 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
       : ["user", "tool"]
   const tools = policy.tools && !gpt56 ? markLastTool(request.tools, prefixHint, reserve) : request.tools
   const system = policy.system ? markLastSystem(request.system, prefixHint, reserve) : request.system
+  const trailingVolatile = request.messages.at(-1)?.volatile === true
+  const implicitReserved =
+    !gpt56 || OpenAIOptions.promptCacheOptions(request)?.mode === "explicit" || trailingVolatile ? 0 : 1
   const gpt56MessageLimit = gpt56
     ? Math.max(
         0,
-        OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT -
-          (OpenAIOptions.promptCacheOptions(request)?.mode === "explicit" ? 0 : 1) -
-          (system.some((part) => part.cache !== undefined) ? 1 : 0),
+        OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT - implicitReserved - (system.some((part) => part.cache !== undefined) ? 1 : 0),
       )
     : Number.MAX_SAFE_INTEGER
   const selectedMessages = !policy.messages

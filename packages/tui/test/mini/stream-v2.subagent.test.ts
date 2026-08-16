@@ -41,7 +41,7 @@ function ok<T>(data: T) {
 }
 
 function connected(id = "evt_connected") {
-  return { id, type: "server.connected", data: {} } satisfies RunV2Event
+  return { id, type: "server.connected", data: {}, sourceEpoch: "source_test" } satisfies RunV2Event
 }
 
 function durable(sessionID: string, seq = 0) {
@@ -308,7 +308,12 @@ describe("mini subagent tracker", () => {
     while (!states().some((state) => state.tabs.some((tab) => tab.status === "running"))) await Bun.sleep(0)
 
     first.close()
-    while (states().at(-1)?.tabs.some((tab) => tab.status === "running")) await Bun.sleep(0)
+    while (
+      states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.status === "running")
+    )
+      await Bun.sleep(0)
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "completed" }])
     await transport.close()
@@ -325,7 +330,12 @@ describe("mini subagent tracker", () => {
     while (!states().some((state) => state.tabs.some((tab) => tab.status === "running"))) await Bun.sleep(0)
 
     events.push(subagentToolFailed())
-    while (states().at(-1)?.tabs.some((tab) => tab.status === "running")) await Bun.sleep(0)
+    while (
+      states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.status === "running")
+    )
+      await Bun.sleep(0)
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "error" }])
     await transport.close()
@@ -342,7 +352,12 @@ describe("mini subagent tracker", () => {
     while (!states().some((state) => state.tabs.some((tab) => tab.status === "running"))) await Bun.sleep(0)
 
     events.push(parentInterrupted())
-    while (states().at(-1)?.tabs.some((tab) => tab.status === "running")) await Bun.sleep(0)
+    while (
+      states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.status === "running")
+    )
+      await Bun.sleep(0)
 
     expect(states().at(-1)?.tabs).toMatchObject([{ sessionID: "ses_child", status: "cancelled" }])
     await transport.close()
@@ -413,7 +428,12 @@ describe("mini subagent tracker family cap", () => {
     expect(states().at(-1)?.tabs).toHaveLength(CAP)
 
     launchLiveSubagent(events, false, "ses_new")
-    while (!states().at(-1)?.tabs.some((tab) => tab.sessionID === "ses_new")) await Bun.sleep(0)
+    while (
+      !states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.sessionID === "ses_new")
+    )
+      await Bun.sleep(0)
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -429,10 +449,19 @@ describe("mini subagent tracker family cap", () => {
       sessions: familySessions(CAP - 1, ["ses_live"]),
       active: { ses_live: { type: "running" } },
     })
-    expect(states().at(-1)?.tabs.find((tab) => tab.sessionID === "ses_live")).toMatchObject({ status: "running" })
+    expect(
+      states()
+        .at(-1)
+        ?.tabs.find((tab) => tab.sessionID === "ses_live"),
+    ).toMatchObject({ status: "running" })
 
     launchLiveSubagent(events, false, "ses_new")
-    while (!states().at(-1)?.tabs.some((tab) => tab.sessionID === "ses_new")) await Bun.sleep(0)
+    while (
+      !states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.sessionID === "ses_new")
+    )
+      await Bun.sleep(0)
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -452,7 +481,12 @@ describe("mini subagent tracker family cap", () => {
     expect(states().at(-1)?.tabs).toHaveLength(CAP)
 
     launchLiveSubagent(events, false, "ses_new")
-    while (!states().at(-1)?.tabs.some((tab) => tab.sessionID === "ses_new")) await Bun.sleep(0)
+    while (
+      !states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.sessionID === "ses_new")
+    )
+      await Bun.sleep(0)
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP + 1)
@@ -466,7 +500,12 @@ describe("mini subagent tracker family cap", () => {
     while (!states().at(-1)?.details.ses_old_0) await Bun.sleep(0)
 
     launchLiveSubagent(events, false, "ses_new")
-    while (!states().at(-1)?.tabs.some((tab) => tab.sessionID === "ses_new")) await Bun.sleep(0)
+    while (
+      !states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.sessionID === "ses_new")
+    )
+      await Bun.sleep(0)
 
     const tabs = states().at(-1)?.tabs ?? []
     expect(tabs).toHaveLength(CAP)
@@ -481,7 +520,14 @@ describe("mini subagent tracker family cap", () => {
 
     events.push(foundStep())
     // Bounded: a skipped discovery emits nothing, so the assertions must fail.
-    for (let tick = 0; tick < 50 && !states().at(-1)?.tabs.some((tab) => tab.sessionID === "ses_found"); tick++)
+    for (
+      let tick = 0;
+      tick < 50 &&
+      !states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.sessionID === "ses_found");
+      tick++
+    )
       await Bun.sleep(0)
 
     const tabs = states().at(-1)?.tabs ?? []
@@ -507,7 +553,11 @@ describe("mini subagent tracker family cap", () => {
     // No slot can be won, so the lookup is never issued and the list stays capped.
     expect((client.session.get as ReturnType<typeof spyOn>).mock.calls).toHaveLength(lookups)
     expect(states().at(-1)?.tabs).toHaveLength(CAP)
-    expect(states().at(-1)?.tabs.some((tab) => tab.sessionID === "ses_found")).toBe(false)
+    expect(
+      states()
+        .at(-1)
+        ?.tabs.some((tab) => tab.sessionID === "ses_found"),
+    ).toBe(false)
     await transport.close()
   })
 })

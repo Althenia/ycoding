@@ -64,7 +64,7 @@ import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
-import { Session } from "./routes/session"
+import { Session, type SessionViewportStore } from "./routes/session"
 import { ShellOutput } from "./routes/shell-output"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
@@ -391,6 +391,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
 })
 
 function App(props: { pair?: DialogPairCredentials; started: number }) {
+  const sessionViewports: SessionViewportStore = new Map()
   const log = useLog({ component: "app" })
   const startup = useTuiStartup()
   const config = useConfig()
@@ -1079,7 +1080,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                 </Match>
                 <Match when={route.data.type === "session"}>
                   <Show when={route.data.type === "session" ? route.data.sessionID : undefined} keyed>
-                    {(_) => <Session />}
+                    {(_) => <Session viewports={sessionViewports} />}
                   </Show>
                 </Match>
                 <Match when={route.data.type === "plugin"}>

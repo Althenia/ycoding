@@ -9,7 +9,11 @@ import { Integration } from "../../integration";
 import { ProviderV2 } from "../../provider";
 import { ProviderUsageV2 } from "../../provider-usage";
 import { ClaudeUsage } from "../../provider-usage/claude";
+import { SessionMessage } from "../../session/message";
+import { SessionSchema } from "../../session/schema";
+import type { PluginRuntime } from "../runtime";
 import {
+  claudeCodeBillingSample,
   createClaudeCodeCredentialStore,
   createClaudeCodeFetch,
   createSystemClaudeCodeCredentialSource,
@@ -101,6 +105,8 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
       const credentials = yield* Credential.Service;
       const providerUsage = yield* ProviderUsageV2.Service;
       const events = yield* EventV2.Service;
+      const { PluginRuntime } = yield* Effect.promise(() => import("../runtime"));
+      const runtime = yield* PluginRuntime.Service;
       yield* Effect.forEach(
         yield* credentials.list(Integration.ID.make("anthropic")),
         (credential) =>
@@ -296,6 +302,12 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
               fetch: upstream,
               credentials: () => store.resolve(source),
               reload: () => store.refresh(source),
+              billingSample: (sessionID) =>
+                Effect.runPromise(
+                  durableBillingSample(runtime, SessionSchema.ID.make(sessionID)).pipe(
+                    Effect.catch(() => Effect.succeed(undefined)),
+                  ),
+                ),
               onEvent,
               onResponse: async (response) => {
                 const credentials = await store.resolve(source);
@@ -331,3 +343,25 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
 }
 
 export const AnthropicPlugin = makeAnthropicPlugin();
+
+const BILLING_MESSAGE_PAGE_SIZE = 32;
+
+const durableBillingSample = Effect.fn("AnthropicPlugin.durableBillingSample")(function* (
+  runtime: PluginRuntime.Interface,
+  sessionID: SessionSchema.ID,
+) {
+  let cursor: { readonly id: SessionMessage.ID; readonly direction: "next" } | undefined;
+  while (true) {
+    const messages = yield* runtime.session.messages({
+      sessionID,
+      limit: BILLING_MESSAGE_PAGE_SIZE,
+      order: "asc",
+      ...(cursor ? { cursor } : {}),
+    });
+    const first = messages.find((message) => message.type === "user");
+    if (first) return claudeCodeBillingSample(first.text);
+    const last = messages.at(-1);
+    if (!last || messages.length < BILLING_MESSAGE_PAGE_SIZE) return undefined;
+    cursor = { id: last.id, direction: "next" };
+  }
+});

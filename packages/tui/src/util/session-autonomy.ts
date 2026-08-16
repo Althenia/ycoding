@@ -1,11 +1,40 @@
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
+export function yoloLevel(state: { yolo?: unknown }): number {
+  const raw = (state as { yolo?: unknown }).yolo
+  if (typeof raw === "number" && raw >= 0 && raw <= 3) return raw
+  if (raw === true) return 2
+  if (raw === false || raw === 0) return 0
+  if (typeof raw === "number") return Math.max(0, Math.min(3, Math.trunc(raw)))
+  return 0
+}
+
+export function yoloLevelLabel(level: number): string {
+  if (level === 0) return "Normal"
+  return `YOLO ${level}`
+}
+
+export function yoloLevelTooltip(level: number): string {
+  if (level === 1) return "auto questions"
+  if (level === 2) return "auto questions + permissions"
+  if (level === 3) return "auto questions + permissions + guardrails"
+  return "manual approvals"
+}
+
+export const YOLO_LEVEL_DETAILS: Record<number, string> = {
+  0: "manual approvals",
+  1: "questions",
+  2: "+permissions",
+  3: "+guardrails",
+}
+
 export function autonomyModeLabel(state: SessionAutonomyState) {
-  if (state.mode === "yolo") return "YOLO"
-  if (state.mode === "goal") return "Goal"
-  // A finished goal leaves goal mode but keeps its terminal status. Gating on the mode alone would
-  // drop back to a bare "Normal", hiding that a goal ran and how it ended.
-  if (state.goal && state.goal.status !== "active") return `Goal ${state.goal.status}`
+  const level = yoloLevel(state)
+  const active = state.goal?.status === "active"
+  const yoloLabel = level > 0 ? `YOLO ${level}` : ""
+  if (level > 0 && active) return `${yoloLabel} + Goal`
+  if (level > 0) return yoloLabel
+  if (active) return "Goal"
   return "Normal"
 }
 
@@ -123,7 +152,7 @@ export function currentSessionAutonomy(
   connected: boolean,
   response: SessionAutonomyResponse | undefined,
 ): SessionAutonomyState {
-  if (!connected || response?.sessionID !== sessionID) return { mode: "normal" }
+  if (!connected || response?.sessionID !== sessionID) return { mode: "normal", yolo: 0 } as unknown as SessionAutonomyState
   return response.state
 }
 
@@ -141,18 +170,17 @@ export async function activateGoal(input: {
   id: string
   goal: string
   get: () => Promise<SessionAutonomyState>
-  set: (input: { mode: "goal"; goal: string }) => Promise<SessionAutonomyState>
+  set: (input: { goal: string }) => Promise<SessionAutonomyState>
   prompt: (input: { sessionID: string; id: string; text: string; resume?: boolean }) => Promise<unknown>
 }) {
   await input.prompt({ sessionID: input.sessionID, id: input.id, text: input.goal, resume: false })
   const current = await input.get()
   const state =
-    current.mode === "goal" &&
     current.goal &&
     current.goal.status === "active" &&
-    ("rawText" in current.goal ? current.goal.rawText : current.goal.text) === input.goal
+    ("rawText" in current.goal ? (current.goal as { rawText?: string }).rawText : current.goal.text) === input.goal
       ? current
-      : await input.set({ mode: "goal", goal: input.goal })
+      : await input.set({ goal: input.goal })
   await input.prompt({ sessionID: input.sessionID, id: input.id, text: input.goal })
   return state
 }

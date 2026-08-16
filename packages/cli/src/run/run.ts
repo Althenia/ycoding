@@ -3,6 +3,7 @@ import { YCoding, type YCodingClient, type SessionMessageAssistantTool } from "@
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { open } from "node:fs/promises"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { readStdin } from "../util/io"
 import { ServerConnection } from "../services/server-connection"
 import { waitForCatalogReady } from "../services/catalog"
@@ -59,7 +60,7 @@ async function run(input: RunCommandInput) {
   const directory = localDirectory(root)
   const message = mergeInput(formatMessage(input.message), process.stdin.isTTY ? undefined : await readStdin())
   if (!message?.trim()) fail("You must provide a message")
-  const files = await Promise.all(input.file.map((file) => prepareFile(file, root)))
+  const files = await Promise.all(input.file.map((file) => prepareRunFile(file, root)))
   const prepared = { directory, message, files }
   return execute(input, prepared, input.server.endpoint)
 }
@@ -196,43 +197,21 @@ async function validateAgent(client: YCodingClient, directory: string, workspace
   return name
 }
 
-async function prepareFile(input: string, directory: string): Promise<FilePart> {
+export async function prepareRunFile(input: string, directory: string): Promise<FilePart> {
   const file = path.resolve(directory, input)
   const handle = await open(file, "r").catch(() => fail(`File not found: ${input}`))
   try {
     const stat = await handle.stat()
     if (!stat.isFile() || stat.size > ATTACH_FILE_MAX_BYTES)
       fail(`Cannot attach a directory, special file, or file larger than 10 MiB: ${input}`)
-    const content = Buffer.alloc(Number(stat.size))
-    let offset = 0
-    while (offset < content.length) {
-      const read = await handle.read(content, offset, content.length - offset, offset)
-      if (read.bytesRead === 0) break
-      offset += read.bytesRead
-    }
-    const bytes = content.subarray(0, offset)
-    const detected = FSUtil.mimeType(file)
-    const text = bytes.toString("utf8")
-    const mime =
-      detected.startsWith("image/") || detected === "application/pdf"
-        ? detected
-        : !isBinaryContent(bytes) && Buffer.from(text, "utf8").equals(bytes)
-          ? "text/plain"
-          : detected
     return {
-      url: `data:${mime};base64,${bytes.toString("base64")}`,
+      url: pathToFileURL(file).href,
       filename: path.basename(file),
-      mime,
+      mime: FSUtil.mimeType(file),
     }
   } finally {
     await handle.close()
   }
-}
-
-function isBinaryContent(bytes: Uint8Array) {
-  if (bytes.length === 0) return false
-  if (bytes.includes(0)) return true
-  return bytes.reduce((count, byte) => count + Number(byte < 9 || (byte > 13 && byte < 32)), 0) / bytes.length > 0.3
 }
 
 async function renderTool(part: SessionMessageAssistantTool, directory: string) {

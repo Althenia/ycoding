@@ -170,10 +170,10 @@ describe("Config", () => {
       }).compaction!
 
       expect(ConfigCompaction.resolve([])).toEqual({
-        keepRecentMessages: 0,
+        keepRecentMessages: 20,
         reservedOutputTokens: 0,
         contextSafetyMarginTokens: 4_096,
-        timeoutSeconds: 0,
+        timeoutSeconds: 60,
         maxOutputTokens: 0,
         maxManifestBytes: 65_536,
         maxInternalPasses: 8,
@@ -183,7 +183,7 @@ describe("Config", () => {
         keepRecentMessages: 3,
         reservedOutputTokens: 1_024,
         contextSafetyMarginTokens: 8_192,
-        timeoutSeconds: 0,
+        timeoutSeconds: 60,
         maxOutputTokens: 0,
         maxManifestBytes: 32_768,
         maxInternalPasses: 8,
@@ -196,6 +196,21 @@ describe("Config", () => {
       expect(() => decode({ compaction: { advisory: { consider_percent: 70, strongly_advised_percent: 100 } } })).toThrow()
       expect(() => decode({ compaction: { advisory: { consider_percent: 80, strongly_advised_percent: 80 } } })).toThrow()
       expect(() => decode({ compaction: { advisory: { consider_percent: 90, strongly_advised_percent: 80 } } })).toThrow()
+    }),
+  )
+
+  it.effect("derives deterministic versioned compaction admission digests", () =>
+    Effect.sync(() => {
+      const resolved = ConfigCompaction.resolve([])
+      const digest = ConfigCompaction.admissionDigest(resolved)
+
+      expect(digest).toBe(ConfigCompaction.admissionDigest(ConfigCompaction.resolve([])))
+      expect(digest).toBe(ConfigCompaction.admissionDigest(resolved, 3))
+      expect(digest).not.toBe(ConfigCompaction.admissionDigest(resolved, 2))
+      expect(digest).not.toBe(ConfigCompaction.admissionDigest(resolved, 1))
+      expect(digest).not.toBe(
+        ConfigCompaction.admissionDigest({ ...resolved, timeoutSeconds: resolved.timeoutSeconds + 1 }),
+      )
     }),
   )
 

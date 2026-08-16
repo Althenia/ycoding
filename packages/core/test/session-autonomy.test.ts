@@ -37,15 +37,15 @@ const setup = Effect.gen(function* () {
 it.effect("persists modes in the current autonomy column", () =>
   Effect.gen(function* () {
     const service = yield* setup
-    expect(yield* service.get(sessionID)).toEqual({ mode: "normal" })
-    expect(yield* service.setMode({ sessionID, mode: "yolo" })).toEqual({ mode: "yolo" })
-    expect(yield* service.get(sessionID)).toEqual({ mode: "yolo" })
+    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", yolo: 0 })
+    expect(yield* service.setMode({ sessionID, mode: "yolo" })).toEqual({ mode: "normal", yolo: 2 })
+    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", yolo: 2 })
     const row = yield* (yield* Database.Service).db
       .select({ autonomy: SessionTable.autonomy })
       .from(SessionTable)
       .get()
       .pipe(Effect.orDie)
-    expect(row?.autonomy).toEqual({ mode: "yolo" })
+    expect(row?.autonomy).toEqual({ mode: "normal", yolo: 2 })
   }),
 )
 
@@ -54,9 +54,9 @@ it.effect("snapshots autonomy state with a durable ABA fence", () =>
     const service = yield* setup
     const initial = yield* service.snapshot(sessionID)
     expect(initial).toEqual({
-      state: { mode: "normal" },
+      state: { mode: "normal", yolo: 0 },
       sequence: 0,
-      digest: "fa76e6a145e80d3ef8d955abd5a17426feba569df832d2cf6af7dbd5b86c5240",
+      digest: "7bca8b42480222ddfa0cf4adc95073d9b40726221d52a79b4c55ef354dec7b52",
     })
 
     expect(yield* service.advance({ sessionID, progress: "ignored" })).toEqual(initial.state)
@@ -87,7 +87,7 @@ it.effect("serializes concurrent state-dependent autonomy advances", () =>
     )
 
     expect(yield* service.snapshot(sessionID)).toMatchObject({
-      state: { mode: "goal", goal: { iteration: 2, status: "active" } },
+      state: { mode: "normal", yolo: 0, goal: { iteration: 2, status: "active" } },
       sequence: 3,
     })
   }),
@@ -98,7 +98,8 @@ it.effect("persists the original text alongside an active goal", () =>
     const service = yield* setup
 
     expect(yield* service.setGoal({ sessionID, text: "Ship the fix" })).toMatchObject({
-      mode: "goal",
+      mode: "normal",
+      yolo: 0,
       goal: { text: "Ship the fix", rawText: "Ship the fix", status: "active" },
     })
   }),
@@ -111,7 +112,8 @@ it.effect("resets a completed goal to active with identical or new text", () =>
     yield* service.advance({ sessionID, progress: "done", completed: true })
 
     expect(yield* service.setGoal({ sessionID, text: "Ship the fix" })).toEqual({
-      mode: "goal",
+      mode: "normal",
+      yolo: 0,
       goal: {
         text: "Ship the fix",
         rawText: "Ship the fix",
@@ -124,7 +126,8 @@ it.effect("resets a completed goal to active with identical or new text", () =>
     yield* service.advance({ sessionID, progress: "done", completed: true })
 
     expect(yield* service.setGoal({ sessionID, text: "Ship the follow-up" })).toEqual({
-      mode: "goal",
+      mode: "normal",
+      yolo: 0,
       goal: {
         text: "Ship the follow-up",
         rawText: "Ship the follow-up",
@@ -176,7 +179,8 @@ it.effect("keeps a progressing goal active beyond fifty-one iterations", () =>
     )
 
     expect(states.at(-1)).toMatchObject({
-      mode: "goal",
+      mode: "normal",
+      yolo: 0,
       goal: { status: "active", iteration: 51, noProgress: 0 },
     })
   }),
@@ -186,8 +190,8 @@ it.effect("stops an active goal durably", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Keep going" })
-    expect(yield* service.stop(sessionID)).toMatchObject({ mode: "normal", goal: { status: "stopped" } })
-    expect(yield* service.get(sessionID)).toMatchObject({ mode: "normal", goal: { status: "stopped" } })
+    expect(yield* service.stop(sessionID)).toMatchObject({ mode: "normal", yolo: 0, goal: { status: "stopped" } })
+    expect(yield* service.get(sessionID)).toMatchObject({ mode: "normal", yolo: 0, goal: { status: "stopped" } })
   }),
 )
 
@@ -195,16 +199,23 @@ it.effect("keeps goal history when a mode switch leaves goal mode", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Keep going" })
-    expect(yield* service.setMode({ sessionID, mode: "normal" })).toMatchObject({
+    expect(yield* service.setMode({ sessionID, mode: "yolo" })).toMatchObject({
       mode: "normal",
+      yolo: 2,
+      goal: { text: "Keep going", status: "active" },
+    })
+    expect(yield* service.get(sessionID)).toMatchObject({ mode: "normal", yolo: 2, goal: { status: "active" } })
+    expect(yield* service.stop(sessionID)).toMatchObject({
+      mode: "normal",
+      yolo: 2,
       goal: { text: "Keep going", status: "stopped" },
     })
-    expect(yield* service.get(sessionID)).toMatchObject({ mode: "normal", goal: { status: "stopped" } })
 
     yield* service.setGoal({ sessionID, text: "Finish" })
-    expect(yield* service.setMode({ sessionID, mode: "yolo" })).toMatchObject({
-      mode: "yolo",
-      goal: { text: "Finish", status: "stopped" },
+    expect(yield* service.setMode({ sessionID, mode: "normal" })).toMatchObject({
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "Finish", status: "active" },
     })
   }),
 )
@@ -215,7 +226,8 @@ it.effect("preserves an already terminal goal status across mode switches", () =
     yield* service.setGoal({ sessionID, text: "Ship it" })
     yield* service.advance({ sessionID, progress: "done", completed: true })
     expect(yield* service.setMode({ sessionID, mode: "yolo" })).toMatchObject({
-      mode: "yolo",
+      mode: "normal",
+      yolo: 2,
       goal: { status: "completed" },
     })
   }),

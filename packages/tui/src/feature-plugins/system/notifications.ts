@@ -200,7 +200,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         const output =
           session.parentID
             ? { message: "Session done", sound: { name: "subagent_done" as const, when: "always" as const } }
-            : initial.mode === "goal"
+            : initial.goal !== undefined
             ? goalNotification(final)
             : { message: "Session done", sound: { name: "done" as const, when: "always" as const } }
         send(

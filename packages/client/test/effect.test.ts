@@ -15,17 +15,20 @@ import {
 } from "../src/effect/index"
 
 const synced = { type: "log.synced" as const, aggregateID: "ses_test", seq: Event.Seq.make(1) }
+const sourceEpoch = "source_test"
 
 test("health.get decodes the readiness response", async () => {
   const httpClient = HttpClient.make((request) =>
-    Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ healthy: true, version: "old", pid: 123 }))),
+    Effect.succeed(
+      HttpClientResponse.fromWeb(request, Response.json({ healthy: true, version: "old", pid: 123, sourceEpoch })),
+    ),
   )
   const result = await Effect.gen(function* () {
     const client = yield* YCoding.make({ baseUrl: "http://localhost:3000" })
     return yield* client.health.get()
   }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient), Effect.runPromise)
 
-  expect(result).toEqual({ healthy: true, version: "old", pid: 123 })
+  expect(result).toEqual({ healthy: true, version: "old", pid: 123, sourceEpoch })
 })
 
 test("session.get returns the decoded Effect projection", async () => {
@@ -137,8 +140,8 @@ test("event.subscribe exposes and decodes the native Effect event stream", async
       HttpClientResponse.fromWeb(
         request,
         new Response(
-          `data: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {} })}\n\n` +
-            `data: ${JSON.stringify(modelSwitchedEvent)}\n\n`,
+          `data: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {}, sourceEpoch })}\n\n` +
+            `data: ${JSON.stringify({ ...modelSwitchedEvent, sourceEpoch })}\n\n`,
           { headers: { "content-type": "text/event-stream" } },
         ),
       ),
@@ -185,9 +188,12 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       return Effect.succeed(
         HttpClientResponse.fromWeb(
           request,
-          new Response(`data: ${JSON.stringify(modelSwitchedEvent)}\n\ndata: ${JSON.stringify(synced)}\n\n`, {
-            headers: { "content-type": "text/event-stream" },
-          }),
+          new Response(
+            `data: ${JSON.stringify({ ...modelSwitchedEvent, sourceEpoch })}\n\ndata: ${JSON.stringify({ ...synced, sourceEpoch })}\n\n`,
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          ),
         ),
       )
     }
@@ -195,7 +201,8 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
       return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(admission)))
     }
     if (url.endsWith("/compact")) {
-      compactBody = request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined
+      compactBody =
+        request.body._tag === "Uint8Array" ? JSON.parse(new TextDecoder().decode(request.body.body)) : undefined
       return Effect.succeed(HttpClientResponse.fromWeb(request, Response.json(compactionAdmission)))
     }
     if (url.includes("/context")) {
@@ -265,8 +272,7 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
     id: "cmp_compaction",
     sessionID: "ses_test",
     trigger: "manual",
-    admissionMode: "background",
-    status: "pending",
+    status: "ended",
   })
   expect(result.compacted).not.toHaveProperty("type")
   expect(result.compacted).not.toHaveProperty("summary")
@@ -274,11 +280,11 @@ test("session methods retain decoded Effect inputs and outputs", async () => {
   expect(result.context).toEqual([])
   expect(logQueries[0]).toEqual({ after: "0" })
   const logged = Array.from(result.log)
-  expect(logged.map((item) => item.type)).toEqual(["session.model.selected", "log.synced"])
+  expect(logged.map((entry) => entry.type)).toEqual(["session.model.selected", "log.synced"])
   expect(logged[0]?.type === "session.model.selected" && DateTime.toEpochMillis(logged[0].created)).toBe(
     1_717_171_717_000,
   )
-  expect(logged.at(-1)).toEqual(synced)
+  expect(logged.at(-1)).toEqual({ ...synced, sourceEpoch })
   expect(result.message).toEqual(expect.objectContaining({ id: "msg_model", type: "model-switched" }))
 })
 
@@ -339,8 +345,7 @@ const compactionAdmission = {
     id: "cmp_compaction",
     sessionID: "ses_test",
     trigger: "manual",
-    admissionMode: "background",
-    status: "pending",
+    status: "ended",
     requestedThrough: { messageID: "msg_compaction_request", seq: 1 },
     timeCreated: 1_717_171_717_000,
   },

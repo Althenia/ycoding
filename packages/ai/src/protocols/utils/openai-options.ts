@@ -43,6 +43,13 @@ export interface OpenAIContextManagementEntry {
   readonly compactThreshold?: number
 }
 
+export interface OpenAIResponsesWebSocketSession {
+  readonly sessionKey: string
+  readonly fingerprint: string
+  readonly messageBoundary: number
+  readonly fullReplay: boolean
+}
+
 export const OpenAIContextManagement = Schema.Struct({
   type: Schema.tag("compaction"),
   compact_threshold: Schema.optional(Schema.Number),
@@ -101,6 +108,21 @@ export const previousResponseId = (request: LLMRequest): string | undefined => {
 export const continuationInputStart = (request: LLMRequest): number | undefined => {
   const value = options(request)?.continuationInputStart
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+export const responsesWebSocket = (request: LLMRequest): OpenAIResponsesWebSocketSession | undefined => {
+  const value = options(request)?.responsesWebSocket
+  if (!isRecord(value)) return undefined
+  if (typeof value.sessionKey !== "string" || value.sessionKey.length === 0) return undefined
+  if (typeof value.fingerprint !== "string" || value.fingerprint.length === 0) return undefined
+  if (typeof value.messageBoundary !== "number" || !Number.isSafeInteger(value.messageBoundary) || value.messageBoundary < 0)
+    return undefined
+  return {
+    sessionKey: value.sessionKey,
+    fingerprint: value.fingerprint,
+    messageBoundary: value.messageBoundary,
+    fullReplay: value.fullReplay === true,
+  }
 }
 
 export const reasoningEffort = (request: LLMRequest): string | undefined => {
@@ -240,7 +262,6 @@ export const supportsExtendedPromptCacheRetention = (modelID: string): boolean =
 
 export type PublicOpenAIPromptCacheCapability = "key-only" | "legacy" | "gpt-5.6"
 
-// ChatGPT Codex remains key-only because its models do not accept public inline breakpoints uniformly.
 const PUBLIC_OPENAI_CACHE_ROUTES = new Set(["openai-chat", "openai-responses", "openai-responses-websocket"])
 
 export const supportsPromptCacheBreakpoints = (routeID: string, modelID: string): boolean =>
@@ -251,7 +272,7 @@ export const publicPromptCacheCapability = (
   modelID: string,
 ): PublicOpenAIPromptCacheCapability => {
   if (!PUBLIC_OPENAI_CACHE_ROUTES.has(routeID)) return "key-only"
-  return supportsPromptCacheBreakpoints(routeID, modelID) ? "gpt-5.6" : "legacy"
+  return isGpt56OrLater(modelID) ? "gpt-5.6" : "legacy"
 }
 
 export * as OpenAIOptions from "./openai-options"

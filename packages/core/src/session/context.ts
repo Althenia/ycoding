@@ -1,6 +1,7 @@
 export * as SessionContext from "./context"
 
 import { Context, Effect, Layer } from "effect"
+import { eq } from "drizzle-orm"
 import { AgentV2 } from "../agent"
 import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
@@ -20,6 +21,7 @@ import { SessionLiveState } from "./live-state"
 import { SessionMessage } from "./message"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
+import { SessionContextStateTable } from "./sql"
 import { SessionStore } from "./store"
 
 export interface Selection {
@@ -32,6 +34,7 @@ export interface Loaded {
   readonly session: SessionSchema.Info
   readonly agent: AgentV2.Selection & { readonly info: AgentV2.Info }
   readonly model: SessionRunnerModel.Resolved
+  readonly contextRevision: number
   readonly initial: string
   readonly messages: ReadonlyArray<SessionMessage.Info>
   readonly liveState: SessionLiveState.Snapshot
@@ -47,6 +50,8 @@ export interface Interface {
   readonly select: (sessionID: SessionSchema.ID) => Effect.Effect<Selection, AgentNotFoundError>
   /** Resolves the model and active history for that selection. */
   readonly load: (selection: Selection) => Effect.Effect<Loaded, SessionRunnerModel.Error>
+  /** Reads the active context revision without preparing model-visible history. */
+  readonly revision: (sessionID: SessionSchema.ID) => Effect.Effect<number>
 }
 
 /** Location-scoped model-context loader for durable Session Steps. */
@@ -69,6 +74,17 @@ const layer = Layer.effect(
     const skillInstructions = yield* SkillInstructions.Service
     const projectArtifactInstructions = ProjectArtifactInstructions.make()
     const store = yield* SessionStore.Service
+
+    const revision = Effect.fn("SessionContext.revision")(function* (sessionID: SessionSchema.ID) {
+      const state = yield* db
+        .select({ revision: SessionContextStateTable.revision })
+        .from(SessionContextStateTable)
+        .where(eq(SessionContextStateTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!state) return yield* Effect.die(new Error(`Context state not found for Session ${sessionID}`))
+      return state.revision
+    })
 
     const select = Effect.fn("SessionContext.select")(function* (sessionID: SessionSchema.ID) {
       const session = yield* store.get(sessionID)
@@ -95,6 +111,7 @@ const layer = Layer.effect(
     })
 
     const load = Effect.fn("SessionContext.load")(function* (selection: Selection) {
+      const contextRevision = yield* revision(selection.session.id)
       const model = yield* models.resolve(selection.session)
       const history = yield* SessionHistory.entriesForRunner(db, selection.session.id, selection.instructions)
       const live = yield* liveState.load(selection.session.id).pipe(Effect.orDie)
@@ -102,13 +119,14 @@ const layer = Layer.effect(
         session: selection.session,
         agent: selection.agent,
         model,
+        contextRevision,
         initial: history.initial,
         messages: history.entries.map((entry) => entry.message),
         liveState: live,
       }
     })
 
-    return Service.of({ select, load })
+    return Service.of({ select, load, revision })
   }),
 )
 

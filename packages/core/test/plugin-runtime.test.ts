@@ -10,14 +10,13 @@ const cell = PluginRuntime.makeCell()
 const it = testEffect(PluginRuntime.layerWithCell(cell))
 
 describe("PluginRuntime", () => {
-  it.effect("forwards compaction admission through its cell", () =>
+  it.effect("forwards an advisor compaction admission through its cell", () =>
     Effect.gen(function* () {
       const unavailable = () => Effect.die(new Error("unused"))
       const expected = {
         id: SessionCompaction.ID.make("cmp_plugin_runtime"),
         sessionID: Session.ID.make("ses_parent"),
         trigger: "advised" as const,
-        admissionMode: "background" as const,
         status: "pending" as const,
         requestedThrough: { messageID: SessionMessage.ID.make("msg_boundary"), seq: 1 },
         timeCreated: DateTime.makeUnsafe(0),
@@ -33,7 +32,7 @@ describe("PluginRuntime", () => {
           resume: unavailable,
           interrupt: unavailable,
           synthetic: unavailable,
-          compact: () => Effect.succeed(expected),
+          compact: (() => Effect.succeed(expected)) as unknown as PluginRuntime.Interface["session"]["compact"],
         },
         job: {
           start: unavailable,

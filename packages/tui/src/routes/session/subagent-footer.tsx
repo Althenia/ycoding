@@ -84,7 +84,6 @@ export type SubagentEconomics = {
   strip: readonly string[]
   context?: string
   cacheHit?: string
-  prefix?: string
   reads?: string
   writes?: string
   spent?: string
@@ -107,7 +106,6 @@ export function subagentEconomics(
   const context = diagnostics
     ? `${compactNumber(diagnostics.context.total)} / ${diagnostics.context.limit === undefined ? "unreported" : compactNumber(diagnostics.context.limit)}${diagnostics.context.percent === undefined ? "" : ` · ${diagnostics.context.percent}%`}`
     : undefined
-  const prefix = diagnostics?.requests?.latestInvalidation === "stable-hit" ? "stable" : undefined
   const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
   const spent = session.cost > 0 ? money.format(session.cost) : undefined
@@ -121,7 +119,6 @@ export function subagentEconomics(
   const strip = [
     context ? `Context ${context}` : undefined,
     diagnostics && !hit ? "hit unreported" : undefined,
-    prefix ? `prefix ${prefix}` : undefined,
     diagnostics ? (reads ? `${reads} read` : "read unreported") : undefined,
     diagnostics ? (writes ? `${writes} write` : "write unreported") : undefined,
     spent,
@@ -133,7 +130,6 @@ export function subagentEconomics(
     strip,
     context,
     cacheHit,
-    prefix,
     reads,
     writes,
     spent,

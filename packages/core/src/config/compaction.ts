@@ -2,6 +2,7 @@ export * as ConfigCompaction from "./compaction"
 
 import { Schema } from "effect"
 import { NonNegativeInt } from "../schema"
+import { Hash } from "../util/hash"
 
 const Percent = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 99 }))
 export const Advisory = Schema.Union([
@@ -40,15 +41,20 @@ export interface Resolved {
 }
 
 const defaults: Resolved = {
-  keepRecentMessages: 0,
+  keepRecentMessages: 20,
   reservedOutputTokens: 0,
   contextSafetyMarginTokens: 4_096,
-  timeoutSeconds: 0,
+  timeoutSeconds: 60,
   maxOutputTokens: 0,
   maxManifestBytes: 65_536,
   maxInternalPasses: 8,
   advisory: { considerPercent: 70, stronglyAdvisedPercent: 90 },
 }
+
+const algorithmRevision = 3
+
+export const admissionDigest = (policy: Resolved, revision = algorithmRevision) =>
+  Hash.sha256(JSON.stringify({ revision, policy }))
 
 export const resolve = (infos: ReadonlyArray<Info>): Resolved =>
   infos.reduce<Resolved>(

@@ -1,4 +1,5 @@
 import type { SessionMessageInfo, SessionMessageUser } from "@ycoding-ai/client/promise"
+import { projectedPromptInput } from "../prompt/codec"
 import { promptCopy, promptSame } from "./prompt.shared"
 import type { RunInput, RunPrompt } from "./types"
 
@@ -21,23 +22,24 @@ export type RunSession = {
 }
 
 function messagePrompt(message: SessionMessageUser): RunPrompt {
+  const prompt = projectedPromptInput(message)
   return {
-    text: message.text,
+    text: prompt.text,
     parts: [
-      ...(message.files ?? []).map((file) => ({
+      ...(prompt.files ?? []).map((file, index) => ({
         type: "file" as const,
-        url: file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`,
-        mime: file.mime,
+        url: file.uri,
+        mime: message.files?.[index]?.mime,
         filename: file.name,
         source: file.mention
           ? {
               type: "file",
-              path: file.name ?? (file.source.type === "uri" ? file.source.uri : "inline attachment"),
+              path: file.name ?? file.uri,
               text: { start: file.mention.start, end: file.mention.end, value: file.mention.text },
             }
           : undefined,
       })),
-      ...(message.agents ?? []).map((agent) => ({
+      ...(prompt.agents ?? []).map((agent) => ({
         type: "agent" as const,
         name: agent.name,
         source: agent.mention

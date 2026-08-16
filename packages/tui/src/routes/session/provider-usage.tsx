@@ -6,15 +6,25 @@ import type {
   SessionInfo,
 } from "@ycoding-ai/client"
 import { CREDIT_TO_USD } from "@ycoding-ai/core/provider-usage/copilot"
+import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, on, onCleanup, onMount, type Accessor } from "solid-js"
 import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { useRouteData } from "../../context/route"
-import { useDialog } from "../../ui/dialog"
-import { formatWindowValue, freshnessLabel } from "../../util/provider-usage"
+import { dialogContentWidth, DIALOG_INSET_RIGHT, useDialog } from "../../ui/dialog"
+import {
+  formatBillDue,
+  formatReset,
+  formatWindowValue,
+  freshnessLabel,
+  progressBar,
+  usageSeverity,
+} from "../../util/provider-usage"
 import { formatDiagnosticsModel, type ProviderRequestDiagnostics } from "../../util/cache-diagnostics"
 import { DialogSelect } from "../../ui/dialog-select"
+import { useTheme } from "../../context/theme"
+import { Locale } from "../../util/locale"
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 
@@ -227,6 +237,7 @@ export function ProviderUsageDialogContent(props: {
   sessionUsage?: ProviderUsageSessionPresentation
   subagentUsage?: readonly ProviderUsageSubagentPresentation[]
 }) {
+  const dimensions = useTerminalDimensions()
   const sessionUsage = createMemo(() =>
     props.sessionUsage ??
     usagePresentation(
@@ -252,12 +263,13 @@ export function ProviderUsageDialogContent(props: {
       return [{ ...usage, name: session.title }]
     }),
   )
+  const totalUsage = createMemo(() => props.usage ? usagePresentation(undefined, props.usage(), "Total") : undefined)
   const familySpend = createMemo(() => props.usage?.()?.models?.map(spendPresentation))
   const options = createMemo(() => [
-    ...(familySpend()?.flatMap((item) => usageOptions("Family spend", `family:${item.model}`, item)) ?? [
-      ...(sessionUsage() ? usageOptions("This session", "session", sessionUsage()!) : []),
-      ...subagentUsage().flatMap((item) => usageOptions("Subagents", `subagent:${item.name}`, item, item.name)),
-    ]),
+    ...(familySpend() === undefined ? [
+      ...(sessionUsage() ? usageOptions("This session", "session", sessionUsage()!, "Session") : []),
+      ...subagentUsage().flatMap((item) => usageOptions("Subagents", `subagent:${item.name}`, item, "Subagent", item.name)),
+    ] : aggregateUsageOptions([totalUsage()!, ...familySpend()!], dimensions().width)),
     ...visibleProviderSnapshots(props.snapshots()).flatMap((snapshot) => providerQuotaOptions(snapshot, props.now?.() ?? Date.now())),
   ])
 
@@ -267,11 +279,9 @@ export function ProviderUsageDialogContent(props: {
 }
 
 function providerQuotaOptions(snapshot: ProviderUsageSnapshot, now: number) {
-  const resetAt = snapshot.windows
-    .map((window) => window.resetAt)
-    .filter((value): value is number => value !== undefined && value > now)
-    .toSorted((left, right) => left - right)
-    .at(0)
+  const openRouterKeyLimit = snapshot.providerID === "openrouter"
+    ? snapshot.windows.find((window) => window.id === "key" && window.unit === "usd")?.limit
+    : undefined
   return [
     {
       title: snapshot.label,
@@ -279,31 +289,50 @@ function providerQuotaOptions(snapshot: ProviderUsageSnapshot, now: number) {
       category: "Provider quota",
       value: `provider:${snapshot.providerID}`,
     },
-    ...snapshot.windows.map((window) => ({
-      title: `  ${window.label}`,
-      footer: formatWindowValue(window),
-      category: "Provider quota",
-      value: `provider:${snapshot.providerID}:${window.id}`,
-    })),
-    ...(resetAt === undefined
-      ? []
-      : [{
-          title: "  Reset",
-          footer: formatRelativeReset(resetAt, now),
-          category: "Provider quota",
-          value: `provider:${snapshot.providerID}:reset`,
-        }]),
+    ...snapshot.windows.map((window) => {
+      const limit = window.limit ?? (
+        snapshot.providerID === "openrouter" && ["daily", "weekly", "monthly"].includes(window.id)
+          ? openRouterKeyLimit
+          : undefined
+      )
+      const presented = limit === undefined ? window : { ...window, limit }
+      const ratio = quotaRatio(presented)
+      const deadline =
+        snapshot.providerID === "meta" && window.id === "current-bill"
+          ? formatBillDue(window.resetAt, now)
+          : formatReset(window.resetAt, now)
+      const value = deadline === undefined ? formatWindowValue(presented) : `${formatWindowValue(presented)} · ${deadline}`
+      return {
+        title: `  ${window.label}`,
+        footer: ratio === undefined ? value : <QuotaWindowFooter ratio={ratio} value={value} />,
+        category: "Provider quota",
+        value: `provider:${snapshot.providerID}:${window.id}`,
+      }
+    }),
   ]
 }
 
-function formatRelativeReset(resetAt: number, now: number) {
-  const minutes = Math.max(1, Math.ceil((resetAt - now) / 60_000))
-  if (minutes < 60) return `in ${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `in ${hours}h`
-  const days = Math.floor(hours / 24)
-  const remainingHours = hours % 24
-  return `in ${days}d${remainingHours ? ` ${remainingHours}h` : ""}`
+function quotaRatio(window: ProviderUsageSnapshot["windows"][number]) {
+  if (window.unlimited) return undefined
+  if (window.unit === "percent") return window.used
+  if (window.used === undefined || window.limit === undefined || window.limit <= 0) return undefined
+  return (window.used / window.limit) * 100
+}
+
+function QuotaWindowFooter(props: { ratio: number; value: string }) {
+  const { themeV2 } = useTheme().contextual("elevated")
+  const color = () => {
+    const severity = usageSeverity(props.ratio)
+    if (severity === "error") return themeV2.text.feedback.error.default
+    if (severity === "warning") return themeV2.text.feedback.warning.default
+    return themeV2.text.feedback.success.default
+  }
+
+  return (
+    <span>
+      <span style={{ fg: color() }}>{progressBar(props.ratio)}</span> {props.value}
+    </span>
+  )
 }
 
 export type ProviderUsageSessionPresentation = {
@@ -324,15 +353,59 @@ export type ProviderUsageSessionPresentation = {
 
 export type ProviderUsageSubagentPresentation = ProviderUsageSessionPresentation & { name: string }
 
+const USAGE_METRICS = [
+  { key: "hit", label: "Hit", width: 10 },
+  { key: "input", label: "Input", width: 5 },
+  { key: "output", label: "Output", width: 6 },
+  { key: "cacheRead", label: "Read", width: 5 },
+  { key: "cacheWrite", label: "Write", width: 5 },
+  { key: "spent", label: "Spent", width: 12 },
+] as const
+
+function aggregateUsageOptions(usages: readonly ProviderUsageSessionPresentation[], viewportWidth: number) {
+  const columns = USAGE_METRICS.filter((column) => usages.some((usage) => !unavailableUsageMetric(usage[column.key])))
+  const width = Math.max(1, dialogContentWidth(viewportWidth) - 6 - DIALOG_INSET_RIGHT)
+  return usages.map((usage, index) => ({
+    title: usage.model,
+    titleView: <>{usageTableRow(usage.model, usage, columns, width)}</>,
+    category: "Usage",
+    categoryView: index === 0 ? <UsageTableHeader columns={columns} width={width} /> : undefined,
+    value: `usage:${index}:${usage.model}`,
+  }))
+}
+
+function UsageTableHeader(props: { columns: readonly (typeof USAGE_METRICS)[number][]; width: number }) {
+  const { themeV2 } = useTheme().contextual("elevated")
+  return (
+    <text fg={themeV2.text.feedback.info.default}>{`   ${usageTableRow("Usage", Object.fromEntries(props.columns.map((column) => [column.key, column.label])), props.columns, props.width)}`}</text>
+  )
+}
+
+function usageTableRow(
+  subject: string,
+  usage: Partial<ProviderUsageSessionPresentation>,
+  columns: readonly (typeof USAGE_METRICS)[number][],
+  width: number,
+) {
+  const metrics = columns.map((column) => (unavailableUsageMetric(usage[column.key]) ? "" : usage[column.key] ?? "").padStart(column.width)).join(" ")
+  const subjectWidth = Math.max(1, width - metrics.length - 1)
+  return `${Locale.truncate(subject, subjectWidth).padEnd(subjectWidth)} ${metrics}`
+}
+
+function unavailableUsageMetric(value: string | undefined) {
+  return value === undefined || value === "Unreported" || value === "Not reported"
+}
+
 /**
  * The measured subject is one row and its metrics are indented detail rows beneath it, so a session
  * and a subagent read as the same shape.
  */
-function usageOptions(category: string, key: string, usage: ProviderUsageSessionPresentation, name?: string) {
+function usageOptions(category: string, key: string, usage: ProviderUsageSessionPresentation, title = usage.model, detail?: string) {
   return [
     {
-      title: name ?? usage.model,
-      description: name ? usage.model : undefined,
+      title,
+      details: title === usage.model && detail === undefined ? undefined : [detail === undefined ? usage.model : `${detail} · ${usage.model}`],
+      detailsWrap: title !== usage.model || detail !== undefined,
       footer: usage.hit,
       category,
       value: `${key}:model`,

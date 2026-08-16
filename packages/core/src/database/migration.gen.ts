@@ -16,5 +16,7 @@ export const migrations = (
     import("./migration/20260804120956_selective-compaction-harness"),
     import("./migration/20260804123002_continuation-generation-fence"),
     import("./migration/20260804142728_session-authority-revisions"),
+    import("./migration/20260806071025_drop-compaction-admission-mode"),
+    import("./migration/20260808031138_provider-request-cache-read-reported"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

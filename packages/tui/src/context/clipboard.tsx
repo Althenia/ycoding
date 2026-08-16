@@ -1,7 +1,7 @@
 import { createContext, type JSX, useContext } from "solid-js"
-import { read, write } from "../clipboard"
+import { read, write, type ClipboardFile } from "../clipboard"
 
-export type ClipboardContent = Readonly<{ data: string; mime: string }>
+export type ClipboardContent = Readonly<{ type: "text"; text: string; mime: "text/plain" }> | ClipboardFile
 export type ClipboardService = Readonly<{
   read?(): Promise<ClipboardContent | undefined>
   write?(text: string): Promise<void>

@@ -200,12 +200,8 @@ function nextEvent(stream: AsyncIterator<RunV2Event>, signal: AbortSignal) {
   })
 }
 
-async function prepareInitialFile(file: RunFilePart, readTextFile?: StreamInput["readTextFile"]) {
-  if (file.mime !== "text/plain") return { type: "file" as const, file: { uri: file.url, name: file.filename } }
-  const content = file.url.startsWith("data:")
-    ? Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
-    : await (readTextFile?.(file.url) ?? Promise.reject(new Error("Local text file acquisition is unavailable")))
-  return { type: "text" as const, text: `<file name="${file.filename}">\n${content}\n</file>` }
+function prepareInitialFile(file: RunFilePart) {
+  return { uri: file.url, name: file.filename }
 }
 
 function promptFileMention(part: PromptFilePart) {
@@ -231,11 +227,7 @@ function promptFiles(next: SessionTurnInput) {
   )
 }
 
-async function prepareAttachments(
-  next: SessionTurnInput,
-  mode: "command" | "prompt",
-  readTextFile?: StreamInput["readTextFile"],
-) {
+async function prepareAttachments(next: SessionTurnInput, mode: "command" | "prompt") {
   const initial = next.includeFiles ? next.files : []
   if (mode === "command") {
     return {
@@ -243,10 +235,9 @@ async function prepareAttachments(
       files: [...initial.map((file) => ({ uri: file.url, name: file.filename })), ...promptFiles(next)],
     }
   }
-  const prepared = await Promise.all(initial.map((file) => prepareInitialFile(file, readTextFile)))
   return {
-    text: prepared.flatMap((file) => (file.type === "text" ? [file.text] : [])),
-    files: [...prepared.flatMap((file) => (file.type === "file" ? [file.file] : [])), ...promptFiles(next)],
+    text: [],
+    files: [...initial.map(prepareInitialFile), ...promptFiles(next)],
   }
 }
 
@@ -618,8 +609,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
             {
               kind: "reasoning",
               source: "reasoning",
-              text:
-                update.previous.length === 0 ? `Thinking: ${item.text}` : item.text.slice(update.previous.length),
+              text: update.previous.length === 0 ? `Thinking: ${item.text}` : item.text.slice(update.previous.length),
               phase: "progress",
               messageID: message.id,
               partID: fragment.partID,
@@ -1461,7 +1451,7 @@ export async function createSessionTransport(input: StreamInput): Promise<Sessio
       if (selected)
         await client.session.switchModel({ sessionID: input.sessionID, model: selected }, { signal: next.signal })
 
-      const attachments = await prepareAttachments(next, "prompt", input.readTextFile)
+      const attachments = await prepareAttachments(next, "prompt")
       const agents = promptAgents(next)
       input.trace?.write("send.prompt", { sessionID: input.sessionID, messageID })
       await runTurnWait(next, messageID, {

@@ -40,6 +40,7 @@ import { PluginV2 } from "../plugin";
 import { PluginPromise } from "../plugin/promise";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
+import { SessionAutonomy } from "../session/autonomy";
 import { SessionGuardrail } from "../session/guardrail";
 import { SessionCompaction } from "../session/compaction";
 import { SessionInstructions } from "../session/instructions";
@@ -386,6 +387,7 @@ export const node = makeLocationNode({
     Npm.node,
     PermissionV2.node,
     ProviderUsageV2.node,
+    SessionAutonomy.node,
     SessionGuardrail.node,
     SessionCompaction.node,
     PluginRuntime.node,

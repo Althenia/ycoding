@@ -38,7 +38,9 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
+import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
+import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
@@ -54,7 +56,6 @@ import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
-import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionUsage } from "@ycoding-ai/core/session/usage"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -76,10 +77,12 @@ import {
   SessionProviderContinuationTable,
   SessionProviderStateBlobTable,
   SessionProviderStateLinkTable,
+  SessionProviderRequestTable,
   SessionTable,
 } from "@ycoding-ai/core/session/sql"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionSummaryToon } from "@ycoding-ai/core/session/summary-toon"
 import { Instructions } from "@ycoding-ai/core/instructions"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
@@ -92,7 +95,7 @@ import { Location } from "@ycoding-ai/core/location"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
-import { and, asc, eq } from "drizzle-orm"
+import { and, asc, eq, lte } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
@@ -502,6 +505,8 @@ const projects = Layer.mock(Project.Service, {
   resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
 })
 let efficiencyConfig: ConfigEfficiency.Info | undefined
+let compactionWakeHook = Effect.void
+let compactionSummary = false
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -529,17 +534,83 @@ const compactionExecution = Layer.effect(
     const contextState = yield* SessionContextState.Service
     const guardrails = yield* SessionGuardrail.Service
     const owner = "runner-test-compaction"
-    const wake = (sessionID: SessionV2.ID) =>
+    const run: SessionCompactionExecution.Interface["run"] = (input) =>
       Effect.gen(function* () {
-        const pending = (yield* jobs.pending(sessionID))[0]
-        if (!pending) return
+        yield* compactionWakeHook
+        const pending = yield* jobs.get(input.jobID)
+        if (!pending) return yield* Effect.die(`Compaction job not found: ${input.jobID}`)
+        if (pending.status === "ended" || pending.status === "failed")
+          return {
+            id: pending.id,
+            sessionID: pending.sessionID,
+            trigger: pending.trigger,
+            status: pending.status,
+            requestedThrough: pending.requestedThrough,
+            timeCreated: DateTime.makeUnsafe(pending.timeCreated),
+            ...(pending.errorCode === undefined ? {} : { failure: pending.errorCode }),
+          }
         const now = Date.now()
         const job = yield* jobs.claim({ jobID: pending.id, owner, now, expiresAt: now + 30_000 })
-        if (!job) return
-        const guardrail = yield* guardrails.snapshot(sessionID)
-        const capture = yield* SessionLiveState.captureDatabase(db, sessionID).pipe(Effect.orDie)
+        if (!job) return yield* Effect.die(`Compaction job is not claimable: ${pending.id}`)
+        const guardrail = yield* guardrails.snapshot(job.sessionID).pipe(Effect.orDie)
+        const capture = yield* SessionLiveState.captureDatabase(db, job.sessionID).pipe(Effect.orDie)
+        const boundary = compactionSummary
+          ? yield* db
+              .select({ data: SessionMessageTable.data })
+              .from(SessionMessageTable)
+              .where(eq(SessionMessageTable.id, job.requestedThrough.messageID))
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
+        if (compactionSummary && !boundary) yield* Effect.die("Missing compaction boundary")
+        const boundaryData = boundary && Schema.is(Schema.Json)(boundary.data) ? boundary.data : undefined
+        if (boundary && !boundaryData) yield* Effect.die("Invalid compaction boundary")
+        const coveredUserTexts = compactionSummary
+          ? (yield* db
+              .select({ data: SessionMessageTable.data })
+              .from(SessionMessageTable)
+              .where(
+                and(
+                eq(SessionMessageTable.session_id, job.sessionID),
+                  eq(SessionMessageTable.type, "user"),
+                  lte(SessionMessageTable.seq, job.requestedThrough.seq),
+                ),
+              )
+              .orderBy(asc(SessionMessageTable.seq))
+              .all()
+              .pipe(Effect.orDie))
+              .flatMap((row) =>
+                Schema.is(Schema.Json)(row.data) &&
+                typeof row.data === "object" &&
+                row.data !== null &&
+                !Array.isArray(row.data) &&
+                "text" in row.data &&
+                typeof row.data.text === "string" &&
+                row.data.text.trim()
+                  ? [row.data.text]
+                  : [],
+              )
+          : []
+        const summary = compactionSummary
+          ? SessionSummaryToon.encode({
+              version: 1,
+              through_sequence: job.requestedThrough.seq,
+              objective: "Retain the completed exchange.",
+              current_state: "Continue with the next user request.",
+              facts: coveredUserTexts.map((text) => ({ text, confidence: "confirmed" as const })),
+              decisions: [],
+              preferences: [],
+              constraints: [],
+              completed: ["The covered exchange completed."],
+              pending: [],
+              blockers: [],
+              unresolved: [],
+              important_identifiers: [],
+              continuation: "Answer the next user request.",
+            })
+          : undefined
         yield* contextState.activate({
-          sessionID,
+          sessionID: job.sessionID,
           jobID: job.id,
           leaseOwner: owner,
           manifest: Object.freeze({
@@ -555,25 +626,37 @@ const compactionExecution = Layer.effect(
               ),
             ),
             exclusions: Object.freeze([]),
+            ...(summary === undefined || boundaryData === undefined
+              ? {}
+              : {
+                  summary: Object.freeze({
+                    text: summary,
+                    coveredThrough: Object.freeze({
+                      messageID: job.requestedThrough.messageID,
+                      seq: EventV2.Seq.make(job.requestedThrough.seq),
+                    }),
+                    digest: ContextManifest.payloadDigest(boundaryData),
+                  }),
+                }),
             inputTokens: 100,
             retainedTokens: 50,
           }),
-        })
-      }).pipe(Effect.orDie)
-    return SessionCompactionExecution.Service.of({
-      active: Effect.succeed(new Set()),
-      wake,
-      wait: (jobID) =>
-        jobs
-          .get(jobID)
-          .pipe(
-            Effect.flatMap((job) =>
-              job ? Effect.succeed(job) : Effect.die(new Error(`Compaction job not found: ${jobID}`)),
-            ),
-          ),
-      cancel: (jobID) => jobs.get(jobID),
-      recover: Effect.void,
-    })
+        }).pipe(Effect.orDie)
+        const settled = yield* jobs.get(job.id)
+        if (!settled || (settled.status !== "ended" && settled.status !== "failed"))
+          return yield* Effect.die(`Compaction job did not settle: ${job.id}`)
+        return {
+          id: settled.id,
+          sessionID: settled.sessionID,
+          trigger: settled.trigger,
+          status: settled.status,
+          requestedThrough: settled.requestedThrough,
+          timeCreated: DateTime.makeUnsafe(settled.timeCreated),
+          ...(settled.errorCode === undefined ? {} : { failure: settled.errorCode }),
+        }
+      })
+    const start: SessionCompactionExecution.Interface["start"] = (input) => run(input).pipe(Effect.asVoid)
+    return SessionCompactionExecution.Service.of({ start, run })
   }),
 )
 let pluginFlushHook = Effect.void
@@ -611,6 +694,7 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [McpInstructions.node, mcpInstructions],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   [PluginSupervisor.node, pluginSupervisor],
+  [SessionCompaction.node, Layer.succeed(SessionCompaction.Service, SessionCompaction.Service.of({ manifest: () => Effect.die("unused") }))],
 ])
 const execution = Layer.effect(
   SessionExecution.Service,
@@ -728,6 +812,8 @@ const setup = Effect.gen(function* () {
   pluginFlushHook = Effect.void
   currentModel = model
   efficiencyConfig = undefined
+  compactionWakeHook = Effect.void
+  compactionSummary = false
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -1116,7 +1202,7 @@ describe("SessionRunnerLLM", () => {
       expect(volatile[0]?.content).toEqual([
         {
           type: "text",
-          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"permissionCeiling":[],"todos":[{"content":"first","priority":"high","status":"in_progress"},{"content":"second","priority":"medium","status":"pending"}]}',
+          text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":false},"permissionCeiling":[],"todos":[{"content":"first","priority":"high","status":"in_progress"},{"content":"second","priority":"medium","status":"pending"}]}',
         },
       ])
       expect(volatile[1]?.content).toEqual([{ type: "text", text: "TeamView marker" }])
@@ -1375,6 +1461,30 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("keeps the OpenAI cache key stable after durable low-hit steps", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = openAI56Model
+      responses = Array.from({ length: 5 }, (_, index) => reply.textWithCache(`Step ${index + 1}`, `cache-low-${index}`, 1, 0))
+
+      for (const prompt of ["First", "Second", "Third", "Fourth", "Fifth"]) {
+        yield* admit(session, prompt)
+        yield* session.resume(sessionID)
+      }
+
+      const records = yield* SessionProviderRequest.Service.pipe(Effect.flatMap((service) => service.list(sessionID)))
+      expect(records.map((record) => record.cacheReadReported)).toEqual([true, true, true, true, true])
+      const keys = requests
+        .map((request) => request.providerOptions?.openai?.promptCacheKey)
+        .filter((key): key is string => typeof key === "string")
+      expect(keys.length).toBe(5)
+      expect(records.map((record) => record.promptCacheKey)).toEqual(keys)
+      expect(new Set(records.map((record) => record.systemDigest)).size).toBe(1)
+      expect(new Set(records.map((record) => record.toolDigest)).size).toBe(1)
+      expect(keys.every((key) => key === keys[0])).toBe(true)
+    }),
+  )
+
   it.effect("activates hybrid caching for direct GPT-5.6 OpenAI requests in auto mode", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -1453,7 +1563,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("continues at a complete multipart boundary only when the volatile suffix matches", () =>
+  it.effect("continues at a complete multipart boundary while the volatile suffix changes", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const hooks = yield* PluginHooks.Service
@@ -1499,8 +1609,8 @@ describe("SessionRunnerLLM", () => {
       yield* admit(session, "Rebase after volatile change")
       yield* session.resume(sessionID)
 
-      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      expect(JSON.stringify(requests[2]?.messages)).toContain("Changed team view")
+      expect(requests[2]?.providerOptions?.openai?.previousResponseId).toBe("resp_multipart_done")
+      expect(JSON.stringify(requests[2]?.messages)).not.toContain("Changed team view")
     }),
   )
 
@@ -4843,6 +4953,7 @@ describe("SessionRunnerLLM", () => {
       const db = (yield* Database.Service).db
       currentModel = storedRecoveryResponsesModel
       efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      compactionSummary = true
       const opaque = {
         type: "compaction",
         id: "cmp_overflow_private",
@@ -4878,7 +4989,18 @@ describe("SessionRunnerLLM", () => {
       expect(requests).toHaveLength(3)
       expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_before_overflow")
       expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
-      expect(JSON.stringify(requests[2]?.messages)).not.toContain("overflow-private-state")
+      expect(requests[2]?.providerOptions?.openai?.promptCacheKey).toBe(
+        requests[1]?.providerOptions?.openai?.promptCacheKey,
+      )
+      expect(requests[2]?.providerOptions?.openrouter?.sessionID).toBe(
+        requests[1]?.providerOptions?.openrouter?.sessionID,
+      )
+      expect(requests[2]?.system).toEqual(requests[1]?.system)
+      expect(requests[2]?.tools).toEqual(requests[1]?.tools)
+      const rebuiltInput = JSON.stringify(requests[2]?.messages)
+      expect(rebuiltInput).toContain("conversation-checkpoint")
+      expect(rebuiltInput).toContain("Recover from overflow")
+      expect(rebuiltInput).not.toContain("overflow-private-state")
       expect(
         yield* db
           .select({ revision: SessionContextStateTable.revision })
@@ -4891,6 +5013,115 @@ describe("SessionRunnerLLM", () => {
         { type: "assistant" },
         { type: "assistant", finish: "stop", content: [{ type: "text", text: "Recovered" }] },
       ])
+    }),
+  )
+
+  it.effect("reprepares when background compaction activates before provider execution", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const hooks = yield* PluginHooks.Service
+      const events = yield* EventV2.Service
+      const providerRequests = yield* SessionProviderRequest.Service
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responses = [
+        reply.textWithResponse("First answer", "text-first", "resp_first"),
+        reply.textWithResponse("Second answer", "text-second", "resp_second"),
+      ]
+      const retainedState = [
+        "First user request",
+        "Active skill: runner-retention; active because this request selected it; route only post-compaction requests.",
+        "Objective: preserve the first request.",
+        "Accepted decision: keep TOON version 1.",
+        "Todo [in_progress]: send the rebased provider request.",
+        "Todo [pending]: validate the response.",
+        "```ts",
+        'const marker = "retained-fence"',
+        "```",
+      ].join("\n")
+      yield* admit(session, retainedState)
+      yield* session.resume(sessionID)
+
+      const compactionWakeStarted = yield* Deferred.make<void>()
+      const compactionWakeGate = yield* Deferred.make<void>()
+      compactionSummary = true
+      compactionWakeHook = Deferred.succeed(compactionWakeStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(compactionWakeGate)),
+      )
+      const compacted = yield* session.compact({ sessionID }).pipe(Effect.forkChild)
+      yield* Deferred.await(compactionWakeStarted)
+
+      yield* insertSession(otherSessionID)
+      const providerLedgerBlocked = yield* Deferred.make<void>()
+      const providerLedgerGate = yield* Deferred.make<void>()
+      const stopBlockingProviderLedger = yield* events.listen((event) => {
+        if (event.type !== "session.provider.request.recorded") return Effect.void
+        const recorded = event as EventV2.Payload<typeof SessionEvent.ProviderRequestRecorded>
+        if (recorded.data.sessionID !== otherSessionID) return Effect.void
+        return Deferred.succeed(providerLedgerBlocked, undefined).pipe(
+          Effect.andThen(Deferred.await(providerLedgerGate)),
+        )
+      })
+      const blocker = yield* providerRequests.next({
+        sessionID: otherSessionID,
+        source: "title",
+        agent: AgentV2.ID.make("build"),
+        model: ModelV2.Ref.make({ id: ModelV2.ID.make("gpt-5.6"), providerID: ProviderV2.ID.make("openai") }),
+        routeID: "openai-responses",
+        promptCacheKey: "block-provider-ownership",
+        systemDigest: "system",
+        toolDigest: "tools",
+      })
+      const blockingCompletion = yield* blocker
+        .complete({
+          continuation: "full",
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(providerLedgerBlocked)
+
+      const prepareStarted = yield* Deferred.make<void>()
+      const prepareGate = yield* Deferred.make<void>()
+      let blockPrepare = true
+      yield* hooks.register("session", "context", () => {
+        if (!blockPrepare) return Effect.void
+        blockPrepare = false
+        return Deferred.succeed(prepareStarted, undefined).pipe(Effect.andThen(Deferred.await(prepareGate)))
+      })
+      yield* admit(session, "Second user request")
+      const resumed = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(prepareStarted)
+      yield* Deferred.succeed(prepareGate, undefined)
+      yield* Effect.yieldNow
+      yield* Deferred.succeed(compactionWakeGate, undefined)
+      yield* Fiber.join(compacted)
+      yield* Deferred.succeed(providerLedgerGate, undefined)
+      yield* Fiber.join(blockingCompletion)
+      yield* stopBlockingProviderLedger
+      yield* Fiber.join(resumed)
+
+      expect(requests).toHaveLength(2)
+      expect((yield* providerRequests.list(sessionID)).map((request) => request.attempts)).toEqual([1, 1])
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[1]?.providerOptions?.openai?.promptCacheKey).toBe(
+        requests[0]?.providerOptions?.openai?.promptCacheKey,
+      )
+      expect(requests[1]?.providerOptions?.openrouter?.sessionID).toBe(
+        requests[0]?.providerOptions?.openrouter?.sessionID,
+      )
+      expect(requests[1]?.system).toEqual(requests[0]?.system)
+      expect(requests[1]?.tools).toEqual(requests[0]?.tools)
+      const modelInput = JSON.stringify(requests[1]?.messages)
+      expect(modelInput).toContain("conversation-checkpoint")
+      expect(modelInput).toContain("conversation_memory")
+      expect(modelInput).toContain("Active skill: runner-retention")
+      expect(modelInput).toContain("Objective: preserve the first request")
+      expect(modelInput).toContain("Accepted decision: keep TOON version 1")
+      expect(modelInput).toContain("Todo [in_progress]: send the rebased provider request")
+      expect(modelInput).toContain("Todo [pending]: validate the response")
+      expect(modelInput).toContain("retained-fence")
+      expect(modelInput).toContain("Second user request")
+      expect(modelInput).not.toContain("First answer")
     }),
   )
 
@@ -4942,35 +5173,31 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails closed before provider execution without a configured context window", () =>
+  it.effect("continues provider execution without a configured context window", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = missingContextLimitModel
 
       yield* admit(session, "Unprovable context limit")
-      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
-      if (!("error" in failure)) return yield* Effect.die(new Error("Expected context limit failure"))
-      expect(failure.error).toMatchObject({ type: "context.limit" })
+      yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(0)
+      expect(requests).toHaveLength(1)
     }),
   )
 
-  it.effect("fails closed before provider execution without a configured output limit", () =>
+  it.effect("continues provider execution without a configured output limit", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = missingOutputLimitModel
 
       yield* admit(session, "Unprovable output limit")
-      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
-      if (!("error" in failure)) return yield* Effect.die(new Error("Expected context limit failure"))
-      expect(failure.error).toMatchObject({ type: "context.limit" })
+      yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(0)
+      expect(requests).toHaveLength(1)
     }),
   )
 
-  it.effect("fails a started overflow step once when recovery preflight cannot prove the cap", () =>
+  it.effect("continues a started overflow step when recovery cannot prove the cap", () =>
     Effect.gen(function* () {
       const session = yield* setupOverflowRecovery
       responseStream = Stream.fromEffect(
@@ -4987,17 +5214,15 @@ describe("SessionRunnerLLM", () => {
       )
 
       yield* admit(session, "Fail overflow recovery preflight")
-      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
-      if (!("error" in failure)) return yield* Effect.die(new Error("Expected context limit failure"))
-      expect(failure.error).toMatchObject({ type: "context.limit" })
+      yield* session.resume(sessionID)
 
-      expect(requests).toHaveLength(1)
+      expect(requests).toHaveLength(2)
       const assistant = (yield* session.context(sessionID)).findLast((message) => message.type === "assistant")
-      if (!assistant || assistant.type !== "assistant") throw new Error("Failed assistant missing")
+      if (!assistant || assistant.type !== "assistant") throw new Error("Recovered assistant missing")
       const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
       expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
-      expect(events.filter((event) => event.type === "session.step.failed.1")).toHaveLength(1)
-      expect(events.filter((event) => event.type === "session.step.ended.1")).toHaveLength(0)
+      expect(events.filter((event) => event.type === "session.step.failed.1")).toHaveLength(0)
+      expect(events.filter((event) => event.type === "session.step.ended.1")).toHaveLength(1)
     }),
   )
 
@@ -5152,6 +5377,78 @@ describe("SessionRunnerLLM", () => {
           content: [{ type: "text", text: "Partial" }],
         },
       ])
+    }),
+  )
+
+  it.effect("recovers a reasoning-only transport failure with one text-only terminal response step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const failure = providerUnavailable()
+      yield* admit(session, "Recover after reasoning transport failure")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-transport-failure" }),
+        ]).pipe(Stream.concat(Stream.fail(failure))),
+        Stream.fromIterable(reply.text("Recovered answer", "text-after-reasoning-transport-failure")),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools).toEqual([])
+      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes).not.toContain("session.retry.scheduled.1")
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+      const assistants = (yield* session.context(sessionID)).filter(
+        (message): message is SessionMessage.Assistant => message.type === "assistant",
+      )
+      expect(assistants).toHaveLength(2)
+      expect(assistants[0]).toMatchObject({ finish: "error", error: { type: "provider.transport" } })
+      expect((yield* recordedStepSettlementEvents(sessionID, assistants[0].id)).map((event) => event.type)).toEqual([
+        "session.step.started.1",
+        "session.step.failed.1",
+      ])
+      expect(assistants[1]).toMatchObject({
+        finish: "stop",
+        content: [{ type: "text", text: "Recovered answer" }],
+      })
+    }),
+  )
+
+  it.effect("does not retry a failed terminal response recovery or create a third request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const firstFailure = providerUnavailable()
+      const recoveryFailure = providerUnavailable()
+      yield* admit(session, "Fail terminal response recovery")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-failed-recovery" }),
+        ]).pipe(Stream.concat(Stream.fail(firstFailure))),
+        Stream.fail(recoveryFailure),
+        Stream.fromIterable(reply.text("Must not run", "text-after-failed-recovery")),
+      ]
+
+      const run = yield* session.resume(sessionID).pipe(Effect.exit, Effect.forkChild)
+      while (requests.length < 2) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      const exit = yield* Fiber.join(run)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) return
+      expect(Cause.squash(exit.cause)).toBe(recoveryFailure)
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools).toEqual([])
+      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes).not.toContain("session.retry.scheduled.1")
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
     }),
   )
 

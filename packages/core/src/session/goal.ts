@@ -95,6 +95,7 @@ const make = (dependencies: Dependencies) => {
       Config.latest(yield* dependencies.config.entries(), "efficiency"),
     )
     const ttl = yield* dependencies.cacheRuntime.policy({
+      sessionID: input.session.id,
       namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
       modelID: resolved.model.id,
       configured: efficiency.anthropicTtl,

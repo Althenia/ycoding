@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "76ed750b-4d38-4e12-aa79-91755c83bc23",
+  "id": "d34baf9f-353b-4d84-bffe-9fababe5b050",
   "prevIds": [
-    "6b611feb-f989-431b-9669-e08c55d67c8d"
+    "955c465a-adec-463d-b7e5-5cfe92b130a8"
   ],
   "ddl": [
     {
@@ -2690,16 +2690,6 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "admission_mode",
-      "entityType": "columns",
-      "table": "session_compaction_job"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
       "name": "requested_through_message_id",
       "entityType": "columns",
       "table": "session_compaction_job"
@@ -3661,6 +3651,16 @@
       "default": null,
       "generated": null,
       "name": "continuation",
+      "entityType": "columns",
+      "table": "session_provider_request"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read_reported",
       "entityType": "columns",
       "table": "session_provider_request"
     },
@@ -7769,12 +7769,6 @@
     {
       "value": "\"trigger\" IN ('consider', 'advised', 'mandatory', 'manual')",
       "name": "session_compaction_job_trigger_check",
-      "entityType": "checks",
-      "table": "session_compaction_job"
-    },
-    {
-      "value": "\"admission_mode\" IN ('background', 'mandatory')",
-      "name": "session_compaction_job_admission_check",
       "entityType": "checks",
       "table": "session_compaction_job"
     },

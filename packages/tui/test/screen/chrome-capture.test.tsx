@@ -85,28 +85,28 @@ function ChromeFixture() {
       </For>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
-        <ModeChips autonomy={{ mode: "normal" }} />
+        <ModeChips autonomy={{ mode: "normal", yolo: false }} />
         <text flexGrow={1} />
         <text>⌃p commands</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
         <ModeChips
-          autonomy={{ mode: "goal", goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
+          autonomy={{ mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
         />
         <text flexGrow={1} />
         <text>⌃p commands</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
-        <ModeChips autonomy={{ mode: "yolo" }} />
+        <ModeChips autonomy={{ mode: "normal", yolo: true }} />
         <text flexGrow={1} />
         <text>⌃x y disable</text>
       </box>
       <box flexDirection="row" gap={3} paddingLeft={3} paddingRight={3} height={3} alignItems="center">
         <PromptFooterIdentity branch="main" sessionID="ses_0085fc701234567" />
         <ModeChips
-          autonomy={{ mode: "yolo", goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
+          autonomy={{ mode: "normal", yolo: true, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 } }}
           guardrailPending={true}
         />
         <text flexGrow={1} />

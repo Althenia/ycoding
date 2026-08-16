@@ -724,7 +724,7 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
-            if (yield* autonomy.isAutonomous(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
+            if (yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
               yield* sessions
                 .synthetic({
                   id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),

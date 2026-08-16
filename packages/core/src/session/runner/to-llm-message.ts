@@ -14,57 +14,47 @@ import { SessionProviderState } from "../provider-state"
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
-const media = (file: FileAttachment): ContentPart => ({
+export interface AttachmentMaterialization {
+  readonly absolutePath: (file: FileAttachment) => string
+  readonly images: ReadonlyMap<string, Uint8Array>
+}
+
+export const isProviderImage = (file: FileAttachment) => imageMimes.has(file.mime)
+
+const media = (file: FileAttachment, data: Uint8Array): ContentPart => ({
   type: "media",
   mediaType: file.mime,
-  data: file.data,
+  data,
   filename: file.name,
   metadata: file.description === undefined ? undefined : { description: file.description },
 })
 
-const textAttachment = (file: FileAttachment): ContentPart => ({
+const managedAttachment = (file: FileAttachment, absolutePath: string): ContentPart => ({
   type: "text",
   text: `\n\n${[
-    `Attached file: ${file.name ?? (file.source.type === "uri" ? file.source.uri : "inline attachment")}`,
+    `Attached managed file: ${file.name ?? file.content.digest}`,
     file.description === undefined ? undefined : `Description: ${file.description}`,
-    "",
-    Buffer.from(file.data, "base64").toString("utf8"),
+    `MIME: ${file.mime}`,
+    `Path: ${absolutePath}`,
+    `SHA-256: ${file.content.digest}`,
+    `Bytes: ${file.content.bytes}`,
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n")}`,
   metadata: {
     attachment: {
-      source: file.source,
+      content: file.content,
       name: file.name,
       description: file.description,
     },
   },
 })
 
-const directoryAttachment = (file: FileAttachment): ContentPart => ({
-  type: "text",
-  text: `\n\n${[
-    `Attached directory: ${file.name ?? (file.source.type === "uri" ? file.source.uri : "directory")}`,
-    file.description === undefined ? undefined : `Description: ${file.description}`,
-    file.data.length === 0 ? undefined : "",
-    file.data.length === 0 ? undefined : Buffer.from(file.data, "base64").toString("utf8"),
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n")}`,
-  metadata: {
-    attachment: {
-      source: file.source,
-      name: file.name,
-      description: file.description,
-    },
-  },
-})
-
-const attachmentContent = (file: FileAttachment): ContentPart[] => {
-  if (file.mime === "text/plain") return [textAttachment(file)]
-  if (file.mime === "application/x-directory") return [directoryAttachment(file)]
-  if (imageMimes.has(file.mime)) return [media(file)]
-  return []
+const attachmentContent = (file: FileAttachment, attachments?: AttachmentMaterialization): ContentPart[] => {
+  if (!isProviderImage(file)) return [managedAttachment(file, attachments?.absolutePath(file) ?? file.content.path)]
+  const data = attachments?.images.get(file.content.digest)
+  if (data === undefined) throw new TypeError(`Provider image was not materialized: ${file.content.digest}`)
+  return [media(file, data)]
 }
 
 const decodeToolInput = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
@@ -229,6 +219,7 @@ function toLLMMessage(
   model: ModelV2.Ref,
   providerMetadataKey: string,
   materialized: ReadonlyMap<string, Record<string, unknown>>,
+  attachments?: AttachmentMaterialization,
 ): Message[] {
   switch (message.type) {
     case "agent-switched":
@@ -242,7 +233,7 @@ function toLLMMessage(
     case "user":
       const content = [
         ...(message.text === "" ? [] : [Message.text(message.text)]),
-        ...(message.files ?? []).flatMap(attachmentContent),
+        ...(message.files ?? []).flatMap((file) => attachmentContent(file, attachments)),
       ]
       if (content.length === 0) return []
       return [
@@ -301,4 +292,5 @@ export const toLLMMessages = (
   model: ModelV2.Ref,
   providerMetadataKey: string = model.providerID,
   materialized: ReadonlyMap<string, Record<string, unknown>> = new Map(),
-) => messages.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, materialized))
+  attachments?: AttachmentMaterialization,
+) => messages.flatMap((message) => toLLMMessage(message, model, providerMetadataKey, materialized, attachments))

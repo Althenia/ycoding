@@ -9,7 +9,6 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
   const columns = () => [
     ["Context", props.economics?.context],
     ["Cache hit", props.economics?.cacheHit],
-    ["Prefix", props.economics?.prefix],
     ["Reads", props.economics?.reads],
     ["Writes", props.economics?.writes],
     ["Spent", props.economics?.spent],
@@ -31,8 +30,8 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
             <For each={columns()}>
               {([label], index) => (
                 <box
-                  width={index() === 0 || index() === 5 ? 28 : index() < 6 ? 27 : undefined}
-                  flexGrow={index() === 6 ? 1 : 0}
+                  width={index() === 0 || index() === 4 ? 28 : index() < 5 ? 27 : undefined}
+                  flexGrow={index() === 5 ? 1 : 0}
                   flexShrink={0}
                 >
                   <text fg={themeV2.text.subdued} wrapMode="none">{label}</text>
@@ -45,8 +44,8 @@ export function SubagentEconomicsSurface(props: { economics?: SubagentEconomics 
             <For each={columns()}>
               {([, value], index) => (
                 <box
-                  width={index() === 0 || index() === 5 ? 28 : index() < 6 ? 27 : undefined}
-                  flexGrow={index() === 6 ? 1 : 0}
+                  width={index() === 0 || index() === 4 ? 28 : index() < 5 ? 27 : undefined}
+                  flexGrow={index() === 5 ? 1 : 0}
                   flexShrink={0}
                 >
                   <text fg={themeV2.text.default} wrapMode="none">{value ?? "unreported"}</text>

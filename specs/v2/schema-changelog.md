@@ -2,6 +2,17 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-08-07: Replace Durable Attachment Payloads With Managed References
+
+- Keep prompt inputs URI-shaped while replacing durable `Prompt.FileAttachment.data` and `.source` with `content: { type: "managed", digest, bytes, path }`.
+- Store admitted bytes once below the global data directory by SHA-256. Enforce the exact opaque reference grammar, derived-path containment, regular-file and no-symlink checks, digest and size integrity, and a 20 MiB limit.
+- Materialize supported provider images as transient bytes only during request assembly. Represent every non-provider image, including PDF, XLS, XLSX, and SVG, as model-visible metadata with its internally resolved absolute managed path.
+
+Compatibility:
+
+- This is an approved breaking pre-release Schema and generated-client change. Consumers must stop reading durable base64 payloads and source URIs; Promise and Effect clients are regenerated with the managed content shape.
+- The idempotent `managed-attachments-v1` application migration rewrites `session.input.admitted.1` events, user `session_pending` rows, and user `session_message` rows. It records its marker in the same transaction as all rewrites only after every legacy payload and preexisting managed reference verifies successfully.
+
 ## 2026-08-01: Remove The Session Archive Flag
 
 - Remove `time_archived` from the `session` table, `Session.Info.time.archived` from the public schema, and the projection mapping in `packages/core/src/session/info.ts`.

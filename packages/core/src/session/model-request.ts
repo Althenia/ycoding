@@ -20,6 +20,7 @@ import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
 import { PluginHooks } from "../plugin/hooks"
+import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { ToolRegistry } from "../tool/registry"
 import { SessionContext } from "./context"
 import { SessionModelHeaders } from "./model-headers"
@@ -28,11 +29,12 @@ import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionRunnerModel } from "./runner/model"
 import { MAX_STEPS_PROMPT } from "./runner/max-steps"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
-import { toLLMMessages } from "./runner/to-llm-message"
+import { isProviderImage, toLLMMessages } from "./runner/to-llm-message"
 import { SessionContinuation } from "./runner/continuation"
 import { Hash } from "../util/hash"
 import { SessionMessage } from "./message"
 import { SessionProviderState } from "./provider-state"
+import { AttachmentStore } from "../attachment-store"
 
 const fingerprintValue = (value: unknown, ancestors: ReadonlySet<object> = new Set()): unknown => {
   if (value === undefined || value === null || typeof value === "string" || typeof value === "boolean") return value
@@ -88,10 +90,7 @@ export const baseSystem = (context: Pick<SessionContext.Loaded, "agent" | "initi
     .filter((part) => part.length > 0)
     .map(SystemPart.make)
 
-export function toolPermissions(
-  agent: Pick<AgentV2.Info, "mode" | "permissions">,
-  ceiling: PermissionV2.Ruleset,
-) {
+export function toolPermissions(agent: Pick<AgentV2.Info, "mode" | "permissions">, ceiling: PermissionV2.Ruleset) {
   return PermissionV2.merge(
     agent.permissions,
     ceiling,
@@ -130,6 +129,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const continuation = yield* SessionContinuation.Service
       const providerState = yield* SessionProviderState.Service
       const db = (yield* Database.Service).db
+      const attachments = yield* AttachmentStore.Service
 
       const prepare = Effect.fn("SessionModelRequest.prepare")(function* (input: PrepareInput) {
         const session = input.context.session
@@ -151,12 +151,35 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           modelID: resolved.ref.id,
           stateless: responsesState === "stateless",
         })
+        const attachmentFiles = input.context.messages.flatMap((message) =>
+          message.type === "user" ? (message.files ?? []) : [],
+        )
+        const verifiedAttachments = yield* Effect.forEach(
+          [...new Map(attachmentFiles.map((file) => [file.content.digest, file])).values()],
+          (file) =>
+            attachments.read(file.content).pipe(
+              Effect.orDie,
+              Effect.map((bytes) => ({ file, bytes })),
+            ),
+          { concurrency: 4 },
+        )
+        const images = new Map(
+          verifiedAttachments.flatMap(({ file, bytes }) =>
+            isProviderImage(file) ? [[file.content.digest, bytes] as const] : [],
+          ),
+        )
+        const attachmentMaterialization = {
+          images,
+          absolutePath: (file: (typeof attachmentFiles)[number]) => attachments.absolutePath(file.content),
+        }
         const loweredHistory = input.context.messages.map((message) =>
-          toLLMMessages([message], resolved.ref, providerMetadataKey, materialized),
+          toLLMMessages([message], resolved.ref, providerMetadataKey, materialized, attachmentMaterialization),
         )
         const history = loweredHistory.flat()
         const messages = [
-          ...(stepLimitReached && !terminalResponseRecovery ? [...history, Message.assistant(MAX_STEPS_PROMPT)] : history),
+          ...(stepLimitReached && !terminalResponseRecovery
+            ? [...history, Message.assistant(MAX_STEPS_PROMPT)]
+            : history),
           ...(input.messages ?? []),
           input.context.liveState.rendered,
         ]
@@ -194,11 +217,29 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           system: contextEvent.system,
           tools: hookedTools,
         }
+        const now = Date.now()
+        const baselineKey = SessionRunnerCache.promptCacheNamespace(
+          { ...namespaceInput, routeID: resolved.model.route.id },
+          now,
+        )
+        const systemDigest = SessionRunnerCache.systemDigest(contextEvent.system)
+        const toolDigest = SessionRunnerCache.toolDigest(hookedTools)
         const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
         const ttl = yield* cacheRuntime.policy({
+          sessionID: session.id,
           namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
           modelID: model.id,
           configured: efficiency.anthropicTtl,
+        })
+        const generation = yield* cacheRuntime.generation({
+          sessionID: session.id,
+          model: resolved.ref,
+          routeID: resolved.model.route.id,
+          apiModelID: model.id,
+          systemDigest,
+          toolDigest,
+          baselineKey,
+          now,
         })
         const cache = SessionRunnerCache.providerOptions({
           ...namespaceInput,
@@ -208,7 +249,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           anthropicTtlSeconds: ttl.ttlSeconds,
           openaiMode: efficiency.openaiMode,
           openaiExtendedRetention: efficiency.openaiExtendedRetention,
-        })
+          generation,
+        }, now)
         const directOpenAIResponses =
           model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
         const baseRequest = LLM.request({
@@ -288,9 +330,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
               }),
             ),
           ),
-          volatileContextDigest: Hash.sha256(
-            SessionRunnerCache.canonicalJson(fingerprintValue(volatileMessages)),
-          ),
+          volatileContextDigest: Hash.sha256(SessionRunnerCache.canonicalJson(fingerprintValue(volatileMessages))),
         }
         const eligible =
           directOpenAIResponses &&
@@ -308,13 +348,34 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                 completeMessageIDs: input.context.messages.map((message) => message.id),
               })
         const continuationInputStart = state
-          ? loweredHistory.slice(0, state.representedMessageCount).reduce((count, messages) => count + messages.length, 0) + 1
+          ? loweredHistory
+              .slice(0, state.representedMessageCount)
+              .reduce((count, messages) => count + messages.length, 0) + 1
           : 0
         const continuedMessages = state ? stableMessages : contextEvent.messages
-        const request =
-          state === undefined
+        const transportRequest =
+          model.route.id !== OpenAICodex.routeID
             ? baseRequest
             : LLMRequest.update(baseRequest, {
+                providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
+                  openai: {
+                    responsesWebSocket: {
+                      sessionKey: SessionRunnerCache.providerSessionNamespace({
+                        projectID: session.projectID,
+                        sessionID: session.id,
+                        providerID: resolved.ref.providerID,
+                      }),
+                      fingerprint: SessionContinuation.transportFingerprint(continuationFingerprint),
+                      messageBoundary: baseRequest.messages.length - 1,
+                      fullReplay: input.disableContinuation === true,
+                    },
+                  },
+                }),
+              })
+        const request =
+          state === undefined
+            ? transportRequest
+            : LLMRequest.update(transportRequest, {
                 messages: continuedMessages,
                 providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
                   openai: {
@@ -392,6 +453,7 @@ export function configured(options?: SessionModelHeaders.Options) {
       SessionCacheRuntime.node,
       SessionContinuation.node,
       SessionProviderState.node,
+      AttachmentStore.node,
     ],
   })
 }

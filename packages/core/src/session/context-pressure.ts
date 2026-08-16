@@ -1,6 +1,6 @@
 export * as SessionContextPressure from "./context-pressure"
 
-import { Message, type LLMRequest } from "@ycoding-ai/ai"
+import type { LLMRequest } from "@ycoding-ai/ai"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
 import type { ModelV2 } from "../model"
@@ -73,39 +73,4 @@ export const modelLevel = (
   })
   if (!capabilities) return undefined
   return level({ ...input, capabilities })
-}
-
-export const advisory = (
-  input: Usage & {
-    readonly models: readonly ModelV2.Info[]
-    readonly model: ModelV2.Ref
-    readonly policy?: ConfigCompaction.Resolved
-    readonly contextSafetyMarginTokens?: number
-  },
-) => {
-  const resolved =
-    input.policy ??
-    ConfigCompaction.resolve(
-      input.contextSafetyMarginTokens === undefined
-        ? []
-        : [new ConfigCompaction.Info({ context_safety_margin_tokens: input.contextSafetyMarginTokens })],
-    )
-  const current = modelLevel({ ...input, policy: resolved })
-  if (!current) return undefined
-  if (current === "normal") return undefined
-  if (current === "mandatory")
-    return Message.make({
-      role: "user",
-      content:
-        "The hard input cap is exhausted; runtime context compaction is mandatory before the next model request.",
-      volatile: true,
-    })
-  if (resolved.advisory === false) return undefined
-  const percent = current === "consider" ? resolved.advisory.considerPercent : resolved.advisory.stronglyAdvisedPercent
-  const recommendation = current === "consider" ? "optional" : "strongly advised"
-  return Message.make({
-    role: "user",
-    content: `Context usage has reached the configured ${percent}% of the hard input cap; calling conversation_compact is ${recommendation}. conversation_compact accepts no boundary and schedules context compaction in the background.`,
-    volatile: true,
-  })
 }

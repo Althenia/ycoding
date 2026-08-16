@@ -79,16 +79,20 @@ export const layer = () =>
             row.represented_message_count === 0
               ? row.represented_through_message_id === null
               : input.completeMessageIDs[row.represented_message_count - 1] === row.represented_through_message_id
-          if (
-            !representedBoundary ||
-            row.continuation_fingerprint !==
-              fingerprint({
-                ...input,
-                representedThroughMessageID: row.represented_through_message_id ?? undefined,
-                representedMessageCount: row.represented_message_count,
-              })
-          )
-            return undefined
+          if (!representedBoundary) return undefined
+          const candidate = {
+            ...input,
+            representedThroughMessageID: row.represented_through_message_id ?? undefined,
+            representedMessageCount: row.represented_message_count,
+          }
+          const matches =
+            row.continuation_fingerprint === fingerprint(candidate) ||
+            // Volatile context (liveState JSON, TeamView) is not part of provider-stored
+            // prefix and churns every step. Require stable fingerprint equality and
+            // tolerate volatile mismatches to keep `previous_response_id` reuse for
+            // mainchat which has frequent todo/orchestration updates.
+            fingerprintWithoutVolatile(fromRow(row)) === fingerprintWithoutVolatile(candidate)
+          if (!matches) return undefined
           return fromRow(row)
         }).pipe(Effect.orDie)
 
@@ -241,6 +245,50 @@ function fingerprint(input: Fingerprint) {
         toolsDigest: input.toolsDigest,
         optionsDigest: input.optionsDigest,
         volatileContextDigest: input.volatileContextDigest,
+      }),
+    )
+    .digest("hex")
+}
+
+function fingerprintWithoutVolatile(input: Fingerprint) {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        sessionID: input.sessionID,
+        contextRevision: input.contextRevision,
+        continuationGeneration: input.continuationGeneration,
+        provider: input.provider,
+        routeID: input.routeID,
+        modelID: input.modelID,
+        variant: input.variant,
+        connectionIdentityDigest: input.connectionIdentityDigest,
+        representedThroughMessageID: input.representedThroughMessageID,
+        representedMessageCount: input.representedMessageCount,
+        promptCacheKey: input.promptCacheKey,
+        instructionsDigest: input.instructionsDigest,
+        toolsDigest: input.toolsDigest,
+        optionsDigest: input.optionsDigest,
+      }),
+    )
+    .digest("hex")
+}
+
+export function transportFingerprint(input: Fingerprint) {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        sessionID: input.sessionID,
+        contextRevision: input.contextRevision,
+        continuationGeneration: input.continuationGeneration,
+        provider: input.provider,
+        routeID: input.routeID,
+        modelID: input.modelID,
+        variant: input.variant,
+        connectionIdentityDigest: input.connectionIdentityDigest,
+        promptCacheKey: input.promptCacheKey,
+        instructionsDigest: input.instructionsDigest,
+        toolsDigest: input.toolsDigest,
+        optionsDigest: input.optionsDigest,
       }),
     )
     .digest("hex")

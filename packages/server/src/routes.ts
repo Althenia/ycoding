@@ -48,6 +48,9 @@ import { formLocationLayer } from "./middleware/form-location"
 import { sessionLocationLayer } from "./middleware/session-location"
 import { ServerInfo } from "./server-info"
 import type { ServerOptions } from "./options"
+import { randomUUID } from "node:crypto"
+import { processIdentityLayer } from "./process-identity"
+import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 
 const applicationServices = LayerNode.group([
   Database.node,
@@ -73,24 +76,33 @@ const applicationServices = LayerNode.group([
   SessionOrchestrationNotifier.node,
 ])
 
-export function createRoutes(options: ServerOptions = {}, serviceURLs: () => ReadonlyArray<string> = () => []) {
+export function createRoutes(
+  options: ServerOptions = {},
+  serviceURLs: () => ReadonlyArray<string> = () => [],
+  sourceEpoch: ServiceStatus.Epoch = ServiceStatus.Epoch.make(randomUUID()),
+) {
   return makeRoutes(
     options.password
       ? ServerAuth.Config.configLayer({ password: Option.some(options.password) })
       : ServerAuth.Config.layer,
     options,
     serviceURLs,
+    sourceEpoch,
   )
 }
 
-export function createEmbeddedRoutes(options: ServerOptions = {}) {
-  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [])
+export function createEmbeddedRoutes(
+  options: ServerOptions = {},
+  sourceEpoch: ServiceStatus.Epoch = ServiceStatus.Epoch.make(randomUUID()),
+) {
+  return makeRoutes(ServerAuth.Config.configLayer({ password: Option.none() }), options, () => [], sourceEpoch)
 }
 
 function makeRoutes<AuthError, AuthServices>(
   auth: Layer.Layer<ServerAuth.Config, AuthError, AuthServices>,
   options: ServerOptions,
   serviceURLs: () => ReadonlyArray<string>,
+  sourceEpoch: ServiceStatus.Epoch,
 ) {
   const pluginRuntimeCell = PluginRuntime.makeCell()
   const replacements: LayerNode.Replacements = [
@@ -136,7 +148,7 @@ function makeRoutes<AuthError, AuthServices>(
         ServerInfo.layer(serviceURLs),
       )
       return HttpApiBuilder.layer(Api, { openapiPath: "/openapi.json" }).pipe(
-        Layer.provide(handlers.pipe(Layer.provide(services))),
+        Layer.provide(handlers.pipe(Layer.provide(services), Layer.provide(processIdentityLayer(sourceEpoch)))),
         Layer.provide(formLocationLayer),
         Layer.provide(sessionLocationLayer),
         Layer.provide(layer),

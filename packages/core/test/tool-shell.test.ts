@@ -42,10 +42,7 @@ import { toolIdentity, executeTool, settleTool, toolDefinitions, waitForTool } f
 const sessionID = SessionV2.ID.make("ses_shell_tool_test")
 const sessionModel = ModelV2.Ref.make({ id: ModelV2.ID.make("test"), providerID: ProviderV2.ID.make("test") })
 const testShell = process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh"
-const configDocument = (
-  shellSandbox?: "disabled" | "optional" | "required",
-  shellMemoryLimitMb?: number,
-) =>
+const configDocument = (shellSandbox?: "disabled" | "optional" | "required", shellMemoryLimitMb?: number) =>
   new Config.Document({
     type: "document",
     info: new Config.Info({
@@ -185,6 +182,7 @@ const fakeShellNode = makeLocationNode({
           shell: testShell,
           file: `/tmp/sh_fake_${fakeShellState.creates}.out`,
           metadata: input.metadata ?? {},
+          ...(typeof input.metadata?.toolCallID === "string" ? { toolCallID: input.metadata.toolCallID } : {}),
           time: { started: 0 },
         }
         fakeShellState.complete = (output = "complete output") =>
@@ -576,7 +574,9 @@ describe("ShellTool", () => {
             Effect.tap((output) =>
               Effect.sync(() => {
                 expect(output).toMatchObject({ type: "error" })
-                expect(output.type === "error" ? output.value : "").toContain("Session guardrail rejected shell command")
+                expect(output.type === "error" ? output.value : "").toContain(
+                  "Session guardrail rejected shell command",
+                )
                 expect(fakeShellState.creates).toBe(0)
               }),
             ),
@@ -622,9 +622,9 @@ describe("ShellTool", () => {
             expect(
               (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 0 })).memoryLimitMb,
             ).toBeUndefined()
-            expect((yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 256 })).memoryLimitMb).toBe(
-              256,
-            )
+            expect(
+              (yield* shell.prepare({ command: helloCommand, timeout: 0, memoryLimitMb: 256 })).memoryLimitMb,
+            ).toBe(256)
           }),
         )
       },
@@ -633,30 +633,28 @@ describe("ShellTool", () => {
   )
 
   if (!isWindows)
-    it.live(
-      "supplies matching Go and Node runtime memory hints",
-      () =>
-        Effect.acquireUseRelease(
-          Effect.promise(() => tmpdir()),
-          (tmp) => {
-            reset()
-            const command = "printf '%s|%s' \"$GOMEMLIMIT\" \"$NODE_OPTIONS\""
-            return withSession(tmp.path, (registry) =>
-              settleTool(registry, call({ command, memory_limit_mb: 512 }, "call-memory-runtime-hints")).pipe(
-                Effect.tap((settled) =>
-                  Effect.sync(() => {
-                    const content = settled.output?.content[0]
-                    expect(content?.type).toBe("text")
-                    if (content?.type !== "text") return
-                    expect(content.text).toContain("512MiB|")
-                    expect(content.text).toContain("--max-old-space-size=512")
-                  }),
-                ),
+    it.live("supplies matching Go and Node runtime memory hints", () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => {
+          reset()
+          const command = 'printf \'%s|%s\' "$GOMEMLIMIT" "$NODE_OPTIONS"'
+          return withSession(tmp.path, (registry) =>
+            settleTool(registry, call({ command, memory_limit_mb: 512 }, "call-memory-runtime-hints")).pipe(
+              Effect.tap((settled) =>
+                Effect.sync(() => {
+                  const content = settled.output?.content[0]
+                  expect(content?.type).toBe("text")
+                  if (content?.type !== "text") return
+                  expect(content.text).toContain("512MiB|")
+                  expect(content.text).toContain("--max-old-space-size=512")
+                }),
               ),
-            )
-          },
-          (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
-        ),
+            ),
+          )
+        },
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
+      ),
     )
 
   if (!isWindows)
@@ -1142,7 +1140,9 @@ describe("ShellTool", () => {
 
                 yield* waitForJob(jobs, callID)
                 yield* Effect.yieldNow
-                expect(fakeShellState.prepared).toMatchObject([{ timeout: 0, metadata: { sessionID: owner } }])
+                expect(fakeShellState.prepared).toMatchObject([
+                  { timeout: 0, metadata: { sessionID: owner, toolCallID: callID } },
+                ])
                 expect(fakeShellState.creates).toBe(1)
 
                 yield* TestClock.adjust("299999 millis")
@@ -1161,7 +1161,11 @@ describe("ShellTool", () => {
                 })
                 expect(fakeShellState.creates).toBe(1)
                 expect(fakeShellState.removes).toBe(0)
-                expect(fakeShellState.info).toMatchObject({ id: "sh_fake_1", status: "running" })
+                expect(fakeShellState.info).toMatchObject({
+                  id: "sh_fake_1",
+                  status: "running",
+                  toolCallID: callID,
+                })
                 expect(yield* shell.output(ShellSchema.ID.make("sh_fake_1"))).toMatchObject({
                   output: "partial output continued",
                 })

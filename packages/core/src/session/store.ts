@@ -9,6 +9,7 @@ import { MessageDecodeError } from "./error"
 import { SessionMessage } from "./message"
 import { Session } from "@ycoding-ai/schema/session"
 import { SessionMessageTable, SessionTable } from "./sql"
+import { SessionTask } from "./task"
 import { fromRow } from "./info"
 
 export interface Interface {
@@ -29,6 +30,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    yield* SessionTask.reconcileStaleTasks(db)
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
 
     return Service.of({

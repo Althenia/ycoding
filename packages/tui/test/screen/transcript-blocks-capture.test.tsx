@@ -146,7 +146,7 @@ const route: FetchHandler = (url) => {
   )
     return json({ data: [] })
   if (/^\/api\/session\/ses_(docs_sync|cache_audit)\/(permission|form)$/.test(url.pathname)) return json({ data: [] })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal" } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
   if (url.pathname === `/api/session/${sessionID}/todo`)
     return json({
       data: [

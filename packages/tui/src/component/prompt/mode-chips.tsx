@@ -1,16 +1,18 @@
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 import { For } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { yoloLevel } from "../../util/session-autonomy"
 
 export type ModeChip = { key: "goal" | "yolo"; label: string; tone: "off" | "on" | "warning" | "danger" }
 
 /**
  * Autonomy chips for the composer status row. Off states stay muted and on states invert, because an
- * active autonomy mode is the most consequential fact on screen. Guardrails still require a human in YOLO mode.
+ * active autonomy mode is the most consequential fact on screen. Guardrails require YOLO 3.
  */
 export function modeChips(input: { autonomy?: SessionAutonomyState; guardrailPending?: boolean }): ModeChip[] {
-  const active = input.autonomy?.mode === "goal" && input.autonomy.goal?.status === "active"
-  const blocked = input.autonomy?.mode === "yolo" && input.guardrailPending
+  const active = input.autonomy?.goal?.status === "active"
+  const level = yoloLevel(input.autonomy ?? { yolo: 0 })
+  const blocked = level > 0 && level < 3 && !!input.guardrailPending
   return [
     {
       key: "goal",
@@ -19,8 +21,8 @@ export function modeChips(input: { autonomy?: SessionAutonomyState; guardrailPen
     },
     {
       key: "yolo",
-      label: input.autonomy?.mode === "yolo" ? "YOLO" : "YOLO off",
-      tone: input.autonomy?.mode === "yolo" ? "danger" : "off",
+      label: level > 0 ? `YOLO ${level}` : "YOLO off",
+      tone: level > 0 ? "danger" : "off",
     },
   ]
 }

@@ -402,6 +402,40 @@ describe("Claude Code request translation", () => {
     expect(headers.get("user-agent")).toBe("claude-cli/2.1.220 (external, sdk-cli)")
   })
 
+  test("derives Claude Code session affinity from the stable incoming Session ID", async () => {
+    const sent: string[] = []
+    const makeFetcher = () =>
+      createClaudeCodeFetch({
+        fetch: Object.assign(
+          async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+            sent.push(new Headers(init?.headers).get("x-claude-code-session-id") ?? "")
+            return Response.json({ type: "message", content: [] })
+          },
+          { preconnect: fetch.preconnect },
+        ),
+        credentials: async () => credentials("paid", Date.now() + 3_600_000),
+        reload: async () => null,
+      })
+
+    await makeFetcher()("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "X-Session-Id": "ses_first" },
+      body: JSON.stringify({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hello" }] }),
+    })
+    await makeFetcher()("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "X-Session-Id": "ses_second" },
+      body: JSON.stringify({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hello" }] }),
+    })
+    await makeFetcher()("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "X-Session-Id": "ses_first" },
+      body: JSON.stringify({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hello" }] }),
+    })
+
+    expect(sent).toEqual(["ses_first", "ses_second", "ses_first"])
+  })
+
   test("uses Claude Code 2.1.220 in the default billing signature", () => {
     const transformed = JSON.parse(
       requiredString(
@@ -419,6 +453,129 @@ describe("Claude Code request translation", () => {
       /^x-anthropic-billing-header: cc_version=2\.1\.220\.[0-9a-f]{3}; cc_entrypoint=sdk-cli;$/,
     )
     expect(transformed.system[0].text).not.toContain("cch=")
+  })
+
+  test("keeps the billing prefix when local compaction replaces the first visible user", () => {
+    const billingSample = "dur"
+    const transform = (text: string) =>
+      JSON.parse(
+        requiredString(
+          transformClaudeCodeBody(
+            JSON.stringify({
+              model: "claude-opus-5",
+              system: [
+                {
+                  type: "text",
+                  text: "stable system",
+                  cache_control: { type: "ephemeral", ttl: "1h" },
+                },
+              ],
+              messages: [{ role: "user", content: [{ type: "text", text }] }],
+            }),
+            { billingSample },
+          ),
+          "transformed Claude request body",
+        ),
+      )
+
+    const before = transform("original durable user text")
+    const after = transform("<conversation-checkpoint>compacted history</conversation-checkpoint>")
+
+    expect(before.system).toEqual(after.system)
+    expect(before.messages[0].content[0]).toEqual(after.messages[0].content[0])
+    expect(before.messages[0].content[0].cache_control).toEqual({ type: "ephemeral", ttl: "1h" })
+  })
+
+  test("retains visible-first-user billing when no durable Session sample resolves", () => {
+    const transform = (text: string) =>
+      JSON.parse(
+        requiredString(
+          transformClaudeCodeBody(
+            JSON.stringify({
+              model: "claude-opus-5",
+              messages: [{ role: "user", content: [{ type: "text", text }] }],
+            }),
+          ),
+          "transformed Claude request body",
+        ),
+      ).system[0].text
+
+    expect(transform("original durable user text")).not.toBe(
+      transform("<conversation-checkpoint>compacted history</conversation-checkpoint>"),
+    )
+  })
+
+  test("recreated fetches resolve the durable billing sample from incoming Session identity", async () => {
+    const sent: Array<{ sessionID: string | null; billing: string }> = []
+    const billingSamples: string[] = []
+    const makeFetcher = () =>
+      createClaudeCodeFetch({
+        fetch: Object.assign(
+          async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+            const body = JSON.parse(requiredString(init?.body, "Claude request body"))
+            sent.push({
+              sessionID: new Headers(init?.headers).get("x-claude-code-session-id"),
+              billing: body.system[0].text,
+            })
+            return Response.json({ type: "message", content: [] })
+          },
+          { preconnect: fetch.preconnect },
+        ),
+        credentials: async () => credentials("paid", Date.now() + 3_600_000),
+        reload: async () => null,
+        billingSample: async (sessionID) => {
+          billingSamples.push(sessionID)
+          return "dur"
+        },
+      })
+    const request = (fetcher: typeof fetch, text: string) =>
+      fetcher("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "X-Session-Id": "ses_durable_billing" },
+        body: JSON.stringify({
+          model: "claude-opus-5",
+          system: [{ type: "text", text: "stable system", cache_control: { type: "ephemeral", ttl: "1h" } }],
+          messages: [{ role: "user", content: [{ type: "text", text }] }],
+        }),
+      })
+
+    await request(makeFetcher(), "original durable user text")
+    await request(makeFetcher(), "<conversation-checkpoint>compacted history</conversation-checkpoint>")
+
+    expect(billingSamples).toEqual(["ses_durable_billing", "ses_durable_billing"])
+    expect(sent[0]?.billing).toBe(sent[1]?.billing)
+    expect(sent.map((item) => item.sessionID)).toEqual(["ses_durable_billing", "ses_durable_billing"])
+  })
+
+  test("falls back to visible-first-user billing when the durable resolver throws synchronously", async () => {
+    const body = JSON.stringify({
+      model: "claude-opus-5",
+      messages: [{ role: "user", content: [{ type: "text", text: "standalone user text" }] }],
+    })
+    const expected = JSON.parse(requiredString(transformClaudeCodeBody(body), "transformed Claude request body"))
+    let sent: unknown
+    const fetcher = createClaudeCodeFetch({
+      fetch: Object.assign(
+        async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          sent = JSON.parse(requiredString(init?.body, "Claude request body"))
+          return Response.json({ type: "message", content: [] })
+        },
+        { preconnect: fetch.preconnect },
+      ),
+      credentials: async () => credentials("paid", Date.now() + 3_600_000),
+      reload: async () => null,
+      billingSample: () => {
+        throw new Error("invalid Session identity")
+      },
+    })
+
+    await fetcher("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "X-Session-Id": "invalid" },
+      body,
+    })
+
+    expect(sent).toEqual(expected)
   })
 
   test("adds explicit beta overrides without replacing required model betas", () => {

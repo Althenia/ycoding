@@ -17,7 +17,14 @@ export type Outcome = { readonly status: "switched" } | Blocked
  * recent messages only; system, tool, and attachment prefixes are not included.
  */
 export const estimateContextTokens = (messages: readonly SessionMessage.Info[], model: ModelV2.Ref) =>
-  SessionContextBudget.countTokens(JSON.stringify(toLLMMessages(messages, model)))
+  SessionContextBudget.countTokens(
+    JSON.stringify(
+      toLLMMessages(
+        messages.map((message) => (message.type === "user" ? { ...message, files: undefined } : message)),
+        model,
+      ),
+    ),
+  )
 
 /**
  * Advisory boundary for a blocked switch: summarizing up to and including the

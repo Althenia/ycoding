@@ -53,15 +53,20 @@ test("estimates all resident message payloads without claiming exact heap attrib
 })
 
 function user(index: number): SessionMessageInfo {
+  const digest = index.toString(16).padStart(64, "0")
   return {
     id: `msg_${index.toString().padStart(6, "0")}`,
     type: "user",
     text: `message ${index}`,
     files: [
       {
-        data: Buffer.from(`payload ${index}`).toString("base64"),
+        content: {
+          type: "managed",
+          digest,
+          bytes: Buffer.byteLength(`payload ${index}`),
+          path: `attachments/sha256/${digest.slice(0, 2)}/${digest}`,
+        },
         mime: "text/plain",
-        source: { type: "inline" },
         name: `${index}.txt`,
       },
     ],

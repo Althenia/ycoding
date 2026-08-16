@@ -547,7 +547,6 @@ describe("LocationServiceMap", () => {
               // Tool plugins register during the forked PluginSupervisor boot; wait for
               // every expected tool rather than relying on batch ordering.
               const expected = [
-                "conversation_compact",
                 "edit",
                 "glob",
                 "grep",

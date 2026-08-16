@@ -12,7 +12,7 @@ import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { ProviderV2 } from "../../provider"
 import type { PluginInternal } from "../internal"
 
-const clientID = "Ov23li8tweQw6odWQebz"
+const clientID = "Iv23liQxejUrCuRKOtA0"
 const apiVersion = "2026-06-01"
 const pollingSafetyMargin = 3000
 const methodID = Integration.MethodID.make("device")

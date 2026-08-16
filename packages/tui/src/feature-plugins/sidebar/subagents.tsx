@@ -6,7 +6,7 @@ import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { RailRow, RailSection, useRail } from "../../routes/session/rail-section"
 import { getGlyph } from "../../ui/glyph"
-import { formatDuration } from "../../util/format"
+import { formatSubagentElapsed } from "../../util/time"
 
 export function SubagentRail(props: { sessionID: string }) {
   const route = useRoute()
@@ -17,7 +17,10 @@ export function SubagentRail(props: { sessionID: string }) {
 
   return (
     <SubagentRailContent
-      tasks={(page()?.data ?? []).map((task) => ({ ...task, elapsed: formatDuration((Date.now() - task.time.created) / 1000) }))}
+      tasks={(page()?.data ?? []).map((task) => ({
+        ...task,
+        elapsed: formatSubagentElapsed(task),
+      }))}
       summary={page()?.summary}
       position={navigation().position}
       onSelect={(sessionID) => route.navigate({ type: "session", sessionID })}

@@ -48,6 +48,8 @@ export const Info = Schema.Struct({
   exit: optional(Schema.Finite),
   // Always present; defaults to an empty object when the creator supplies no metadata.
   metadata: Metadata,
+  // Present for shells created by a Session tool invocation.
+  toolCallID: optional(Schema.String.check(Schema.isNonEmpty())),
   time: Time,
 }).annotate({ identifier: "Shell.Info" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}

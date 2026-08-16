@@ -57,9 +57,7 @@ const guardrailRequest = {
   standard: true,
 }
 
-const yoloGoal: SessionAutonomyState = {
-  mode: "yolo",
-  goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
+const yoloGoal: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Keep todos in the sidebar", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
 }
 const yoloTodos: SessionTodoInfo[] = [{ content: "Yolo sidebar todo", status: "in_progress", priority: "medium" }]
 
@@ -395,10 +393,14 @@ const pendingReceipt = [
       text: "Queued bubble",
       files: [
         {
-          data: "",
+          content: {
+            type: "managed",
+            digest: "b".repeat(64),
+            bytes: 7,
+            path: `attachments/sha256/bb/${"b".repeat(64)}`,
+          },
           mime: "text/plain",
           name: "receipt.txt",
-          source: { type: "uri", uri: "file:///tmp/receipt.txt" },
         },
       ],
     },
@@ -431,6 +433,21 @@ const streamingTranscript = [
   },
 ] as SessionMessageInfo[]
 
+const completedCompactionTailTranscript = [
+  ...streamingTranscript,
+  {
+    id: "msg_compaction_tail",
+    type: "compaction",
+    jobID: "cmp_tail",
+    trigger: "advised",
+    status: "completed",
+    revision: 1,
+    boundary: { messageID: "msg_user_stream", seq: 1 },
+    metrics: { excludedMessages: 1, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 },
+    time: { created: 3 },
+  },
+] as SessionMessageInfo[]
+
 const subagentNotificationTranscript = [
   {
     id: "msg_subagent_notification",
@@ -451,7 +468,7 @@ function routeFor(
   messages: SessionMessageInfo[],
   guardrails: unknown[] = [],
   pending: SessionPendingInfo[] = [],
-  autonomy: SessionAutonomyState = { mode: "normal" },
+  autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
   todos: SessionTodoInfo[] = [],
 ) {
   return (url: URL) => {
@@ -554,6 +571,63 @@ function routeFor(
   }
 }
 
+const restorationParentID = "ses_compaction_parent"
+const restorationChildID = "ses_compaction_child"
+const restorationParent = { ...session, id: restorationParentID, title: "Compaction parent" }
+const restorationChild = {
+  ...session,
+  id: restorationChildID,
+  title: "Compaction child",
+  parentID: restorationParentID,
+}
+const restorationMessages = [
+  { id: "msg_covered", type: "user", text: "COVERED HISTORY MUST STAY PRUNED", time: { created: 1 } },
+  { id: "msg_boundary_restore", type: "user", text: "Covered boundary", time: { created: 2 } },
+  ...Array.from({ length: 14 }, (_, index) => ({
+    id: `msg_after_${index}`,
+    type: "user" as const,
+    text: index === 4 ? "RESTORE THIS HISTORICAL VIEW" : `Later chat after compaction ${index + 1}`,
+    time: { created: 4 + index },
+  })),
+  { id: "msg_after_tail", type: "user", text: "LATEST CHAT AFTER COMPACTION", time: { created: 30 } },
+] as SessionMessageInfo[]
+const restorationChildMessages = [
+  { id: "msg_child", type: "user", text: "CHILD SESSION TRANSCRIPT", time: { created: 1 } },
+] as SessionMessageInfo[]
+
+function restorationRoute(url: URL) {
+  if (url.pathname === "/api/session") return json({ data: [restorationParent, restorationChild], cursor: {} })
+  if (url.pathname === `/api/session/${restorationParentID}`) return json({ data: restorationParent })
+  if (url.pathname === `/api/session/${restorationChildID}`) return json({ data: restorationChild })
+  if (url.pathname === `/api/session/${restorationParentID}/message`)
+    return json({ data: restorationMessages, cursor: {} })
+  if (url.pathname === `/api/session/${restorationChildID}/message`)
+    return json({ data: restorationChildMessages, cursor: {} })
+  if (url.pathname === `/api/session/${restorationParentID}/subagent`)
+    return json({
+      data: [
+        {
+          sessionID: restorationChildID,
+          parentID: restorationParentID,
+          description: "Inspect compacted history",
+          agent: "build",
+          model: restorationChild.model,
+          background: true,
+          state: "completed",
+          revision: 1,
+          time: { created: 2, updated: 3 },
+        },
+      ],
+      summary: { total: 1, active: 0, running: 0, waiting: 0 },
+      cursor: {},
+    })
+
+  const remapped = new URL(url)
+  remapped.pathname = remapped.pathname.replace(`/api/session/${restorationChildID}`, `/api/session/${sessionID}`)
+  remapped.pathname = remapped.pathname.replace(`/api/session/${restorationParentID}`, `/api/session/${sessionID}`)
+  return routeFor([])(remapped)
+}
+
 /** Transcript-content extent of a rendered line: [first painted column, last painted column + 1]. */
 function extent(line: string) {
   return [line.length - line.trimStart().length, line.trimEnd().length] as const
@@ -638,6 +712,120 @@ test("keeps yolo-goal todos in the sidebar instead of the transcript", async () 
     await screen.dispose()
   }
 }, 60_000)
+
+test("bottom-follows a completed compaction tail like normal chat", async () => {
+  const screen = await renderScreen({
+    ...NARROW_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(completedCompactionTailTranscript),
+    settle: "Compression #1",
+  })
+
+  try {
+    const scroll = screen.scrollbox()
+    if (!scroll) throw new Error("missing transcript scrollbox")
+    expect(scroll.scrollTop).toBe(Math.max(0, scroll.scrollHeight - scroll.viewport.height))
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("restores main-session tail and non-tail view across repeated subagent navigation", async () => {
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID: restorationParentID },
+    route: restorationRoute,
+    settle: "LATEST CHAT AFTER COMPACTION",
+  })
+
+  const navigateToChild = async () => {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding"))
+    if (promptRow !== -1) await screen.mouse.click(3, promptRow)
+    screen.input.pressKey("ARROW_DOWN")
+    await waitForFrame(screen.frame, "Inspect compacted history")
+    screen.input.pressEnter()
+    await waitForFrame(screen.frame, "CHILD SESSION TRANSCRIPT")
+  }
+  const waitForScrollTop = async (expected: number) => {
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      if (screen.scrollbox()?.scrollTop === expected) return
+      await Bun.sleep(10)
+    }
+    throw new Error(`transcript did not settle at scrollTop ${expected}`)
+  }
+  const scrollToTop = async () => {
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline) {
+      const scroll = screen.scrollbox()
+      scroll?.scrollTo(0)
+      if (scroll?.scrollTop === 0 && screen.frame().includes("Later chat after compaction 2")) return
+      await Bun.sleep(10)
+    }
+    throw new Error("parent transcript did not settle at its top row")
+  }
+  const navigateToParent = async () => {
+    screen.input.pressKey("ARROW_UP")
+    const deadline = Date.now() + 2_000
+    while (Date.now() < deadline && screen.frame().includes("CHILD SESSION TRANSCRIPT")) await Bun.sleep(10)
+    if (screen.frame().includes("CHILD SESSION TRANSCRIPT")) throw new Error("parent route did not settle")
+    while (Date.now() < deadline) {
+      const scrollTop = screen.scrollbox()?.scrollTop
+      if (scrollTop !== undefined && scrollTop > 0) return scrollTop
+      await Bun.sleep(10)
+    }
+    throw new Error("parent transcript did not restore a positive scrollTop")
+  }
+
+  try {
+    const parentScroll = screen.scrollbox()
+    if (!parentScroll) throw new Error("missing parent transcript scrollbox")
+    await scrollToTop()
+    expect(screen.frame()).toContain("COVERED HISTORY MUST STAY PRUNED")
+    screen.events.emit({
+      id: "evt_compaction_restore",
+      created: 3,
+      type: "session.compaction.ended",
+      data: {
+        sessionID: restorationParentID,
+        jobID: "cmp_restore",
+        revision: 1,
+        boundary: { messageID: "msg_boundary_restore", seq: 2 },
+        metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 10_000, retainedTokens: 1_000 },
+      },
+    } satisfies YCodingEvent)
+    await waitForFrame(screen.frame, "~ compacted")
+    expect(screen.frame()).not.toContain("COVERED HISTORY MUST STAY PRUNED")
+    const residentHeight = parentScroll.scrollHeight
+    const nonTail = Math.max(1, Math.floor((parentScroll.scrollHeight - parentScroll.viewport.height) / 2))
+    parentScroll.scrollTo(nonTail)
+    await waitForScrollTop(nonTail)
+    const savedTop = nonTail
+
+    await navigateToChild()
+    const restoredNonTailTop = await navigateToParent()
+    await scrollToTop()
+    expect(screen.frame()).not.toContain("COVERED HISTORY MUST STAY PRUNED")
+    expect(restoredNonTailTop).toBe(savedTop)
+
+    const restored = screen.scrollbox()
+    if (!restored) throw new Error("missing restored parent transcript scrollbox")
+    const tailTop = Math.max(0, restored.scrollHeight - restored.viewport.height)
+    restored.scrollTo(restored.scrollHeight)
+    await waitForScrollTop(tailTop)
+
+    await navigateToChild()
+    await navigateToParent()
+    await waitForScrollTop(tailTop)
+    expect(screen.scrollbox()?.scrollTop).toBe(tailTop)
+    expect(screen.scrollbox()?.scrollHeight).toBe(residentHeight)
+    expect(screen.frame()).toContain("LATEST CHAT AFTER COMPACTION")
+    expect(screen.frame()).not.toContain("COVERED HISTORY MUST STAY PRUNED")
+  } finally {
+    await screen.dispose()
+  }
+}, 120_000)
 
 test("keeps non-subagent activity rows on one marker/label grid with symmetric compaction rules", async () => {
   const screen = await renderScreen({

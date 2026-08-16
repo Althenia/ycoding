@@ -51,7 +51,7 @@ A review request blocks the guarded operation until the user replies:
 - `always` permits the attempt and records a transient reusable approval;
 - `reject` fails the blocked operation.
 
-An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. `yolo`, `goal`, and TUI permission auto-approval never answer guardrail reviews.
+An `always` approval is keyed by root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. It is held only by the Location service in process memory, is cleared at service shutdown, is not durable or global, and is shared by descendants of the same root. Core always performs a fresh evaluation before consulting the key: a deny, changed match, or non-review result cannot reuse an approval. `once` is not reusable. `yolo 1-2`, `goal`, and TUI permission auto-approval never answer guardrail reviews; only `yolo 3` auto-approves guardrail reviews.
 
 Parent Session views may answer reviews created by descendants in the same root family. An unrelated Session receives a not-found response.
 The first valid reply atomically claims the pending request. A concurrent or later reply receives a not-found response and cannot change the winning decision or create a reusable approval.

@@ -3,7 +3,6 @@ import { createEffect, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useData } from "../../context/data"
 import { useClient } from "../../context/client"
-import { isActiveSubagent } from "../../util/subagent"
 
 export type PartRef = {
   messageID: string
@@ -49,28 +48,57 @@ export async function resolveMessageJump(input: {
   return "loaded" as const
 }
 
+function residentCompactionBoundary(sessionID: string, messages: SessionMessageInfo[], compactionList: ReturnType<ReturnType<typeof useData>["session"]["compaction"]["list"]>) {
+  const fromStore = compactionList
+    .filter((lifecycle) => lifecycle.status === "completed" && !!lifecycle.boundary)
+    .map((lifecycle) => messages.findIndex((message) => message.id === lifecycle.boundary!.messageID))
+    .reduce((latest, position) => Math.max(latest, position), -1)
+  const fromMessages = messages
+    .filter(
+      (message): message is Extract<SessionMessageInfo, { type: "compaction" }> =>
+        message.type === "compaction" &&
+        "jobID" in message &&
+        (message as unknown as { status: string }).status === "completed" &&
+        !!(message as unknown as { boundary?: unknown }).boundary,
+    )
+    .map((message) => messages.findIndex((item) => item.id === (message as unknown as { boundary: { messageID: string } }).boundary.messageID))
+    .reduce((latest, position) => Math.max(latest, position), -1)
+  return Math.max(fromStore, fromMessages)
+}
+
 export function createSessionRows(sessionID: Accessor<string>, activity = () => true) {
   const data = useData()
   const client = useClient()
   const [rows, setRows] = createStore<SessionRow[]>([])
   const revertBoundary = () => data.session.get(sessionID())?.revert?.messageID
 
+  function hydrateCompactionLifecycle(targetID: string) {
+    // Re-derive completed compaction boundaries from both the store lifecycle
+    // and the resident message payloads so pruning is reapplied before
+    // resident rows are published on sessionID change. This covers the
+    // keep_recent_messages:0 case where covered rows must stay pruned after
+    // jumping to a subagent and back (previously only initial hydration/reconnect pruned).
+    const messages = data.session.message.list(targetID)
+    void data.session.compaction.list(targetID)
+    void messages
+  }
+
   function reduce() {
     const messages = data.session.message.list(sessionID())
     const inputs = new Set(data.session.input.list(sessionID()))
-    const boundary = revertBoundary()
-    const rows = reduceSessionRows(
-      (boundary ? messages.filter((message) => message.id < boundary) : messages).filter(
-        (message) => message.type !== "compaction" || !("jobID" in message),
-      ),
-      inputs,
-      data.session.status(sessionID()) === "idle",
+    const revertID = revertBoundary()
+    const compactionBoundaryIndex = residentCompactionBoundary(sessionID(), messages, data.session.compaction.list(sessionID()))
+    const pruned = compactionBoundaryIndex === -1 ? messages : messages.filter((message, index) => index > compactionBoundaryIndex || message.type === "compaction")
+    const visible = (revertID ? pruned.filter((message) => message.id < revertID) : pruned).filter(
+      (message) => message.type !== "compaction" || compactionMessageTranscriptVisible(message as Extract<SessionMessageInfo, { type: "compaction" }>),
     )
-    rows.push(
-      ...data.session.compaction
-        .list(sessionID())
-        .map((item): SessionRow => ({ type: "compaction", jobID: item.jobID })),
-    )
+    const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle")
+    data.session.compaction.list(sessionID()).filter(compactionTranscriptVisible).forEach((item) => {
+      const row: SessionRow = { type: "compaction", jobID: item.jobID }
+      const index = compactionRowIndex(item, messages, rows)
+      if (index === -1) rows.push(row)
+      else rows.splice(index, 0, row)
+    })
     const activityBoundary = rows.findLastIndex((row) => {
       if (row.type === "compaction") return true
       if (row.type !== "message") return false
@@ -96,22 +124,9 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   }
 
   function activityRows(): SessionRow[] {
-    return [
-      ...data.session.guardrail
-        .list(sessionID())
-        .map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason })),
-      ...(data.session.subagent
-        .page(sessionID())
-        ?.data.filter((task) => isActiveSubagent(task.state))
-        .map(
-          (task): SessionRow => ({
-            type: "subagent",
-            sessionID: task.sessionID,
-            agent: task.agent,
-            created: task.time.created,
-          }),
-        ) ?? []),
-    ]
+    return data.session.guardrail
+      .list(sessionID())
+      .map((request): SessionRow => ({ type: "guardrail", requestID: request.id, reason: request.reason }))
   }
 
   createEffect(() => {
@@ -124,15 +139,16 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   })
 
   createEffect(
-    on([sessionID, () => client.connection.status()], ([id, status], previous) => {
-      if (previous && previous[0] !== id) data.session.message.evict(previous[0])
+    on([sessionID, () => client.connection.status()], ([id, status]) => {
       if (status !== "connected") return
+      hydrateCompactionLifecycle(id)
       setRows(reconcile(reduce(), { key: "key" }))
       void data.session.pending.sync(id).catch(() => undefined)
       void data.session.diagnostics.sync(id).catch(() => undefined)
       void data.session.message.sync(id).then(
         () => {
           if (sessionID() !== id) return
+          hydrateCompactionLifecycle(id)
           setRows(reconcile(reduce(), { key: "key" }))
         },
         () => undefined,
@@ -154,9 +170,6 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
         // The closing assistant footer depends on execution state, so idling must re-reduce.
         data.session.status(sessionID()),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),
-        ...(data.session.subagent
-          .page(sessionID())
-          ?.data.map((task) => `${task.sessionID}:${task.agent}:${task.state}:${task.time.created}`) ?? []),
       ],
       () => setRows(reconcile(reduce(), { key: "key" })),
     ),
@@ -372,6 +385,18 @@ export function reduceSessionRows(messages: SessionMessageInfo[], inputs = new S
   }, [])
 }
 
+export function compactionMessageTranscriptVisible(message: Extract<SessionMessageInfo, { type: "compaction" }>) {
+  if ("jobID" in message) return false
+  return message.status !== "failed" || message.error.type === "aborted"
+}
+
+export function compactionTranscriptVisible(lifecycle: {
+  status: "pending" | "running" | "completed" | "failed"
+  code?: string
+}) {
+  return lifecycle.status !== "failed" || lifecycle.code === "cancelled" || lifecycle.code === "superseded"
+}
+
 export function messageBoundaryIDs(rows: SessionRow[], messages: SessionMessageInfo[]) {
   const byID = new Map(messages.map((message) => [message.id, message]))
   const seen = new Set<string>()
@@ -470,8 +495,8 @@ function rowKey(row: SessionRow, message?: SessionMessageInfo): string {
     case "subagent":
       return `subagent:${row.sessionID}`
     case "task":
-      // Task activity rows have no runtime producer (activityRows() only emits guardrail and
-      // subagent rows), so `content` is the only stable identity available and cannot collide.
+      // Task activity rows have no runtime producer, so `content` is the only stable identity
+      // available and cannot collide.
       return `task:${row.content}`
     case "part":
       return `part:${row.ref.messageID}:${row.ref.partID}`
@@ -482,6 +507,38 @@ function rowKey(row: SessionRow, message?: SessionMessageInfo): string {
     case "assistant-footer":
       return `assistant-footer:${row.messageID}`
   }
+}
+
+function compactionRowIndex(
+  lifecycle: {
+    messageID?: string
+    status: "pending" | "running" | "completed" | "failed"
+    boundary?: { messageID: string; seq: number }
+  },
+  messages: SessionMessageInfo[],
+  rows: SessionRow[],
+) {
+  if (!lifecycle.messageID) {
+    if (lifecycle.status !== "completed" || !lifecycle.boundary) return -1
+    return rows.findIndex((row) => {
+      if (row.type === "compaction") return false
+      if (row.type !== "message") return true
+      return messages.find((message) => message.id === row.messageID)?.type !== "compaction"
+    })
+  }
+  const position = messages.findIndex((message) => message.id === lifecycle.messageID)
+  if (position === -1) return -1
+  const laterMessageIDs = new Set(messages.slice(position + 1).map((message) => message.id))
+  return rows.findIndex((row) => {
+    const messageID = sessionRowMessageID(row)
+    return messageID !== undefined && laterMessageIDs.has(messageID)
+  })
+}
+
+function sessionRowMessageID(row: SessionRow) {
+  if (row.type === "message" || row.type === "assistant-footer") return row.messageID
+  if (row.type === "part") return row.ref.messageID
+  if (row.type === "group") return row.refs[0]?.messageID ?? (row.kind === "exploration" ? row.pending[0]?.messageID : undefined)
 }
 
 function hasPart(rows: SessionRow[], ref: PartRef) {

@@ -1,9 +1,9 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream, Scope, Option } from "effect"
+import { DateTime, Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
-import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
+import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
@@ -20,6 +20,7 @@ import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { SessionAutonomy } from "./session/autonomy"
 import { SessionCompactionJob } from "./session/compaction-job"
 import { SessionCompactionExecution } from "./session/compaction-execution"
+import { SessionCompaction } from "./session/compaction"
 import { SessionContextState } from "./session/context-state"
 import { Info, list } from "./session/skill-status"
 import { SessionGoal } from "./session/goal"
@@ -78,7 +79,7 @@ import { SessionRunnerModel } from "./session/runner/model"
 import { Catalog } from "./catalog"
 import { Config } from "./config"
 import { ConfigCompaction } from "./config/compaction"
-import { Hash } from "./util/hash"
+import { AttachmentStore } from "./attachment-store"
 
 export const RevertState = Session.Revert
 export type RevertState = Session.Revert
@@ -129,10 +130,17 @@ type CreateBaseInput = {
 type CreateInput = CreateBaseInput &
   ({ location: Location.Ref; parentID?: never } | { parentID: SessionSchema.ID; location?: never })
 
-type CompactInput = {
-  id?: SessionCompaction.ID
+type CompactBaseInput = {
+  id?: ID
   sessionID: SessionSchema.ID
-  trigger?: "consider" | "advised"
+}
+export type AdvisorCompactInput = CompactBaseInput & { trigger: "consider" | "advised" }
+export type ManualCompactInput = CompactBaseInput & { trigger?: never }
+type CompactInput = AdvisorCompactInput | ManualCompactInput
+
+interface Compact {
+  (input: AdvisorCompactInput): Effect.Effect<Admission | undefined, NotFoundError | CompactionConflictError>
+  (input: ManualCompactInput): Effect.Effect<Result, NotFoundError | CompactionConflictError>
 }
 
 type ForkInput = {
@@ -140,14 +148,13 @@ type ForkInput = {
   messageID?: SessionMessage.ID
 }
 
-type AutonomyInput =
-  | { sessionID: SessionSchema.ID; mode: "normal" | "yolo" }
-  | {
-      sessionID: SessionSchema.ID
-      mode: "goal"
-      goal: string
-      maxNoProgress?: number
-    }
+type AutonomyInput = {
+  sessionID: SessionSchema.ID
+  yolo?: number | boolean
+  goal?: string | null
+  maxNoProgress?: number
+  mode?: "normal" | "yolo" | "goal"
+}
 
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
@@ -177,7 +184,7 @@ export class CompactionConflictError extends Schema.TaggedErrorClass<CompactionC
   "Session.CompactionConflictError",
   {
     sessionID: SessionSchema.ID,
-    jobID: SessionCompaction.ID,
+    jobID: ID,
     message: Schema.String,
   },
 ) {}
@@ -233,6 +240,14 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly fork: (input: ForkInput) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly snapshot: (sessionID: SessionSchema.ID) => Effect.Effect<
+    {
+      readonly session: SessionSchema.Info
+      readonly messages: SessionMessage.Info[]
+      readonly watermark: EventLog.Synced
+    },
+    NotFoundError | MessageDecodeError
+  >
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -347,9 +362,7 @@ export interface Interface {
     winner: SkillV2.ID
     loser: SkillV2.ID
   }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError>
-  readonly compact: (
-    input: CompactInput,
-  ) => Effect.Effect<SessionCompaction.Admission, NotFoundError | CompactionConflictError>
+  readonly compact: Compact
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly active: Effect.Effect<ReadonlySet<SessionSchema.ID>>
   readonly background: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
@@ -388,12 +401,13 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
     const compactionJobs = yield* SessionCompactionJob.Service
-    const compactionExecution = yield* Effect.serviceOption(SessionCompactionExecution.Service)
+    const compactionExecution = yield* SessionCompactionExecution.Service
     const contextState = yield* SessionContextState.Service
     const store = yield* SessionStore.Service
     const providerRequests = yield* SessionProviderRequest.Service
     const locations = yield* LocationServiceMap.Service
     const fs = yield* FSUtil.Service
+    const attachments = yield* AttachmentStore.Service
     const jobs = yield* Job.Service
     const projectArtifactAccounting = yield* ProjectArtifactAccounting.Service
     const projectArtifactStore = yield* ProjectArtifactStore.Service
@@ -570,6 +584,27 @@ const layer = Layer.effect(
         if (!session) return yield* new NotFoundError({ sessionID })
         return session
       }),
+      snapshot: Effect.fn("V2Session.snapshot")(function* (sessionID) {
+        return yield* db
+          .transaction(() =>
+            Effect.gen(function* () {
+              const session = yield* result.get(sessionID)
+              const messages = yield* SessionHistory.load(db, sessionID)
+              const sequence = yield* EventV2.latestSequence(db, sessionID)
+              const watermark: EventLog.Synced = {
+                type: "log.synced",
+                aggregateID: sessionID,
+                ...(sequence < 0 ? {} : { seq: EventV2.Seq.make(sequence) }),
+              }
+              return {
+                session,
+                messages,
+                watermark,
+              }
+            }),
+          )
+          .pipe(Effect.orDie)
+      }),
       diagnostics: Effect.fn("V2Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
         const diagnostics = SessionCacheDiagnostics.fromMessages(
@@ -599,22 +634,58 @@ const layer = Layer.effect(
         }),
         set: Effect.fn("V2Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
-          if (input.mode !== "goal")
-            return yield* autonomy
-              .setMode({ sessionID: input.sessionID, mode: input.mode })
+          let yolo = input.yolo
+          let goal: string | null | undefined = input.goal as string | null | undefined
+          if (input.mode !== undefined) {
+            if (input.mode === "yolo") yolo = yolo ?? true
+            else if (input.mode === "normal") yolo = yolo ?? false
+            else if (input.mode === "goal" && goal === undefined) goal = (input as { goal?: string }).goal ?? undefined
+          }
+          if (typeof goal === "string") {
+            const rawText = goal.trim()
+            const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+            const synthesized = yield* goals.synthesize({ session, text: rawText })
+            const state = yield* autonomy
+              .set({
+                sessionID: input.sessionID,
+                yolo,
+                goal: synthesized ?? rawText,
+                rawText,
+                maxNoProgress: input.maxNoProgress,
+              })
               .pipe(
                 Effect.catchTag("SessionAutonomy.NotFound", () =>
                   Effect.fail(new NotFoundError({ sessionID: input.sessionID })),
                 ),
               )
-          const rawText = input.goal.trim()
-          const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
-          const synthesized = yield* goals.synthesize({ session, text: rawText })
+            if (state.goal?.status === "active") {
+              const startText = SessionAutonomy.continuationPrompt(state.goal)
+              const startID = SessionMessage.ID.make(
+                `msg_goal_${(yield* Effect.sync(() => randomUUID())).slice(0, 24)}`,
+              )
+              const startInput = SessionPending.Message.make({
+                type: "synthetic",
+                data: {
+                  text: startText,
+                  description: "Autonomous goal start",
+                  metadata: { autonomy: { yolo: state.yolo, goal: true, iteration: state.goal.iteration } },
+                },
+                delivery: "steer",
+              })
+              yield* SessionPending.admit(db, events, { id: startID, sessionID: input.sessionID, input: startInput }).pipe(
+                Effect.catchDefect((defect) =>
+                  defect instanceof SessionPending.LifecycleConflict ? Effect.void : Effect.die(defect),
+                ),
+              )
+              if (state.goal) yield* execution.wake(input.sessionID).pipe(Effect.orDie)
+            }
+            return state
+          }
           return yield* autonomy
-            .setGoal({
+            .set({
               sessionID: input.sessionID,
-              text: synthesized ?? rawText,
-              rawText,
+              yolo,
+              goal,
               maxNoProgress: input.maxNoProgress,
             })
             .pipe(
@@ -786,8 +857,16 @@ const layer = Layer.effect(
             const prompt = yield* resolvePrompt(
               { text: input.text, files: input.files, agents: input.agents },
               image,
+              attachments,
             ).pipe(Effect.provideService(FSUtil.Service, fs))
             const messageID = input.id ?? SessionMessage.ID.create()
+            const activeGoal = (yield* autonomy.get(input.sessionID).pipe(Effect.orDie)).goal?.status === "active"
+            const alreadyAdmitted =
+              activeGoal &&
+              ((yield* SessionPending.find(db, messageID)) !== undefined ||
+                (yield* SessionHistory.load(db, input.sessionID).pipe(Effect.orDie)).some(
+                  (message) => message.id === messageID,
+                ))
             const admittedInput = SessionPending.Message.make({
               type: "user",
               data: { ...prompt, metadata: input.metadata },
@@ -809,6 +888,16 @@ const layer = Layer.effect(
               !SessionPending.equivalent(admitted, { sessionID: input.sessionID, input: admittedInput })
             )
               return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+            if (activeGoal && !alreadyAdmitted) {
+              const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+              const rawText = admitted.data.text.trim()
+              const synthesized = yield* goals.synthesize({ session, text: rawText })
+              yield* autonomy.set({
+                sessionID: input.sessionID,
+                goal: synthesized ?? rawText,
+                rawText,
+              }).pipe(Effect.orDie)
+            }
             if (input.resume !== false) {
               if (activeShells.has(admitted.sessionID)) return admitted
               yield* execution.wake(admitted.sessionID)
@@ -1173,9 +1262,9 @@ const layer = Layer.effect(
           subpath: RelativePath.make(path.relative(project.directory, directory).replaceAll("\\", "/")),
         })
       }),
-      compact: Effect.fn("V2Session.compact")(function* (input) {
+      compact: Effect.fn("V2Session.compact")(function* (input: CompactInput) {
         const session = yield* result.get(input.sessionID)
-        const jobID = input.id ?? SessionCompaction.ID.create()
+        const jobID = input.id ?? ID.create()
         const boundary = yield* latestCompleteBoundary(db, input.sessionID)
         if (!boundary)
           return yield* new CompactionConflictError({
@@ -1212,27 +1301,53 @@ const layer = Layer.effect(
         const targetMaxInputTokens = policy.advisory
           ? Math.floor((hardInputCap * policy.advisory.considerPercent) / 100)
           : hardInputCap
-        const current = yield* contextState.current(input.sessionID)
         const trigger = input.trigger ?? "manual"
-        const admitted = yield* compactionJobs
-          .admit({
-            id: jobID,
-            sessionID: input.sessionID,
-            trigger,
-            admissionMode: "background",
-            requestedThrough: boundary,
-            baseContextRevision: current.revision,
-            targetMaxInputTokens,
-            configDigest: Hash.sha256(JSON.stringify(policy)),
-          })
+        const configDigest = ConfigCompaction.admissionDigest(policy)
+        const manifest = (job: SessionCompactionJob.Job) =>
+          Effect.gen(function* () {
+            const compaction = yield* SessionCompaction.Service
+            return yield* compaction.manifest(job)
+          }).pipe(Effect.provide(locations.get(session.location)))
+        return yield* compactionJobs
+          .withAdmissionGate(input.sessionID, (admit) =>
+            Effect.gen(function* () {
+              if (trigger === "consider" || trigger === "advised") {
+                const current = yield* contextState.current(input.sessionID)
+                const admission = {
+                  id: jobID,
+                  sessionID: input.sessionID,
+                  trigger,
+                  requestedThrough: boundary,
+                  baseContextRevision: current.revision,
+                  targetMaxInputTokens,
+                  configDigest,
+                } as const
+                if (yield* compactionJobs.hasUnchangedDeterministicFailure(admission)) return undefined
+                const admitted = yield* admit(admission)
+                yield* compactionExecution.run({ jobID: admitted.id, manifest })
+                return admitted
+              }
+              const active = (yield* compactionJobs.pending(input.sessionID))[0]
+              if (active) return yield* compactionExecution.run({ jobID: active.id, manifest })
+              const current = yield* contextState.current(input.sessionID)
+              const admitted = yield* admit({
+                id: jobID,
+                sessionID: input.sessionID,
+                trigger: "manual",
+                requestedThrough: boundary,
+                baseContextRevision: current.revision,
+                targetMaxInputTokens,
+                configDigest,
+              })
+              return yield* compactionExecution.run({ jobID: admitted.id, manifest })
+            }),
+          )
           .pipe(
             Effect.mapError(
               (error) => new CompactionConflictError({ sessionID: input.sessionID, jobID, message: error.message }),
             ),
           )
-        if (Option.isSome(compactionExecution)) yield* compactionExecution.value.wake(input.sessionID)
-        return admitted
-      }),
+      }) as Compact,
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
         yield* execution.awaitIdle(sessionID)
@@ -1355,10 +1470,13 @@ function synthesizeTerminalShellInfo(started: ShellInfo): ShellInfo {
 const resolvePrompt = Effect.fn("V2Session.resolvePrompt")(function* (
   input: PromptInput.Prompt,
   image: Effect.Effect<Image.Interface>,
+  attachments: AttachmentStore.Interface,
 ) {
   const fs = yield* FSUtil.Service
   const files = input.files
-    ? yield* Effect.forEach(input.files, (file) => materializeAttachment(fs, file, image), { concurrency: 8 })
+    ? yield* Effect.forEach(input.files, (file) => materializeAttachment(fs, file, image, attachments), {
+        concurrency: 8,
+      })
     : undefined
   return Prompt.make({ text: input.text, agents: input.agents, files })
 })
@@ -1369,7 +1487,23 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
   fs: FSUtil.Interface,
   input: PromptInput.FileAttachment,
   image: Effect.Effect<Image.Interface>,
+  attachments: AttachmentStore.Interface,
 ) {
+  if (input.uri.startsWith("ycoding-attachment://")) {
+    const content = yield* attachments
+      .resolveURI(input.uri)
+      .pipe(Effect.mapError((error) => new AttachmentError({ uri: input.uri, message: error.message })))
+    const bytes = yield* attachments
+      .read(content)
+      .pipe(Effect.mapError((error) => new AttachmentError({ uri: input.uri, message: error.message })))
+    return FileAttachment.create({
+      content,
+      mime: Mime.detect(bytes),
+      name: input.name,
+      description: input.description,
+      mention: input.mention,
+    })
+  }
   const resolved = input.uri.startsWith("data:")
     ? {
         bytes: yield* decodeDataURL(input.uri),
@@ -1397,16 +1531,12 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
             .join("\n"),
         )
       : resolved.bytes
-  const normalized = yield* normalizeImageAttachment(
-    input,
-    Base64.make(Buffer.from(content).toString("base64")),
-    mime,
-    image,
-  )
+  const normalized = yield* normalizeImageAttachment(input, content, mime, image)
   return FileAttachment.create({
-    data: normalized.data,
+    content: yield* attachments
+      .import(normalized.bytes)
+      .pipe(Effect.mapError((error) => new AttachmentError({ uri: input.uri, message: error.message }))),
     mime: normalized.mime,
-    source: resolved.source,
     name: input.name ?? resolved.name,
     description: input.description,
     mention: input.mention,
@@ -1415,19 +1545,24 @@ const materializeAttachment = Effect.fn("V2Session.materializeAttachment")(funct
 
 const normalizeImageAttachment = Effect.fn("V2Session.normalizeImageAttachment")(function* (
   input: PromptInput.FileAttachment,
-  data: Base64,
+  bytes: Uint8Array,
   mime: string,
   image: Effect.Effect<Image.Interface>,
 ) {
-  if (!mime.startsWith("image/")) return { data, mime }
+  if (!mime.startsWith("image/")) return { bytes, mime }
   const service = yield* image
   const label = input.name ?? (input.uri.startsWith("data:") ? "inline attachment" : input.uri)
-  const content = { uri: label, content: data, encoding: "base64" as const, mime }
+  const content = {
+    uri: label,
+    content: Base64.make(Buffer.from(bytes).toString("base64")),
+    encoding: "base64" as const,
+    mime,
+  }
   const normalized = yield* service.normalize(label, content).pipe(
     Effect.catchTag("Image.ResizerUnavailableError", () => Effect.succeed(content)),
     Effect.mapError((error) => new AttachmentError({ uri: label, message: error.message })),
   )
-  return { data: Base64.make(normalized.content), mime: normalized.mime }
+  return { bytes: Buffer.from(normalized.content, "base64"), mime: normalized.mime }
 })
 
 const readFileAttachment = Effect.fn("V2Session.readFileAttachment")(function* (fs: FSUtil.Interface, uri: string) {
@@ -1566,5 +1701,6 @@ export const node = makeGlobalNode({
     Global.node,
     ProjectArtifactAccounting.node,
     ProjectArtifactStore.node,
+    AttachmentStore.node,
   ],
 })

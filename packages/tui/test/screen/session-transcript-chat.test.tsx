@@ -21,6 +21,8 @@ const session = {
   time: { created: 1, updated: 9 },
 }
 const providerPayload = '{"error":{"message":"invalid x-api-key","request_id":"req_provider_123"}}'
+const providerMessage = "Provider overloaded; retry in 30 seconds."
+const retryMessage = "Rate limit reached; the provider will accept another request shortly."
 const messages = [
   {
     id: "msg_assistant_chat",
@@ -99,6 +101,17 @@ const messages = [
     finish: "error",
     error: { type: "ProviderError", message: providerPayload },
     time: { created: 8, completed: 9 },
+  },
+  {
+    id: "msg_provider_error_safe",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    content: [],
+    finish: "error",
+    error: { type: "provider.transport", message: providerMessage },
+    retry: { attempt: 2, at: 11, error: { type: "provider.rate_limit", message: retryMessage } },
+    time: { created: 9, completed: 10 },
   },
 ] satisfies SessionMessageInfo[]
 
@@ -224,20 +237,24 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     expect(collapsed.join("\n")).not.toContain("Request")
     expect(collapsed.join("\n")).not.toContain("Response")
     expectSafe(collapsed.join("\n"))
-    expect(collapsed.join("\n")).toContain("Provider request failed.")
+    expect(collapsed.join("\n")).toContain(providerMessage)
+    expect(collapsed.join("\n")).toContain(`Retry attempt 2 scheduled: ${retryMessage}`)
+    expect(collapsed.join("\n")).toContain("Sensitive response detail omitted.")
+    expect(collapsed.join("\n")).not.toContain("Provider request failed.")
+    expect(collapsed.join("\n")).not.toContain("scheduled after a provider request failed")
 
     const providerIdentityRow = collapsed.findLastIndex(
       (line) => line.includes("Build") && line.indexOf("Build") < railStart,
     )
     const providerFailureRow = collapsed.findLastIndex(
-      (line) => line.includes("Provider request failed.") && line.indexOf("Provider request failed.") < railStart,
+      (line) => line.includes(providerMessage) && line.indexOf(providerMessage) < railStart,
     )
     const providerMetadataRow = collapsed.findLastIndex(
       (line) => line.includes("Claude Opus 5") && line.indexOf("Claude Opus 5") < railStart,
     )
     expect(providerIdentityRow).toBeLessThan(providerFailureRow)
     expect(providerFailureRow).toBeLessThan(providerMetadataRow)
-    expect(screen.colorOf("Provider request failed.")).not.toEqual(screen.colorOf("Claude Opus 5"))
+    expect(screen.colorOf(providerMessage)).not.toEqual(screen.colorOf("Claude Opus 5"))
     expect(collapsed[providerIdentityRow]?.slice(0, railStart)).not.toContain("│")
     expect(collapsed[providerFailureRow]?.slice(0, railStart)).not.toContain("│")
     expect(collapsed[providerMetadataRow]?.slice(0, railStart)).not.toContain("│")

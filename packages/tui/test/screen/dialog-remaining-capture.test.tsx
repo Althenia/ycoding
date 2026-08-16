@@ -263,7 +263,7 @@ function route(url: URL) {
   if (url.pathname === "/api/server") return json({ urls: ["http://127.0.0.1:4096"] })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`, `/api/session/${sessionID}/subagent`, "/api/reference", "/api/command", "/api/shell", "/api/permission/request", "/api/form/request"].includes(url.pathname)) return json({ location, data: [] })
   if (url.pathname === "/api/session/active") return json({ data: {} })
-  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal" } })
+  if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: false } })
   if (url.pathname === "/api/session/ses_subagent_capture/subagent") return json({ data: subagents })
   return undefined
 }

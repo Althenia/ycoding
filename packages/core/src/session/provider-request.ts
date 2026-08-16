@@ -6,17 +6,23 @@ import { Money } from "@ycoding-ai/schema/money"
 import { Model } from "@ycoding-ai/schema/model"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { TransportAttempt } from "@ycoding-ai/ai/route"
-import { asc, desc, eq } from "drizzle-orm"
-import { Cause, Context, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
+import { and, asc, desc, eq, gt } from "drizzle-orm"
+import { Cause, Context, Data, DateTime, Effect, Layer, Option, Schema, Semaphore } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
 import { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { ProviderRequestObserver } from "./provider-request-observer"
-import { SessionProviderRequestTable, SessionUsageTable } from "./sql"
+import {
+  SessionCompactionJobTable,
+  SessionContextStateTable,
+  SessionProviderRequestTable,
+  SessionUsageTable,
+} from "./sql"
 
 export interface BeginInput {
   readonly sessionID: ProviderRequest.Record["sessionID"]
+  readonly expectedContextRevision?: number
   readonly inputID?: ProviderRequest.Record["inputID"]
   readonly source: ProviderRequest.Source
   readonly agent: ProviderRequest.Record["agent"]
@@ -27,21 +33,31 @@ export interface BeginInput {
   readonly toolDigest: string
 }
 
+export class StaleContextRevision extends Data.TaggedError("SessionProviderRequest.StaleContextRevision")<{
+  readonly expected: number
+  readonly actual: number
+}> {}
+
 export interface CompleteInput {
   readonly invalidation?: ProviderRequest.Invalidation
   readonly continuation: ProviderRequest.Continuation
+  readonly cacheReadReported?: boolean
   readonly cost?: Money.USD
   readonly tokens: TokenUsage.Info
 }
 
 export interface Tracker {
   readonly requestID: string
+  readonly defaultInvalidation: ProviderRequest.Invalidation
   readonly observeAttempt: TransportAttempt.Observer
   readonly complete: (input: CompleteInput) => Effect.Effect<void>
 }
 
 export interface Interface {
-  readonly next: (input: BeginInput) => Effect.Effect<Tracker>
+  readonly next: {
+    (input: BeginInput & { readonly expectedContextRevision: number }): Effect.Effect<Tracker, StaleContextRevision>
+    (input: BeginInput): Effect.Effect<Tracker>
+  }
   readonly observeAttempt: TransportAttempt.Observer
   readonly list: (
     sessionID: ProviderRequest.Record["sessionID"],
@@ -66,6 +82,7 @@ type PreviousRequest = {
   readonly promptCacheKey: string
   readonly systemDigest: string
   readonly toolDigest: string
+  readonly timeCreated: number
 }
 
 const decodeModel = Schema.decodeUnknownOption(Model.Ref)
@@ -163,23 +180,25 @@ function readPreviousRequest(
         readonly promptCacheKey: string
         readonly systemDigest: string
         readonly toolDigest: string
+        readonly timeCreated: number
       }
     | undefined,
 ): PreviousRequest | undefined {
-  if (!row) return
+  if (!row) return undefined
   return {
     ...row,
     model: Option.getOrUndefined(decodeModel(row.model)),
   }
 }
 
-function defaultInvalidation(previous: PreviousRequest | undefined, input: BeginInput): ProviderRequest.Invalidation {
+function defaultInvalidation(
+  previous: PreviousRequest | undefined,
+  input: BeginInput,
+  compactedSincePrevious: boolean,
+): ProviderRequest.Invalidation {
   if (!previous) return "first-request"
-  if (previous.source === "compaction") return "compaction-reset"
-  if (
-    previous.model &&
-    (previous.model.providerID !== input.model.providerID || previous.model.id !== input.model.id)
-  )
+  if (previous.source === "compaction" || compactedSincePrevious) return "compaction-reset"
+  if (previous.model && (previous.model.providerID !== input.model.providerID || previous.model.id !== input.model.id))
     return "model-switched"
   if (previous.model && (previous.model.variant ?? "default") !== (input.model.variant ?? "default"))
     return "model-variant-switched"
@@ -204,6 +223,7 @@ const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): Provid
   attempts: row.attempts,
   invalidation: row.invalidation,
   continuation: row.continuation,
+  ...(row.cache_read_reported === null ? {} : { cacheReadReported: row.cache_read_reported }),
   ...(row.cost === null ? {} : { cost: Money.USD.make(row.cost) }),
   tokens: row.tokens,
   time: DateTime.makeUnsafe(row.time_created),
@@ -241,9 +261,17 @@ const layer = Layer.effect(
     const summary: Interface["summary"] = (sessionID) =>
       Effect.gen(function* () {
         const [rows, last] = yield* Effect.all([
-          db.select().from(SessionUsageTable).where(eq(SessionUsageTable.session_id, sessionID)).all().pipe(Effect.orDie),
           db
-            .select({ invalidation: SessionProviderRequestTable.invalidation, promptCacheKey: SessionProviderRequestTable.prompt_cache_key })
+            .select()
+            .from(SessionUsageTable)
+            .where(eq(SessionUsageTable.session_id, sessionID))
+            .all()
+            .pipe(Effect.orDie),
+          db
+            .select({
+              invalidation: SessionProviderRequestTable.invalidation,
+              promptCacheKey: SessionProviderRequestTable.prompt_cache_key,
+            })
             .from(SessionProviderRequestTable)
             .where(eq(SessionProviderRequestTable.session_id, sessionID))
             .orderBy(desc(SessionProviderRequestTable.request))
@@ -255,7 +283,12 @@ const layer = Layer.effect(
           .map((row) => ({
             model: row.model,
             requests: row.logical,
-            tokens: { input: row.input, output: row.output, reasoning: row.reasoning, cache: { read: row.cache_read, write: row.cache_write } },
+            tokens: {
+              input: row.input,
+              output: row.output,
+              reasoning: row.reasoning,
+              cache: { read: row.cache_read, write: row.cache_write },
+            },
             ...(row.cost === null ? {} : { cost: Money.USD.make(row.cost), costProvenance: "recorded" as const }),
           }))
           .sort(
@@ -298,75 +331,123 @@ const layer = Layer.effect(
         }
       })
 
-    const next: Interface["next"] = (input) =>
-      lock.withPermit(
-        Effect.gen(function* () {
-          const last = yield* db
-            .select({
-              request: SessionProviderRequestTable.request,
-              source: SessionProviderRequestTable.source,
-              model: SessionProviderRequestTable.model,
-              promptCacheKey: SessionProviderRequestTable.prompt_cache_key,
-              systemDigest: SessionProviderRequestTable.system_digest,
-              toolDigest: SessionProviderRequestTable.tool_digest,
-            })
-            .from(SessionProviderRequestTable)
-            .where(eq(SessionProviderRequestTable.session_id, input.sessionID))
-            .orderBy(desc(SessionProviderRequestTable.request))
-            .limit(1)
-            .get()
-            .pipe(Effect.orDie)
-          const previous = readPreviousRequest(last)
-          const requestID = ProviderRequest.ID.make(`prq_${randomUUID().replaceAll("-", "")}`)
-          const state: Pending = {
-            input,
-            request: (previous?.request ?? 0) + 1,
-            defaultInvalidation: defaultInvalidation(previous, input),
-            attempts: 0,
-            completed: false,
-          }
-          pending.set(requestID, state)
-          const complete: Tracker["complete"] = (completion) =>
-            lock
-              .withPermit(
+    // The overload keeps helper requests infallible; only revision-bound Step ownership can be stale.
+    const next = ((input: BeginInput) =>
+      lock
+        .withPermit(
+          Effect.gen(function* () {
+            const requestID = yield* db.transaction(
+              () =>
                 Effect.gen(function* () {
-                  const current = pending.get(requestID)
-                  if (!current || current.completed) return
-                  current.completed = true
-                  const time = yield* DateTime.now
-                  yield* events.publish(SessionEvent.ProviderRequestRecorded, {
-                    id: requestID,
-                    sessionID: input.sessionID,
-                    inputID: input.inputID,
-                    source: input.source,
-                    agent: input.agent,
-                    model: input.model,
-                    routeID: input.routeID,
-                    promptCacheKey: input.promptCacheKey,
-                    systemDigest: input.systemDigest,
-                    toolDigest: input.toolDigest,
-                    request: current.request,
-                    attempts: Math.max(1, current.attempts),
-                    invalidation: completion.invalidation ?? current.defaultInvalidation,
-                    continuation: completion.continuation,
-                    ...(completion.cost === undefined ? {} : { cost: completion.cost }),
-                    tokens: completion.tokens,
-                    time,
+                  if (input.expectedContextRevision !== undefined) {
+                    const state = yield* db
+                      .select({ revision: SessionContextStateTable.revision })
+                      .from(SessionContextStateTable)
+                      .where(eq(SessionContextStateTable.session_id, input.sessionID))
+                      .get()
+                      .pipe(Effect.orDie)
+                    if (!state)
+                      return yield* Effect.die(new Error(`Context state not found for Session ${input.sessionID}`))
+                    if (state.revision !== input.expectedContextRevision)
+                      return yield* new StaleContextRevision({
+                        expected: input.expectedContextRevision,
+                        actual: state.revision,
+                      })
+                  }
+                  const last = yield* db
+                    .select({
+                      request: SessionProviderRequestTable.request,
+                      source: SessionProviderRequestTable.source,
+                      model: SessionProviderRequestTable.model,
+                      promptCacheKey: SessionProviderRequestTable.prompt_cache_key,
+                      systemDigest: SessionProviderRequestTable.system_digest,
+                      toolDigest: SessionProviderRequestTable.tool_digest,
+                      timeCreated: SessionProviderRequestTable.time_created,
+                    })
+                    .from(SessionProviderRequestTable)
+                    .where(eq(SessionProviderRequestTable.session_id, input.sessionID))
+                    .orderBy(desc(SessionProviderRequestTable.request))
+                    .limit(1)
+                    .get()
+                    .pipe(Effect.orDie)
+                  const previous = readPreviousRequest(last)
+                  const compactedSincePrevious =
+                    previous === undefined
+                      ? false
+                      : (yield* db
+                          .select({ id: SessionCompactionJobTable.id })
+                          .from(SessionCompactionJobTable)
+                          .where(
+                            and(
+                              eq(SessionCompactionJobTable.session_id, input.sessionID),
+                              eq(SessionCompactionJobTable.status, "ended"),
+                              gt(SessionCompactionJobTable.time_ended, previous.timeCreated),
+                            ),
+                          )
+                          .orderBy(desc(SessionCompactionJobTable.time_ended))
+                          .limit(1)
+                          .get()
+                          .pipe(Effect.orDie)) !== undefined
+                  const requestID = ProviderRequest.ID.make(`prq_${randomUUID().replaceAll("-", "")}`)
+                  pending.set(requestID, {
+                    input,
+                    request: (previous?.request ?? 0) + 1,
+                    defaultInvalidation: defaultInvalidation(previous, input, compactedSincePrevious),
+                    attempts: 0,
+                    completed: false,
                   })
+                  return requestID
                 }),
-              )
-              .pipe(
-                Effect.ensuring(Effect.sync(() => pending.delete(requestID))),
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("failed to record provider request", {
-                    requestID,
-                    cause: Cause.pretty(cause),
+              { behavior: "immediate" },
+            )
+            const complete: Tracker["complete"] = (completion) =>
+              lock
+                .withPermit(
+                  Effect.gen(function* () {
+                    const current = pending.get(requestID)
+                    if (!current || current.completed) return
+                    current.completed = true
+                    const time = yield* DateTime.now
+                    yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+                      id: requestID,
+                      sessionID: input.sessionID,
+                      inputID: input.inputID,
+                      source: input.source,
+                      agent: input.agent,
+                      model: input.model,
+                      routeID: input.routeID,
+                      promptCacheKey: input.promptCacheKey,
+                      systemDigest: input.systemDigest,
+                      toolDigest: input.toolDigest,
+                      request: current.request,
+                      attempts: Math.max(1, current.attempts),
+                      invalidation: completion.invalidation ?? current.defaultInvalidation,
+                      continuation: completion.continuation,
+                      ...(completion.cacheReadReported === undefined ? {} : { cacheReadReported: completion.cacheReadReported }),
+                      ...(completion.cost === undefined ? {} : { cost: completion.cost }),
+                      tokens: completion.tokens,
+                      time,
+                    })
                   }),
-                ),
-              )
-          return { requestID, observeAttempt, complete }
-        }),
-      )
+                )
+                .pipe(
+                  Effect.ensuring(Effect.sync(() => pending.delete(requestID))),
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to record provider request", {
+                      requestID,
+                      cause: Cause.pretty(cause),
+                    }),
+                  ),
+                )
+            return {
+              requestID,
+              defaultInvalidation: pending.get(requestID)?.defaultInvalidation ?? "first-request",
+              observeAttempt,
+              complete,
+            }
+          }),
+        )
+        .pipe(Effect.catchTag("SqlError", Effect.die))) as unknown as Interface["next"]
 
     return Service.of({ next, observeAttempt, list, summary })
   }),

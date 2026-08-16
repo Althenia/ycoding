@@ -248,7 +248,6 @@ const CompactionBase = { type: Schema.tag("compaction"), ...Base }
 const CompactionCurrent = {
   jobID: SessionCompaction.ID,
   trigger: SessionCompaction.Trigger,
-  admissionMode: SessionCompaction.AdmissionMode,
 }
 
 const CompactionLegacy = {

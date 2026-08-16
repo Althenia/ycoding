@@ -26,6 +26,7 @@ import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { ProcessIdentity } from "../process-identity"
 
 const DefaultSessionsLimit = 50
 const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
@@ -34,6 +35,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
     const orchestration = yield* SessionOrchestration.Service
+    const identity = yield* ProcessIdentity
 
     return handlers
       .handle(
@@ -128,6 +130,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               ),
             ),
           }
+        }),
+      )
+      .handle(
+        "session.snapshot",
+        Effect.fn(function* (ctx) {
+          const projection = yield* session.snapshot(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+            Effect.catchTag("Session.MessageDecodeError", Effect.die),
+          )
+          return { sourceEpoch: identity.sourceEpoch, ...projection }
         }),
       )
       .handle(
@@ -246,7 +258,9 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               previous: page.cursor.previous
                 ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.previous })
                 : undefined,
-              next: page.cursor.next ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.next }) : undefined,
+              next: page.cursor.next
+                ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.next })
+                : undefined,
             },
           }
         }),
@@ -411,8 +425,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 )
               }),
             )
-          if (outcome.status === "blocked")
-            return yield* Effect.fail(new ModelSwitchBlockedError(outcome))
+          if (outcome.status === "blocked") return yield* Effect.fail(new ModelSwitchBlockedError(outcome))
           return HttpApiSchema.NoContent.make()
         }),
       )
@@ -871,7 +884,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.fileChange.list",
         Effect.fn(function* (ctx) {
-          return { data: yield* session.fileChanges(ctx.params.sessionID).pipe(Effect.catchTag("Session.NotFoundError", mapSessionNotFound)) }
+          return {
+            data: yield* session
+              .fileChanges(ctx.params.sessionID)
+              .pipe(Effect.catchTag("Session.NotFoundError", mapSessionNotFound)),
+          }
         }),
       )
       .handle(
@@ -934,12 +951,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.log",
         Effect.fn((ctx) =>
           Effect.succeed(
-            session
-              .log({ sessionID: ctx.params.sessionID, after: ctx.query.after, follow: ctx.query.follow })
-              .pipe(
-                Stream.filter((item) => item.type === "log.synced" || isPublicDurableSessionEvent(item)),
-                Stream.orDie,
-              ),
+            session.log({ sessionID: ctx.params.sessionID, after: ctx.query.after, follow: ctx.query.follow }).pipe(
+              Stream.filter((item) => item.type === "log.synced" || isPublicDurableSessionEvent(item)),
+              Stream.map((item) => ({ ...item, sourceEpoch: identity.sourceEpoch })),
+              Stream.orDie,
+            ),
           ),
         ),
       )

@@ -40,8 +40,9 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
   const hostname = options.hostname ?? "127.0.0.1"
   const port = Option.fromNullishOr(options.port)
   const shutdown = yield* Deferred.make<void>()
+  const sourceEpoch = ServiceStatus.Epoch.make(lifecycle?.instanceID ?? randomUUID())
   const status = yield* Status.make({
-    instanceID: lifecycle?.instanceID ?? randomUUID(),
+    instanceID: sourceEpoch,
     managed: lifecycle !== undefined,
   })
   // Binding and serving are noisy at Info; the caller used to silence the whole of start() for that,
@@ -83,6 +84,7 @@ export const start = Effect.fn("ServerProcess.start")(function* <E, R>(
           const host = address.family === "IPv6" ? `[${address.address}]` : address.address
           return ServerInfo.connectionURLs(`http://${host}:${address.port}`, hostname)
         },
+        sourceEpoch,
       ).pipe(Layer.provide(NodeHttpServer.layerHttpServices)),
       applicationScope,
     )
@@ -212,7 +214,7 @@ const control = Effect.fnUntraced(function* (
 const healthResponse = Effect.fnUntraced(function* (status: Status.Interface) {
   const state = yield* status.current
   return HttpServerResponse.jsonUnsafe(
-    { healthy: true, version: InstallationVersion, pid: process.pid },
+    { healthy: true, version: InstallationVersion, pid: process.pid, sourceEpoch: status.sourceEpoch },
     {
       status: state.type === "ready" ? 200 : state.type === "failed" ? 500 : 503,
       headers: state.type === "starting" || state.type === "stopping" ? { "retry-after": "1" } : undefined,

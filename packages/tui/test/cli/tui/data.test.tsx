@@ -84,7 +84,7 @@ function subagentPage(data: SessionOrchestrationTask[], cursor: { previous?: str
   }
 }
 
-test("preserves the resident transcript through V2 compaction activation and canonical reconciliation", async () => {
+test("releases rows through a completed V2 compaction boundary after each canonical reconcile", async () => {
   const sessionID = "session-v2-compaction-resident"
   const resident: SessionMessageInfo[] = [
     {
@@ -99,13 +99,23 @@ test("preserves the resident transcript through V2 compaction activation and can
   const canonical: SessionMessageInfo[] = [
     ...resident,
     {
+      id: "msg_boundary",
+      type: "user",
+      text: "Release this boundary message too",
+      files: [],
+      agents: [],
+      time: { created: 2 },
+    },
+    {
       id: "msg_compaction_job",
       type: "compaction",
       jobID: "cmp_resident",
       trigger: "advised",
-      admissionMode: "background",
-      status: "pending",
-      time: { created: 2 },
+      status: "completed",
+      revision: 1,
+      boundary: { messageID: "msg_boundary", seq: 2 },
+      metrics: { excludedMessages: 2, excludedParts: 0, inputTokens: 1_000, retainedTokens: 400 },
+      time: { created: 3 },
     },
   ]
   const events = createEventStream()
@@ -114,15 +124,17 @@ test("preserves the resident transcript through V2 compaction activation and can
     if (url.pathname === `/api/session/${sessionID}/message`) {
       messageRequests++
       // Each response is a complete canonical transcript. The second response
-      // adds the server-projected job without dropping resident messages.
+      // adds a completed compaction without dropping durable history.
       return json({ data: messageRequests === 1 ? resident : canonical, cursor: {} })
     }
     return undefined
   }, events)
   let data!: ReturnType<typeof useData>
+  const publications: string[][] = []
 
   function Probe() {
     data = useData()
+    createEffect(() => publications.push(data.session.message.list(sessionID).map((message) => message.id)))
     return <box />
   }
 
@@ -146,37 +158,18 @@ test("preserves the resident transcript through V2 compaction activation and can
     const compaction = () => data.session.compaction.get(sessionID, "cmp_resident")
     expect(residentMessageIDs()).toEqual(resident.map((message) => message.id))
 
-    emitEvent(events, {
-      id: "evt_compaction_admitted_resident_v2",
-      created: 2,
-      type: "session.compaction.admitted",
-      durable: durable(sessionID, 2, 2),
-      data: { sessionID, jobID: "cmp_resident" },
-    })
-
-    await wait(() => compaction()?.status === "pending")
+    publications.length = 0
     data.session.message.invalidate(sessionID)
     await data.session.message.sync(sessionID)
-    expect(residentMessageIDs()).toEqual(canonical.map((message) => message.id))
+    expect(residentMessageIDs()).toEqual(["msg_compaction_job"])
+    expect(publications).toEqual([["msg_compaction_job"]])
     expect(data.session.message.list(sessionID).filter((message) => message.type === "compaction")).toHaveLength(1)
     expect(compaction()).toMatchObject({
       jobID: "cmp_resident",
       messageID: "msg_compaction_job",
       trigger: "advised",
-      admissionMode: "background",
-      status: "pending",
+      status: "completed",
     })
-
-    emitEvent(events, {
-      id: "evt_compaction_started_resident_v2",
-      created: 3,
-      type: "session.compaction.started",
-      durable: durable(sessionID, 3, 2),
-      data: { sessionID, jobID: "cmp_resident" },
-    })
-
-    await wait(() => compaction()?.status === "running")
-    expect(residentMessageIDs()).toEqual(canonical.map((message) => message.id))
     expect(messageRequests).toBe(2)
   } finally {
     app.renderer.destroy()

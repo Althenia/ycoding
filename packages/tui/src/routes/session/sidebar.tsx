@@ -8,7 +8,7 @@ import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 import { useTerminalDimensions } from "@opentui/solid"
 import { getScrollAcceleration } from "../../util/scroll"
-import { autonomyModeLabel } from "../../util/session-autonomy"
+import { autonomyModeLabel, yoloLevel } from "../../util/session-autonomy"
 import { railMetrics, railWidth } from "./rail"
 import { RailProvider, RailRow, RailSection } from "./rail-section"
 
@@ -20,7 +20,7 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
   const dimensions = useTerminalDimensions()
   const session = createMemo(() => data.session.get(props.sessionID))
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
-  const allExpanded = () => props.autonomy.mode === "goal"
+  const allExpanded = () => props.autonomy.goal?.status === "active"
 
   return (
     <Show when={session()}>
@@ -49,8 +49,8 @@ export function Sidebar(props: { sessionID: string; autonomy: SessionAutonomySta
         >
           <box flexShrink={0}>
             <RailProvider
-              goal={Boolean(props.autonomy.goal)}
-              autonomy={props.autonomy.mode !== "normal"}
+              goal={props.autonomy.goal?.status === "active"}
+              autonomy={yoloLevel(props.autonomy) > 0 || props.autonomy.goal?.status === "active"}
               shellSurface={props.shellSurface}
               allExpanded={allExpanded()}
               leftRule
@@ -128,12 +128,11 @@ function SessionRailIdentity(props: { title: string }) {
 
 export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
   const { themeV2 } = useTheme().contextual("elevated")
+  const level = createMemo(() => yoloLevel(props.autonomy))
 
   return (
     <>
-      <Show when={props.autonomy.goal}>
-        {/* The no-progress count and its meter are hidden by explicit user instruction: neither
-            communicated anything actionable in the rail. */}
+      <Show when={props.autonomy.goal?.status === "active" ? props.autonomy.goal : undefined}>
         {(goal) => (
           <RailSection section="goal" title="GOAL" summary={goal().status}>
             <text fg={themeV2.text.default}>{goal().text}</text>
@@ -141,21 +140,24 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
             <RailRow
               label="Status"
               value={goal().status}
-              valueColor={
-                goal().status === "active" || goal().status === "completed"
-                  ? themeV2.text.feedback.success.default
-                  : themeV2.text.feedback.warning.default
-              }
+              valueColor={themeV2.text.feedback.success.default}
             />
           </RailSection>
         )}
       </Show>
-      <Show when={props.autonomy.mode !== "normal"}>
-        <RailSection section="autonomy" title="AUTONOMY" summary={autonomyModeLabel(props.autonomy)} attention={props.autonomy.mode === "yolo"}>
+      <Show when={true}>
+        <RailSection section="autonomy" title="AUTONOMY" summary={autonomyModeLabel(props.autonomy)} attention={level() > 0}>
           <RailRow
             label="Approvals"
-            value={props.autonomy.mode === "yolo" ? "auto" : "manual"}
-            valueColor={props.autonomy.mode === "yolo" ? themeV2.text.feedback.warning.default : themeV2.text.default}
+            value={level() > 0 ? `auto · YOLO ${level()}` : "manual"}
+            valueColor={level() > 0 ? themeV2.text.feedback.warning.default : themeV2.text.default}
+          />
+          <RailRow
+            label="Guardrails"
+            value={level() === 3 ? "auto · YOLO 3" : "enforced"}
+            valueColor={
+              level() === 3 ? themeV2.text.feedback.warning.default : themeV2.text.feedback.success.default
+            }
           />
         </RailSection>
       </Show>

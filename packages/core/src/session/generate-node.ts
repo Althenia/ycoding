@@ -15,7 +15,8 @@ import { SessionModelHeaders } from "./model-headers"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionRunnerModel } from "./runner/model"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
-import { toLLMMessages } from "./runner/to-llm-message"
+import { isProviderImage, toLLMMessages } from "./runner/to-llm-message"
+import { AttachmentStore } from "../attachment-store"
 
 export const layer = (options?: SessionModelHeaders.Options) =>
   Layer.effect(
@@ -26,6 +27,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const hooks = yield* PluginHooks.Service
       const llm = yield* LLMClient.Service
       const models = yield* SessionRunnerModel.Service
+      const attachments = yield* AttachmentStore.Service
 
       return SessionGenerate.Service.of({
         generate: Effect.fn("SessionGenerate.generate")(function* (input) {
@@ -40,13 +42,40 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             .filter((part) => part.length > 0)
             .map(SystemPart.make)
           const providerMetadataKey = selected.model.route.providerMetadataKey ?? selected.model.provider
+          const attachmentFiles = history.messages.flatMap((message) =>
+            message.type === "user" ? (message.files ?? []) : [],
+          )
+          const verifiedAttachments = yield* Effect.forEach(
+            [...new Map(attachmentFiles.map((file) => [file.content.digest, file])).values()],
+            (file) =>
+              attachments.read(file.content).pipe(
+                Effect.orDie,
+                Effect.map((bytes) => ({ file, bytes })),
+              ),
+            { concurrency: 4 },
+          )
+          const images = new Map(
+            verifiedAttachments.flatMap(({ file, bytes }) =>
+              isProviderImage(file) ? [[file.content.digest, bytes] as const] : [],
+            ),
+          )
+          const attachmentMaterialization = {
+            images,
+            absolutePath: (file: (typeof attachmentFiles)[number]) => attachments.absolutePath(file.content),
+          }
           const contextEvent = yield* hooks.trigger("session", "context", {
             sessionID: selection.session.id,
             agent: selection.agent.id,
             model: selected.ref,
             system,
             messages: [
-              ...toLLMMessages(history.messages, selected.ref, providerMetadataKey),
+              ...toLLMMessages(
+                history.messages,
+                selected.ref,
+                providerMetadataKey,
+                new Map(),
+                attachmentMaterialization,
+              ),
               ...(history.instructionUpdate ? [Message.system(history.instructionUpdate)] : []),
               Message.user(input.prompt),
             ],
@@ -88,7 +117,14 @@ export function configured(options?: SessionModelHeaders.Options) {
   return makeLocationNode({
     service: SessionGenerate.Service,
     layer: layer(options),
-    deps: [SessionContext.node, Database.node, PluginHooks.node, SessionRunnerModel.node, llmClient],
+    deps: [
+      SessionContext.node,
+      Database.node,
+      PluginHooks.node,
+      SessionRunnerModel.node,
+      AttachmentStore.node,
+      llmClient,
+    ],
   })
 }
 

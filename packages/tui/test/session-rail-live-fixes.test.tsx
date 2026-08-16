@@ -296,11 +296,11 @@ test("omits the MCP failure exception when no server has failed", async () => {
 
 test("keeps the rail top below the header across autonomy modes and retained goals", async () => {
   const modes: ReadonlyArray<[string, SessionAutonomyState]> = [
-    ["normal", { mode: "normal" }],
-    ["active goal", { mode: "goal", goal: { text: "Finish audit", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
-    ["yolo", { mode: "yolo" }],
-    ["yolo with completed goal", { mode: "yolo", goal: { text: "Finish audit", status: "completed", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
-    ["yolo with stopped goal", { mode: "yolo", goal: { text: "Finish audit", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
+    ["normal", { mode: "normal", yolo: false }],
+    ["active goal", { mode: "normal", yolo: false, goal: { text: "Finish audit", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
+    ["yolo", { mode: "normal", yolo: true }],
+    ["yolo with completed goal", { mode: "normal", yolo: true, goal: { text: "Finish audit", status: "completed", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
+    ["yolo with stopped goal", { mode: "normal", yolo: true, goal: { text: "Finish audit", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 5 } }],
   ]
   const tops: number[] = []
 
@@ -355,7 +355,7 @@ type McpFixture = {
 async function mountSidebar(
   viewport: { width: number; height: number },
   mcp: ReadonlyArray<McpFixture> = [],
-  autonomy: SessionAutonomyState = { mode: "normal" },
+  autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
 ) {
   const events = createEventStream()
   const calls = createFetch((url) => route(url, mcp), events)

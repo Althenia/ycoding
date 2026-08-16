@@ -20,12 +20,16 @@ export type SessionHeaderOperationalState =
   | { type: "tool-running"; elapsed?: number; startedAt?: number }
   | { type: "waiting"; count: number }
   | { type: "awaiting-input"; count: number; elapsed?: number }
-  | { type: "provider-error"; code?: number }
-  | { type: "retrying"; attempt: number; at: number }
+  | { type: "provider-error"; message?: string; code?: number }
+  // A retry is two phases with opposite indicator rules. `retry-scheduled` is the backoff worker:
+  // the next attempt has not started, so it shows only the countdown to `at` and no animation.
+  // `retrying` is the live attempt in progress, which animates and shows no countdown.
+  | { type: "retry-scheduled"; attempt: number; at: number }
+  | { type: "retrying"; attempt: number }
 
 export type SessionHeaderState =
   | SessionHeaderOperationalState
-  | { type: "autonomy"; mode: "yolo" | "goal"; state: SessionHeaderOperationalState }
+  | { type: "autonomy"; yolo: number; goalActive: boolean; state: SessionHeaderOperationalState }
 
 type SessionHeaderTimedState = Extract<
   SessionHeaderOperationalState,
@@ -85,12 +89,25 @@ function pendingAgent(current: string | undefined, pending: string | undefined) 
   return pending && current?.toLocaleLowerCase() !== pending.toLocaleLowerCase() ? `→ ${pending}` : undefined
 }
 
+function headerYoloLevel(yolo: unknown): number {
+  if (typeof yolo === "number") return yolo
+  if (yolo === true) return 2
+  return 0
+}
+
 export function headerStatusLabel(state: SessionHeaderState, width: number, runningShells?: number, now = Date.now()): string {
   if (state.type === "autonomy") {
-    const autonomy = state.mode === "yolo" ? "YOLO · auto-approve" : "Goal · autonomous"
+    const level = headerYoloLevel(state.yolo)
+    let autonomy: string
+    if (level > 0 && state.goalActive) autonomy = `YOLO ${level} + Goal · autonomous`
+    else if (level > 0) autonomy = `YOLO ${level} · auto-approve`
+    else if (state.goalActive) autonomy = "Goal · autonomous"
+    else autonomy = "autonomous"
     return `${autonomy} · ${headerStatusLabel(state.state, width, runningShells, now)}`
   }
-  if (state.type === "retrying") return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
+  if (state.type === "retry-scheduled")
+    return `${state.attempt - 1} failed · retry ${state.attempt} · in ${Math.max(0, Math.ceil((state.at - now) / 1_000))}s`
+  if (state.type === "retrying") return `retrying · attempt ${state.attempt}`
   if (state.type === "working" || state.type === "thinking" || state.type === "tool-running" || state.type === "awaiting-input") {
     // One rule for every surface: the design writes sub-minute working time with a decimal
     // ("4.1s", "8.4s") and anything longer as "2m14s". formatDuration floors to whole seconds, so
@@ -102,7 +119,7 @@ export function headerStatusLabel(state: SessionHeaderState, width: number, runn
     return elapsed ? `? awaiting input · ${elapsed}` : "? awaiting input"
   }
   if (state.type === "waiting") return `waiting · ${state.count} subagent${state.count === 1 ? "" : "s"}`
-  if (state.type === "provider-error") return state.code ? `provider error \u00b7 ${state.code}` : "provider error"
+  if (state.type === "provider-error") return "provider error"
   if (runningShells) return `${runningShells} shell${runningShells === 1 ? "" : "s"} running`
   return "ready"
 }
@@ -116,19 +133,39 @@ export function Header(
   const leaderActive = Keymap.useLeaderActive()
   const [now, setNow] = createSignal(Date.now())
   const operational = createMemo(() => (props.state.type === "autonomy" ? props.state.state : props.state))
+  // `retry-scheduled` is the backoff countdown phase; once `at` is reached the
+  // retry is in-flight and should render as `retrying` (spinner, no countdown).
+  const effectiveOperational = createMemo<SessionHeaderOperationalState>(() => {
+    const current = operational()
+    if (current.type === "retry-scheduled" && current.at <= now()) return { type: "retrying", attempt: current.attempt }
+    return current
+  })
   const timed = createMemo<SessionHeaderTimedState | undefined>(() => {
     const current = operational()
     if (current.type === "working" || current.type === "thinking" || current.type === "tool-running") return current
   })
   createEffect(() => {
-    if (timed()?.startedAt === undefined && operational().type !== "retrying") return
+    // The shared `now` tick drives the retry countdown and the working/thinking/tool-running elapsed;
+    // terminal states (ready/waiting/provider-error/cancelled/completed/failed/lost) freeze elapsed and stop the tick.
+    const active = timed()
+    const op = operational()
+    if (active?.startedAt === undefined && op.type !== "retry-scheduled") return
     setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 100)
+    const interval = op.type === "retry-scheduled" ? 1_000 : 100
+    const timer = setInterval(() => setNow(Date.now()), interval)
     onCleanup(() => clearInterval(timer))
   })
   const state = createMemo<SessionHeaderState>(() => {
     const active = timed()
-    if (!active?.startedAt) return props.state
+    if (!active?.startedAt) {
+      const op = operational()
+      const eff = effectiveOperational()
+      if (op.type !== eff.type) {
+        if (props.state.type === "autonomy") return { ...props.state, state: eff as SessionHeaderOperationalState }
+        return eff as SessionHeaderState
+      }
+      return props.state
+    }
     const elapsed = { ...active, elapsed: Math.max(0, (now() - active.startedAt) / 1000) }
     if (props.state.type === "autonomy") return { ...props.state, state: elapsed }
     return elapsed
@@ -157,11 +194,11 @@ export function Header(
   const statusColor = createMemo(() => {
     const current = state()
     const active = current.type === "autonomy" ? current.state : current
-    if (current.type === "autonomy")
-      return current.mode === "yolo" ? themeV2.text.feedback.error.default : themeV2.text.feedback.success.default
+    if (current.type === "autonomy") return headerYoloLevel(current.yolo) > 0 ? themeV2.text.feedback.error.default : themeV2.text.feedback.success.default
     if (active.type === "provider-error")
       return themeV2.text.feedback.error.default
-    if (active.type === "retrying") return themeV2.text.feedback.warning.default
+    if (active.type === "retrying" || active.type === "retry-scheduled")
+      return themeV2.text.feedback.warning.default
     if (active.type === "awaiting-input") return themeV2.text.feedback.warning.default
     if (active.type === "tool-running" || active.type === "waiting") return themeV2.text.feedback.info.default
     if (active.type === "working" || active.type === "thinking")
@@ -244,11 +281,8 @@ export function Header(
           <For each={pending()}>{(value) => <span style={{ fg: themeV2.text.subdued }}> {"·"} {value}</span>}</For>
         </text>
         <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-          <Show when={operational().type === "working" && !props.subagent}>
+          <Show when={(effectiveOperational().type === "working" && !props.subagent) || effectiveOperational().type === "retrying"}>
             <Spinner color={statusColor()} frames={DOT_TRAIL_FRAMES} interval={160} />
-          </Show>
-          <Show when={operational().type === "retrying"}>
-            <text fg={themeV2.text.feedback.error.default} wrapMode="none">{getGlyph("failed").glyph}</text>
           </Show>
           <text fg={statusColor()} wrapMode="none">
             {headerStatusLabel(state(), dimensions().width, identity().runningShells, now())}

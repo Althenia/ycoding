@@ -415,7 +415,7 @@ export function Autocomplete(props: {
 
   const agents = createMemo(() => {
     return (data.location.agent.list(location.current) ?? [])
-      .filter((agent) => !agent.hidden && agent.mode !== "primary")
+      .filter((agent) => !agent.hidden && agent.mode !== "primary" && agent.id !== "btw")
       .map(
         (agent): AutocompleteOption => ({
           display: "@" + agent.id,

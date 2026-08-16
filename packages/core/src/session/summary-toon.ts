@@ -60,15 +60,6 @@ export class EmptySummaryError extends Schema.TaggedErrorClass<EmptySummaryError
   }
 }
 
-export class SummaryTooLargeError extends Schema.TaggedErrorClass<SummaryTooLargeError>()(
-  "SessionSummary.SummaryTooLargeError",
-  { bytes: Schema.Number, maxBytes: Schema.Number },
-) {
-  override get message() {
-    return `Summary exceeds ${this.maxBytes} bytes (got ${this.bytes})`
-  }
-}
-
 export class CodeFenceError extends Schema.TaggedErrorClass<CodeFenceError>()("SessionSummary.CodeFenceError", {}) {
   override get message() {
     return "Markdown code fences are not allowed in the summary"
@@ -91,7 +82,6 @@ export type ParseError =
   | SequenceMismatchError
   | InvalidElementError
   | EmptySummaryError
-  | SummaryTooLargeError
   | CodeFenceError
   | ProseError
 
@@ -105,6 +95,9 @@ const MemoryShape = Schema.Struct({
   version: Schema.Literal(1),
   through_sequence: Schema.Int,
   objective: Schema.String,
+  requirements: TextList,
+  acceptance_criteria: TextList,
+  progress: TextList,
   current_state: Schema.String,
   facts: Schema.Array(Fact),
   decisions: Schema.Array(Decision),
@@ -113,17 +106,20 @@ const MemoryShape = Schema.Struct({
   completed: TextList,
   pending: TextList,
   blockers: TextList,
+  skills: TextList,
   unresolved: TextList,
   important_identifiers: TextList,
   continuation: Schema.String,
 })
 
 export type Memory = Schema.Schema.Type<typeof MemoryShape>
+type MemoryInput = Omit<Memory, "requirements" | "acceptance_criteria" | "progress" | "skills"> &
+  Partial<Pick<Memory, "requirements" | "acceptance_criteria" | "progress" | "skills">>
 
 export interface ParseOptions {
   /** Expected session boundary that the summary must claim via `through_sequence`. */
   readonly throughSequence: number
-  /** Upper bound on the raw input's UTF-8 byte length. */
+  /** Advisory UTF-8 byte target for the summary; parsing never rejects on size. */
   readonly maxSummaryBytes: number
 }
 
@@ -131,6 +127,9 @@ const REQUIRED_FIELDS = [
   "version",
   "through_sequence",
   "objective",
+  "requirements",
+  "acceptance_criteria",
+  "progress",
   "current_state",
   "facts",
   "decisions",
@@ -139,6 +138,7 @@ const REQUIRED_FIELDS = [
   "completed",
   "pending",
   "blockers",
+  "skills",
   "unresolved",
   "important_identifiers",
   "continuation",
@@ -149,26 +149,77 @@ const TABLE_HEADER = /\[(\d+|\*)\]\s*\{[^}]*\}\s*:\s*$/
 const ROW_LINE = /^\s+(?:"(?:\\.|[^"\\])*"|[^",]+)(?:\s*,\s*(?:"(?:\\.|[^"\\])*"|[^",]+))*\s*$/
 const DASH_LINE = /^\s*-\s*/
 const COMMENT_LINE = /^\s*#/
-const FENCE = /```/
+const FENCE_LINE = /^\s*```/
 
 /**
  * Encodes a conversation memory as a TOON document rooted at `conversation_memory`.
  */
-export function encode(memory: Memory): string {
+export function encode(memory: MemoryInput): string {
   // toon's `encode` is Array.from(encodeLines(x)).join("\n"); use encodeLines so the
   // library's export does not shadow the `encode` defined here.
-  return Array.from(encodeLines({ conversation_memory: memory })).join("\n")
+  return Array.from(
+    encodeLines({
+      conversation_memory: {
+        version: memory.version,
+        through_sequence: memory.through_sequence,
+        objective: memory.objective,
+        requirements: memory.requirements ?? [],
+        acceptance_criteria: memory.acceptance_criteria ?? [],
+        progress: memory.progress ?? [],
+        current_state: memory.current_state,
+        facts: memory.facts,
+        decisions: memory.decisions,
+        preferences: memory.preferences,
+        constraints: memory.constraints,
+        completed: memory.completed,
+        pending: memory.pending,
+        blockers: memory.blockers,
+        skills: memory.skills ?? [],
+        unresolved: memory.unresolved,
+        important_identifiers: memory.important_identifiers,
+        continuation: memory.continuation,
+      },
+    }),
+  ).join("\n")
+}
+
+/** Retains source-backed text verbatim in existing TOON v1 fields. */
+export function retainRequiredTexts(memory: Memory, texts: ReadonlyArray<string>): Memory {
+  return texts
+    .filter((text, index) => text.trim() && texts.indexOf(text) === index)
+    .reduce<Memory>(
+      (result, text) => {
+        if (memoryTexts(result).some((value) => value.includes(text))) return result
+        if (/^objective\s*:/i.test(text)) return { ...result, objective: text }
+        if (/\bactive skill\b/i.test(text)) return { ...result, skills: [...result.skills, text] }
+        if (/\baccept(?:ance)?[ _-]?criteria\b/i.test(text))
+          return { ...result, acceptance_criteria: [...result.acceptance_criteria, text] }
+        if (/\brequirement\b/i.test(text)) return { ...result, requirements: [...result.requirements, text] }
+        if (/\b(?:accepted|rejected|superseded) decision\b/i.test(text)) {
+          const status = /\brejected decision\b/i.test(text)
+            ? "rejected"
+            : /\bsuperseded decision\b/i.test(text)
+              ? "superseded"
+              : "accepted"
+          return { ...result, decisions: [...result.decisions, { text, status }] }
+        }
+        if (/\bblocker\b/i.test(text)) return { ...result, blockers: [...result.blockers, text] }
+        if (/\b(?:pending|todo|next action)\b/i.test(text)) return { ...result, pending: [...result.pending, text] }
+        if (/\b(?:progress|in[_ -]?progress|completed|validation)\b/i.test(text))
+          return { ...result, progress: [...result.progress, text] }
+        return { ...result, facts: [...result.facts, { text, confidence: "confirmed" }] }
+      },
+      memory,
+    )
 }
 
 /**
  * Parses a TOON conversation_memory document, returning the validated memory or a
- * tagged error. `options.throughSequence` must match the document's `through_sequence`
- * and the raw input's byte length must stay within `options.maxSummaryBytes`.
+ * tagged error. `options.throughSequence` must match the document's `through_sequence`.
+ * `options.maxSummaryBytes` is advisory: an oversized document still parses.
  */
 export function parse(input: string, options: ParseOptions): Memory | ParseError {
-  const bytes = new TextEncoder().encode(input).byteLength
-  if (bytes > options.maxSummaryBytes) return new SummaryTooLargeError({ bytes, maxBytes: options.maxSummaryBytes })
-  if (FENCE.test(input)) return new CodeFenceError({})
+  if (isFencedDocument(input)) return new CodeFenceError({})
   const proseLine = findProseLine(input)
   if (proseLine !== undefined) return new ProseError({ line: proseLine })
   const decoded = decodeToon(input)
@@ -187,6 +238,11 @@ export function parse(input: string, options: ParseOptions): Memory | ParseError
   if (Result.isFailure(result)) return new InvalidElementError({ reason: result.failure.message })
   if (isEmpty(result.success)) return new EmptySummaryError({})
   return result.success
+}
+
+function isFencedDocument(input: string) {
+  const lines = input.split(/\r?\n/).filter((line) => line.trim())
+  return lines.length >= 2 && FENCE_LINE.test(lines[0]) && FENCE_LINE.test(lines[lines.length - 1])
 }
 
 function decodeToon(input: string): unknown | InvalidToonError {
@@ -212,6 +268,9 @@ function rootBody(value: unknown): { body: Record<string, unknown> } | { reason:
 function isEmpty(memory: Memory): boolean {
   const text = [memory.objective, memory.current_state, memory.continuation]
   const lists = [
+    memory.requirements,
+    memory.acceptance_criteria,
+    memory.progress,
     memory.facts,
     memory.decisions,
     memory.preferences,
@@ -219,10 +278,32 @@ function isEmpty(memory: Memory): boolean {
     memory.completed,
     memory.pending,
     memory.blockers,
+    memory.skills,
     memory.unresolved,
     memory.important_identifiers,
   ]
   return !text.some((value) => value.trim()) && lists.every((list) => list.length === 0)
+}
+
+function memoryTexts(memory: Memory) {
+  return [
+    memory.objective,
+    ...memory.requirements,
+    ...memory.acceptance_criteria,
+    ...memory.progress,
+    memory.current_state,
+    memory.continuation,
+    ...memory.facts.map((fact) => fact.text),
+    ...memory.decisions.map((decision) => decision.text),
+    ...memory.preferences,
+    ...memory.constraints,
+    ...memory.completed,
+    ...memory.pending,
+    ...memory.blockers,
+    ...memory.skills,
+    ...memory.unresolved,
+    ...memory.important_identifiers,
+  ]
 }
 
 /**

@@ -11,26 +11,24 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 test("derives the goal chip from the current mode instead of retained goal state", () => {
   const active = modeChips({
-    autonomy: {
-      mode: "goal",
-      goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+    autonomy: { mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
     },
   })[0]
   expect(active).toEqual({ key: "goal", label: "goal", tone: "on" })
   expect(active?.label).not.toContain("/")
 
   const completed = { text: "ship", status: "completed" as const, iteration: 3, noProgress: 0, maxNoProgress: 5 }
-  expect(modeChips({ autonomy: { mode: "normal", goal: completed } })).toEqual([
+  expect(modeChips({ autonomy: { mode: "normal", yolo: false, goal: completed } })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
     { key: "yolo", label: "YOLO off", tone: "off" },
   ])
 
   const retained = { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 }
-  expect(modeChips({ autonomy: { mode: "yolo", goal: retained } })).toEqual([
+  expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained } })).toEqual([
     { key: "goal", label: "goal off", tone: "off" },
     { key: "yolo", label: "YOLO", tone: "danger" },
   ])
-  expect(modeChips({ autonomy: { mode: "yolo", goal: retained }, guardrailPending: true })[0]).toEqual({
+  expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained }, guardrailPending: true })[0]).toEqual({
     key: "goal",
     label: "guardrail blocked",
     tone: "warning",
@@ -45,21 +43,17 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
             <box flexDirection="column">
-              <box><ModeChips autonomy={{ mode: "normal" }} /></box>
+              <box><ModeChips autonomy={{ mode: "normal", yolo: false }} /></box>
               <box>
                 <ModeChips
-                  autonomy={{
-                    mode: "goal",
-                    goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+                  autonomy={{ mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
                   }}
                 />
               </box>
-              <box><ModeChips autonomy={{ mode: "yolo" }} /></box>
+              <box><ModeChips autonomy={{ mode: "normal", yolo: true }} /></box>
               <box>
                 <ModeChips
-                  autonomy={{
-                    mode: "yolo",
-                    goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
+                  autonomy={{ mode: "normal", yolo: true, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
                   }}
                   guardrailPending={guardrailPending()}
                 />
@@ -86,7 +80,7 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
     if (!guardrailChip) throw new Error("expected the guardrail-blocked goal chip")
     expect(guardrailChip.fg.toInts()).toEqual(RGBA.fromHex("#0F1115").toInts())
     expect(guardrailChip.bg.toInts()).toEqual(RGBA.fromHex("#F0BE62").toInts())
-    expect(modeChips({ autonomy: { mode: "yolo" } })[1]).toMatchObject({ label: "YOLO", tone: "danger" })
+    expect(modeChips({ autonomy: { mode: "normal", yolo: true } })[1]).toMatchObject({ label: "YOLO", tone: "danger" })
   } finally {
     app.renderer.destroy()
   }
@@ -94,9 +88,7 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
 
 test("clearing a pending guardrail restores the prior YOLO footer state", async () => {
   const [guardrailPending, setGuardrailPending] = createSignal(true)
-  const autonomy = {
-    mode: "yolo" as const,
-    goal: { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 },
+  const autonomy = { mode: "normal" as const, yolo: true, goal: { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 },
   }
   const app = await testRender(
     () => (

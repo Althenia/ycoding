@@ -54,7 +54,7 @@ export function RailProvider(
     expanded: (key) => order().includes(key),
     leftRule: Boolean(props.leftRule),
     shellSurface: Boolean(props.shellSurface),
-    showTodo: () => !props.allExpanded,
+    showTodo: () => true,
     toggle: (key) =>
       setOrder((current) => (current.includes(key) ? collapseSection(current, key) : expandSection(current, key))),
     attend: (key, needsAttention) => {
@@ -143,15 +143,9 @@ export function RailSection(
           paddingLeft={rail ? metrics().paddingLeft - (rail.leftRule ? 1 : 0) : 0}
           paddingRight={rail ? metrics().paddingRight : 0}
         >
-          <Show when={props.children || props.section === "autonomy"}>
+          <Show when={props.children}>
             <box height={1} flexShrink={0} />
             {props.children}
-            <Show when={props.section === "autonomy"}>
-              <>
-                <box height={1} flexShrink={0} />
-                <RailRow label="Guardrails" value="enforced" valueColor={themeV2.text.feedback.success.default} />
-              </>
-            </Show>
             <box height={1} flexShrink={0} />
           </Show>
         </box>

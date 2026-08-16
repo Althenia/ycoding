@@ -79,7 +79,7 @@ export function buildClaudeCodeHeaders(
   headers.set("x-app", "cli")
   headers.set("user-agent", process.env.ANTHROPIC_USER_AGENT ?? `claude-cli/${version()} (external, sdk-cli)`)
   headers.set("x-client-request-id", options.requestID?.() ?? randomUUID())
-  headers.set("x-claude-code-session-id", options.sessionID ?? claudeCodeSessionID)
+  headers.set("x-claude-code-session-id", options.sessionID ?? headers.get("x-session-id") ?? claudeCodeSessionID)
   const stainless = {
     "x-stainless-arch": process.arch === "arm64" ? "arm64" : process.arch,
     "x-stainless-lang": "js",
@@ -97,7 +97,10 @@ export function buildClaudeCodeHeaders(
   return headers
 }
 
-export function transformClaudeCodeBody(body: FetchBody, options: { readonly version?: string } = {}): FetchBody {
+export function transformClaudeCodeBody(
+  body: FetchBody,
+  options: { readonly version?: string; readonly billingSample?: string } = {},
+): FetchBody {
   if (typeof body !== "string") return body
   let parsed: ClaudeBody
   try {
@@ -115,6 +118,7 @@ export function transformClaudeCodeBody(body: FetchBody, options: { readonly ver
       parsed.messages ?? [],
       options.version ?? version(),
       process.env.CLAUDE_CODE_ENTRYPOINT ?? "sdk-cli",
+      options.billingSample,
     ),
   })
   parsed.system = parsed.system.flatMap((entry) => {
@@ -258,6 +262,7 @@ export function createClaudeCodeFetch(input: {
   readonly reload: () => Promise<ClaudeCodeCredentials | null>
   readonly sessionID?: string
   readonly requestID?: () => string
+  readonly billingSample?: (sessionID: string) => Promise<string | undefined>
   readonly onEvent?: (event: ClaudeCodeRequestEvent) => void
   readonly onResponse?: (response: Response) => void | Promise<void>
 }) {
@@ -266,6 +271,7 @@ export function createClaudeCodeFetch(input: {
     init: RequestInit,
     credentials: ClaudeCodeCredentials,
     excluded: Set<string>,
+    billingSample: string | undefined,
   ) => {
     const modelID = modelFromBody(init.body)
     const url = requestURL(request)
@@ -275,7 +281,7 @@ export function createClaudeCodeFetch(input: {
     })
     return input.fetch(url, {
       ...init,
-      body: transformClaudeCodeBody(init.body),
+      body: transformClaudeCodeBody(init.body, { billingSample }),
       headers,
     })
   }
@@ -284,7 +290,14 @@ export function createClaudeCodeFetch(input: {
     const latest = await input.credentials()
     if (!latest) throw new Error("Claude Code credentials are unavailable or expired. Run `claude auth login`.")
     const excluded = new Set<string>()
-    let response = await run(request, init, latest, excluded)
+    const sessionID = input.sessionID ?? requestHeader(request, init, "x-session-id")
+    const billingSample =
+      sessionID && input.billingSample
+        ? await Promise.resolve()
+            .then(() => input.billingSample!(sessionID))
+            .catch(() => undefined)
+        : undefined
+    let response = await run(request, init, latest, excluded, billingSample)
     if (response.status === 401) {
       const rotated = await input.reload().catch(() => null)
       if (!rotated || rotated.accessToken === latest.accessToken) return response
@@ -292,7 +305,7 @@ export function createClaudeCodeFetch(input: {
         event: "credential-rotated",
         data: { sourceReloaded: true },
       })
-      response = await run(request, init, rotated, excluded)
+      response = await run(request, init, rotated, excluded, billingSample)
     }
     for (;;) {
       if (response.status !== 400 && response.status !== 429) break
@@ -303,7 +316,7 @@ export function createClaudeCodeFetch(input: {
       excluded.add(beta)
       input.onEvent?.({ event: "beta-excluded", data: { beta } })
       const current = (await input.credentials()) ?? latest
-      response = await run(request, init, current, excluded)
+      response = await run(request, init, current, excluded, billingSample)
     }
     try {
       await input.onResponse?.(response)
@@ -348,6 +361,12 @@ function requestURL(input: FetchInput) {
   return url.toString()
 }
 
+function requestHeader(input: FetchInput, init: RequestInit, name: string) {
+  const headers = new Headers(input instanceof Request ? input.headers : undefined)
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value))
+  return headers.get(name) ?? undefined
+}
+
 function modelFromBody(body: FetchBody) {
   if (typeof body !== "string") return "unknown"
   try {
@@ -362,12 +381,13 @@ function prefixToolName(name: string) {
   return `${toolPrefix}${name.charAt(0).toUpperCase()}${name.slice(1)}`
 }
 
-function buildBillingHeader(messages: ClaudeMessage[], value: string, entrypoint: string) {
-  const text = firstUserText(messages)
-  const sampled = [4, 7, 20].map((index) => text[index] ?? "0").join("")
+function buildBillingHeader(messages: ClaudeMessage[], value: string, entrypoint: string, sample?: string) {
+  const sampled = sample ?? claudeCodeBillingSample(firstUserText(messages))
   const suffix = createHash("sha256").update(`${billingSalt}${sampled}${value}`).digest("hex").slice(0, 3)
   return `${billingPrefix}: cc_version=${value}.${suffix}; cc_entrypoint=${entrypoint};`
 }
+
+export const claudeCodeBillingSample = (text: string) => [4, 7, 20].map((index) => text[index] ?? "0").join("")
 
 function firstUserText(messages: ClaudeMessage[]) {
   const content = messages.find((message) => message.role === "user")?.content

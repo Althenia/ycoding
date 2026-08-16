@@ -19,7 +19,7 @@ describe("CopilotUsage", () => {
         quota_snapshots: {
           chat: { entitlement: 400, remaining: 220, percent_remaining: 55, overage_count: 12, overage_permitted: true },
           completions: { entitlement: 2000, remaining: 2000, percent_remaining: 100 },
-          premium_interactions: { entitlement: 1000000, remaining: 999999, percent_remaining: 99, unlimited: false },
+          premium_interactions: { entitlement: 1000000, remaining: 999999, percent_remaining: 99, overage_count: 7, unlimited: false },
         },
       },
     })
@@ -33,7 +33,8 @@ describe("CopilotUsage", () => {
         { id: "chat", label: "Chat", unit: "percent", used: 45, remaining: 220, limit: 400, resetAt: Date.parse("2026-08-01T00:00:00Z") },
         { id: "chat-overage", label: "Chat overage", unit: "count", used: 12 },
         { id: "completions", label: "Completions", unit: "percent", used: 0, remaining: 2000, limit: 2000 },
-        { id: "premium_interactions", label: "Premium interactions", unit: "percent", used: 1 },
+        { id: "premium_interactions", label: "Premium requests", unit: "percent", used: 1 },
+        { id: "premium_interactions-overage", label: "Premium requests overage", unit: "count", used: 7 },
       ],
     })
   })
@@ -145,6 +146,7 @@ describe("CopilotUsage", () => {
             body: {
               copilot_plan: "BUSINESS",
               access_type_sku: "token_based_billing",
+              quota_reset_date: "2026-08-01T00:00:00Z",
               quota_snapshots: { chat: { entitlement: 0, remaining: 0, percent_remaining: 0 } },
             },
           }
@@ -175,10 +177,16 @@ describe("CopilotUsage", () => {
 
     expect(calls).toEqual([userStatusPath, orgsPath, summaryPath("acme"), summaryPath("globex")])
     expect(result.matchedOrg).toBe("globex")
-    expect(result.snapshot.windows).toMatchObject([
-      { id: "ai-credits", unit: "count", used: 1234 },
-      { id: "ai-credit-spend", unit: "usd", used: 12.34 },
+    expect(result.snapshot.windows).toEqual([
+      expect.objectContaining({
+        id: "monthly-ai-credits",
+        label: "Monthly AI credits",
+        unit: "count",
+        used: 1234,
+        resetAt: Date.parse("2026-08-01T00:00:00Z"),
+      }),
     ])
+    expect(result.snapshot.windows[0]?.limit).toBeUndefined()
   })
 
   test("reuses the remembered org and skips discovery while it answers", async () => {
@@ -233,9 +241,8 @@ describe("CopilotUsage", () => {
     })
 
     expect(result.matchedOrg).toBe("acme")
-    expect(result.snapshot.windows).toMatchObject([
-      { id: "ai-credits", used: 5 },
-      { id: "ai-credit-spend", used: 0.05 },
+    expect(result.snapshot.windows).toEqual([
+      expect.objectContaining({ id: "monthly-ai-credits", used: 5 }),
     ])
   })
 
@@ -262,7 +269,7 @@ describe("CopilotUsage", () => {
     expect(result.snapshot).toMatchObject({ status: "available", windows: [] })
   })
 
-  test("converts credits to USD through the single fixed rate when amounts are absent", () => {
+  test("normalizes billed credits without a reset when user status is unavailable", () => {
     expect(CopilotUsage.CREDIT_TO_USD).toBe(0.01)
     const result = CopilotUsage.normalizeBilling({
       providerID,
@@ -276,10 +283,15 @@ describe("CopilotUsage", () => {
     })
 
     expect(result.matched).toBe(true)
-    expect(result.snapshot.windows).toMatchObject([
-      { id: "ai-credits", unit: "count", used: 1234 },
-      { id: "ai-credit-spend", unit: "usd", used: 12.34 },
+    expect(result.snapshot.windows).toEqual([
+      expect.objectContaining({
+        id: "monthly-ai-credits",
+        label: "Monthly AI credits",
+        unit: "count",
+        used: 1234,
+      }),
     ])
+    expect(result.snapshot.windows[0]?.resetAt).toBeUndefined()
   })
 
   test("reads official AI-credit usage-report columns", () => {
@@ -293,13 +305,12 @@ describe("CopilotUsage", () => {
     })
 
     expect(result.matched).toBe(true)
-    expect(result.snapshot.windows).toMatchObject([
-      { id: "ai-credits", unit: "count", used: 1234 },
-      { id: "ai-credit-spend", unit: "usd", used: 12.34 },
+    expect(result.snapshot.windows).toEqual([
+      expect.objectContaining({ id: "monthly-ai-credits", unit: "count", used: 1234 }),
     ])
   })
 
-  test("keeps the credit window absent when the matched entry reports no quantity", () => {
+  test("keeps the monthly credit window when the matched entry reports no quantity", () => {
     const result = CopilotUsage.normalizeBilling({
       providerID,
       label: "GitHub Copilot",
@@ -309,8 +320,10 @@ describe("CopilotUsage", () => {
       },
     })
 
-    expect(result.snapshot.windows.map((window) => window.id)).toEqual(["ai-credit-spend"])
-    expect(result.snapshot.windows[0]).toMatchObject({ id: "ai-credit-spend", used: 2 })
+    expect(result.snapshot.windows).toEqual([
+      expect.objectContaining({ id: "monthly-ai-credits", unit: "count" }),
+    ])
+    expect(result.snapshot.windows[0]?.used).toBeUndefined()
   })
 
   test("rejects a malformed org billing payload instead of guessing", () => {

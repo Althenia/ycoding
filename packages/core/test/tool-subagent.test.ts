@@ -1218,7 +1218,8 @@ describe("SubagentTool", () => {
                 autonomy:
                   mode === "goal"
                     ? {
-                        mode,
+                        mode: "normal",
+                        yolo: 0,
                         goal: {
                           text: "Finish the parent goal",
                           status: "active",
@@ -1227,7 +1228,7 @@ describe("SubagentTool", () => {
                           maxNoProgress: 3,
                         },
                       }
-                    : { mode },
+                    : { mode: "normal", yolo: 2 },
               })
               .where(eq(SessionTable.id, parent.id))
               .run()

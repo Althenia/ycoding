@@ -92,6 +92,18 @@ describe("active session screen", () => {
               },
             },
           })
+        if (url.pathname === `/api/session/${sessionID}/usage`)
+          return json({
+            data: {
+              logical: 1,
+              physical: 1,
+              helpers: 0,
+              continued: 0,
+              fallback: 0,
+              cost: session.cost,
+              tokens: session.tokens,
+            },
+          })
         if (url.pathname === "/api/vcs/branch")
           return json({ location, data: { current: "main", default: "main" } })
         if (url.pathname === "/api/model")
@@ -172,8 +184,10 @@ describe("active session screen", () => {
     expect(userLine).not.toContain("┃")
     expect(sessionHeader).not.toContain("Provider cache audit")
     // Spend is now a SPEND subgroup with per-model rows and a total, not a single `Spent` row.
-    for (const label of ["Input", "Output", "Used", "SPEND", "Total", "CACHE", "Hit ratio", "Prefix", "Reads", "Writes"])
+    for (const label of ["Input", "Output", "Used", "SPEND", "Total", "CACHE", "Hit ratio", "Reads", "Writes"])
       expect(frame).toContain(label)
+    expect(frame).not.toContain("Prefix")
+    expect(frame).not.toContain("prefix stable")
     expect(frame).not.toContain("GUARDRAIL")
     expect(frame).not.toContain("LSP")
     expect(frame).not.toContain("AUTONOMY")

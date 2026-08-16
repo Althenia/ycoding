@@ -56,7 +56,9 @@ export function parsePromptInfo(value: unknown): PromptInfo | undefined {
   if (!value || typeof value !== "object") return
   const input = value as Record<string, unknown>
   if (typeof input.text !== "string" || !Array.isArray(input.pasted)) return
-  return input as PromptInfo
+  const prompt = structuredClone(input) as PromptInfo
+  prompt.files = prompt.files?.filter((file) => !file.uri.startsWith("data:"))
+  return prompt
 }
 
 export const { use: usePromptHistory, provider: PromptHistoryProvider } = createSimpleContext({
@@ -91,7 +93,8 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         return store.history.at(next)
       },
       append(item: PromptInfo) {
-        const entry = structuredClone(unwrap(item))
+        const entry = parsePromptInfo(structuredClone(unwrap(item)))
+        if (!entry) return
         if (isDuplicateEntry(store.history.at(-1), entry)) {
           setStore("index", 0)
           return

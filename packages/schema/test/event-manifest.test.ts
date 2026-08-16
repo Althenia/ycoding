@@ -84,6 +84,17 @@ describe("public event manifest", () => {
     })
 
     expect(String(admission.id)).toBe("cmp_01")
+    expect(admission).not.toHaveProperty("admissionMode")
+    const historicalMessage = Schema.decodeUnknownSync(SessionMessage.CompactionPending)({
+      id: "msg_compaction_historical",
+      type: "compaction",
+      jobID: "cmp_01",
+      trigger: "manual",
+      admissionMode: "background",
+      status: "pending",
+      time: { created: 1 },
+    })
+    expect(historicalMessage).not.toHaveProperty("admissionMode")
     expect(() => Schema.decodeUnknownSync(SessionCompaction.ID)("compaction_01")).toThrow()
     expect(SessionEvent.Compaction.Started.durable?.version).toBe(2)
     expect(EventManifest.Latest.get("session.compaction.started")).toBe(SessionEvent.Compaction.Started)

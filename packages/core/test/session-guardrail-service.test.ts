@@ -110,6 +110,9 @@ function harness(input?: {
           ]).get(sessionID),
         ),
     }),
+    Layer.mock(SessionAutonomy.Service, {
+      canAutoGuardrail: () => Effect.succeed(false),
+    } as unknown as SessionAutonomy.Interface),
   )
   return {
     documents,
@@ -256,7 +259,11 @@ autonomousRuntime.effect(
         yield* mode === "goal"
           ? autonomy.setGoal({ sessionID: autonomousSessionID, text: "Finish safely" })
           : autonomy.setMode({ sessionID: autonomousSessionID, mode })
-        expect(yield* autonomy.get(autonomousSessionID)).toMatchObject({ mode })
+        expect(yield* autonomy.get(autonomousSessionID)).toMatchObject(
+          mode === "yolo"
+            ? { mode: "normal", yolo: 2 }
+            : { mode: "normal", goal: expect.objectContaining({ status: "active" }) },
+        )
         expect(
           yield* permission.ask({
             sessionID: autonomousSessionID,

@@ -23,6 +23,15 @@ test("session goal keeps palette and autonomy state wiring", async () => {
   expect(session).toContain("onAutonomyUpdated={acceptAutonomy}")
 })
 
+test("session goal has one slash registration", async () => {
+  const sources = await Promise.all([
+    Bun.file("src/component/prompt/index.tsx").text(),
+    Bun.file("src/routes/session/index.tsx").text(),
+  ])
+
+  expect(sources.join("\n").match(/slash:\s*\{\s*name:\s*"goal"\s*\}/g)).toHaveLength(1)
+})
+
 test("retained submission retry is an explicit conditional Prompt command", async () => {
   const prompt = await Bun.file("src/component/prompt/index.tsx").text()
 
@@ -39,6 +48,14 @@ test("session skills is registered only by the session route", async () => {
   expect(session).toContain('title: "Session skills"')
   expect(session).toContain('id: "session.skills"')
   expect(session).toContain("<DialogSessionSkills sessionID={route.sessionID} location={location()} />")
+})
+
+test("session compact surfaces API rejection through the toast error path", async () => {
+  const session = await Bun.file("src/routes/session/index.tsx").text()
+  const command = session.slice(session.indexOf('title: "Compact session"'), session.indexOf('title: "Unshare session"'))
+
+  expect(command).toContain("client.api.session.compact({ sessionID: route.sessionID })")
+  expect(command).toContain(".catch(toast.error)")
 })
 
 test("shell output relies on configurable action bindings", async () => {

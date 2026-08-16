@@ -32,8 +32,7 @@ import {
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Hash } from "@ycoding-ai/core/util/hash"
 import { asc } from "drizzle-orm"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema } from "effect"
-import { TestClock } from "effect/testing"
+import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 
 const model = Model.make({
@@ -83,11 +82,15 @@ const it = testEffect(
       Database.node,
       EventV2.node,
       SessionCompactionJob.node,
+      SessionCompaction.node,
       SessionContextState.node,
       SessionStore.node,
       SessionCompactionExecution.node,
     ]),
-    [[LocationServiceMap.node, locations]],
+    [
+      [LocationServiceMap.node, locations],
+      [SessionCompaction.node, compaction],
+    ],
   ),
 )
 
@@ -123,33 +126,33 @@ describe("Session hard context gate", () => {
     }),
   )
 
-  it.effect("fails before admission when the exact cap is non-positive", () =>
+  it.effect("continues without admission when the exact cap is non-positive", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("non_positive")
 
-      const error = yield* runGate({
+      const result = yield* runGate({
         fixture,
         candidate: candidate(10),
         capabilities: { contextWindowTokens: 200, maxOutputTokens: 100, contextSafetyMarginTokens: 100 },
         reload: () => Effect.die("reload must not run"),
-      }).pipe(Effect.flip)
+      })
 
-      expect(error.type).toBe("context.limit")
+      expect(result.compacted).toBe(false)
       expect(yield* allJobs()).toEqual([])
     }),
   )
 
-  it.effect("fails before admission when no complete message boundary exists", () =>
+  it.effect("continues when no complete message boundary exists", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("no_boundary", false)
 
-      const error = yield* runGate({
+      const result = yield* runGate({
         fixture,
         candidate: candidate(8_000),
         reload: () => Effect.die("reload must not run"),
-      }).pipe(Effect.flip)
+      })
 
-      expect(error.type).toBe("context.limit")
+      expect(result.compacted).toBe(false)
       expect(yield* allJobs()).toEqual([])
     }),
   )
@@ -183,51 +186,6 @@ describe("Session hard context gate", () => {
     }),
   )
 
-  it.effect("waits incompatible running work only for serialization, reloads, then admits mandatory work", () =>
-    Effect.gen(function* () {
-      const fixture = yield* setup("incompatible")
-      const jobs = yield* SessionCompactionJob.Service
-      const execution = yield* SessionCompactionExecution.Service
-      const incompatible = yield* jobs.admit(
-        admission(fixture, {
-          configDigest: "b".repeat(64),
-        }),
-      )
-      const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      worker = (db, job) =>
-        job.id === incompatible.id
-          ? Deferred.succeed(started, undefined).pipe(
-              Effect.andThen(Deferred.await(release)),
-              Effect.andThen(successfulManifest(db, job)),
-            )
-          : successfulManifest(db, job)
-      yield* execution.wake(fixture.sessionID)
-      yield* Deferred.await(started)
-      let reloads = 0
-      const gated = yield* runGate({
-        fixture,
-        candidate: candidate(8_000),
-        reload: () =>
-          Effect.sync(() => {
-            reloads += 1
-            return candidate(reloads === 1 ? 8_000 : 10)
-          }),
-      }).pipe(Effect.forkChild({ startImmediately: true }))
-      yield* Effect.yieldNow
-
-      expect(yield* allJobs()).toMatchObject([{ id: incompatible.id, status: "running" }])
-      yield* Deferred.succeed(release, undefined)
-      expect((yield* Fiber.join(gated)).compacted).toBe(true)
-
-      expect(reloads).toBe(2)
-      expect(yield* allJobs()).toMatchObject([
-        { id: incompatible.id, status: "ended", baseContextRevision: 0 },
-        { status: "ended", trigger: "mandatory", admissionMode: "mandatory", baseContextRevision: 1 },
-      ])
-    }),
-  )
-
   it.effect("admits and waits one mandatory job at consider headroom even when advisories are disabled", () =>
     Effect.gen(function* () {
       worker = (db, job) => successfulManifest(db, job)
@@ -251,20 +209,19 @@ describe("Session hard context gate", () => {
         {
           status: "ended",
           trigger: "mandatory",
-          admissionMode: "mandatory",
           targetMaxInputTokens: 560,
-          configDigest: Hash.sha256(JSON.stringify(disabledPolicy)),
+          configDigest: ConfigCompaction.admissionDigest(disabledPolicy),
         },
       ])
     }),
   )
 
-  it.effect("reloads after a compatible failed job and returns a rebuilt candidate below the cap", () =>
+  it.effect("reloads after a compatible job settles with a local checkpoint", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("compatible_failure_rebuild")
       const jobs = yield* SessionCompactionJob.Service
       const existing = yield* jobs.admit(admission(fixture, { trigger: "consider" }))
-      worker = () => new SessionCompaction.ManifestError({ code: "provider_failed" })
+      worker = (db, job) => successfulManifest(db, job)
       const reloads: boolean[] = []
 
       const result = yield* runGate({
@@ -277,21 +234,16 @@ describe("Session hard context gate", () => {
           }),
       })
 
-      expect(result.compacted).toBe(false)
-      expect(reloads).toEqual([false])
-      expect(yield* allJobs()).toMatchObject([{ id: existing.id, status: "failed", errorCode: "provider_failed" }])
+      expect(result.compacted).toBe(true)
+      expect(reloads).toEqual([true])
+      expect(yield* allJobs()).toMatchObject([{ id: existing.id, status: "ended" }])
     }),
   )
 
-  it.effect("admits one replacement after a failed gate-owned job and returns its successful rebuild", () =>
+  it.effect("returns the successful rebuild after one gate-owned job settles", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("failed_owned_replacement")
-      let runs = 0
-      worker = (db, job) => {
-        runs += 1
-        if (runs === 1) return new SessionCompaction.ManifestError({ code: "provider_failed" })
-        return successfulManifest(db, job)
-      }
+      worker = (db, job) => successfulManifest(db, job)
       const reloads: boolean[] = []
 
       const result = yield* runGate({
@@ -300,54 +252,51 @@ describe("Session hard context gate", () => {
         reload: (fullRebase) =>
           Effect.sync(() => {
             reloads.push(fullRebase)
-            return candidate(fullRebase ? 10 : 8_000)
+            return candidate(10)
           }),
       })
 
       expect(result.compacted).toBe(true)
-      expect(reloads).toEqual([false, true])
+      expect(reloads).toEqual([true])
+      expect(yield* allJobs()).toMatchObject([{ status: "ended", trigger: "mandatory" }])
+    }),
+  )
+
+  it.effect("bounds gate-owned admissions after joined work when compaction cannot reduce the request", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("owned_admission_bound")
+      const jobs = yield* SessionCompactionJob.Service
+      const existing = yield* jobs.admit(admission(fixture, { trigger: "consider" }))
+      worker = (db, job) => successfulManifest(db, job)
+      const reloads: boolean[] = []
+
+      const result = yield* runGate({
+        fixture,
+        candidate: candidate(8_000),
+        reload: (fullRebase) =>
+          Effect.sync(() => {
+            reloads.push(fullRebase)
+            return candidate(8_000)
+          }),
+      })
+
+      expect(result.compacted).toBe(true)
+      expect(reloads).toEqual([true, true, true, false])
       expect(yield* allJobs()).toMatchObject([
-        { status: "failed", trigger: "mandatory", errorCode: "provider_failed" },
+        { id: existing.id, status: "ended", trigger: "consider" },
+        { status: "ended", trigger: "mandatory" },
         { status: "ended", trigger: "mandatory" },
       ])
     }),
   )
 
-  it.effect("bounds gate-owned admissions after joined work and fails once when both owned jobs fail", () =>
-    Effect.gen(function* () {
-      const fixture = yield* setup("owned_admission_bound")
-      const jobs = yield* SessionCompactionJob.Service
-      const existing = yield* jobs.admit(admission(fixture, { trigger: "consider" }))
-      worker = () => new SessionCompaction.ManifestError({ code: "provider_failed" })
-      const reloads: boolean[] = []
-
-      const error = yield* runGate({
-        fixture,
-        candidate: candidate(8_000),
-        reload: (fullRebase) =>
-          Effect.sync(() => {
-            reloads.push(fullRebase)
-            return candidate(8_000)
-          }),
-      }).pipe(Effect.flip)
-
-      expect(error.type).toBe("context.limit")
-      expect(reloads).toEqual([false, false, false, false])
-      expect(yield* allJobs()).toMatchObject([
-        { id: existing.id, status: "failed", trigger: "consider" },
-        { status: "failed", trigger: "mandatory" },
-        { status: "failed", trigger: "mandatory" },
-      ])
-    }),
-  )
-
-  it.effect("never releases an oversized candidate after two insufficient ended jobs", () =>
+  it.effect("releases an oversized candidate after two insufficient ended jobs", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("insufficient_ended")
       worker = (db, job) => successfulManifest(db, job)
       const reloads: boolean[] = []
 
-      const error = yield* runGate({
+      const result = yield* runGate({
         fixture,
         candidate: candidate(8_000),
         reload: (fullRebase) =>
@@ -355,54 +304,149 @@ describe("Session hard context gate", () => {
             reloads.push(fullRebase)
             return candidate(8_000)
           }),
-      }).pipe(Effect.flip)
+      })
 
-      expect(error.type).toBe("context.limit")
+      expect(result.compacted).toBe(true)
       expect(reloads).toEqual([true, true, false])
       expect(yield* allJobs()).toMatchObject([{ status: "ended" }, { status: "ended" }])
     }),
   )
 
-  it.effect("times out foreground waiting without cancelling a live shared job", () =>
+  it.effect("does not readmit unchanged context after context_limit_unresolved", () =>
     Effect.gen(function* () {
-      const fixture = yield* setup("foreground_deadline")
-      const jobs = yield* SessionCompactionJob.Service
-      const existing = yield* jobs.admit(admission(fixture, { trigger: "consider" }))
-      yield* TestClock.setTime(1)
-      yield* jobs.claim({
-        jobID: existing.id,
-        owner: "foreign-owner",
-        now: 1,
-        expiresAt: Number.MAX_SAFE_INTEGER,
-      })
-      const reloads: boolean[] = []
-      const gated = yield* runGate({
+      const fixture = yield* setup("unresolved_deduplication")
+      worker = () => new SessionCompaction.ManifestError({ code: "context_limit_unresolved" })
+      const oversized = {
         fixture,
         candidate: candidate(8_000),
-        reload: (fullRebase) =>
-          Effect.sync(() => {
-            reloads.push(fullRebase)
-            return candidate(8_000)
-          }),
-      }).pipe(Effect.forkChild({ startImmediately: true }))
+        reload: () => Effect.succeed(candidate(8_000)),
+      }
 
-      yield* Effect.yieldNow
-      yield* TestClock.adjust("61 seconds")
-      yield* Effect.yieldNow
-      const exit = gated.pollUnsafe()
-      expect(exit).toBeDefined()
-      if (!exit) return
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isSuccess(exit)) return
+      expect((yield* runGate(oversized)).compacted).toBe(false)
+      expect(yield* allJobs()).toHaveLength(1)
 
-      expect(Cause.squash(exit.cause)).toMatchObject({ type: "context.limit" })
-      expect(reloads).toEqual([false])
-      expect(yield* jobs.get(existing.id)).toMatchObject({
-        status: "running",
-        leaseOwner: "foreign-owner",
-        attempts: 1,
+      expect((yield* runGate(oversized)).compacted).toBe(false)
+      expect(yield* allJobs()).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not readmit an unchanged deterministic invalid manifest across mandatory gate invocations", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("invalid_manifest_deduplication")
+      worker = () => new SessionCompaction.ManifestError({ code: "invalid_manifest" })
+      const oversized = {
+        fixture,
+        candidate: candidate(8_000),
+        reload: () => Effect.succeed(candidate(8_000)),
+      }
+
+      expect((yield* runGate(oversized)).compacted).toBe(false)
+      expect(yield* allJobs()).toMatchObject([{ status: "failed", errorCode: "invalid_manifest" }])
+
+      expect((yield* runGate(oversized)).compacted).toBe(false)
+      expect(yield* allJobs()).toHaveLength(1)
+
+      expect((yield* runGate({ ...oversized, policy: disabledPolicy })).compacted).toBe(false)
+      expect(yield* allJobs()).toMatchObject([
+        { status: "failed", targetMaxInputTokens: 400 },
+        { status: "failed", targetMaxInputTokens: 560 },
+      ])
+    }),
+  )
+
+  it.effect("does not let a legacy policy-only failure suppress the repaired algorithm", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("legacy_invalid_manifest_digest")
+      const jobs = yield* SessionCompactionJob.Service
+      const execution = yield* SessionCompactionExecution.Service
+      const legacyDigest = Hash.sha256(JSON.stringify(policy))
+      const legacy = yield* jobs.admit(admission(fixture, { configDigest: legacyDigest }))
+      worker = () => new SessionCompaction.ManifestError({ code: "invalid_manifest" })
+      yield* execution.run({
+        jobID: legacy.id,
+        manifest: (job) => SessionCompaction.Service.use((service) => service.manifest(job)),
       })
-      yield* jobs.withAdmissionGate(fixture.sessionID, () => Effect.void)
+      const oversized = {
+        fixture,
+        candidate: candidate(8_000),
+        reload: () => Effect.succeed(candidate(8_000)),
+      }
+
+      expect((yield* runGate(oversized)).compacted).toBe(false)
+      expect(yield* allJobs()).toMatchObject([
+        { status: "failed", errorCode: "invalid_manifest", configDigest: legacyDigest },
+        {
+          status: "failed",
+          errorCode: "invalid_manifest",
+          configDigest: ConfigCompaction.admissionDigest(policy),
+        },
+      ])
+
+      expect((yield* runGate(oversized)).compacted).toBe(false)
+      expect(yield* allJobs()).toHaveLength(2)
+    }),
+  )
+
+  it.effect("does not let an algorithm revision 2 failure suppress the repaired revision 3 job", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("revision_two_failure")
+      const jobs = yield* SessionCompactionJob.Service
+      const execution = yield* SessionCompactionExecution.Service
+      const revisionTwoDigest = ConfigCompaction.admissionDigest(policy, 2)
+      const legacy = yield* jobs.admit(admission(fixture, { configDigest: revisionTwoDigest }))
+      worker = () => new SessionCompaction.ManifestError({ code: "context_limit_unresolved" })
+      yield* execution.run({
+        jobID: legacy.id,
+        manifest: (job) => SessionCompaction.Service.use((service) => service.manifest(job)),
+      })
+      worker = (db, job) => successfulManifest(db, job)
+
+      const result = yield* runGate({
+        fixture,
+        candidate: candidate(8_000),
+        reload: () => Effect.succeed(candidate(10)),
+      })
+
+      expect(result.compacted).toBe(true)
+      expect(yield* allJobs()).toMatchObject([
+        { status: "failed", errorCode: "context_limit_unresolved", configDigest: revisionTwoDigest },
+        { status: "ended", configDigest: ConfigCompaction.admissionDigest(policy) },
+      ])
+    }),
+  )
+
+  it.effect("joins concurrent equivalent mandatory gates on one repaired job without repeating it", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("concurrent_repaired_revision")
+      const jobs = yield* SessionCompactionJob.Service
+      const execution = yield* SessionCompactionExecution.Service
+      const revisionTwoDigest = ConfigCompaction.admissionDigest(policy, 2)
+      const legacy = yield* jobs.admit(admission(fixture, { configDigest: revisionTwoDigest }))
+      worker = () => new SessionCompaction.ManifestError({ code: "context_limit_unresolved" })
+      yield* execution.run({
+        jobID: legacy.id,
+        manifest: (job) => SessionCompaction.Service.use((service) => service.manifest(job)),
+      })
+      let calls = 0
+      worker = (db, job) => {
+        calls += 1
+        return successfulManifest(db, job)
+      }
+      const oversized = {
+        fixture,
+        candidate: candidate(8_000),
+        reload: () => Effect.succeed(candidate(10)),
+      }
+
+      const results = yield* Effect.all([runGate(oversized), runGate(oversized)], { concurrency: "unbounded" })
+
+      expect(results.every((result) => result.compacted)).toBe(true)
+      expect(calls).toBe(2)
+      expect(yield* allJobs()).toMatchObject([
+        { status: "failed", errorCode: "context_limit_unresolved", configDigest: revisionTwoDigest },
+        { status: "ended", configDigest: ConfigCompaction.admissionDigest(policy) },
+        { status: "ended", configDigest: ConfigCompaction.admissionDigest(policy) },
+      ])
     }),
   )
 })
@@ -509,11 +553,10 @@ function admission(
   return {
     sessionID: fixture.sessionID,
     trigger: "mandatory",
-    admissionMode: "mandatory",
     requestedThrough: fixture.boundary,
     baseContextRevision: 0,
     targetMaxInputTokens: 400,
-    configDigest: Hash.sha256(JSON.stringify(policy)),
+    configDigest: ConfigCompaction.admissionDigest(policy),
     ...overrides,
   }
 }
@@ -548,7 +591,6 @@ const allJobs = Effect.fnUntraced(function* () {
     id: row.id,
     status: row.status,
     trigger: row.trigger,
-    admissionMode: row.admission_mode,
     baseContextRevision: row.base_context_revision,
     targetMaxInputTokens: row.target_max_input_tokens,
     configDigest: row.config_digest,

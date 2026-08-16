@@ -55,6 +55,8 @@ export const Record = Schema.Struct({
   attempts: PositiveInt,
   invalidation: Invalidation,
   continuation: Continuation,
+  /** Whether the provider explicitly reported cache-read usage; absent for historical records. */
+  cacheReadReported: Schema.Boolean.pipe(optional),
   /** Persisted provider-reported USD cost. */
   cost: Money.USD.pipe(optional),
   tokens: TokenUsage.Info,

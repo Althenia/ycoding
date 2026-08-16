@@ -231,7 +231,7 @@ const layer = Layer.effect(
               const state = yield* autonomy
                 .get(event.data.sessionID)
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
-              executions.set(event.data.sessionID, { goalMode: state.mode === "goal", startedAt: DateTime.toEpochMillis(event.created) })
+              executions.set(event.data.sessionID, { goalMode: state.goal?.status === "active", startedAt: DateTime.toEpochMillis(event.created) })
               return
             }
             const session = yield* sessions.get(event.data.sessionID)

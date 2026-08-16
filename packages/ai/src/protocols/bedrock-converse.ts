@@ -351,7 +351,8 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
           continue
         }
       }
-      appendUserBlocks(messages, content)
+      if (message.volatile === true) messages.push({ role: "user", content })
+      else appendUserBlocks(messages, content)
       continue
     }
 
@@ -393,7 +394,8 @@ const lowerMessages = Effect.fn("BedrockConverse.lowerMessages")(function* (
       const cachePoint = BedrockCache.block(breakpoints, part.cache)
       if (cachePoint) content.push(cachePoint)
     }
-    appendUserBlocks(messages, content)
+    if (message.volatile === true) messages.push({ role: "user", content })
+    else appendUserBlocks(messages, content)
   }
 
   return messages

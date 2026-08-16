@@ -1,11 +1,16 @@
 import { Schema } from "effect"
+import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 
 export namespace ServiceStatus {
+  export const Epoch = SourceEpoch
+  export type Epoch = typeof Epoch.Type
+
   export const Health = Schema.Struct({
     healthy: Schema.Literal(true),
     version: Schema.String,
     pid: Schema.Int.check(Schema.isGreaterThan(0)),
+    sourceEpoch: Epoch,
   }).annotate({ identifier: "ServiceHealth" })
   export type Health = typeof Health.Type
 
