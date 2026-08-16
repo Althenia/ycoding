@@ -473,7 +473,8 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
         }
         return yield* ProviderShared.unsupportedContent("Anthropic Messages", "user", ["text", "media"])
       }
-      appendUserBlocks(messages, content)
+      if (message.volatile === true) messages.push({ role: "user", content })
+      else appendUserBlocks(messages, content)
       continue
     }
 
@@ -520,7 +521,8 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
         cache_control: cacheControl(breakpoints, part.cache),
       })
     }
-    appendUserBlocks(messages, content)
+    if (message.volatile === true) messages.push({ role: "user", content })
+    else appendUserBlocks(messages, content)
   }
 
   return messages

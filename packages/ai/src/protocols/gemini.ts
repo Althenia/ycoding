@@ -265,13 +265,12 @@ const lowerMessages = Effect.fn("Gemini.lowerMessages")(function* (request: LLMR
         continue
       }
       const content: ReadonlyArray<ToolContent> = part.result.value
-      const text = content.filter((item) => item.type === "text").map((item) => item.text)
       parts.push({
         functionResponse: {
           name: part.name,
           response: {
             name: part.name,
-            content: text.join("\n"),
+            content: ProviderShared.joinText(content.filter((item) => item.type === "text")),
           },
         },
       })

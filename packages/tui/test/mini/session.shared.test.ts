@@ -13,6 +13,26 @@ const model = {
   providerID: "openai",
   modelID: "gpt-5",
 }
+const attachmentDigest = "a".repeat(64)
+const attachmentURI = `ycoding-attachment://sha256/${attachmentDigest}`
+
+function managedAttachment(
+  input: {
+    name?: string
+    mention?: { start: number; end: number; text: string }
+  } = {},
+) {
+  return {
+    content: {
+      type: "managed" as const,
+      digest: attachmentDigest,
+      bytes: 4,
+      path: `attachments/sha256/${attachmentDigest.slice(0, 2)}/${attachmentDigest}`,
+    },
+    mime: "text/plain",
+    ...input,
+  }
+}
 
 afterEach(() => {
   mock.restore()
@@ -34,12 +54,9 @@ describe("run session shared", () => {
       userMessage("msg-user-1", "look @scan @note.ts", {
         agents: [{ name: "scan", mention: { start: 5, end: 10, text: "@scan" } }],
         files: [
-          {
-            data: "",
-            mime: "text/plain",
-            source: { type: "uri", uri: "file:///tmp/note.ts" },
+          managedAttachment({
             mention: { start: 11, end: 19, text: "@note.ts" },
-          },
+          }),
         ],
       }),
     ]
@@ -53,10 +70,10 @@ describe("run session shared", () => {
         type: "file",
         mime: "text/plain",
         filename: undefined,
-        url: "file:///tmp/note.ts",
+        url: attachmentURI,
         source: {
           type: "file",
-          path: "file:///tmp/note.ts",
+          path: attachmentURI,
           text: {
             start: 11,
             end: 19,
@@ -80,7 +97,7 @@ describe("run session shared", () => {
     const out = createSession([
       userMessage("msg-user-1", "look @scan @note.ts", {
         agents: [{ name: "scan" }],
-        files: [{ data: "", mime: "text/plain", source: { type: "uri", uri: "file:///tmp/note.ts" } }],
+        files: [managedAttachment()],
       }),
     ])
 
@@ -91,7 +108,7 @@ describe("run session shared", () => {
           type: "file",
           mime: "text/plain",
           filename: undefined,
-          url: "file:///tmp/note.ts",
+          url: attachmentURI,
           source: undefined,
         },
         {
@@ -158,27 +175,16 @@ describe("run session shared", () => {
   test("restores current prompt history from stored text and file references", async () => {
     const client = YCoding.make({ baseUrl: "https://ycoding.test" })
     spyOn(client.message, "list").mockImplementation(() =>
-      Promise.resolve({
-        data: [
-          {
-            id: "msg_prompt",
-            type: "user",
-            text: "Review @note.ts",
-            files: [
-              {
-                data: "",
-                mime: "text/plain",
-                name: "note.ts",
-                source: { type: "uri", uri: "file:///tmp/note.ts" },
-                mention: { start: 7, end: 15, text: "@note.ts" },
-              },
-            ],
-            agents: [],
-            time: { created: 1 },
-          },
-        ],
-        cursor: {},
-      }),
+      Promise.resolve([
+        {
+          id: "msg_prompt",
+          type: "user",
+          text: "Review @note.ts",
+          files: [managedAttachment({ name: "note.ts", mention: { start: 7, end: 15, text: "@note.ts" } })],
+          agents: [],
+          time: { created: 1 },
+        },
+      ]),
     )
     spyOn(client.session, "get").mockImplementation(() =>
       Promise.resolve({
@@ -203,7 +209,7 @@ describe("run session shared", () => {
       parts: [
         {
           type: "file",
-          url: "file:///tmp/note.ts",
+          url: attachmentURI,
           mime: "text/plain",
           filename: "note.ts",
           source: {
@@ -215,7 +221,7 @@ describe("run session shared", () => {
       ],
     })
     expect(client.message.list).toHaveBeenCalledWith(
-      { sessionID: "ses_1", limit: 200, order: "desc" },
+      { sessionID: "ses_1" },
       { signal: controller.signal },
     )
     expect(client.session.get).toHaveBeenCalledWith({ sessionID: "ses_1" }, { signal: controller.signal })

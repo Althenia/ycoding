@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
@@ -30,18 +31,145 @@ const projects = Layer.succeed(
     commit: () => Effect.void,
   }),
 )
+const catalog = Layer.mock(Catalog.Service, {
+  provider: { get: () => Effect.succeed(undefined), all: () => Effect.succeed([]), available: () => Effect.succeed([]) },
+  model: {
+    get: (providerID, modelID) => {
+      const cost =
+        providerID === ProviderV2.ID.make("openai") && modelID === ModelV2.ID.make("provider-priced")
+          ? 2
+          :
+              providerID === ProviderV2.ID.openrouter &&
+                ["anthropic/fallback-priced", "openai/provider-priced"].includes(modelID)
+            ? 20
+            : undefined
+      return Effect.succeed(
+        cost === undefined
+          ? undefined
+          : {
+              ...ModelV2.Info.empty(providerID, modelID),
+              cost: [
+                {
+                  input: Money.USDPerMillionTokens.make(cost),
+                  output: Money.USDPerMillionTokens.make(cost * 4),
+                  cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.zero },
+                },
+              ],
+            },
+      )
+    },
+    all: () => Effect.succeed([]),
+    available: () => Effect.succeed([]),
+    default: () => Effect.succeed(undefined),
+    small: () => Effect.succeed(undefined),
+  },
+})
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
+    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, Catalog.node, SessionV2.node]),
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
+      [Catalog.node, catalog],
     ],
   ),
 )
-const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
+const location = Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) })
 
 describe("SessionV2.log", () => {
+  it.effect("reads durable provider usage through the Session service", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({ location })
+      yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+        id: ProviderRequest.ID.make("prq_session_usage"),
+        sessionID: created.id,
+        source: "step",
+        agent: AgentV2.ID.make("build"),
+        model: ModelV2.Ref.make({
+          providerID: ProviderV2.ID.make("openai"),
+          id: ModelV2.ID.make("gpt-5.6"),
+        }),
+        routeID: "openai-responses",
+        promptCacheKey: "cache-key",
+        systemDigest: "system-digest",
+        toolDigest: "tool-digest",
+        request: 1,
+        attempts: 2,
+        invalidation: "first-request",
+        continuation: "full",
+        cost: Money.USD.make(0.125),
+        tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 4 } },
+        time: yield* DateTime.now,
+      })
+
+      expect(yield* session.usage(created.id)).toMatchObject({
+        logical: 1,
+        physical: 2,
+        cost: Money.USD.make(0.125),
+        tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 4 } },
+        latestInvalidation: "first-request",
+        latestNamespace: "cache-ke",
+      })
+    }),
+  )
+
+  it.effect("aggregates root families and estimates missing costs from provider then OpenRouter catalogs", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const root = yield* session.create({ location })
+      const child = yield* session.create({ parentID: root.id })
+      const grandchild = yield* session.create({ parentID: child.id })
+      const record = Effect.fnUntraced(function* (sessionID: SessionV2.ID, id: string, providerID: string, model: string) {
+        yield* events.publish(SessionEvent.ProviderRequestRecorded, {
+          id: ProviderRequest.ID.make(`prq_${id}`),
+          sessionID,
+          source: "step",
+          agent: AgentV2.ID.make("build"),
+          model: ModelV2.Ref.make({ providerID: ProviderV2.ID.make(providerID), id: ModelV2.ID.make(model) }),
+          routeID: "test",
+          promptCacheKey: `${id}-cache-key`,
+          systemDigest: "system",
+          toolDigest: "tools",
+          request: 1,
+          attempts: 1,
+          invalidation: "first-request",
+          continuation: "full",
+          tokens: { input: 1_000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: yield* DateTime.now,
+        })
+      })
+      yield* record(root.id, "provider", "openai", "provider-priced")
+      yield* record(child.id, "fallback", "anthropic", "fallback-priced")
+      yield* record(grandchild.id, "missing", "custom", "missing")
+
+      const rootUsage = yield* session.usage(root.id)
+      expect(rootUsage).toMatchObject({ logical: 3 })
+      expect(rootUsage.models).toMatchObject([
+        expect.objectContaining({
+          model: { providerID: "anthropic", id: "fallback-priced" },
+          cost: Money.USD.make(0.028),
+          costProvenance: "current_catalog",
+        }),
+        expect.objectContaining({
+          model: { providerID: "openai", id: "provider-priced" },
+          cost: Money.USD.make(0.0028),
+          costProvenance: "current_catalog",
+        }),
+        expect.objectContaining({ model: { providerID: "custom", id: "missing" } }),
+      ])
+      expect(rootUsage.models?.find((item) => item?.model?.providerID === "custom")).not.toHaveProperty("cost")
+      expect(rootUsage).not.toHaveProperty("cost")
+      expect(yield* session.usage(child.id)).toMatchObject({
+        logical: 1,
+        cost: Money.USD.make(0.028),
+        models: [{ costProvenance: "current_catalog" }],
+      })
+    }),
+  )
+
   it.effect("replays public session events and marks synced at the aggregate watermark", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

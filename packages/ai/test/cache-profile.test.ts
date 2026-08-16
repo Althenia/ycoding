@@ -13,6 +13,9 @@ describe("normalizeCacheModelID", () => {
       ["us.anthropic.claude-opus-4-8", "claude-opus-4-8"],
       // Bedrock's dated snapshots carry a model-version suffix.
       ["anthropic.claude-3-5-sonnet-20241022-v2:0", "claude-3-5-sonnet"],
+      // GitHub Copilot and SAP AI Core expose this verified vendor-qualified alias.
+      ["anthropic--claude-4-sonnet", "claude-sonnet-4"],
+      ["claude-4-sonnet", "claude-sonnet-4"],
       // Vertex separates the snapshot date with `@`.
       ["claude-opus-4-5@20251101", "claude-opus-4-5"],
       ["claude-haiku-4-5-20251001", "claude-haiku-4-5"],
@@ -34,6 +37,7 @@ describe("cacheProfile", () => {
       ["claude-sonnet-4-5", 1024],
       ["claude-opus-4-1", 1024],
       ["claude-sonnet-4", 1024],
+      ["claude-3-5-sonnet", 1024],
       ["claude-opus-4-7", 2048],
       ["claude-mythos-preview", 2048],
       ["claude-3-5-haiku", 2048],
@@ -56,6 +60,8 @@ describe("cacheProfile", () => {
   test("resolves through platform-qualified ids", () => {
     expect(cacheProfile("us.anthropic.claude-opus-4-8")?.minimumTokens).toBe(1024)
     expect(cacheProfile("anthropic/claude-sonnet-4.6")?.minimumTokens).toBe(1024)
+    expect(cacheProfile("anthropic.claude-3-5-sonnet-20241022-v2:0")?.minimumTokens).toBe(1024)
+    expect(cacheProfile("anthropic--claude-4-sonnet")?.minimumTokens).toBe(1024)
     expect(cacheProfile("claude-opus-4-5@20251101")?.minimumTokens).toBe(4096)
   })
 

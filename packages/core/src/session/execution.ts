@@ -14,6 +14,7 @@ import { UserInterruptedError } from "./error"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
+import { SessionCompactionExecution } from "./compaction-execution"
 import { SessionMessage } from "./message"
 import { SessionPending } from "./pending"
 import { SessionTaskTable } from "./sql"
@@ -55,6 +56,7 @@ export const layer = Layer.effect(
     const events = yield* EventV2.Service
     const db = (yield* Database.Service).db
     const autonomy = yield* SessionAutonomy.Service
+    const compactionExecution = yield* SessionCompactionExecution.Service
     const reportLifecycle = <A>(sessionID: SessionSchema.ID, effect: Effect.Effect<A>) =>
       effect.pipe(
         Effect.tapCause((cause) =>
@@ -73,7 +75,7 @@ export const layer = Layer.effect(
       const state = yield* autonomy
         .get(sessionID)
         .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
-      if (state.mode !== "goal" || !state.goal || state.goal.status !== "active") return undefined
+      if (!state.goal || state.goal.status !== "active") return undefined
       const activeChild = yield* db
         .select({ sessionID: SessionTaskTable.session_id })
         .from(SessionTaskTable)
@@ -94,18 +96,19 @@ export const layer = Layer.effect(
           .filter((item) => item.type === "text")
           .map((item) => item.text)
           .join("\n") ?? ""
+      const completed = SessionAutonomy.isCompleted(progress)
       const advanced = yield* autonomy.advance({
         sessionID,
         progress,
-        completed: SessionAutonomy.isCompleted(progress),
+        completed,
       })
-      if (advanced.mode !== "goal" || !advanced.goal || advanced.goal.status !== "active") return undefined
-      return { goal: advanced.goal, progress }
+      if (!advanced.goal || advanced.goal.status !== "active") return undefined
+      return { goal: advanced.goal, progress, yolo: SessionAutonomy.yoloLevel(advanced) }
     })
 
     const admitGoalContinuation = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
-      advanced: { readonly goal: SessionAutonomy.Goal; readonly progress: string },
+      advanced: { readonly goal: SessionAutonomy.Goal; readonly progress: string; readonly yolo: number },
     ) {
       const id = SessionMessage.ID.make(
         `msg_goal_${Hash.sha256(`${sessionID}\0${advanced.goal.iteration}`).slice(0, 24)}`,
@@ -115,7 +118,7 @@ export const layer = Layer.effect(
         data: {
           text: SessionAutonomy.continuationPrompt(advanced.goal, { latestAssistantText: advanced.progress }),
           description: "Autonomous goal continuation",
-          metadata: { autonomy: { mode: "goal", iteration: advanced.goal.iteration } },
+          metadata: { autonomy: { yolo: advanced.yolo, goal: true, iteration: advanced.goal.iteration } },
         },
         delivery: "steer",
       })
@@ -182,6 +185,7 @@ export const layer = Layer.effect(
         if (task && task.state !== "running") return
         return yield* SessionRunner.Service.use((runner) => runner.drain({ sessionID, force })).pipe(
           Effect.provide(locations.get(session.location)),
+          SessionCompactionExecution.bind(compactionExecution),
           Effect.tapCause((cause) =>
             Cause.hasInterruptsOnly(cause)
               ? Effect.void
@@ -263,7 +267,14 @@ export const layer = Layer.effect(
 export const node = makeGlobalNode({
   service: Service,
   layer,
-  deps: [Database.node, SessionAutonomy.node, SessionStore.node, LocationServiceMap.node, EventV2.node],
+  deps: [
+    Database.node,
+    SessionAutonomy.node,
+    SessionCompactionExecution.node,
+    SessionStore.node,
+    LocationServiceMap.node,
+    EventV2.node,
+  ],
 })
 
 /** Low-level compatibility layer for callers that only need durable Session recording. */

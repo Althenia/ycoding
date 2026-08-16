@@ -14,13 +14,19 @@ export const stepStart = (state: State, events: LLMEvent[]): State => {
   return { ...state, stepStarted: true }
 }
 
-export const textDelta = (state: State, events: LLMEvent[], id: string, text: string): State => {
+export const textDelta = (
+  state: State,
+  events: LLMEvent[],
+  id: string,
+  text: string,
+  providerMetadata?: ProviderMetadata,
+): State => {
   const stepped = stepStart(state, events)
   if (stepped.text.has(id)) {
-    events.push(LLMEvent.textDelta({ id, text }))
+    events.push(LLMEvent.textDelta({ id, text, providerMetadata }))
     return stepped
   }
-  events.push(LLMEvent.textStart({ id }), LLMEvent.textDelta({ id, text }))
+  events.push(LLMEvent.textStart({ id, providerMetadata }), LLMEvent.textDelta({ id, text, providerMetadata }))
   return { ...stepped, text: new Set([...stepped.text, id]) }
 }
 

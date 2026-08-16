@@ -1,6 +1,6 @@
 export * as Credential from "./credential"
 
-import { asc, eq } from "drizzle-orm"
+import { asc, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
@@ -25,6 +25,9 @@ export class Info extends Schema.Class<Info>("Credential.Info")({
   integrationID: Integration.ID,
   label: Schema.String,
   value: Value,
+  generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+    Schema.withConstructorDefault(Effect.succeed(0)),
+  ),
 }) {}
 
 export interface Interface {
@@ -60,6 +63,7 @@ const layer = Layer.effect(
         integrationID: row.integration_id,
         label: row.label,
         value: decode(row.value),
+        generation: row.generation,
       })
     }
 
@@ -97,6 +101,7 @@ const layer = Layer.effect(
           integrationID: input.integrationID,
           label: input.label ?? "default",
           value: input.value,
+          generation: 0,
         })
         yield* db
           .transaction((tx) =>
@@ -120,10 +125,18 @@ const layer = Layer.effect(
         return credential
       }),
       update: Effect.fn("Credential.update")(function* (id, updates) {
-        if (!updates.label && !updates.value) return
+        if (updates.label === undefined && updates.value === undefined) return
         yield* db
           .update(CredentialTable)
-          .set({ label: updates.label, value: updates.value })
+          .set({
+            label: updates.label,
+            value: updates.value,
+            ...(updates.value === undefined
+              ? {}
+              : {
+                  generation: sql`CASE WHEN ${eq(CredentialTable.value, updates.value)} THEN ${CredentialTable.generation} ELSE ${CredentialTable.generation} + 1 END`,
+                }),
+          })
           .where(eq(CredentialTable.id, id))
           .run()
           .pipe(Effect.orDie)

@@ -2,12 +2,7 @@ import { expect, test } from "bun:test"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Effect } from "effect"
-import {
-  GuardrailHandler,
-  guardrailRequests,
-  guardrailStatus,
-  replyGuardrail,
-} from "../src/handlers/guardrail"
+import { GuardrailHandler, guardrailRequests, guardrailStatus, replyGuardrail } from "../src/handlers/guardrail"
 
 const parentID = SessionV2.ID.make("ses_guardrail_parent")
 const childID = SessionV2.ID.make("ses_guardrail_child")
@@ -40,9 +35,13 @@ const request: GuardrailRequest = {
 
 test("guardrail handlers preserve family ownership and normalized output", async () => {
   const calls: unknown[] = []
+  const snapshot = (sessionID: SessionV2.ID) =>
+    Effect.succeed({ sequence: 0, digest: sessionID === childID ? parentID : sessionID })
   const service = SessionGuardrail.Service.of({
     evaluate: () => Effect.die("unused"),
     assert: () => Effect.die("unused"),
+    snapshot,
+    withSnapshot: (sessionID, use) => snapshot(sessionID).pipe(Effect.flatMap(use)),
     status: (sessionID) =>
       Effect.sync(() => {
         calls.push(["status", sessionID])

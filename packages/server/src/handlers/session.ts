@@ -3,7 +3,7 @@ import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
 import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
-import { SessionsCursor } from "@ycoding-ai/protocol/groups/session"
+import { SessionsCursor, SubagentCursor } from "@ycoding-ai/protocol/groups/session"
 import {
   ConflictError,
   CommandEvaluationError,
@@ -11,6 +11,7 @@ import {
   InvalidRequestError,
   InvalidCursorError,
   MessageNotFoundError,
+  ModelSwitchBlockedError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -25,6 +26,7 @@ import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { ProcessIdentity } from "../process-identity"
 
 const DefaultSessionsLimit = 50
 const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
@@ -33,6 +35,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
   Effect.gen(function* () {
     const session = yield* SessionV2.Service
     const orchestration = yield* SessionOrchestration.Service
+    const identity = yield* ProcessIdentity
 
     return handlers
       .handle(
@@ -130,6 +133,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.snapshot",
+        Effect.fn(function* (ctx) {
+          const projection = yield* session.snapshot(ctx.params.sessionID).pipe(
+            Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+            Effect.catchTag("Session.MessageDecodeError", Effect.die),
+          )
+          return { sourceEpoch: identity.sourceEpoch, ...projection }
+        }),
+      )
+      .handle(
         "session.diagnostics",
         Effect.fn(function* (ctx) {
           return {
@@ -153,6 +166,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   ),
                 )
               }),
+            ),
+          }
+        }),
+      )
+      .handle(
+        "session.usage",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.usage(ctx.params.sessionID).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
             ),
           }
         }),
@@ -210,7 +240,29 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.subagent.list",
         Effect.fn(function* (ctx) {
-          return { data: yield* orchestration.list(ctx.params.parentID).pipe(Effect.mapError(mapSessionNotFound)) }
+          const parsed =
+            ctx.query.cursor === undefined
+              ? undefined
+              : yield* SubagentCursor.parse(ctx.query.cursor).pipe(
+                  Effect.mapError(() => new InvalidCursorError({ message: "Invalid cursor" })),
+                )
+          if (parsed && parsed.parentID !== ctx.params.parentID)
+            return yield* new InvalidCursorError({ message: "Invalid cursor" })
+          const page = yield* orchestration
+            .page({ parentID: ctx.params.parentID, limit: ctx.query.limit ?? 10, cursor: parsed?.anchor })
+            .pipe(Effect.mapError(mapSessionNotFound))
+          return {
+            data: page.data,
+            summary: page.summary,
+            cursor: {
+              previous: page.cursor.previous
+                ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.previous })
+                : undefined,
+              next: page.cursor.next
+                ? SubagentCursor.make({ parentID: ctx.params.parentID, anchor: page.cursor.next })
+                : undefined,
+            },
+          }
         }),
       )
       .handle(
@@ -350,16 +402,30 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.switchModel",
         Effect.fn(function* (ctx) {
-          yield* session.switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+          const outcome = yield* session
+            .switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
               ),
-            ),
-          )
+              Effect.catchTag("Session.MessageDecodeError", (error) => {
+                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+                return Effect.logError("failed to decode session transcript for model switch").pipe(
+                  Effect.annotateLogs({ ref, sessionID: error.sessionID, messageID: error.messageID }),
+                  Effect.andThen(
+                    Effect.fail(
+                      new UnknownError({ message: "Unexpected server error. Check server logs for details.", ref }),
+                    ),
+                  ),
+                )
+              }),
+            )
+          if (outcome.status === "blocked") return yield* Effect.fail(new ModelSwitchBlockedError(outcome))
           return HttpApiSchema.NoContent.make()
         }),
       )
@@ -647,8 +713,8 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.CompactionConflictError", (error) =>
                 Effect.fail(
                   new ConflictError({
-                    message: `Compaction input ID conflicts with an existing durable record: ${error.inputID}`,
-                    resource: error.inputID,
+                    message: `Compaction job ID conflicts with an existing durable record: ${error.jobID}`,
+                    resource: error.jobID,
                   }),
                 ),
               ),
@@ -816,6 +882,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.fileChange.list",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session
+              .fileChanges(ctx.params.sessionID)
+              .pipe(Effect.catchTag("Session.NotFoundError", mapSessionNotFound)),
+          }
+        }),
+      )
+      .handle(
         "session.pending.list",
         Effect.fn(function* (ctx) {
           return {
@@ -875,12 +951,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.log",
         Effect.fn((ctx) =>
           Effect.succeed(
-            session
-              .log({ sessionID: ctx.params.sessionID, after: ctx.query.after, follow: ctx.query.follow })
-              .pipe(
-                Stream.filter((item) => item.type === "log.synced" || isPublicDurableSessionEvent(item)),
-                Stream.orDie,
-              ),
+            session.log({ sessionID: ctx.params.sessionID, after: ctx.query.after, follow: ctx.query.follow }).pipe(
+              Stream.filter((item) => item.type === "log.synced" || isPublicDurableSessionEvent(item)),
+              Stream.map((item) => ({ ...item, sourceEpoch: identity.sourceEpoch })),
+              Stream.orDie,
+            ),
           ),
         ),
       )

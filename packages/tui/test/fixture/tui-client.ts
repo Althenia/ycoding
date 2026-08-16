@@ -123,7 +123,7 @@ export function createFetch(override?: FetchHandler, events?: ReturnType<typeof 
     // Provider-usage refresh is read-only and best effort. Absent usage renders as unreported, so the
     // fixture returns no payload rather than zeroed quota values.
     if (/^\/api\/provider\/[^/]+\/usage$/.test(url.pathname)) return json({ data: null })
-    if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname)) return json({ data: { mode: "normal" } })
+    if (/^\/api\/session\/[^/]+\/autonomy$/.test(url.pathname)) return json({ data: { mode: "normal", yolo: 0 } })
     if (/^\/api\/session\/[^/]+\/form$/.test(url.pathname)) return json({ data: [] })
     if (
       ["/api/agent", "/api/model", "/api/provider", "/api/integration", "/api/command", "/api/skill"].includes(

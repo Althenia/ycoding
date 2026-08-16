@@ -72,7 +72,7 @@ type UsableModel = RemoteModel & {
 
 export async function get(baseURL: string, headers: RequestInit["headers"], existing: readonly ModelV2.Info[]) {
   const response = await fetch(`${baseURL}/models`, {
-    headers,
+    headers: { ...headers, "Copilot-Integration-Id": "vscode-chat" },
     signal: AbortSignal.timeout(5_000),
   })
   if (!response.ok) throw new Error(`Failed to fetch Copilot models: ${response.status}`)
@@ -145,6 +145,7 @@ function build(id: ModelV2.ID, remote: UsableModel, baseURL: string, previous?: 
     settings: ProviderV2.mergeOverlay(previous?.settings, {
       baseURL: messages ? `${baseURL}/v1` : baseURL,
       ...(endpoint ? { endpoint } : {}),
+      ...(messages ? { toolStreaming: false } : endpoint === "responses" ? { store: false } : {}),
     }),
     headers: previous?.headers,
     body: previous?.body,

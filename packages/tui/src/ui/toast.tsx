@@ -25,7 +25,7 @@ export function Toast() {
     route.data.type === "session" && railPlacement(dimensions().width) === "docked"
       ? railWidth(dimensions().width) + 2
       : 2
-  const width = () => Math.max(1, Math.min(92, dimensions().width - right()))
+  const width = () => Math.max(1, Math.min(60, dimensions().width - right()))
   const label = () => {
     const variant = toast.currentToast?.variant
     if (variant === "success") return "Success"

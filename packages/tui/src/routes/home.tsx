@@ -1,5 +1,6 @@
 import { Prompt, type PromptRef } from "../component/prompt"
 import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useArgs } from "../context/args"
 import { useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
@@ -16,30 +17,25 @@ import { useDialog } from "../ui/dialog"
 import { ModeChips } from "../component/prompt/mode-chips"
 import { Header } from "./session/header"
 import { useClient } from "../context/client"
+import { BrandMark } from "../component/logo"
+import { useToast } from "../ui/toast"
+import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
 
 export function LandingHero() {
   const { themeV2 } = useTheme()
-  const shortcut = Keymap.useShortcut("command.palette.show")
-  const description = createMemo(() => {
-    const value = shortcut()
-    if (!value) return "Describe a goal, paste an error."
-    return `Describe a goal, paste an error, or press ${value.replaceAll("ctrl+", "⌃")} for commands.`
-  })
 
   return (
     <box alignItems="center" flexShrink={0}>
       <box flexDirection="column" alignItems="center" gap={2}>
-        <text fg={themeV2.text.feedback.success.default} selectable={false}>
-          y. ycoding
-        </text>
+        <BrandMark />
         <text fg={themeV2.text.default} selectable={false}>
           What should we build?
         </text>
         <text fg={themeV2.text.subdued} selectable={false}>
-          {description()}
+          Describe a goal, paste an error, or press ^p for commands.
         </text>
       </box>
     </box>
@@ -48,8 +44,14 @@ export function LandingHero() {
 
 export function LandingComposer(props: { children: JSX.Element }) {
   const { themeV2 } = useTheme()
+  const dimensions = useTerminalDimensions()
   return (
-    <box width="100%" paddingBottom={3} border={["top"]} borderColor={themeV2.text.feedback.success.default}>
+    <box
+      width="100%"
+      paddingBottom={Math.max(0, Math.max(1, Math.min(4, Math.floor(dimensions().height / 16))) - 1)}
+      border={["top"]}
+      borderColor={themeV2.text.feedback.success.default}
+    >
       {props.children}
     </box>
   )
@@ -59,7 +61,7 @@ export function LandingMark(props: { overlay: boolean; children: JSX.Element }) 
   return <Show when={!props.overlay}>{props.children}</Show>
 }
 
-export function LandingFooter() {
+export function LandingFooter(props: { autonomy?: SessionAutonomyState }) {
   const { themeV2 } = useTheme()
   const shortcut = Keymap.useShortcut("command.palette.show")
 
@@ -77,7 +79,7 @@ export function LandingFooter() {
     >
       <box flexDirection="row" gap={3}>
         <text fg={themeV2.text.subdued}>main</text>
-        <ModeChips />
+        <ModeChips autonomy={props.autonomy} />
         <text fg={themeV2.text.subdued}>subagents 0</text>
       </box>
       <Show when={shortcut()}>
@@ -99,7 +101,11 @@ export function Home() {
   const location = useLocation()
   const dialog = useDialog()
   const client = useClient()
+  const toast = useToast()
   const [promptOverlay, setPromptOverlay] = createSignal(false)
+  const [landingYolo, setLandingYolo] = createSignal(false)
+  const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
+  const landingAutonomy = createMemo(() => ({ mode: "normal" as const, yolo: landingYolo(), goal: landingGoal() ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }) as SessionAutonomyState)
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
@@ -176,9 +182,11 @@ export function Home() {
           <pluginRuntime.Slot name="home_prompt" mode="replace" ref={bind}>
             <Prompt
               ref={bind}
-              right={<pluginRuntime.Slot name="home_prompt_right" />}
               placeholders={landingPlaceholder}
               landing
+              autonomy={landingAutonomy()}
+              onLandingYoloToggle={(next) => setLandingYolo(next)}
+              onLandingGoalToggle={(next) => setLandingGoal(next ?? undefined)}
               onOverlayChange={setPromptOverlay}
               disabled={forms().length > 0}
             />
@@ -186,7 +194,7 @@ export function Home() {
         </LandingComposer>
         <PluginSlot name="home.bottom" />
       </box>
-      <LandingFooter />
+      <LandingFooter autonomy={landingAutonomy()} />
       <Show when={forms()[0]?.id} keyed>
         {(_) => {
           const form = forms()[0]

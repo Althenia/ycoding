@@ -1,5 +1,6 @@
-import { readFile } from "node:fs/promises"
+import { stat } from "node:fs/promises"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
 
 export type LocalFiles = Readonly<{
   readText(path: string): Promise<string>
@@ -8,14 +9,17 @@ export type LocalFiles = Readonly<{
 }>
 
 export type LocalAttachment =
-  | Readonly<{ type: "text"; mime: "image/svg+xml"; content: string }>
-  | Readonly<{ type: "binary"; mime: string; content: Uint8Array }>
+  | Readonly<{ type: "image"; mime: string; uri: string; name: string }>
+  | Readonly<{ type: "pdf"; mime: "application/pdf"; uri: string; name: string }>
+  | Readonly<{ type: "excel"; mime: string; uri: string; name: string }>
 
-export function readLocalAttachment(file: string) {
+export async function readLocalAttachment(file: string) {
+  const info = await stat(file).catch(() => undefined)
+  if (!info?.isFile()) return
   return readLocalAttachmentWith(
     {
-      readText: (value) => readFile(value, "utf8"),
-      readBytes: (value) => readFile(value),
+      readText: async () => "",
+      readBytes: async () => new Uint8Array(),
       mime: async (value) => mimeTypes[path.extname(value).toLowerCase()] ?? "application/octet-stream",
     },
     file,
@@ -25,6 +29,8 @@ export function readLocalAttachment(file: string) {
 const mimeTypes: Record<string, string> = {
   ".avif": "image/avif",
   ".gif": "image/gif",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   ".jpeg": "image/jpeg",
   ".jpg": "image/jpeg",
   ".pdf": "application/pdf",
@@ -33,16 +39,15 @@ const mimeTypes: Record<string, string> = {
   ".webp": "image/webp",
 }
 
-export async function readLocalAttachmentWith(files: LocalFiles, path: string): Promise<LocalAttachment | undefined> {
-  const mime = await files.mime(path).catch(() => undefined)
+export async function readLocalAttachmentWith(files: LocalFiles, file: string): Promise<LocalAttachment | undefined> {
+  const mime = await files.mime(file).catch(() => undefined)
   if (!mime) return
-  if (mime === "image/svg+xml") {
-    const content = await files.readText(path).catch(() => undefined)
-    if (!content) return
-    return { type: "text", mime, content }
-  }
-  if (!mime.startsWith("image/") && mime !== "application/pdf") return
-  const content = await files.readBytes(path).catch(() => undefined)
-  if (!content) return
-  return { type: "binary", mime, content }
+  const attachment = { mime, uri: pathToFileURL(file).href, name: path.basename(file) }
+  if (mime.startsWith("image/")) return { type: "image", ...attachment }
+  if (mime === "application/pdf") return { type: "pdf", ...attachment, mime }
+  if (
+    mime === "application/vnd.ms-excel" ||
+    mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+  )
+    return { type: "excel", ...attachment }
 }

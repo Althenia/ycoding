@@ -962,6 +962,40 @@ it.effect("preserves and sanitizes structured AI SDK provider errors", () =>
   }),
 )
 
+it.effect("classifies a closed AI SDK socket while reading as a retryable transport failure", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    const failure = new Error("The socket connection was closed unexpectedly")
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () => ({
+          specificationVersion: "v3",
+          provider: "anthropic",
+          modelId: "claude-fable-5",
+          supportedUrls: {},
+          doGenerate: () => Promise.reject(new Error("Unexpected non-streaming request")),
+          doStream: () =>
+            Promise.resolve({
+              stream: new ReadableStream({
+                start(controller) {
+                  controller.error(failure)
+                },
+              }),
+            }),
+        }),
+      }
+    })
+
+    const resolved = yield* aisdk.model(model("@ai-sdk/anthropic"))
+    const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+      Effect.provide(client),
+      Effect.flip,
+    )
+
+    expect(error).toMatchObject({ method: "readStream", reason: { _tag: "Transport", message: failure.message } })
+  }),
+)
+
 it.effect("uses a provider error code when the AI SDK message is generic", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

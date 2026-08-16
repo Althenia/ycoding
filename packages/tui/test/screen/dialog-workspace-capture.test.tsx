@@ -36,6 +36,8 @@ const sessionSkills = [
 const skillInfo = [
   { id: "go-developer", name: "go-developer", content: "", location: "/repo/.ycoding/skills/go-developer/SKILL.md" },
   { id: "writing-test", name: "writing-test", content: "", location: "/tmp/ycoding/home/.agents/skills/writing-test/SKILL.md" },
+  { id: "rust-developer", name: "rust-developer", content: "", location: "/tmp/ycoding/home/.agents/skills/rust-developer/SKILL.md" },
+  { id: "python-developer", name: "python-developer", content: "", location: "/tmp/ycoding/home/.agents/skills/python-developer/SKILL.md" },
 ]
 
 const artifacts = [
@@ -85,13 +87,13 @@ async function capture(
       mode: "global",
       commands: [
         { id: "test.model", bind: "ctrl+x m", title: "Switch model", group: "Suggested", palette: true, suggested: true, run: () => {} },
-        { id: "test.session", bind: "ctrl+x 1", title: "Switch session", group: "Suggested", palette: true, suggested: true, run: () => {} },
+        { id: "test.session", bind: "ctrl+x l", title: "Switch session", group: "Suggested", palette: true, suggested: true, run: () => {} },
         { id: "test.settings", title: "Open settings", group: "Suggested", palette: true, run: () => {} },
         { id: "test.new", bind: "ctrl+x n", title: "New session", group: "Session", palette: true, run: () => {} },
         { id: "test.editor", bind: "ctrl+x e", title: "Open editor", group: "Session", palette: true, run: () => {} },
-        { id: "test.move", bind: "ctrl+x l", title: "Move session", group: "Session", palette: true, run: () => {} },
+        { id: "test.move", bind: "ctrl+x u", title: "Move session", group: "Session", palette: true, run: () => {} },
         { id: "test.agent", bind: "ctrl+x a", title: "Switch agent", group: "Agent", palette: true, run: () => {} },
-        { id: "test.variant", bind: "ctrl+x t", title: "Variant cycle", group: "Agent", palette: true, run: () => {} },
+        { id: "test.variant", bind: "ctrl+t", title: "Variant cycle", group: "Agent", palette: true, run: () => {} },
         { id: "test.status", bind: "ctrl+x s", title: "View status", group: "System", palette: true, run: () => {} },
       ],
     }))
@@ -137,6 +139,10 @@ async function capture(
     // --- Focused assertions for open TOON differences ---
 
     if (name === "session-skills") {
+      const title = origin(rows, "Session skills")
+      expectAt(rows, title.row, title.column + 88, "esc")
+      expectAt(rows, title.row + 6, title.column, "Active")
+      expectAt(rows, title.row + 7, title.column + 3, "go-developer")
       // difference:workspace-session-skills-conflict-glyph
       // Expected: one ! marker before go-review, not !!
       const goReviewRow = rows.find((r) => r.includes("go-review"))
@@ -146,6 +152,10 @@ async function capture(
     }
 
     if (name === "project-artifacts") {
+      const title = origin(rows, "Project artifacts")
+      expectAt(rows, title.row, title.column + 88, "esc")
+      expectAt(rows, title.row + 6, title.column, "Skills")
+      expectAt(rows, title.row + 7, title.column + 3, "go-developer")
       // difference:workspace-project-artifacts-scope-tabs
       // Expected: title row contains "Project artifacts" and "esc" but no scope tabs
       const titleRow = rows.find((r) => r.includes("Project artifacts"))
@@ -181,6 +191,16 @@ async function capture(
   } finally {
     app.renderer.destroy()
   }
+}
+
+function origin(rows: string[], title: string) {
+  const row = rows.findIndex((line) => line.includes(title))
+  if (row === -1) throw new Error(`missing dialog title ${title}`)
+  return { row, column: rows[row]!.indexOf(title) }
+}
+
+function expectAt(rows: string[], row: number, column: number, text: string) {
+  expect(rows[row]?.slice(column, column + text.length)).toBe(text)
 }
 
 function commandPaletteClient() {

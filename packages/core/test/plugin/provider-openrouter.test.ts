@@ -31,7 +31,7 @@ describe("OpenRouterPlugin", () => {
     Effect.sync(() => expect(ProviderPlugins.map((item) => item.id)).toContain("ycoding.provider.openrouter")),
   )
 
-  it.effect("applies legacy referer headers only to openrouter", () =>
+  it.effect("applies OpenRouter app-attribution and legacy title headers only to openrouter", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       yield* catalog.transform((catalog) => {
@@ -45,9 +45,57 @@ describe("OpenRouterPlugin", () => {
 
       expect((yield* catalog.provider.get(ProviderV2.ID.openrouter))?.headers).toEqual({
         Existing: "value",
+        "HTTP-Referer": "https://github.com/Althenia/ycoding",
+        "X-OpenRouter-Title": "YCoding",
+        "X-OpenRouter-Categories": "cli-agent",
         "X-Title": "YCoding",
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia")))?.headers).toBeUndefined()
+    }),
+  )
+
+  it.effect("preserves user-configured OpenRouter app-attribution headers", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      yield* catalog.transform((catalog) => {
+        catalog.provider.update(ProviderV2.ID.openrouter, (provider) => {
+          provider.package = ProviderV2.aisdk("@openrouter/ai-sdk-provider")
+          provider.headers = {
+            Other: "kept",
+            "HTTP-Referer": "https://user.example/app",
+            "X-OpenRouter-Title": "MyApp",
+            "X-OpenRouter-Categories": "web",
+          }
+        })
+      })
+      yield* addPlugin()
+
+      expect((yield* catalog.provider.get(ProviderV2.ID.openrouter))?.headers).toEqual({
+        Other: "kept",
+        "HTTP-Referer": "https://user.example/app",
+        "X-OpenRouter-Title": "MyApp",
+        "X-OpenRouter-Categories": "web",
+        "X-Title": "YCoding",
+      })
+    }),
+  )
+
+  it.effect("does not add app-attribution headers to kilo", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      yield* catalog.transform((catalog) => {
+        catalog.provider.update(ProviderV2.ID.make("kilo"), (provider) => {
+          provider.package = ProviderV2.aisdk("@ai-sdk/openai-compatible")
+          provider.settings = { baseURL: "https://api.kilo.ai/api/gateway" }
+          provider.headers = { Existing: "value" }
+        })
+      })
+      yield* addPlugin()
+
+      const headers = (yield* catalog.provider.get(ProviderV2.ID.make("kilo")))?.headers
+      expect(headers).toEqual({ Existing: "value" })
+      expect(headers).not.toHaveProperty("http-referer")
+      expect(headers).not.toHaveProperty("x-title")
     }),
   )
 

@@ -13,6 +13,7 @@ const base = {
   workspaceID: "workspace",
   providerID: "openai",
   modelID: "gpt-5.6",
+  apiModelID: "gpt-5.6",
   variant: "default",
   policyRevision: CACHE_POLICY_REVISION,
   permissions: [{ action: "read", resource: "**", effect: "allow" }] satisfies PermissionV2.Ruleset,
@@ -28,7 +29,7 @@ const base = {
       },
     }),
   ],
-} satisfies SessionRunnerCache.PromptCacheNamespaceInput
+} satisfies SessionRunnerCache.PromptCacheNamespaceInput & Pick<SessionRunnerCache.ProviderOptionsInput, "apiModelID">
 
 const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
   SessionRunnerCache.promptCacheNamespace({
@@ -44,7 +45,7 @@ const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
 
 test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
-    "6e41470c1087dc6e2208831a8e3f954750ca0f56b6152934e3637c7751a10853",
+    "3537645d5e6210f16f79be6f3b717923d6621ce3a7431e11a5e483f945885fc6",
   )
 })
 
@@ -52,8 +53,32 @@ test("keeps ordinary keys stable while isolating compaction cache scope", () => 
   const normal = SessionRunnerCache.promptCacheNamespace(base)
   const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })
 
-  expect(normal).toBe("6e41470c1087dc6e2208831a8e3f954750ca0f56b6152934e3637c7751a10853")
+  expect(normal).toBe("3537645d5e6210f16f79be6f3b717923d6621ce3a7431e11a5e483f945885fc6")
   expect(compaction).not.toBe(normal)
+})
+
+test("preserves generation zero and derives a generated provider key", () => {
+  const now = SessionRunnerCache.PROMPT_CACHE_ROTATION_INTERVAL_MS * 5
+  const input = {
+    ...base,
+    sessionID: "ses_generation",
+    routeID: "openai-responses",
+  }
+  const baseline = SessionRunnerCache.promptCacheNamespace(input, now)
+  const generationZero = SessionRunnerCache.providerOptions({ ...input, generation: 0 }, now)
+  const generationOne = SessionRunnerCache.providerOptions({ ...input, generation: 1 }, now)
+
+  expect(generationZero.promptCacheKey).toBe(baseline)
+  expect(generationOne.promptCacheKey).not.toBe(baseline)
+  expect(generationOne.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
+  expect(generationOne.providerOptions.openai.promptCacheKey).toBe(generationOne.promptCacheKey)
+  expect(generationOne.providerOptions.openrouter.promptCacheKey).toBe(generationOne.promptCacheKey)
+
+  const other = { ...input, sessionID: "ses_other_generation" }
+  expect(SessionRunnerCache.providerOptions({ ...other, generation: 0 }, now).promptCacheKey).toBe(baseline)
+  expect(SessionRunnerCache.providerOptions({ ...other, generation: 1 }, now).promptCacheKey).not.toBe(
+    generationOne.promptCacheKey,
+  )
 })
 
 test("canonicalizes object order and preserves JSON array positions", () => {
@@ -78,7 +103,7 @@ test("canonicalizes object order and preserves JSON array positions", () => {
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {
   expect(namespaceWithSchema({ "10": "ten", "2": "two", "\u{10000}": "astral", "\u{e000}": "bmp" })).toBe(
-    "0a99be3cf8b1d65f41acfb4aeeac2c1efbe3287f443f6fd3a7fc57be0303bb3a",
+    "59ed4c65fe5898614f648ffac4e181dedb2616fcf913d747f419b6178d858c25",
   )
 })
 
@@ -160,10 +185,6 @@ test("shares subagent prefixes only when every model-visible dimension is equal"
 })
 
 test("separates provider session namespace from the shared prefix key", () => {
-  const prefixInput = {
-    projectID: "project",
-    providerID: "openai",
-  }
   const baseSession: SessionRunnerCache.ProviderSessionNamespaceInput = {
     projectID: "project",
     sessionID: "ses_aaa",
@@ -212,7 +233,7 @@ test("different sessions share a prompt cache key but not an OpenRouter session 
   expect(first.providerOptions.openrouter.prompt_cache_key).toBe(second.providerOptions.openrouter.prompt_cache_key)
 })
 
-test("selects hybrid auto or explicit OpenAI caching only for supported direct GPT-5.6 routes", () => {
+test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () => {
   const automatic = SessionRunnerCache.providerOptions({
     ...base,
     sessionID: "ses_openai_auto",
@@ -223,7 +244,31 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: automatic.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
-  expect(automatic.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+  expect(automatic.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
+
+  const aliasedNow = 1_700_000_000_000
+  const aliased = SessionRunnerCache.providerOptions(
+    {
+      ...base,
+      modelID: "catalog-alias",
+      apiModelID: "gpt-5.6",
+      sessionID: "ses_openai_alias",
+      routeID: "openai-responses",
+      openaiMode: "auto",
+    },
+    aliasedNow,
+  )
+  expect(aliased.providerOptions.openai).toEqual({
+    promptCacheKey: aliased.promptCacheKey,
+    promptCacheOptions: { mode: "implicit", ttl: "30m" },
+  })
+  expect(aliased.promptCacheKey).toBe(
+    SessionRunnerCache.promptCacheNamespace(
+      { ...base, modelID: "catalog-alias", routeID: "openai-responses" },
+      aliasedNow,
+    ),
+  )
+  expect(aliased.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const directRoute = SessionRunnerCache.providerOptions({
     ...base,
@@ -236,7 +281,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: directRoute.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
-  expect(directRoute.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+  expect(directRoute.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const webSocket = SessionRunnerCache.providerOptions({
     ...base,
@@ -248,7 +293,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: webSocket.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
-  expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
+  expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const explicit = SessionRunnerCache.providerOptions({
     ...base,
@@ -260,11 +305,12 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: explicit.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
-  expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
+  expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
 
   const legacy = SessionRunnerCache.providerOptions({
     ...base,
     modelID: "gpt-5.5",
+    apiModelID: "gpt-5.5",
     sessionID: "ses_openai_legacy",
     routeID: "openai-responses",
     openaiMode: "auto",
@@ -279,6 +325,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
   const unsupportedLegacy = SessionRunnerCache.providerOptions({
     ...base,
     modelID: "gpt-4o-mini",
+    apiModelID: "gpt-4o-mini",
     sessionID: "ses_openai_unsupported_legacy",
     routeID: "openai-responses",
     openaiMode: "explicit",
@@ -305,8 +352,31 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     routeID: "openai-codex-responses",
     openaiMode: "auto",
   })
-  expect(codexBackend.providerOptions.openai).toEqual({ promptCacheKey: codexBackend.promptCacheKey })
+  expect(codexBackend.providerOptions.openai).toEqual({
+    promptCacheKey: codexBackend.promptCacheKey,
+    providerSessionID: SessionRunnerCache.providerSessionNamespace({
+      projectID: base.projectID,
+      sessionID: "ses_openai_codex",
+      providerID: base.providerID,
+    }),
+  })
   expect(codexBackend.cache).toBeUndefined()
+
+  for (const apiModelID of ["gpt-5.5", "unknown-model"]) {
+    const unsupportedCodex = SessionRunnerCache.providerOptions({
+      ...base,
+      apiModelID,
+      sessionID: `ses_openai_codex_${apiModelID}`,
+      routeID: "openai-codex-responses",
+      openaiMode: "auto",
+    })
+    expect(unsupportedCodex.providerOptions.openai).toMatchObject({
+      promptCacheKey: unsupportedCodex.promptCacheKey,
+    })
+    expect(unsupportedCodex.providerOptions.openai).not.toHaveProperty("promptCacheOptions")
+    expect(unsupportedCodex.providerOptions.openai).not.toHaveProperty("promptCacheRetention")
+    expect(unsupportedCodex.cache).toBeUndefined()
+  }
 
   const implicit = SessionRunnerCache.providerOptions({
     ...base,
@@ -323,11 +393,54 @@ test("maps selected Anthropic TTL into a concrete cache policy", () => {
     ...base,
     providerID: "anthropic",
     modelID: "claude-sonnet-4-5",
+    apiModelID: "claude-sonnet-4-5",
     sessionID: "ses_anthropic_ttl",
     routeID: "anthropic-messages",
     anthropicTtlSeconds: 300,
   })
   expect(result.cache).toEqual({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 })
+})
+
+test("keeps safe five-minute markers for an unknown future direct Anthropic model", () => {
+  const result = SessionRunnerCache.providerOptions({
+    ...base,
+    providerID: "anthropic",
+    modelID: "claude-future-unknown",
+    apiModelID: "claude-future-unknown",
+    sessionID: "ses_anthropic_future",
+    routeID: "anthropic-messages",
+    anthropicTtlSeconds: 300,
+  })
+
+  expect(result.cache).toEqual({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 })
+})
+
+test("maps one-hour Anthropic TTL through native and AI SDK OpenRouter routes", () => {
+  for (const routeID of ["openrouter", "ai-sdk:@openrouter/ai-sdk-provider"]) {
+    const result = SessionRunnerCache.providerOptions({
+      ...base,
+      providerID: "openrouter",
+      modelID: "anthropic/claude-sonnet-4.6",
+      apiModelID: "anthropic/claude-sonnet-4.6",
+      sessionID: `ses_${routeID}`,
+      routeID,
+      anthropicTtlSeconds: 3600,
+    })
+
+    expect(result.cache).toEqual({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 3600 })
+  }
+})
+
+test("does not apply Anthropic cache markers to a non-Anthropic OpenRouter model", () => {
+  const result = SessionRunnerCache.providerOptions({
+    ...base,
+    providerID: "openrouter",
+    sessionID: "ses_openrouter_gpt",
+    routeID: "openrouter",
+    anthropicTtlSeconds: 3600,
+  })
+
+  expect(result.cache).toBeUndefined()
 })
 
 test("native openrouter route uses camelCase fields", () => {
@@ -341,4 +454,61 @@ test("native openrouter route uses camelCase fields", () => {
   expect(result.providerOptions.openrouter.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
   expect(result.providerOptions.openrouter).not.toHaveProperty("session_id")
   expect(result.providerOptions.openrouter).not.toHaveProperty("prompt_cache_key")
+})
+
+test("rotates prompt_cache_key every 15m for providers that support it", () => {
+  const interval = SessionRunnerCache.PROMPT_CACHE_ROTATION_INTERVAL_MS
+  const t0 = interval * 5
+  const t1 = t0 + interval
+  const t2 = t0 + interval - 1
+
+  const openAIKey0 = SessionRunnerCache.promptCacheNamespace({ ...base, routeID: "openai-responses" }, t0)
+  const openAIKeySameWindow = SessionRunnerCache.promptCacheNamespace({ ...base, routeID: "openai-responses" }, t2)
+  const openAIKeyNextWindow = SessionRunnerCache.promptCacheNamespace({ ...base, routeID: "openai-responses" }, t1)
+
+  // Rotation window removed — namespace is now stable across time
+  expect(openAIKey0).toBe(openAIKeySameWindow)
+  expect(openAIKey0).toBe(openAIKeyNextWindow)
+  expect(openAIKey0).toMatch(/^[0-9a-f]{64}$/)
+
+  const openAIOptions0 = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_rot", routeID: "openai-responses", apiModelID: "gpt-5.6" }, t0)
+  const openAIOptionsNext = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_rot", routeID: "openai-responses", apiModelID: "gpt-5.6" }, t1)
+  expect(openAIOptions0.promptCacheKey).toBe(openAIKey0)
+  expect(openAIOptions0.promptCacheKey).toBe(openAIOptionsNext.promptCacheKey)
+  expect(openAIOptions0.providerOptions.openai.promptCacheKey).toBe(openAIKey0)
+  expect(openAIOptions0.providerOptions.openrouter.promptCacheKey).toBe(openAIKey0)
+
+  // OpenRouter routes are also stable now (no time rotation)
+  const openRouter0 = SessionRunnerCache.promptCacheNamespace({ ...base, routeID: "openrouter" }, t0)
+  const openRouter1 = SessionRunnerCache.promptCacheNamespace({ ...base, routeID: "openrouter" }, t1)
+  expect(openRouter0).toBe(openRouter1)
+
+  const openRouterOpts0 = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_rot_or", routeID: "openrouter", apiModelID: "anthropic/claude-sonnet-4.5" }, t0)
+  const openRouterOpts1 = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_rot_or", routeID: "openrouter", apiModelID: "anthropic/claude-sonnet-4.5" }, t1)
+  expect(openRouterOpts0.promptCacheKey).toBe(openRouterOpts1.promptCacheKey)
+})
+
+test("rotation is per-provider and stable for non-supporting routes", () => {
+  const interval = SessionRunnerCache.PROMPT_CACHE_ROTATION_INTERVAL_MS
+  const t0 = interval * 10
+  const t1 = t0 + interval
+
+  // Different providerID isolates keys even within same window
+  const openAI = SessionRunnerCache.promptCacheNamespace({ ...base, providerID: "openai", routeID: "openai-responses" }, t0)
+  const anthropicProvider = SessionRunnerCache.promptCacheNamespace({ ...base, providerID: "anthropic", routeID: "openai-responses" }, t0)
+  expect(openAI).not.toBe(anthropicProvider)
+
+  // Non-supporting route stays stable across windows (no rotation)
+  const anthropicMsg0 = SessionRunnerCache.promptCacheNamespace({ ...base, providerID: "anthropic", routeID: "anthropic-messages" }, t0)
+  const anthropicMsg1 = SessionRunnerCache.promptCacheNamespace({ ...base, providerID: "anthropic", routeID: "anthropic-messages" }, t1)
+  expect(anthropicMsg0).toBe(anthropicMsg1)
+
+  // Generic namespace without routeID stays stable (used for cache-runtime policy)
+  const generic0 = SessionRunnerCache.promptCacheNamespace(base, t0)
+  const generic1 = SessionRunnerCache.promptCacheNamespace(base, t1)
+  expect(generic0).toBe(generic1)
+
+  // Window helper is deprecated — now always 0 (stable namespace, no time rotation)
+  expect(SessionRunnerCache.promptCacheRotationWindow(t0)).toBe(0)
+  expect(SessionRunnerCache.promptCacheRotationWindow(t1)).toBe(0)
 })

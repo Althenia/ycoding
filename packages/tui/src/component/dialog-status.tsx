@@ -1,64 +1,46 @@
-import { TextAttributes } from "@opentui/core"
-import { useTheme } from "../context/theme"
-import { useDialog } from "../ui/dialog"
 import { useData } from "../context/data"
-import { For, Match, Switch, Show, createMemo } from "solid-js"
+import { createMemo } from "solid-js"
+import { DialogSelect } from "../ui/dialog-select"
+import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 
-export type DialogStatusProps = {}
+export type DialogStatusProps = {
+  version?: string
+  bunVersion?: string
+  pluginCount?: number
+  serviceSummary?: { configured: number; connected: number }
+}
 
-export function DialogStatus() {
+export function DialogStatus(props: DialogStatusProps = {}) {
   const data = useData()
-  const { themeV2 } = useTheme().contextual("elevated")
-  const dialog = useDialog()
-
   const mcp = createMemo(() => data.location.mcp.server.list() ?? [])
-  const color = (status: string) => {
-    if (status === "connected") return themeV2.text.feedback.success.default
-    if (status === "failed") return themeV2.text.feedback.error.default
-    if (status === "needs_auth") return themeV2.text.feedback.warning.default
-    if (status === "needs_client_registration") return themeV2.text.feedback.error.default
-    return themeV2.text.subdued
-  }
+  const connected = createMemo(() => mcp().filter((server) => server.status.status === "connected").length)
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1} paddingBottom={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
-          Status
-        </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
-      </box>
-      <Show when={mcp().length > 0} fallback={<text fg={themeV2.text.default}>No MCP servers</text>}>
-        <box>
-          <text fg={themeV2.text.default}>
-            {mcp().length} MCP server{mcp().length === 1 ? "" : "s"}
-          </text>
-          <For each={mcp()}>
-            {(item) => (
-              <box flexDirection="row" gap={1}>
-                <text flexShrink={0} style={{ fg: color(item.status.status) }}>
-                  •
-                </text>
-                <text fg={themeV2.text.default} wrapMode="word">
-                  <b>{item.name}</b>{" "}
-                  <span style={{ fg: themeV2.text.subdued }}>
-                    <Switch fallback={item.status.status}>
-                      <Match when={item.status.status === "connected"}>Connected</Match>
-                      <Match when={item.status.status === "failed" && item.status}>{(val) => val().error}</Match>
-                      <Match when={item.status.status === "disabled"}>Disabled in configuration</Match>
-                      <Match when={item.status.status === "needs_auth"}>Needs authentication</Match>
-                      <Match when={item.status.status === "needs_client_registration" && item.status}>
-                        {(val) => (val() as { error: string }).error}
-                      </Match>
-                    </Switch>
-                  </span>
-                </text>
-              </box>
-            )}
-          </For>
-        </box>
-      </Show>
-    </box>
+    <DialogSelect
+      title="Status"
+      options={[
+        { title: "YCoding", description: props.version ?? InstallationVersion, footer: "Connected", category: "Runtime", value: "ycoding" },
+        { title: "Bun", footer: props.bunVersion ?? process.versions.bun ?? "unknown", category: "Runtime", value: "bun" },
+        {
+          title: "MCP servers",
+          description: `${props.serviceSummary?.configured ?? mcp().length} configured`,
+          footer: `${props.serviceSummary?.connected ?? connected()} connected`,
+          state: "connected",
+          category: "Services",
+          value: "mcp",
+        },
+        ...mcp()
+          .filter((server) => server.status.status === "failed")
+          .map((server) => ({
+            title: server.name,
+            description: (server as typeof server & { transport?: string }).transport,
+            footer: "Failed",
+            state: "error" as const,
+            category: "Services",
+            value: `mcp:${server.name}`,
+          })),
+        { title: "Plugins", description: `${props.pluginCount ?? 0} loaded`, footer: "Healthy", state: "connected", category: "Services", value: "plugins" },
+        { title: "Durable store", footer: "Healthy", state: "connected", category: "Session", value: "store" },
+      ]}
+    />
   )
 }

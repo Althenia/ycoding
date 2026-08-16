@@ -8,7 +8,6 @@ import type {
 } from "@ycoding-ai/client/promise"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { EOL } from "node:os"
-import { readFile } from "node:fs/promises"
 import { toolOutputText, type MiniToolPart } from "@ycoding-ai/tui/mini/tool"
 import { UI } from "./ui"
 
@@ -472,7 +471,7 @@ export async function runNonInteractivePrompt(input: Input) {
       await input.client.session.switchModel({ sessionID: input.sessionID, model: selected })
     }
 
-    const prepared = await Promise.all(input.files.map(prepareFile))
+    const prepared = input.files.map(prepareFile)
     if (interrupted) return
     submitted = true
     completed = consume()
@@ -482,8 +481,8 @@ export async function runNonInteractivePrompt(input: Input) {
         {
           sessionID: input.sessionID,
           id: messageID,
-          text: [input.message, ...prepared.flatMap((file) => (file.text ? [file.text] : []))].join("\n\n"),
-          files: prepared.flatMap((file) => (file.attachment ? [file.attachment] : [])),
+          text: input.message,
+          files: prepared.map((file) => file.attachment),
           delivery: "steer",
         },
         { signal: admission.signal },
@@ -577,15 +576,6 @@ function toMillis(value: unknown) {
   return Date.now()
 }
 
-async function prepareFile(file: File) {
-  if (file.mime !== "text/plain") {
-    const uri = file.url.startsWith("data:")
-      ? file.url
-      : `data:${file.mime};base64,${(await readFile(new URL(file.url))).toString("base64")}`
-    return { attachment: { uri, name: file.filename } }
-  }
-  const content = file.url.startsWith("data:")
-    ? Buffer.from(file.url.slice(file.url.indexOf(",") + 1), "base64").toString("utf8")
-    : await readFile(new URL(file.url), "utf8")
-  return { text: `<file name="${file.filename}">\n${content}\n</file>` }
+function prepareFile(file: File) {
+  return { attachment: { uri: file.url, name: file.filename } }
 }

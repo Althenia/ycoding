@@ -157,7 +157,7 @@ export const layer = Layer.effect(
           const entry = yield* find(form.id).pipe(Effect.orDie)
           const autonomous = Schema.is(SessionSchema.ID)(form.sessionID)
             ? yield* autonomy
-                .isAutonomous(form.sessionID)
+                .canAutoAnswer(form.sessionID)
                 .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             : false
           const answer = autonomous ? automaticAnswer(form) : undefined

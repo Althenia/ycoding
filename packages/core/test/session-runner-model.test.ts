@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test";
-import { LLM, Model } from "@ycoding-ai/ai";
+import { LLM, Message, Model, SystemPart, ToolDefinition } from "@ycoding-ai/ai";
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy";
+import type { OpenAIResponsesBody } from "@ycoding-ai/ai/protocols/openai-responses";
 import { LLMClient } from "@ycoding-ai/ai/route";
 import { DateTime, Effect } from "effect";
 import { Money } from "@ycoding-ai/schema/money";
@@ -18,6 +19,8 @@ import { AbsolutePath } from "@ycoding-ai/core/schema";
 import { it } from "./lib/effect";
 
 interface ModelOptions {
+  readonly id?: string;
+  readonly providerID?: string;
   readonly modelID?: string;
   readonly settings?: ModelV2.Info["settings"];
   readonly headers?: ModelV2.Info["headers"];
@@ -27,9 +30,9 @@ interface ModelOptions {
 
 const model = (packageName: string | undefined, options: ModelOptions = {}) =>
   ModelV2.Info.make({
-    id: ModelV2.ID.make("test-model"),
+    id: ModelV2.ID.make(options.id ?? "test-model"),
     modelID: ModelV2.ID.make(options.modelID ?? "api-test-model"),
-    providerID: ProviderV2.ID.make("test-provider"),
+    providerID: ProviderV2.ID.make(options.providerID ?? "test-provider"),
     name: "Test model",
     package: packageName,
     settings: options.settings ?? {},
@@ -42,6 +45,61 @@ const model = (packageName: string | undefined, options: ModelOptions = {}) =>
     status: "active",
     enabled: true,
     limit: { context: 100, output: 20 },
+  });
+
+const cacheSystem = [SystemPart.make("Stable cache system")];
+const cacheTools = [
+  ToolDefinition.make({
+    name: "lookup",
+    description: "Look up a value",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string" } },
+      required: ["query"],
+    },
+  }),
+];
+
+const assembleCacheRequest = (
+  catalog: ModelV2.Info,
+  messages: ReadonlyArray<Message>,
+  sessionID: string,
+  scope?: SessionRunnerCache.PromptCacheNamespaceInput["scope"],
+) =>
+  Effect.gen(function* () {
+    const resolved = yield* SessionRunnerModel.fromCatalogModel(catalog);
+    const namespaceInput = {
+      ...(scope === undefined ? {} : { scope }),
+      projectID: "project",
+      directory: "/repo",
+      providerID: catalog.providerID,
+      modelID: catalog.id,
+      variant: "default",
+      policyRevision: CACHE_POLICY_REVISION,
+      permissions: [],
+      system: cacheSystem,
+      tools: cacheTools,
+    } satisfies SessionRunnerCache.PromptCacheNamespaceInput;
+    const cache = SessionRunnerCache.providerOptions({
+      ...namespaceInput,
+      apiModelID: resolved.id,
+      sessionID,
+      routeID: resolved.route.id,
+      openaiMode: "auto",
+    });
+    return {
+      cache,
+      namespaceInput,
+      request: LLM.request({
+        model: resolved,
+        system: cacheSystem,
+        messages,
+        tools: cacheTools,
+        providerOptions: cache.providerOptions,
+        cache: cache.cache,
+      }),
+      resolved,
+    };
   });
 
 describe("SessionRunnerModel", () => {
@@ -587,7 +645,25 @@ describe("SessionRunnerModel", () => {
           metadata: { accountID: "acct_123" },
         }),
       );
-      const request = LLM.request({ model: resolved, prompt: "Hello" });
+      const cache = SessionRunnerCache.providerOptions({
+        projectID: "project",
+        directory: "/repo",
+        providerID: "test-provider",
+        modelID: "test-model",
+        apiModelID: resolved.id,
+        variant: "default",
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: [],
+        system: [],
+        tools: [],
+        sessionID: "ses_codex_affinity",
+        routeID: resolved.route.id,
+      });
+      const request = LLM.request({
+        model: resolved,
+        prompt: "Hello",
+        providerOptions: cache.providerOptions,
+      });
       const headers = yield* resolved.route.auth.apply({
         request,
         method: "POST",
@@ -599,16 +675,30 @@ describe("SessionRunnerModel", () => {
       expect(resolved.route).toMatchObject({
         id: "openai-codex-responses",
         endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
+        transport: { id: "websocket-json" },
+        defaults: {
+          headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" },
+          providerOptions: { openai: { store: false } },
+        },
       });
       expect(headers.authorization).toBe("Bearer chatgpt-token");
       expect(headers["chatgpt-account-id"]).toBe("acct_123");
+      expect(headers["session-id"]).toBe(cache.promptCacheKey);
+      expect(headers["thread-id"]).toBe(
+        SessionRunnerCache.providerSessionNamespace({
+          projectID: "project",
+          sessionID: "ses_codex_affinity",
+          providerID: "test-provider",
+        }),
+      );
+      expect(headers["x-client-request-id"]).toBe(headers["thread-id"]);
     }),
   );
 
-  it.effect("keeps GPT-5.6 ChatGPT Codex cache requests key-only", () =>
+  it.effect("keeps GPT-5.6 Codex caching key-only", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
-        model(ProviderV2.aisdk("@ai-sdk/openai"), { modelID: "gpt-5.6-sol" }),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), { modelID: "gpt-5.6-luna" }),
         Credential.OAuth.make({
           type: "oauth",
           methodID: Integration.MethodID.make("chatgpt-browser"),
@@ -621,7 +711,8 @@ describe("SessionRunnerModel", () => {
         projectID: "project",
         directory: "/repo",
         providerID: "openai",
-        modelID: "gpt-5.6-sol",
+        modelID: "gpt-5.6-luna",
+        apiModelID: resolved.id,
         variant: "default",
         policyRevision: CACHE_POLICY_REVISION,
         permissions: [],
@@ -631,10 +722,11 @@ describe("SessionRunnerModel", () => {
         routeID: resolved.route.id,
         openaiMode: "auto",
       });
-      const prepared = yield* LLMClient.prepare(
+      const prepared = yield* LLMClient.prepare<OpenAIResponsesBody>(
         LLM.request({
           model: resolved,
-          prompt: "Hello",
+          system: "Stable system",
+          messages: [Message.user("Hello"), Message.assistant("Cached assistant")],
           providerOptions: cache.providerOptions,
           cache: cache.cache,
         }),
@@ -642,7 +734,123 @@ describe("SessionRunnerModel", () => {
 
       expect(prepared.body).toMatchObject({ prompt_cache_key: cache.promptCacheKey });
       expect(prepared.body).not.toHaveProperty("prompt_cache_options");
+      expect(prepared.body).not.toHaveProperty("prompt_cache_retention");
+      expect(prepared.body.input[0]).toEqual({
+        role: "system",
+        content: "Stable system",
+      });
+      expect(prepared.body.input[1]).toEqual({
+        role: "user",
+        content: [{ type: "input_text", text: "Hello" }],
+      });
+      expect(prepared.body.input[2]).toEqual({
+        role: "assistant",
+        content: [{ type: "output_text", text: "Cached assistant" }],
+      });
       expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint");
+    }),
+  );
+
+  it.effect("restores exact OpenAI cache identity and wire prefix after provider and model round trips", () =>
+    Effect.gen(function* () {
+      const catalogA = model(ProviderV2.aisdk("@ai-sdk/openai"), {
+        id: "catalog-openai-a",
+        providerID: "openai",
+        modelID: "gpt-5.6",
+      });
+      const catalogB = model(ProviderV2.aisdk("@ai-sdk/openai"), {
+        id: "catalog-openai-b",
+        providerID: "openai",
+        modelID: "gpt-5.6-mini",
+      });
+      const otherProvider = model(ProviderV2.aisdk("@ai-sdk/anthropic"), {
+        id: "catalog-anthropic",
+        providerID: "anthropic",
+        modelID: "claude-sonnet-4-5",
+      });
+      const messages = [Message.user("Stable request tail")];
+
+      const firstA = yield* assembleCacheRequest(catalogA, messages, "ses_round_trip");
+      const firstPrepared = yield* LLMClient.prepare<OpenAIResponsesBody>(firstA.request);
+      const other = yield* assembleCacheRequest(otherProvider, messages, "ses_round_trip");
+      yield* LLMClient.prepare(other.request);
+      const secondA = yield* assembleCacheRequest(catalogA, messages, "ses_round_trip");
+      const secondPrepared = yield* LLMClient.prepare<OpenAIResponsesBody>(secondA.request);
+
+      expect(secondA.cache.promptCacheKey).toBe(firstA.cache.promptCacheKey);
+      expect(secondA.cache.systemDigest).toBe(firstA.cache.systemDigest);
+      expect(secondA.cache.toolDigest).toBe(firstA.cache.toolDigest);
+      expect(JSON.stringify(secondPrepared.body)).toBe(JSON.stringify(firstPrepared.body));
+
+      const firstB = yield* assembleCacheRequest(catalogB, messages, "ses_round_trip");
+      yield* LLMClient.prepare<OpenAIResponsesBody>(firstB.request);
+      const thirdA = yield* assembleCacheRequest(catalogA, messages, "ses_round_trip");
+      const thirdPrepared = yield* LLMClient.prepare<OpenAIResponsesBody>(thirdA.request);
+
+      expect(firstB.cache.promptCacheKey).not.toBe(firstA.cache.promptCacheKey);
+      expect(thirdA.cache.promptCacheKey).toBe(firstA.cache.promptCacheKey);
+      expect(thirdA.cache.systemDigest).toBe(firstA.cache.systemDigest);
+      expect(thirdA.cache.toolDigest).toBe(firstA.cache.toolDigest);
+      expect(JSON.stringify(thirdPrepared.body)).toBe(JSON.stringify(firstPrepared.body));
+      expect(firstA.cache.promptCacheKey).toBe(
+        SessionRunnerCache.promptCacheNamespace({
+          ...firstA.namespaceInput,
+          routeID: firstA.resolved.route.id,
+        }),
+      );
+      expect(firstA.cache.promptCacheKey).not.toBe(
+        SessionRunnerCache.promptCacheNamespace({
+          ...firstA.namespaceInput,
+          routeID: firstA.resolved.route.id,
+          modelID: firstA.resolved.id,
+        }),
+      );
+      expect(firstA.cache.cache).toEqual({
+        tools: false,
+        system: true,
+        messages: { tail: 50 },
+      });
+    }),
+  );
+
+  it.effect("keeps parent cache identity stable across checkpoint history and isolates compaction", () =>
+    Effect.gen(function* () {
+      const catalog = model(ProviderV2.aisdk("@ai-sdk/openai"), {
+        id: "catalog-openai-parent",
+        providerID: "openai",
+        modelID: "gpt-5.6",
+      });
+      const before = yield* assembleCacheRequest(
+        catalog,
+        [Message.user("History before compaction")],
+        "ses_parent",
+      );
+      const checkpoint = Message.user("Exact checkpoint bytes");
+      const after = yield* assembleCacheRequest(catalog, [checkpoint, Message.user("New tail")], "ses_parent");
+      const repeated = yield* assembleCacheRequest(catalog, [checkpoint, Message.user("New tail")], "ses_parent");
+      const hiddenCompaction = yield* assembleCacheRequest(
+        catalog,
+        [checkpoint],
+        "ses_hidden_compaction",
+        "compaction",
+      );
+      const beforePrepared = yield* LLMClient.prepare<OpenAIResponsesBody>(before.request);
+      const afterPrepared = yield* LLMClient.prepare<OpenAIResponsesBody>(after.request);
+      const repeatedPrepared = yield* LLMClient.prepare<OpenAIResponsesBody>(repeated.request);
+
+      expect(after.cache.promptCacheKey).toBe(before.cache.promptCacheKey);
+      expect(after.cache.systemDigest).toBe(before.cache.systemDigest);
+      expect(after.cache.toolDigest).toBe(before.cache.toolDigest);
+      expect(hiddenCompaction.cache.promptCacheKey).not.toBe(before.cache.promptCacheKey);
+      expect(repeated.cache.promptCacheKey).toBe(after.cache.promptCacheKey);
+      expect(repeated.cache.systemDigest).toBe(after.cache.systemDigest);
+      expect(repeated.cache.toolDigest).toBe(after.cache.toolDigest);
+      expect(
+        JSON.stringify({ system: afterPrepared.body.input[0], tools: afterPrepared.body.tools }),
+      ).toBe(JSON.stringify({ system: beforePrepared.body.input[0], tools: beforePrepared.body.tools }));
+      expect(
+        JSON.stringify({ prefix: repeatedPrepared.body.input.slice(0, 2), tools: repeatedPrepared.body.tools }),
+      ).toBe(JSON.stringify({ prefix: afterPrepared.body.input.slice(0, 2), tools: afterPrepared.body.tools }));
     }),
   );
 
@@ -1006,6 +1214,55 @@ describe("SessionRunnerModel", () => {
           id: "gemini-api-model",
           provider: "test-provider",
         });
+    }),
+  );
+
+  it.effect(
+    "loads GitHub Copilot Anthropic Messages models through the AISDK loader",
+    () =>
+      Effect.gen(function* () {
+        const fallback = yield* SessionRunnerModel.fromCatalogModel(
+          model(ProviderV2.aisdk("@ai-sdk/openai"), {
+            settings: { baseURL: "https://openai.example/v1" },
+          }),
+        );
+        let runtime: ModelV2.Info | undefined;
+        const catalog = ModelV2.Info.make({
+          ...model(ProviderV2.aisdk("@ai-sdk/anthropic"), {
+            modelID: "claude-sonnet-5",
+            settings: { baseURL: "https://copilot.example/v1" },
+          }),
+          providerID: ProviderV2.ID.githubCopilot,
+        });
+
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(
+          catalog,
+          Credential.OAuth.make({
+            type: "oauth",
+            methodID: Integration.MethodID.make("device"),
+            access: "copilot-oauth-token",
+            refresh: "copilot-oauth-token",
+            expires: Number.MAX_SAFE_INTEGER,
+          }),
+          {
+            loadAISDK: (input) =>
+              Effect.sync(() => {
+                runtime = input;
+                return fallback;
+              }),
+          },
+        );
+
+        expect(runtime).toMatchObject({
+          providerID: "github-copilot",
+          modelID: "claude-sonnet-5",
+          package: "aisdk:@ai-sdk/anthropic",
+          settings: {
+            baseURL: "https://copilot.example/v1",
+            apiKey: "copilot-oauth-token",
+          },
+        });
+        expect(resolved).toBe(fallback);
       }),
   );
 

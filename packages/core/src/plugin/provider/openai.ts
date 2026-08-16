@@ -18,6 +18,8 @@ const callbackPort = 1455
 const pollingSafetyMargin = 3000
 const browserMethodID = Integration.MethodID.make("chatgpt-browser")
 const headlessMethodID = Integration.MethodID.make("chatgpt-headless")
+const gpt56ModelID = "gpt-5.6"
+const gpt56ContextWindow = 372_000
 
 type Pkce = {
   verifier: string
@@ -187,6 +189,15 @@ export const OpenAIPlugin = define({
           // chat-completions-only model, so hide it only from OpenAI's catalog.
           model.enabled = false
         })
+      }
+      const openai = evt.provider.get(ProviderV2.ID.openai)
+      if (openai) {
+        for (const model of openai.models.values()) {
+          if (model.id !== gpt56ModelID && !model.id.startsWith(`${gpt56ModelID}-`)) continue
+          evt.model.update(openai.provider.id, model.id, (draft) => {
+            draft.limit.context = gpt56ContextWindow
+          })
+        }
       }
       if (!chatgpt) return
       const item = evt.provider.get(ProviderV2.ID.openai)

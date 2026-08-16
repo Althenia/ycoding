@@ -3,6 +3,7 @@ import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
+import { Show } from "solid-js"
 import { ClipboardProvider } from "../../../src/context/clipboard"
 import type { FormWithLocation } from "../../../src/context/data"
 import { ClientProvider } from "../../../src/context/client"
@@ -15,7 +16,7 @@ import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 import { createApi, createEventStream, createFetch } from "../../fixture/tui-client"
 
-async function mountForm(root: string, width = 80) {
+async function mountForm(root: string, width = 80, bottomAnchored = false) {
   const state = path.join(root, "state")
   await mkdir(state, { recursive: true })
 
@@ -71,7 +72,16 @@ async function mountForm(root: string, width = 80) {
               <ClientProvider api={createApi(transport.fetch)}>
                 <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
                   <ToastProvider>
-                    <FormPrompt form={form} />
+                    <Show
+                      when={bottomAnchored}
+                      fallback={<FormPrompt form={form} />}
+                    >
+                      <box height="100%" flexDirection="column">
+                        <box flexGrow={1} />
+                        <FormPrompt form={form} />
+                        <text>Session footer</text>
+                      </box>
+                    </Show>
                   </ToastProvider>
                 </ThemeProvider>
               </ClientProvider>
@@ -122,6 +132,20 @@ test("includes external acknowledgements in progress", async () => {
   try {
     expect(prompt.app.captureCharFrame()).toContain("0/1")
     expect(prompt.replies).toEqual([])
+  } finally {
+    prompt.app.renderer.destroy()
+  }
+})
+
+test("keeps a form surface immediately above the session footer", async () => {
+  await using tmp = await tmpdir()
+  const prompt = await mountForm(tmp.path, 80, true)
+  try {
+    const lines = prompt.app.captureCharFrame().split("\n")
+    const footer = lines.findIndex((line) => line.includes("Session footer"))
+
+    expect(footer).toBe(19)
+    expect(lines[footer - 1]).toContain("│")
   } finally {
     prompt.app.renderer.destroy()
   }

@@ -4,10 +4,12 @@ import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
+import { DialogSelect } from "../ui/dialog-select"
 
 export function DialogSessionDeleteFailed(props: {
   session: string
   workspace: string
+  failures?: ReadonlyArray<{ session: string; reason: string }>
   onDelete?: () => boolean | void | Promise<boolean | void>
   onRestore?: () => boolean | void | Promise<boolean | void>
   onDone?: () => void
@@ -17,6 +19,31 @@ export function DialogSessionDeleteFailed(props: {
   const [store, setStore] = createStore({
     active: "delete" as "delete" | "restore",
   })
+
+  if (props.failures)
+    return (
+      <DialogSelect
+        title="Could not delete"
+        options={[
+          ...props.failures.map((failure) => ({
+            title: failure.session,
+            footer: failure.reason,
+            state: "error" as const,
+            category: `${props.failures!.length} sessions could not be removed`,
+            value: failure.session,
+          })),
+          {
+            title: "Dismiss",
+            category: `${props.failures.length} sessions could not be removed`,
+            value: "dismiss",
+            onSelect: (dialog) => {
+              props.onDone?.()
+              dialog.clear()
+            },
+          },
+        ]}
+      />
+    )
 
   const options = [
     {

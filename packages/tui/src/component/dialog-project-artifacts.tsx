@@ -79,17 +79,30 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
   const options = createMemo<DialogSelectOption<ArtifactListItem>[]>(() =>
     visible().map((artifact) => {
       const status = isTrashArtifact(artifact) ? undefined : artifactLoadStatus(artifact.stage)
+      const secondLine = !isTrashArtifact(artifact) && artifact.kind !== "skill"
       return {
         title: artifact.name,
-        titleView: status?.loaded === false ? <span style={{ fg: themeV2.text.subdued }}>{artifact.name}</span> : undefined,
+        titleView: secondLine ? (
+          <span style={{ fg: status?.loaded === false ? themeV2.text.subdued : themeV2.text.default }}>{`\n${artifact.name}`}</span>
+        ) : status?.loaded === false ? (
+          <span style={{ fg: themeV2.text.subdued }}>{artifact.name}</span>
+        ) : undefined,
         description: artifact.description,
         footer:
           status === undefined ? undefined : status.loaded ? (
-            <span style={{ fg: themeV2.text.action.primary.focused }}>{status.label}</span>
+            <span style={{ fg: themeV2.text.action.primary.focused }}>{secondLine ? `\n${status.label}` : status.label}</span>
           ) : (
-            <span style={{ fg: themeV2.text.subdued }}>{status.label}</span>
+            <span style={{ fg: themeV2.text.subdued }}>{secondLine ? `\n${status.label}` : status.label}</span>
           ),
-        state: status === undefined ? undefined : status.loaded ? "connected" : "disabled",
+        state: secondLine ? undefined : status === undefined ? undefined : status.loaded ? "connected" : "disabled",
+        gutter:
+          secondLine && status
+            ? () => (
+                <text fg={status.loaded ? themeV2.text.feedback.success.default : themeV2.text.subdued}>
+                  {status.loaded ? "\n✓" : "\n○"}
+                </text>
+              )
+            : undefined,
         category: isTrashArtifact(artifact) ? "Trash" : artifact.kind === "plugin" ? "Plugins" : artifactKindLabel(artifact.kind),
         value: artifact,
         details: undefined,

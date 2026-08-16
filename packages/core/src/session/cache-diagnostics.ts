@@ -29,6 +29,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "ai-sdk:@ai-sdk/anthropic": "anthropic-cache-control",
   "ai-sdk:@ai-sdk/google-vertex/anthropic": "anthropic-cache-control",
   openrouter: "openrouter-cache-control",
+  "openrouter-responses": "openrouter-cache-control",
   "ai-sdk:@openrouter/ai-sdk-provider": "openrouter-cache-control",
   "bedrock-converse": "bedrock-cache-point",
   "ai-sdk:@ai-sdk/amazon-bedrock": "bedrock-cache-point",
@@ -37,6 +38,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "openai-responses-websocket": "openai-prefix-cache",
   "github-copilot-chat": "openai-prefix-cache",
   "github-copilot-responses": "openai-prefix-cache",
+  "ai-sdk:@ai-sdk/github-copilot": "openai-prefix-cache",
   [OpenAICodex.routeID]: "openai-prefix-cache",
   "openai-compatible-chat": "openai-prefix-cache",
   "openai-compatible-responses": "openai-prefix-cache",
@@ -67,6 +69,7 @@ export function mechanism(
       case "azure":
       case "github-copilot":
       case "ycoding":
+      case "meta":
         return "openai-prefix-cache"
       case "openrouter":
         return "openrouter-cache-control"

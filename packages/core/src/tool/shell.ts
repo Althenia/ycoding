@@ -189,19 +189,17 @@ export const Plugin = {
                     cwd: target.canonical,
                     timeout,
                     memoryLimitMb: input.memory_limit_mb,
-                    metadata: { sessionID: context.sessionID },
+                    metadata: { sessionID: context.sessionID, toolCallID: context.callID },
                   })
                   .pipe(
-                    Effect.mapError(
-                      (error) => {
-                        if (error instanceof Shell.MemoryLimitUnavailable)
-                          return new ToolFailure({ message: error.message, error })
-                        return new ToolFailure({
-                          message: "Shell sandboxing is required, but no enforceable backend is available.",
-                          error,
-                        })
-                      },
-                    ),
+                    Effect.mapError((error) => {
+                      if (error instanceof Shell.MemoryLimitUnavailable)
+                        return new ToolFailure({ message: error.message, error })
+                      return new ToolFailure({
+                        message: "Shell sandboxing is required, but no enforceable backend is available.",
+                        error,
+                      })
+                    }),
                   )
                 const external = target.externalDirectory
                 if (external)
@@ -246,9 +244,7 @@ export const Plugin = {
                         }),
                     ),
                   )
-                const info = yield* shell
-                  .create(prepared)
-                  .pipe(Effect.onError(() => reservation.release))
+                const info = yield* shell.create(prepared).pipe(Effect.onError(() => reservation.release))
 
                 const captureShell = Effect.fn("ShellTool.captureShell")(function* () {
                   const page = yield* shell.output(info.id, { limit: MAX_CAPTURE_BYTES })

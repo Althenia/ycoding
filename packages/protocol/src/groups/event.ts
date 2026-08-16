@@ -2,6 +2,7 @@ import { Event } from "@ycoding-ai/schema/event"
 import { EventManifest } from "@ycoding-ai/schema/event-manifest"
 import { Location } from "@ycoding-ai/schema/location"
 import type { Definition } from "@ycoding-ai/schema/event"
+import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 
@@ -19,6 +20,7 @@ const schema = <const Definitions extends ReadonlyArray<Definition>>(definitions
       : [
           Schema.Struct({
             ...fields,
+            sourceEpoch: SourceEpoch,
             type: Schema.Literal("server.connected"),
             data: Schema.Struct({}),
           }).annotate({ identifier: "V2Event.server.connected" }),

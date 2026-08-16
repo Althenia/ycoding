@@ -84,6 +84,8 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
   const windows = Object.entries(input.response).flatMap(([key, value]) => {
     if (key === "extra_usage") return extraUsage(value)
     if (key !== "five_hour" && key !== "seven_day" && !key.startsWith("seven_day_")) return []
+    // Claude reports every known bucket and sets the inactive ones to null.
+    if (value === null || value === undefined) return []
     if (!record(value)) throw new Error(`Invalid Claude usage bucket: ${key}`)
     const used = percentage(value.utilization, key, false)
     if (used === undefined) return []
@@ -98,6 +100,7 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
       }),
     ]
   })
+  const seen = new Set(windows.map((window) => window.id))
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
     label: accountLabel(input.label, input.subscriptionType),
@@ -105,7 +108,32 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
     source: "provider_internal_api",
     stability: "best_effort",
     updatedAt: Math.max(0, Math.trunc(input.updatedAt)),
-    windows,
+    windows: [...windows, ...scopedWindows(input.response.limits).filter((window) => !seen.has(window.id))],
+  })
+}
+
+/**
+ * Newer accounts report per-model weekly lanes only through `limits`, where the legacy
+ * `seven_day_<model>` buckets stay null.
+ */
+function scopedWindows(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    if (!record(entry) || entry.kind !== "weekly_scoped" || !record(entry.scope)) return []
+    const model = record(entry.scope.model) ? entry.scope.model.display_name : undefined
+    if (typeof model !== "string" || !model.trim()) return []
+    const used = percentage(entry.percent, "limits.percent", false)
+    if (used === undefined) return []
+    const resetAt = reset(entry.resets_at, "limits.resets_at")
+    return [
+      new ProviderUsage.Window({
+        id: `seven-day-${model.trim().toLowerCase().replaceAll(" ", "-")}`,
+        label: `${model.trim()} weekly`,
+        unit: "percent",
+        used,
+        ...(resetAt === undefined ? {} : { resetAt }),
+      }),
+    ]
   })
 }
 

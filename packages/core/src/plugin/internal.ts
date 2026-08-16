@@ -30,7 +30,9 @@ import { PermissionV2 } from "../permission";
 import { ProviderUsageV2 } from "../provider-usage";
 import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
+import { SessionAutonomy } from "../session/autonomy";
 import { SessionGuardrail } from "../session/guardrail";
+import { ConversationCompactTool } from "../tool/conversation-compact";
 import { SessionInstructions } from "../session/instructions";
 import { SessionRunnerModel } from "../session/runner/model";
 import { SessionTodo } from "../session/todo";
@@ -49,6 +51,7 @@ import { SubagentTool } from "../tool/subagent";
 import { SubagentControlTool } from "../tool/subagent-control";
 import { SubagentReportTool } from "../tool/subagent-report";
 import { TodoWriteTool } from "../tool/todowrite";
+import { GoalTool } from "../tool/goal";
 import { ProjectArtifactTool } from "../tool/project-artifact";
 import { ProjectArtifactStore } from "../project-artifact";
 import { Tools } from "../tool/tools";
@@ -96,6 +99,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const instructions = yield* SessionInstructions.Service;
   const sessionRunnerModel = yield* SessionRunnerModel.Service;
   const todo = yield* SessionTodo.Service;
+  const autonomy = yield* SessionAutonomy.Service;
   const shell = yield* Shell.Service;
   const skill = yield* SkillV2.Service;
   const tools = yield* Tools.Service;
@@ -132,6 +136,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(SessionInstructions.Service, instructions),
     Context.make(SessionRunnerModel.Service, sessionRunnerModel),
     Context.make(SessionTodo.Service, todo),
+    Context.make(SessionAutonomy.Service, autonomy),
     Context.make(Shell.Service, shell),
     Context.make(SkillV2.Service, skill),
     Context.make(Tools.Service, tools),
@@ -155,6 +160,7 @@ const pre = [
   AgentPlugin.Plugin,
   CommandPlugin.Plugin,
   SkillPlugin.Plugin,
+  ConversationCompactTool.Plugin,
   ...SystemPromptPlugin.Plugins,
   ModelsDevPlugin,
   ...ProviderPlugins,
@@ -174,6 +180,7 @@ const pre = [
   WebFetchTool.Plugin,
   WebSearchTool.Plugin,
   WriteTool.Plugin,
+  GoalTool.Plugin,
 ] as const satisfies readonly InternalPlugin[];
 
 const post = [

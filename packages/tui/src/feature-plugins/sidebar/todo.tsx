@@ -10,14 +10,18 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   const visible = createMemo(() => list().some((item) => item.status !== "completed"))
   const remaining = createMemo(() => list().filter((item) => item.status !== "completed").length)
   createEffect(() => void props.context.data.session.todo.sync(props.sessionID))
-  return <TodoRailContent list={list()} visible={(rail?.showTodo() ?? true) && visible()} summary={`${remaining()} open`} />
+  return <TodoRailContent list={list()} visible={(rail?.showTodo() ?? true) && visible()} summary={`${remaining()}/${list().length} open`} />
 }
 
 export function TodoRailContent(props: { list: ReadonlyArray<SessionTodoInfo>; visible?: boolean; summary?: string }) {
   return (
     <Show when={props.visible ?? true}>
-      <RailSection section="todo" title="TODO LIST" summary={props.summary}>
-        <box flexDirection="column" gap={1} paddingBottom={2}>
+      <RailSection
+        section="todo"
+        title="TODO LIST"
+        summary={props.summary ?? `${props.list.filter((item) => item.status !== "completed").length}/${props.list.length} open`}
+      >
+        <box flexDirection="column" gap={1}>
           <For each={props.list}>{(item) => <TodoItem {...item} />}</For>
         </box>
       </RailSection>

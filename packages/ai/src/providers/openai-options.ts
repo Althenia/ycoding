@@ -1,9 +1,11 @@
 import type { ProviderOptions, ReasoningEffort, TextVerbosity } from "../schema"
 import { mergeProviderOptions } from "../schema"
+import { isGpt56OrLater } from "../protocols/utils/openai-options"
 import type {
   OpenAIPromptCacheOptions,
   OpenAIPromptCacheRetention,
   OpenAIContextManagementEntry,
+  OpenAIImageDetail,
   OpenAIResponseIncludable,
   OpenAIServiceTier,
 } from "../protocols/utils/openai-options"
@@ -12,6 +14,7 @@ export type {
   OpenAIPromptCacheOptions,
   OpenAIPromptCacheRetention,
   OpenAIContextManagementEntry,
+  OpenAIImageDetail,
   OpenAIResponseIncludable,
   OpenAIServiceTier,
 } from "../protocols/utils/openai-options"
@@ -31,12 +34,14 @@ export interface OpenAIOptionsInput {
   readonly contextManagement?: ReadonlyArray<OpenAIContextManagementEntry>
   readonly reasoningEffort?: ReasoningEffort
   readonly reasoningSummary?: "auto"
+  readonly reasoningContext?: "all_turns"
   // OpenAI Responses `include` wire field. Mirrors the official SDK's
   // `ResponseIncludable[]` union exactly so AI SDK callers and direct
   // native-SDK callers share one shape and no translation is required.
   readonly include?: ReadonlyArray<OpenAIResponseIncludable>
   readonly textVerbosity?: TextVerbosity
   readonly serviceTier?: OpenAIServiceTier
+  readonly imageDetail?: OpenAIImageDetail
 }
 
 export type OpenAIProviderOptionsInput = ProviderOptions & {
@@ -56,9 +61,11 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
       contextManagement: options?.contextManagement,
       reasoningEffort: options?.reasoningEffort,
       reasoningSummary: options?.reasoningSummary,
+      reasoningContext: options?.reasoningContext,
       include: options?.include,
       textVerbosity: options?.textVerbosity,
       serviceTier: options?.serviceTier,
+      imageDetail: options?.imageDetail,
     }),
   )
   if (Object.keys(openai).length === 0) return undefined
@@ -74,11 +81,9 @@ export const gpt5DefaultOptions = (
   return openAIProviderOptions({
     reasoningEffort: "medium",
     reasoningSummary: "auto",
-    // GPT-5 reasoning models are configured stateless (`store: false`) by
-    // `openAIDefaultOptions` below, so the only way a follow-up turn can
-    // carry reasoning state is via the encrypted reasoning include. Without
-    // this, callers using the default model facade get reasoning summaries
-    // they cannot replay statelessly.
+    // Shared OpenAI-compatible defaults remain stateless, and direct OpenAI
+    // callers may explicitly opt out of storage. Keep encrypted reasoning
+    // available so either stateless path can replay a follow-up turn.
     include: ["reasoning.encrypted_content"],
     textVerbosity:
       options.textVerbosity === true && id.includes("gpt-5.") && !id.includes("codex") && !id.includes("-chat")
@@ -89,14 +94,20 @@ export const gpt5DefaultOptions = (
 
 export const openAIDefaultOptions = (
   modelID: string,
-  options: { readonly textVerbosity?: boolean } = {},
+  options: { readonly textVerbosity?: boolean; readonly store?: boolean; readonly retainedReasoning?: boolean } = {},
 ): ProviderOptions | undefined =>
-  mergeProviderOptions(openAIProviderOptions({ store: false }), gpt5DefaultOptions(modelID, options))
+  mergeProviderOptions(
+    openAIProviderOptions({
+      store: options.store ?? false,
+      reasoningContext: options.retainedReasoning === true && isGpt56OrLater(modelID) ? "all_turns" : undefined,
+    }),
+    gpt5DefaultOptions(modelID, options),
+  )
 
 export const withOpenAIOptions = <Options extends { readonly providerOptions?: OpenAIProviderOptionsInput }>(
   modelID: string,
   options: Options,
-  defaults: { readonly textVerbosity?: boolean } = {},
+  defaults: { readonly textVerbosity?: boolean; readonly store?: boolean; readonly retainedReasoning?: boolean } = {},
 ): Omit<Options, "providerOptions"> & { readonly providerOptions?: ProviderOptions } => {
   return {
     ...options,

@@ -1,7 +1,8 @@
-import { TextAttributes } from "@opentui/core"
 import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
-import { useDialog, type DialogContext } from "./dialog"
+import { DialogHeader, DialogSearchRow, DialogTitle, dialogMessageLines, dialogPanelWidth, useDialog, type DialogContext } from "./dialog"
+import { createMemo, For } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 
 export type DialogAlertProps = {
   title: string
@@ -12,6 +13,8 @@ export type DialogAlertProps = {
 export function DialogAlert(props: DialogAlertProps) {
   const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
+  const dimensions = useTerminalDimensions()
+  const lines = createMemo(() => dialogMessageLines(props.message))
 
   Keymap.createLayer(() => ({
     mode: "modal",
@@ -28,27 +31,32 @@ export function DialogAlert(props: DialogAlertProps) {
     ],
   }))
   return (
-    <box paddingLeft={2} paddingRight={2} gap={1}>
-      <box flexDirection="row" justifyContent="space-between">
-        <text attributes={TextAttributes.BOLD} fg={themeV2.text.default}>
-          {props.title}
-        </text>
-        <text fg={themeV2.text.subdued} onMouseUp={() => dialog.clear()}>
-          esc
-        </text>
+    <box paddingTop={1}>
+      <DialogHeader title={<DialogTitle>{props.title}</DialogTitle>} />
+      <DialogSearchRow />
+      <box paddingTop={2} paddingLeft={3} paddingRight={4}>
+        <For each={lines()}>
+          {(line) => (
+            <box height={2}>
+              <text fg={themeV2.text.subdued}>{line}</text>
+            </box>
+          )}
+        </For>
       </box>
-      <box paddingBottom={1}>
-        <text fg={themeV2.text.subdued}>{props.message}</text>
-      </box>
-      <box flexDirection="row" justifyContent="flex-end" paddingBottom={1}>
+      <box
+        height={1}
+        width={dialogPanelWidth(dimensions().width)}
+        onMouseUp={() => {
+          props.onConfirm?.()
+          dialog.clear()
+        }}
+      >
         <box
-          paddingLeft={3}
-          paddingRight={3}
+          height={1}
+          width={dialogPanelWidth(dimensions().width)}
+          paddingLeft={6}
+          paddingRight={4}
           backgroundColor={themeV2.background.action.primary.focused}
-          onMouseUp={() => {
-            props.onConfirm?.()
-            dialog.clear()
-          }}
         >
           <text fg={themeV2.text.action.primary.focused}>Dismiss</text>
         </box>

@@ -43,6 +43,8 @@ interface Tool.Context {
 
 Durable events call the invocation identifier `callID`; `Tool.Context.toolCallID` is the same value at the executor boundary.
 
+Shells created by the built-in shell tool expose that identity as `Shell.Info.toolCallID`. A client holding a tool-call ID resolves the corresponding `Shell.ID` from `GET /api/shell` and pages output through `GET /api/shell/:id/output`; shells created outside a Session tool invocation omit the field.
+
 Decoded tool input is passed separately to `execute`. Raw provider input and domain services do not belong in the invocation context.
 
 Effect interruption is the cancellation mechanism. Tools may translate expected typed failures into `ToolFailure`, but must not translate interruption or defects into model-visible failures.

@@ -10,7 +10,7 @@ export const ID = Agent.ID
 export type ID = typeof ID.Type
 export const Name = Agent.Name
 export type Name = Agent.Name
-export const defaultID = ID.make("build")
+export const defaultID = ID.make("god")
 
 export const Color = Agent.Color
 
@@ -18,6 +18,14 @@ export const Info = Agent.Info
 export type Info = Agent.Info
 
 export const Event = Agent.Event
+
+export function isSelectable(agent: Info): boolean {
+  return agent.mode !== "subagent" && !agent.hidden && agent.id !== "btw"
+}
+
+export function isAutocompleteSelectable(agent: Info): boolean {
+  return !agent.hidden && agent.mode !== "primary" && agent.id !== "btw"
+}
 
 export interface Selection {
   readonly id: ID
@@ -73,13 +81,13 @@ const layer = Layer.effect(
       finalize: () => events.publish(Event.Updated, {}).pipe(Effect.asVoid),
     })
     const selectable = (agent: Info | undefined) =>
-      agent && agent.mode !== "subagent" && !agent.hidden ? agent : undefined
+      agent && isSelectable(agent) ? agent : undefined
     const selectedDefault = () => {
       const data = state.get()
       const configured = data.default ? selectable(data.agents.get(data.default)) : undefined
       if (configured) return configured
-      const build = selectable(data.agents.get(ID.make("build")))
-      if (build) return build
+      const defaultAgent = selectable(data.agents.get(defaultID))
+      if (defaultAgent) return defaultAgent
       for (const agent of data.agents.values()) {
         const fallback = selectable(agent)
         if (fallback) return fallback

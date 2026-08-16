@@ -3,6 +3,7 @@ import { Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { EventV2 } from "@ycoding-ai/core/event"
+import { Global } from "@ycoding-ai/core/global"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Location } from "@ycoding-ai/core/location"
@@ -44,6 +45,7 @@ describe("AgentV2", () => {
 
       expect(yield* agent.list()).toEqual([])
       expect(yield* agent.get(AgentV2.ID.make("build"))).toBeUndefined()
+      expect(yield* agent.select()).toEqual({ id: AgentV2.ID.make("god"), info: undefined })
     }),
   )
 
@@ -127,7 +129,7 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("does not ambiently opt built-in agents into bash", () =>
+  it.effect("registers the maintained built-in catalog without ambient bash access", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       yield* AgentPlugin.Plugin.effect(
@@ -143,24 +145,53 @@ describe("AgentV2", () => {
 
       const agents = yield* agent.list()
       expect(agents.map((item) => String(item.id)).sort()).toEqual([
+        "TLDR",
+        "architech",
         "btw",
-        "build",
         "compaction",
-        "explore",
-        "general",
         "goal",
-        "plan",
+        "god",
+        "occam",
+        "omoikane",
         "summary",
         "title",
+        "wittgenstein",
+        "yangi",
+        "zeus",
       ])
-      expect((yield* agent.get(AgentV2.defaultID))?.system).toBeUndefined()
-      for (const item of agents) {
+      expect(AgentV2.defaultID).toBe(AgentV2.ID.make("god"))
+      expect(yield* agent.resolve()).toMatchObject({ id: AgentV2.ID.make("god"), mode: "primary" })
+      expect(yield* agent.get(AgentV2.ID.make("build"))).toBeUndefined()
+      expect(yield* agent.get(AgentV2.ID.make("plan"))).toBeUndefined()
+      expect(yield* agent.get(AgentV2.ID.make("explore"))).toBeUndefined()
+      expect(yield* agent.get(AgentV2.ID.make("general"))).toBeUndefined()
+      expect(yield* agent.get(AgentV2.ID.make("analyze"))).toBeUndefined()
+      expect(yield* agent.get(AgentV2.ID.make("brainstorm"))).toBeUndefined()
+      for (const id of ["TLDR", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = agents.find((agent) => String(agent.id) === id)
+        if (!item) throw new Error(`expected built-in agent ${id}`)
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
+        expect(PermissionV2.evaluate("shell", "git status", item.permissions).effect).toBe("allow")
+      }
+      for (const id of ["TLDR", "architech", "god", "yangi"]) {
+        const item = agents.find((agent) => String(agent.id) === id)
+        if (!item) throw new Error(`expected build-equivalent agent ${id}`)
+        expect(PermissionV2.evaluate("edit", "README.md", item.permissions).effect).toBe("allow")
+        expect(PermissionV2.evaluate("question", "*", item.permissions).effect).toBe("allow")
+        expect(PermissionV2.evaluate("plan_enter", "*", item.permissions).effect).toBe("allow")
+      }
+      for (const id of ["occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = agents.find((agent) => String(agent.id) === id)
+        if (!item) throw new Error(`expected general-equivalent agent ${id}`)
+        expect(PermissionV2.evaluate("edit", "README.md", item.permissions).effect).toBe("allow")
+        expect(PermissionV2.evaluate("question", "*", item.permissions).effect).toBe("deny")
+        expect(PermissionV2.evaluate("plan_enter", "*", item.permissions).effect).toBe("deny")
+        expect(PermissionV2.evaluate("subagent", "*", item.permissions).effect).toBe("deny")
       }
     }),
   )
 
-  it.effect("denies the subagent tool for built-in subagents", () =>
+  it.effect("preserves representative built-in agent metadata and prompts", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       yield* AgentPlugin.Plugin.effect(
@@ -174,15 +205,43 @@ describe("AgentV2", () => {
         ),
       )
 
-      yield* Effect.forEach(["general", "explore"], (id) =>
-        Effect.gen(function* () {
-          const info = yield* agent.get(AgentV2.ID.make(id))
-          if (!info) throw new Error(`expected built-in agent: ${id}`)
-          expect(info.mode).toBe("subagent")
-          expect(info.permissions).toContainEqual({ action: "subagent", resource: "*", effect: "deny" })
-          expect(PermissionV2.evaluate("subagent", "*", info.permissions).effect).toBe("deny")
-        }),
-      )
+      const god = yield* agent.get(AgentV2.ID.make("god"))
+      const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
+      if (!god || !zeus) throw new Error("expected built-in agents")
+
+      expect(god.system).toContain("You are God, an elite autonomous software builder.")
+      expect(god.system).toContain("## Delivery")
+      expect(god).toMatchObject({
+        description: "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
+        mode: "primary",
+        request: { body: { temperature: 0.2 } },
+        color: "#f1c40f",
+      })
+      expect(god.permissions).toEqual([
+        { action: "*", resource: "*", effect: "allow" },
+        { action: "external_directory", resource: "*", effect: "ask" },
+        { action: "external_directory", resource: `${Global.Path.data}/shell/*/*`, effect: "allow" },
+        { action: "external_directory", resource: `${Global.Path.tmp}/*`, effect: "allow" },
+        { action: "question", resource: "*", effect: "deny" },
+        { action: "plan_enter", resource: "*", effect: "deny" },
+        { action: "plan_exit", resource: "*", effect: "deny" },
+        { action: "read", resource: "*", effect: "allow" },
+        { action: "read", resource: "*.env", effect: "ask" },
+        { action: "read", resource: "*.env.*", effect: "ask" },
+        { action: "read", resource: "*.env.example", effect: "allow" },
+        { action: "question", resource: "*", effect: "allow" },
+        { action: "plan_enter", resource: "*", effect: "allow" },
+        { action: "shell", resource: "*", effect: "allow" },
+      ])
+      expect(zeus.system).toContain("You are Zeus, an elite autonomous software implementer.")
+      expect(zeus.system).toContain("## Execution")
+      expect(zeus).toMatchObject({
+        description: "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
+        mode: "subagent",
+        request: { body: { temperature: 0.2 } },
+        color: "#f1c40f",
+      })
+      expect(PermissionV2.evaluate("shell", "git status", zeus.permissions).effect).toBe("allow")
     }),
   )
 

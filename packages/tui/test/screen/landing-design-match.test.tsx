@@ -52,24 +52,33 @@ async function expectLandingDesign(viewport: typeof DESIGN_VIEWPORT) {
     const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Ling-3.0-flash" })
     try {
       for (let attempt = 0; attempt < 100; attempt++) {
-        if (screen.frame().includes("Ling-3.0-flash") && screen.frame().includes("Enter send")) break
+        if (screen.frame().includes("Ling-3.0-flash")) break
         await Bun.sleep(20)
       }
       const lines = screen.lines()
       const header = lines[1]
-      const placeholder = lines[59]
-      const hints = lines[61]
+      const ruleRow = lines.findIndex((line) => line.includes("─"))
+      const placeholder = lines[62]
+      const footerRow = lines.findIndex((line) => line.includes("⌃p commands"))
 
-      expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(59)
-      expect(lines.findIndex((line) => line.includes("Enter send"))).toBe(61)
+      // The landing composer uses the same six-row surface as the session composer. Its input is
+      // inset one additional row below the rule so the larger resting surface remains balanced.
+      expect(ruleRow).toBe(60)
+      expect(footerRow - ruleRow).toBe(7)
+      expect(lines[61]?.trim()).toBe("")
+      expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(62)
       expect(placeholder?.indexOf("Message YCoding…")).toBe(3)
-      expect(hints?.indexOf("Enter send")).toBe(3)
-      expect(hints?.indexOf("↓ subagents")).toBe(16)
-      // String indexes count ↓ as one code point; it occupies two terminal columns.
-      expect(hints?.indexOf("⌃x b sidebar")).toBe(30)
-      expect(hints?.indexOf("⌃p commands")).toBe(45)
       expect(header).toContain("Ling-3.0-flash · max")
       expect(screen.colorOf("max")).toEqual([103, 215, 170, 255])
+      expect(lines.some((line) => /Enter send|↓ subagents|⌃x b sidebar/.test(line))).toBe(false)
+      expect(lines[67]).toContain("⌃p commands")
+      await screen.mouse.click(3, 62)
+      await screen.input.typeText("landing draft")
+      for (let attempt = 0; attempt < 100 && !screen.frame().includes("landing draft"); attempt++) await Bun.sleep(20)
+      expect(screen.lines().findIndex((line) => line.includes("landing draft"))).toBe(62)
+      screen.input.pressKey("u", { ctrl: true })
+      for (let attempt = 0; attempt < 100 && !screen.frame().includes("Message YCoding…"); attempt++) await Bun.sleep(20)
+      expect(screen.lines().findIndex((line) => line.includes("Message YCoding…"))).toBe(62)
     } finally {
       await screen.dispose()
     }

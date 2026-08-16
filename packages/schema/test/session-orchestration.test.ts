@@ -127,4 +127,33 @@ describe("SessionOrchestration", () => {
     })
     expect(Schema.is(SessionOrchestration.TeamView)({ children: [task], omitted: 0 })).toBe(true)
   })
+
+  test("describes a bounded direct-child page and exact aggregate summary", () => {
+    const task = SessionOrchestration.Task.make({
+      sessionID,
+      parentID,
+      description: "Implement projection",
+      agent: Agent.ID.make("build"),
+      model,
+      background: true,
+      state: "waiting",
+      revision: 3,
+      time: { created: 1, updated: 2 },
+    })
+    expect(
+      Schema.is(SessionOrchestration.Page)({
+        data: [task],
+        summary: { total: 12, active: 5, running: 1, waiting: 2 },
+        cursor: { next: "opaque" },
+      }),
+    ).toBe(true)
+    expect(
+      Schema.is(SessionOrchestration.ListAnchor)({
+        rank: 0,
+        updated: 2,
+        sessionID,
+        direction: "next",
+      }),
+    ).toBe(true)
+  })
 })

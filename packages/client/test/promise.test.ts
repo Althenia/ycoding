@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { SessionCompaction } from "@ycoding-ai/schema"
 import { isSessionNotFoundError, isUnauthorizedError, YCoding } from "../src/promise/index"
 
 test("exposes every standard HTTP API group", () => {
@@ -68,9 +69,7 @@ test("VCS branch uses the public HTTP contract", async () => {
     },
   })
 
-  expect(await client.vcs.branch()).toEqual(
-    expect.objectContaining({ data: { current: "feature", default: "main" } }),
-  )
+  expect(await client.vcs.branch()).toEqual(expect.objectContaining({ data: { current: "feature", default: "main" } }))
   expect(request && new URL(request.url).pathname).toBe("/api/vcs/branch")
 })
 
@@ -90,7 +89,10 @@ test("provider usage methods use the public HTTP contract", async () => {
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return Response.json({ location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } }, data: request.url.includes("/openai/") ? snapshot : [snapshot] })
+      return Response.json({
+        location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } },
+        data: request.url.includes("/openai/") ? snapshot : [snapshot],
+      })
     },
   })
 
@@ -245,16 +247,21 @@ test("session subagent controls use their public HTTP contracts", async () => {
     revision: 2,
     time: { created: 1, updated: 2 },
   }
+  const page = {
+    data: [task],
+    summary: { total: 1, active: 1, running: 1, waiting: 0 },
+    cursor: {},
+  }
   const client = YCoding.make({
     baseUrl: "http://localhost:3000",
     fetch: async (input, init) => {
       const request = input instanceof Request ? input : new Request(input, init)
       requests.push(request)
-      return Response.json({ data: request.method === "GET" ? [task] : task })
+      return Response.json(request.method === "GET" ? page : { data: task })
     },
   })
 
-  expect(await client.session.subagent.list({ parentID: "ses_parent" })).toEqual([task])
+  expect(await client.session.subagent.list({ parentID: "ses_parent" })).toEqual(page)
   expect(
     await client.session.subagent.answer({
       parentID: "ses_parent",
@@ -568,15 +575,18 @@ test("event.subscribe exposes the Promise event stream wire projection", async (
     baseUrl: "http://localhost:3000",
     fetch: async () =>
       new Response(
-        `: heartbeat\n\ndata: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {} })}\n\n` +
-          `data: ${JSON.stringify(modelSwitchedEvent)}\n\n`,
+        `: heartbeat\n\ndata: ${JSON.stringify({ id: "evt_connected", created: 0, type: "server.connected", data: {}, sourceEpoch: "source_test" })}\n\n` +
+          `data: ${JSON.stringify({ ...modelSwitchedEvent, sourceEpoch: "source_test" })}\n\n`,
         { headers: { "content-type": "text/event-stream" } },
       ),
   })
   const events = []
   for await (const event of client.event.subscribe()) events.push(event)
 
-  expect(events).toEqual([{ id: "evt_connected", created: 0, type: "server.connected", data: {} }, modelSwitchedEvent])
+  expect(events).toEqual([
+    { id: "evt_connected", created: 0, type: "server.connected", data: {}, sourceEpoch: "source_test" },
+    { ...modelSwitchedEvent, sourceEpoch: "source_test" },
+  ])
   expect(events[1]?.type === "session.model.selected" && events[1].created).toBe(1_717_171_717_000)
 })
 
@@ -642,9 +652,12 @@ test("session methods use the public HTTP contract", async () => {
         })
       }
       if (url.includes("/log")) {
-        return new Response(`data: ${JSON.stringify(modelSwitchedEvent)}\n\ndata: ${JSON.stringify(synced)}\n\n`, {
-          headers: { "content-type": "text/event-stream" },
-        })
+        return new Response(
+          `data: ${JSON.stringify({ ...modelSwitchedEvent, sourceEpoch: "source_test" })}\n\ndata: ${JSON.stringify({ ...synced, sourceEpoch: "source_test" })}\n\n`,
+          {
+            headers: { "content-type": "text/event-stream" },
+          },
+        )
       }
       if (url.includes("/prompt")) return Response.json(admission)
       if (url.includes("/generate")) return Response.json({ data: { text: "A transient answer" } })
@@ -679,7 +692,8 @@ test("session methods use the public HTTP contract", async () => {
     delivery: "queue",
     resume: false,
   })
-  await client.session.compact({ sessionID: "ses_test" })
+  const compactionID = SessionCompaction.ID.make("cmp_compaction_request")
+  const compacted = await client.session.compact({ sessionID: "ses_test", id: compactionID })
   await client.session.wait({ sessionID: "ses_test" })
   const context = await client.session.context({ sessionID: "ses_test" })
   const log = []
@@ -693,8 +707,19 @@ test("session methods use the public HTTP contract", async () => {
   expect(admitted.id).toBe("msg_test")
   expect(generated.text).toBe("A transient answer")
   expect(synthetic).toMatchObject({ type: "synthetic", data: { text: "Completed" }, delivery: "queue" })
+  expect(compacted).toMatchObject({
+    id: expect.stringMatching(/^cmp_/),
+    sessionID: "ses_test",
+    trigger: "manual",
+    status: "ended",
+  })
+  expect(compacted).not.toHaveProperty("summary")
+  expect(compacted).not.toHaveProperty("type")
   expect(context).toEqual([])
-  expect(log).toEqual([modelSwitchedEvent, synced])
+  expect(log).toEqual([
+    { ...modelSwitchedEvent, sourceEpoch: "source_test" },
+    { ...synced, sourceEpoch: "source_test" },
+  ])
   expect(message).toEqual(modelSwitchedMessage)
   expect(requests.map((request) => [request.init?.method, request.url])).toEqual([
     ["GET", "http://localhost:3000/api/session?limit=10&order=desc&parentID=null"],
@@ -725,6 +750,9 @@ test("session methods use the public HTTP contract", async () => {
     delivery: "queue",
     resume: false,
   })
+  const compactBody = requests.find((request) => request.url.endsWith("/compact"))?.init?.body
+  if (typeof compactBody !== "string") throw new Error("Expected JSON compaction request body")
+  expect(JSON.parse(compactBody)).toEqual({ id: compactionID })
 })
 
 test("middleware errors remain declared client errors", async () => {
@@ -806,10 +834,11 @@ const syntheticAdmission = {
 
 const compactionAdmission = {
   data: {
-    type: "compaction",
-    admittedSeq: 1,
-    id: "msg_compaction",
+    id: "cmp_compaction",
     sessionID: "ses_test",
+    trigger: "manual",
+    status: "ended",
+    requestedThrough: { messageID: "msg_compaction_request", seq: 1 },
     timeCreated: 1_717_171_717_000,
   },
 }

@@ -84,6 +84,7 @@ const cacheRuntime = Layer.succeed(
         return { ttlSeconds: 300 as const, promoted: false }
       }),
     observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
+    generation: () => Effect.succeed(0),
   }),
 )
 const config = Layer.succeed(
@@ -237,10 +238,17 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
       modelID: "title-model",
       configured: "1h",
     })
-    expect(requests[0]?.providerOptions?.openai?.promptCacheKey).toBe(cachePolicies[0]?.namespace)
+    const promptCacheKey = requests[0]?.providerOptions?.openai?.promptCacheKey
+    expect(typeof promptCacheKey).toBe("string")
+    if (typeof promptCacheKey !== "string") {
+      yield* Effect.die("prompt cache key missing")
+      return
+    }
+    expect(promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
+    expect(promptCacheKey).toBe(cachePolicies[0]?.namespace)
     expect(cacheObservations).toEqual([
       {
-        namespace: cachePolicies[0]!.namespace,
+        namespace: promptCacheKey,
         cacheRead: 3,
         cacheWrite: 2,
         eligible: 15,
@@ -343,7 +351,7 @@ it.effect("does not generate for a child session", () =>
   }),
 )
 
-it.effect("does not generate in model mode when the title agent is removed", () =>
+it.effect("falls back to local title in model mode when the title agent is removed", () =>
   Effect.gen(function* () {
     requests = []
     titleMode = "model"
@@ -360,6 +368,6 @@ it.effect("does not generate in model mode when the title agent is removed", () 
 
     expect(requests).toHaveLength(0)
     const untouched = yield* store.get(sessionID)
-    expect(untouched?.title).toBe("New session - fake")
+    expect(untouched?.title).toBe("Help me debug the failing build")
   }),
 )

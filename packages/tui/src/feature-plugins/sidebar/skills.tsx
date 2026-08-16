@@ -1,14 +1,16 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
+import { useTerminalDimensions } from "@opentui/solid"
 import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import { useClient } from "../../context/client"
 import { Keymap } from "../../context/keymap"
 import { useTheme } from "../../context/theme"
-import { RailSection } from "../../routes/session/rail-section"
+import { railMetrics, railWidth } from "../../routes/session/rail"
+import { RailRow, RailSection, useRail } from "../../routes/session/rail-section"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
 import { getGlyph } from "../../ui/glyph"
 import { useToast } from "../../ui/toast"
-import { sessionSkillLabel, type SessionSkill } from "../../util/session-skills"
+import type { SessionSkill } from "../../util/session-skills"
 
 const RESOLVE_SKILL_CONFLICT_COMMAND = "session.skill_conflict.resolve"
 
@@ -23,9 +25,20 @@ export function SkillsRailContent(props: {
   refetch?: () => unknown
 }) {
   const { themeV2 } = useTheme()
+  const rail = useRail()
+  const dimensions = useTerminalDimensions()
   const active = createMemo(() => props.skills.filter((skill) => skill.state === "active").length)
   const conflicts = createMemo(() => skillConflicts(props.skills))
-  const summary = createMemo(() => String(active()))
+  const conflicted = createMemo(() => new Set(conflicts().flatMap((conflict) => [conflict.winner.id, conflict.loser.id])))
+  const summary = createMemo(() => {
+    const value = `${active()}/${props.skills.length} active`
+    if (conflicts().length === 0) return value
+    const width = rail ? Math.floor(railWidth(dimensions().width)) : dimensions().width
+    const metrics = railMetrics(dimensions().width)
+    const conflict = ` · ${conflicts().length} conflict`
+    const required = 2 + metrics.sectionLabelPadding + "SKILLS".length + value.length + conflict.length
+    return width - metrics.paddingLeft - metrics.paddingRight >= required ? `${value}${conflict}` : value
+  })
   return (
     <Show when={props.skills.length > 0}>
       <RailSection section="skills" title="SKILLS" summary={summary()} attention={conflicts().length > 0}>
@@ -46,11 +59,7 @@ export function SkillsRailContent(props: {
           </text>
         </Show>
         <For each={props.skills}>
-          {(skill) => (
-            <text fg={skill.conflicts.length ? themeV2.text.feedback.warning.default : themeV2.text.subdued}>
-              {skill.name} {skill.scope ?? sessionSkillLabel(skill)}
-            </text>
-          )}
+          {(skill) => <RailRow label={skill.name} value={skillStatus(skill, conflicted())} valueColor={skillStatusColor(skill, conflicted(), themeV2)} />}
         </For>
       </RailSection>
     </Show>
@@ -162,6 +171,18 @@ function skillConflicts(skills: ReadonlyArray<SessionSkill>): SkillConflict[] {
       return [{ winner, loser }]
     })
   })
+}
+
+function skillStatus(skill: SessionSkill, conflicted: ReadonlySet<string>) {
+  if (conflicted.has(skill.id)) return "CONFLICT"
+  if (skill.state === "active") return "ACTIVE"
+  return "INACTIVE"
+}
+
+function skillStatusColor(skill: SessionSkill, conflicted: ReadonlySet<string>, themeV2: ReturnType<typeof useTheme>["themeV2"]) {
+  if (conflicted.has(skill.id)) return themeV2.text.feedback.warning.default
+  if (skill.state === "active") return themeV2.text.feedback.success.default
+  return themeV2.text.subdued
 }
 
 function isSkillConflictNotFound(error: unknown): error is { _tag: "SkillConflictNotFoundError" } {

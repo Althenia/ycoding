@@ -7,7 +7,7 @@ export function projectedPromptInput(input: Pick<Prompt, "text" | "files" | "age
   return {
     text: input.text,
     files: input.files?.map((file) => ({
-      uri: file.source.type === "uri" ? file.source.uri : `data:${file.mime};base64,${file.data}`,
+      uri: `ycoding-attachment://sha256/${file.content.digest}`,
       name: file.name,
       description: file.description,
       mention: file.mention ? { ...file.mention } : undefined,

@@ -10,6 +10,7 @@ export type State =
   | { readonly type: "failed" }
 
 export interface Interface {
+  readonly sourceEpoch: ServiceStatus.Epoch
   readonly current: Effect.Effect<State>
   readonly ready: Effect.Effect<void>
   readonly fail: Effect.Effect<void>
@@ -28,17 +29,13 @@ export const make = Effect.fnUntraced(function* (options: {
   )
 
   return {
+    sourceEpoch: ServiceStatus.Epoch.make(options.instanceID),
     current: Ref.get(current),
-    ready: Ref.update(current, (status) =>
-      status.type === "starting" ? ({ type: "ready" } satisfies State) : status,
-    ),
-    fail: Ref.update(current, (status) =>
-      status.type === "starting" ? ({ type: "failed" } satisfies State) : status,
-    ),
+    ready: Ref.update(current, (status) => (status.type === "starting" ? ({ type: "ready" } satisfies State) : status)),
+    fail: Ref.update(current, (status) => (status.type === "starting" ? ({ type: "failed" } satisfies State) : status)),
     beginStopping,
     requestStop: (request) => {
-      if (!options.managed || request.instanceID !== options.instanceID)
-        return Effect.succeed(false)
+      if (!options.managed || request.instanceID !== options.instanceID) return Effect.succeed(false)
       return beginStopping.pipe(Effect.as(true))
     },
   } satisfies Interface

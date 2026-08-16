@@ -4,10 +4,12 @@ import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { EventFeed } from "../event-feed"
+import { ProcessIdentity } from "../process-identity"
 
 export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers) =>
   Effect.gen(function* () {
     const feed = yield* EventFeed.Service
+    const identity = yield* ProcessIdentity
     return handlers.handleRaw("event.subscribe", () =>
       Effect.gen(function* () {
         const connected = {
@@ -16,7 +18,11 @@ export const EventHandler = HttpApiBuilder.group(Api, "server.event", (handlers)
           data: {},
         } as const
         const output = Stream.unwrap(
-          feed.subscribe.pipe(Effect.map((live) => Stream.make(EventFeed.frame(connected)).pipe(Stream.concat(live)))),
+          feed.subscribe.pipe(
+            Effect.map((live) =>
+              Stream.make(EventFeed.frame(identity.sourceEpoch, connected)).pipe(Stream.concat(live)),
+            ),
+          ),
         )
         const heartbeat = Stream.tick("15 seconds").pipe(Stream.map(() => ": heartbeat\n\n"))
         return HttpServerResponse.stream(

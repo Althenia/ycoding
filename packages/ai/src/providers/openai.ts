@@ -130,9 +130,13 @@ export const configure = (input: Config = {}) => {
   const responsesWebSocketRoute = configuredRoute(OpenAIResponses.webSocketRoute, input)
   const modelDefaults = defaults(input)
   const responses = (id: string | ModelID) =>
-    responsesRoute.with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true })).model({ id })
+    responsesRoute
+      .with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true, store: true, retainedReasoning: true }))
+      .model({ id })
   const responsesWebSocket = (id: string | ModelID) =>
-    responsesWebSocketRoute.with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true })).model({ id })
+    responsesWebSocketRoute
+      .with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true, store: true, retainedReasoning: true }))
+      .model({ id })
   const image = (modelID: string | ModelID) =>
     OpenAIImages.model({
       id: modelID,

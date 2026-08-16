@@ -37,6 +37,9 @@ export type Invalidation = typeof Invalidation.Type
 export const Continuation = Schema.Literals(["full", "continued", "fallback"])
 export type Continuation = typeof Continuation.Type
 
+export const CostProvenance = Schema.Literals(["recorded", "current_catalog"])
+export type CostProvenance = typeof CostProvenance.Type
+
 export const Record = Schema.Struct({
   id: ID,
   sessionID: SessionID,
@@ -52,11 +55,34 @@ export const Record = Schema.Struct({
   attempts: PositiveInt,
   invalidation: Invalidation,
   continuation: Continuation,
+  /** Whether the provider explicitly reported cache-read usage; absent for historical records. */
+  cacheReadReported: Schema.Boolean.pipe(optional),
+  /** Persisted provider-reported USD cost. */
   cost: Money.USD.pipe(optional),
   tokens: TokenUsage.Info,
   time: DateTimeUtcFromMillis,
 }).annotate({ identifier: "ProviderRequest.Record" })
 export interface Record extends Schema.Schema.Type<typeof Record> {}
+
+export const ModelSpend = Schema.Struct({
+  model: Model.Ref,
+  requests: NonNegativeInt,
+  /** Raw provider-reported usage aggregated for this exact provider/model/variant. */
+  tokens: TokenUsage.Info,
+  /** Absent when any request in the group has neither persisted nor catalog-estimated cost. */
+  cost: Money.USD.pipe(optional),
+  /** Recorded provider billing or a query-time current-catalog estimate; required when cost is present. */
+  costProvenance: CostProvenance.pipe(optional),
+})
+  .check(
+    Schema.makeFilter((value) => (value.cost === undefined) === (value.costProvenance === undefined), {
+      expected: "cost and cost provenance together",
+      meta: { _tag: "isMaxProperties", maxProperties: 5 },
+      arbitrary: { constraint: { maxLength: 5 } },
+    }),
+  )
+  .annotate({ identifier: "ProviderRequest.ModelSpend" })
+export interface ModelSpend extends Schema.Schema.Type<typeof ModelSpend> {}
 
 export const Summary = Schema.Struct({
   logical: NonNegativeInt,
@@ -65,6 +91,11 @@ export const Summary = Schema.Struct({
   continued: NonNegativeInt,
   fallback: NonNegativeInt,
   cost: Money.USD.pipe(optional),
+  /**
+   * Spend grouped by model, ordered by descending cost then by provider, model, and variant.
+   * Absent when the session recorded no provider requests.
+   */
+  models: Schema.Array(ModelSpend).pipe(optional),
   tokens: TokenUsage.Info,
   latestInvalidation: Invalidation.pipe(optional),
   latestNamespace: Schema.String.check(Schema.isMinLength(8), Schema.isMaxLength(8)).pipe(optional),

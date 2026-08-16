@@ -173,6 +173,8 @@ Protocol remains unchanged:
 HttpApiSchema.StreamSse({ data: YCodingEvent })
 ```
 
+The server stamps every emitted global event frame with its stable `sourceEpoch`; `GET /api/health` returns the same value. The initial `server.connected` frame requires it, allowing clients to bind the stream to the same running server generation as health and Session snapshot/log reads.
+
 The raw handler continues to own:
 
 - the unique `server.connected` event;

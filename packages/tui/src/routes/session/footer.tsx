@@ -5,14 +5,13 @@ import { PromptFooterIdentity } from "../../component/prompt"
 import { ModeChips } from "../../component/prompt/mode-chips"
 import { Keymap } from "../../context/keymap"
 import { groupSessionShells } from "../../util/session"
-import { activeSubagentCount } from "../../util/subagent"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 export function Footer(props: { branch?: string; sessionID: string; autonomy: SessionAutonomyState; subagent?: boolean }) {
   const { themeV2 } = useTheme()
   const data = useData()
   const paletteShortcut = Keymap.useShortcut("command.palette.show")
-  const subagents = createMemo(() => activeSubagentCount(data.session.subagent.list(props.sessionID)))
+  const subagents = createMemo(() => data.session.subagent.summary(props.sessionID)?.active ?? 0)
   const shells = createMemo(() => {
     const session = data.session.get(props.sessionID)
     if (!session) return 0
@@ -35,7 +34,7 @@ export function Footer(props: { branch?: string; sessionID: string; autonomy: Se
       backgroundColor={themeV2.background.chrome}
     >
       <box flexDirection="row" gap={3} flexGrow={1} minWidth={0}>
-        <PromptFooterIdentity branch={props.branch} sessionID={props.sessionID} />
+        <PromptFooterIdentity branch={props.branch} />
         <ModeChips autonomy={props.autonomy} />
         <text fg={themeV2.text.subdued} wrapMode="none" flexShrink={0}>
           subagents {subagents()}

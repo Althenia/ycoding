@@ -85,7 +85,7 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
           wait: async ({ sessionID }: { sessionID: string }) => waits.get(sessionID)?.promise,
           autonomy: {
-            get: async ({ sessionID }: { sessionID: string }) => autonomy.get(sessionID) ?? { mode: "normal" },
+            get: async ({ sessionID }: { sessionID: string }) => autonomy.get(sessionID) ?? { mode: "normal", yolo: false },
           },
         },
       } as unknown as Context["client"],
@@ -414,9 +414,7 @@ describe("internal notifications TUI plugin", () => {
     const harness = await setup()
     const idle = Promise.withResolvers<void>()
     harness.waits.set("session", idle)
-    harness.autonomy.set("session", {
-      mode: "goal",
-      goal: {
+    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 1,
@@ -431,9 +429,7 @@ describe("internal notifications TUI plugin", () => {
     harness.emit(executionSucceeded("event-4"))
     expect(harness.notifications).toEqual([])
 
-    harness.autonomy.set("session", {
-      mode: "normal",
-      goal: {
+    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
         text: "Finish the migration",
         status: "completed",
         iteration: 2,
@@ -458,9 +454,7 @@ describe("internal notifications TUI plugin", () => {
     const harness = await setup()
     const idle = Promise.withResolvers<void>()
     harness.waits.set("session", idle)
-    harness.autonomy.set("session", {
-      mode: "goal",
-      goal: {
+    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 1,
@@ -470,9 +464,7 @@ describe("internal notifications TUI plugin", () => {
     })
     harness.emit(executionStarted("event-1"))
     harness.emit(executionSucceeded("event-2"))
-    harness.autonomy.set("session", {
-      mode: "normal",
-      goal: {
+    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
         text: "Finish the migration",
         status: "exhausted",
         iteration: 2,

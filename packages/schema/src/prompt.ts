@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { optional } from "./schema.js"
+import { NonNegativeInt, optional } from "./schema.js"
 import { statics } from "./schema.js"
 
 export interface PromptMention extends Schema.Schema.Type<typeof PromptMention> {}
@@ -9,24 +9,28 @@ export const PromptMention = Schema.Struct({
   text: Schema.String,
 }).annotate({ identifier: "Prompt.Mention" })
 
-export const FileSource = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("inline") }),
-  Schema.Struct({ type: Schema.Literal("uri"), uri: Schema.String }),
-])
-  .pipe(Schema.toTaggedUnion("type"))
-  .annotate({ identifier: "Prompt.FileSource" })
-export type FileSource = typeof FileSource.Type
-
 export const Base64 = Schema.String.check(
   Schema.isPattern(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
 ).annotate({ identifier: "Prompt.Base64" })
 export type Base64 = typeof Base64.Type
 
+export const AttachmentDigest = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)).annotate({
+  identifier: "Prompt.AttachmentDigest",
+})
+export type AttachmentDigest = typeof AttachmentDigest.Type
+
+export interface ManagedAttachmentContent extends Schema.Schema.Type<typeof ManagedAttachmentContent> {}
+export const ManagedAttachmentContent = Schema.Struct({
+  type: Schema.Literal("managed"),
+  digest: AttachmentDigest,
+  bytes: NonNegativeInt,
+  path: Schema.String.check(Schema.isPattern(/^attachments\/sha256\/[0-9a-f]{2}\/[0-9a-f]{64}$/)),
+}).annotate({ identifier: "Prompt.ManagedAttachmentContent" })
+
 export interface FileAttachment extends Schema.Schema.Type<typeof FileAttachment> {}
 export const FileAttachment = Schema.Struct({
-  data: Base64,
+  content: ManagedAttachmentContent,
   mime: Schema.String,
-  source: FileSource,
   name: Schema.String.pipe(optional),
   description: Schema.String.pipe(optional),
   mention: PromptMention.pipe(optional),
@@ -36,9 +40,8 @@ export const FileAttachment = Schema.Struct({
     statics((schema) => ({
       create: (input: FileAttachment) =>
         schema.make({
-          data: input.data,
+          content: input.content,
           mime: input.mime,
-          source: input.source,
           name: input.name,
           description: input.description,
           mention: input.mention,

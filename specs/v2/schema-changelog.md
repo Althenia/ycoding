@@ -2,15 +2,47 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
-## 2026-07-31: Report Remaining Message Pages On The Message List
+## 2026-08-07: Replace Durable Attachment Payloads With Managed References
 
-- Add optional `messages` to the `SessionMessagesResponse` cursor, reporting how many messages the returned `next` cursor still has behind it so a client can size unloaded history without transferring it. Page counts stay with the client, which alone knows the page size it will request.
-- Add `SessionV2.messageRemainder`, which counts the remaining rows with a SQL `COUNT` bounded by the same rule the `next` cursor applies, so the reported size always matches what continuing to page returns. No archived payload is read or decoded.
+- Keep prompt inputs URI-shaped while replacing durable `Prompt.FileAttachment.data` and `.source` with `content: { type: "managed", digest, bytes, path }`.
+- Store admitted bytes once below the global data directory by SHA-256. Enforce the exact opaque reference grammar, derived-path containment, regular-file and no-symlink checks, digest and size integrity, and a 20 MiB limit.
+- Materialize supported provider images as transient bytes only during request assembly. Represent every non-provider image, including PDF, XLS, XLSX, and SVG, as model-visible metadata with its internally resolved absolute managed path.
 
 Compatibility:
 
-- The field is additive and optional. It is absent when the response carries no `next` cursor, and is never coerced to zero; a reported `0` means the client has reached the end of history.
-- Promise and Effect clients are regenerated for the additive cursor field.
+- This is an approved breaking pre-release Schema and generated-client change. Consumers must stop reading durable base64 payloads and source URIs; Promise and Effect clients are regenerated with the managed content shape.
+- The idempotent `managed-attachments-v1` application migration rewrites `session.input.admitted.1` events, user `session_pending` rows, and user `session_message` rows. It records its marker in the same transaction as all rewrites only after every legacy payload and preexisting managed reference verifies successfully.
+
+## 2026-08-01: Remove The Session Archive Flag
+
+- Remove `time_archived` from the `session` table, `Session.Info.time.archived` from the public schema, and the projection mapping in `packages/core/src/session/info.ts`.
+- `session.list` never exposed an archive filter and continues to return every session; no protocol operation or server handler changes.
+
+Compatibility:
+
+- Migration `20260801114207_drop-session-archived` drops the column. Existing session archive timestamps are permanently deleted; the feature is removed so no consumer reads them. The migration is irreversible and has no `down` step, and it is the intended destructive data change of this removal.
+- Promise and Effect client surfaces are regenerated without `archived`.
+
+## 2026-07-31: Preserve OpenAI Responses Assistant Phase
+
+- Add optional `phase: "commentary" | "final_answer"` to projected `SessionMessage.AssistantText` and durable `session.text.started.1` / `session.text.ended.1` payloads.
+- Persist OpenAI Responses assistant phases and replay them only when the selected provider/model still matches, preserving the GPT-5.3 Codex-and-later follow-up contract without exposing arbitrary provider metadata or leaking phase across model switches.
+
+Compatibility:
+
+- The fields are additive and optional. Existing durable events and projected messages decode without phase.
+- Promise and Effect clients are regenerated for the additive Session message and event fields.
+
+## 2026-08-01: Remove Transcript Archive Paging
+
+- Remove `limit`, `order`, and `cursor` from the public Session message-list operation and remove response cursors and remaining-message counts.
+- The operation returns every current projected message in canonical ascending order. The TUI retains that complete transcript while the Session is resident.
+- Remove `SessionV2.messageRemainder`; it existed only to describe unloaded archive pages.
+
+Compatibility:
+
+- This is an approved breaking removal. Clients must call the message-list operation without pagination inputs and accept the complete message array.
+- Promise and Effect clients are regenerated for the simplified operation.
 
 ## 2026-07-30: Add Shell Process-Tree Memory Limits
 

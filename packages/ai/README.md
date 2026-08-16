@@ -308,6 +308,8 @@ Direct GPT-5.6 Responses defaults to stateless `store: false`, requests encrypte
 
 `OpenAI.webSearch(...)` adds OpenAI's hosted `web_search` Responses tool. It runs at OpenAI and its provider-executed call item is replayed on stateless follow-ups. URL citations are appended to assistant text as a `Source: <title>` line followed by the URL, so canonical and durable transcripts retain the provider's attribution. Hosted search is distinct from YCoding Core's local `websearch` tool, which selects Exa or Parallel independently of the model provider.
 
+Direct OpenAI Responses lowers user image attachments and local tool-result images as `input_image` content. Set `providerOptions.openai.imageDetail` to `"auto"`, `"low"`, `"high"`, or `"original"`; omitting it leaves OpenAI's default `auto` behavior unchanged. `"original"` requires a supported GPT-5.4-or-later family (not GPT-5.4 mini or nano). Remote image URL and `file_id` references are not implemented.
+
 Vertex Gemini, Vertex Chat, Vertex Responses, and Vertex Messages are separate API entrypoints. All accept `project`, `location`, and an optional `accessToken`; when no explicit token or auth override is supplied they lazily use Google Application Default Credentials. Vertex Gemini instead selects express mode when `apiKey` or `GOOGLE_VERTEX_API_KEY` is present. Vertex Chat targets MaaS models through the OpenAI-compatible Chat Completions endpoint, while Vertex Responses targets Grok models and defaults `store` to `false` as required by Vertex. `providers/google-vertex` remains the default alias for `providers/google-vertex/gemini`.
 
 Tuned Vertex Gemini deployments use model ids shaped like `endpoints/1234567890` and require OAuth or ADC; Vertex express-mode API keys support publisher models only.
@@ -345,7 +347,7 @@ Other provider exports listed above remain direct facades until they explicitly 
 Three escape hatches in order of stability:
 
 1. **`generation`** — portable knobs (`maxTokens`, `temperature`, `topP`, `topK`, penalties, seed, stop).
-2. **`providerOptions: { <provider>: {...} }`** — typed-at-the-facade provider-specific knobs (OpenAI `promptCacheKey`, Anthropic `thinking`, Gemini `thinkingConfig`, OpenRouter routing).
+2. **`providerOptions: { <provider>: {...} }`** — typed-at-the-facade provider-specific knobs (OpenAI `promptCacheKey` and `imageDetail`, Anthropic `thinking`, Gemini `thinkingConfig`, OpenRouter routing).
 3. **`http: { body, headers, query }`** — last-resort serializable overlays merged into the final HTTP request. Reach for this only when a stable typed path doesn't yet exist.
 
 Route/provider defaults are overridden by request-level values for each axis.

@@ -702,14 +702,16 @@ describe("SessionV2.create", () => {
   it.effect("switches the selected model through the durable Session event", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
-      const created = yield* session.create({ location })
+      const created = yield* session.create({
+        location: Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }),
+      })
       const model = ModelV2.Ref.make({
         id: ModelV2.ID.make("sonnet"),
         providerID: ProviderV2.ID.anthropic,
         variant: ModelV2.VariantID.make("high"),
       })
 
-      yield* session.switchModel({ sessionID: created.id, model })
+      expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
 
       expect(yield* session.get(created.id)).toMatchObject({ model })
       const events = Array.from(
@@ -723,16 +725,16 @@ describe("SessionV2.create", () => {
   it.effect("ignores a model switch when the selected model is unchanged", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
-      const created = yield* session.create({ location })
       const model = ModelV2.Ref.make({ id: ModelV2.ID.make("sonnet"), providerID: ProviderV2.ID.anthropic })
+      const created = yield* session.create({ location, model })
 
-      yield* session.switchModel({ sessionID: created.id, model })
-      yield* session.switchModel({ sessionID: created.id, model })
+      expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
+      expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
 
       const { db } = yield* Database.Service
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-      ).toHaveLength(2)
+      ).toHaveLength(1)
       expect(yield* session.get(created.id)).toMatchObject({ model })
     }),
   )

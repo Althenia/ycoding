@@ -1,4 +1,5 @@
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { SessionPending } from "@ycoding-ai/schema/session-pending"
 import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { Session } from "@ycoding-ai/schema/session"
@@ -9,7 +10,7 @@ import { Event } from "@ycoding-ai/schema/event"
 import { Workspace } from "@ycoding-ai/schema/workspace"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { SessionDelivery } from "@ycoding-ai/schema/session-delivery"
-import { Context, Effect, Encoding, Result, Schema, SchemaGetter, Struct } from "effect"
+import { Context, Effect, Encoding, Result, Schema, SchemaGetter, Struct, Tuple } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiMiddleware, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import {
   ConflictError,
@@ -18,6 +19,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   MessageNotFoundError,
+  ModelSwitchBlockedError,
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
@@ -35,6 +37,8 @@ import { SessionEvent } from "@ycoding-ai/schema/session-event"
 import { SessionTodo } from "@ycoding-ai/schema/session-todo"
 import { EventLog } from "@ycoding-ai/schema/event-log"
 import { SessionSkillStatus } from "@ycoding-ai/schema/session-skill-status"
+import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { SourceEpoch } from "@ycoding-ai/schema/source-epoch"
 
 const ParentIDFilter = Schema.Union([
   Session.ID,
@@ -107,6 +111,32 @@ export const SessionsCursor = Schema.String.pipe(
 )
 export type SessionsCursor = typeof SessionsCursor.Type
 
+const SubagentCursorInput = Schema.Struct({
+  parentID: Session.ID,
+  anchor: SessionOrchestration.ListAnchor,
+})
+const SubagentCursorJson = Schema.fromJsonString(SubagentCursorInput)
+const encodeSubagentCursor = Schema.encodeSync(SubagentCursorJson)
+const decodeSubagentCursor = Schema.decodeUnknownEffect(SubagentCursorJson)
+
+export const SubagentCursor = Schema.String.pipe(
+  Schema.brand("SubagentCursor"),
+  statics((schema) => {
+    const make = schema.make.bind(schema)
+    return {
+      make: (input: typeof SubagentCursorInput.Type) => make(Encoding.encodeBase64Url(encodeSubagentCursor(input))),
+      parse: (input: string) =>
+        Effect.suspend(() => {
+          const result = Encoding.decodeBase64UrlString(input)
+          return Result.isFailure(result)
+            ? Effect.fail(invalidCursor)
+            : decodeSubagentCursor(result.success).pipe(Effect.mapError(() => invalidCursor))
+        }),
+    }
+  }),
+)
+export type SubagentCursor = typeof SubagentCursor.Type
+
 const SessionActive = Schema.Struct({
   type: Schema.Literal("running"),
 }).annotate({ identifier: "SessionActive" })
@@ -118,7 +148,7 @@ const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
   }),
 )
 
-export const SessionAutonomyMode = Schema.Literals(["normal", "yolo", "goal"]).annotate({
+export const SessionAutonomyMode = Schema.Literals(["normal"]).annotate({
   identifier: "SessionAutonomyMode",
 })
 export const SessionAutonomyGoalStatus = Schema.Literals(["active", "completed", "stopped", "exhausted"]).annotate({
@@ -132,15 +162,40 @@ export const SessionAutonomyGoal = Schema.Struct({
   maxNoProgress: PositiveInt,
   lastProgressDigest: Schema.String.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyGoal" })
+export const SessionAutonomyYoloLevel = Schema.Union([
+  Schema.Literal(0),
+  Schema.Literal(1),
+  Schema.Literal(2),
+  Schema.Literal(3),
+]).annotate({
+  identifier: "SessionAutonomyYoloLevel",
+})
+export const SessionAutonomyYolo = Schema.Union([SessionAutonomyYoloLevel, Schema.Boolean])
+  .pipe(
+    Schema.decodeTo(SessionAutonomyYoloLevel, {
+      decode: SchemaGetter.transform((value: unknown) => {
+        if (typeof value === "boolean") return (value ? 2 : 0) as 0 | 1 | 2 | 3
+        if (value === 0 || value === 1 || value === 2 || value === 3) return value as 0 | 1 | 2 | 3
+        throw new Error(`Invalid yolo level: ${String(value)}`)
+      }),
+      encode: SchemaGetter.transform((value: 0 | 1 | 2 | 3) => value),
+    }),
+  )
+  .annotate({ identifier: "SessionAutonomyYolo" })
 export const SessionAutonomyState = Schema.Struct({
   mode: SessionAutonomyMode,
+  yolo: SessionAutonomyYolo,
   goal: SessionAutonomyGoal.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
 export const SessionAutonomySet = Schema.Union([
-  Schema.Struct({ mode: Schema.Literals(["normal", "yolo"]) }),
+  Schema.Struct({ yolo: SessionAutonomyYolo }),
   Schema.Struct({
-    mode: Schema.Literal("goal"),
-    goal: Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())),
+    goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Null]),
+    maxNoProgress: PositiveInt.pipe(Schema.optional),
+  }),
+  Schema.Struct({
+    yolo: SessionAutonomyYolo,
+    goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Null]),
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
 ]).annotate({ identifier: "SessionAutonomySet" })
@@ -166,6 +221,12 @@ export const SessionSubagentAnswer = Schema.Struct({
   data: SessionOrchestration.AnswerData.pipe(Schema.optional),
 }).annotate({ identifier: "SessionSubagentAnswer" })
 
+const SubagentPageLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(10))
+export const SessionSubagentListQuery = Schema.Struct({
+  limit: Schema.NumberFromString.pipe(Schema.decodeTo(SubagentPageLimit), Schema.optional),
+  cursor: SubagentCursor.pipe(Schema.optional),
+}).annotate({ identifier: "SessionSubagentListQuery" })
+
 const SessionsQueryCursor = SessionsCursor.annotate({
   description: "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response.",
 })
@@ -182,6 +243,19 @@ export const SessionsQuery = Schema.Struct({
   subpath: RelativePath.pipe(Schema.optional),
   cursor: SessionsQueryCursor.pipe(Schema.optional),
 }).annotate({ identifier: "SessionsQuery" })
+
+export const SessionProjection = Schema.Struct({
+  sourceEpoch: SourceEpoch,
+  session: Session.Info,
+  messages: Schema.Array(SessionMessage.Info),
+  watermark: EventLog.Synced,
+}).annotate({ identifier: "SessionProjection" })
+export type SessionProjection = typeof SessionProjection.Type
+
+export const SessionLogItem = Schema.Union([...SessionEvent.PublicDurable.members, EventLog.Synced])
+  .mapMembers(Tuple.map(Schema.fieldsAssign({ sourceEpoch: SourceEpoch })))
+  .annotate({ identifier: "SessionLogItem" })
+export type SessionLogItem = typeof SessionLogItem.Type
 
 export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLocationMiddleware: Context.Key<I, S>) =>
   HttpApiGroup.make("server.session")
@@ -252,6 +326,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.get("session.snapshot", "/api/session/:sessionID/snapshot", {
+        params: { sessionID: Session.ID },
+        success: SessionProjection,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.snapshot",
+            summary: "Get a session synchronization snapshot",
+            description:
+              "Atomically retrieve the canonical projected messages and exact durable event watermark for one server process epoch.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.diagnostics", "/api/session/:sessionID/diagnostics", {
         params: { sessionID: Session.ID },
         success: Schema.Struct({ data: Session.CacheDiagnostics.pipe(Schema.optional) }),
@@ -316,15 +406,16 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.get("session.subagent.list", "/api/session/:parentID/subagent", {
         params: { parentID: Session.ID },
-        success: Schema.Struct({ data: Schema.Array(SessionOrchestration.Task) }),
-        error: SessionNotFoundError,
+        query: SessionSubagentListQuery,
+        success: SessionOrchestration.Page,
+        error: [SessionNotFoundError, InvalidCursorError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.subagent.list",
             summary: "List direct subagents",
-            description: "List durable task records for direct managed child Sessions.",
+            description: "List one bounded page of durable task records for direct managed child Sessions.",
           }),
         ),
     )
@@ -441,14 +532,15 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: Schema.Struct({ model: Model.Ref }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ModelSwitchBlockedError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.switchModel",
             summary: "Switch session model",
-            description: "Switch the model used by subsequent provider turns.",
+            description:
+              "Switch the model used by subsequent provider turns. Refuses the switch when the current context cannot fit the target model.",
           }),
         ),
     )
@@ -551,7 +643,23 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             summary: "Activate skill",
             description: "Activate a skill for a session by appending a skill message and resuming execution.",
           }),
-      ),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.usage", "/api/session/:sessionID/usage", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: ProviderRequest.Summary }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.usage",
+            summary: "Get durable session provider usage",
+            description:
+              "Retrieve provider-request usage and recorded or current-catalog-estimated spend after transcript compaction or when cache diagnostics are unavailable. Each priced model row identifies its cost provenance. Root sessions include their descendant subagent family; child sessions remain scoped to themselves.",
+          }),
+        ),
     )
     .add(
       HttpApiEndpoint.get("session.skills", "/api/session/:sessionID/skills", {
@@ -630,8 +738,8 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
     .add(
       HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
         params: { sessionID: Session.ID },
-        payload: Schema.Struct({ id: SessionMessage.ID.pipe(Schema.optional) }),
-        success: Schema.Struct({ data: SessionPending.Compaction }),
+        payload: Schema.Struct({ id: SessionCompaction.ID.pipe(Schema.optional) }),
+        success: Schema.Struct({ data: SessionCompaction.Result }),
         error: [ConflictError, SessionNotFoundError],
       })
         .middleware(sessionLocationMiddleware)
@@ -639,7 +747,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           OpenApi.annotations({
             identifier: "v2.session.compact",
             summary: "Compact session",
-            description: "Queue a durable session compaction request.",
+            description: "Perform durable session compaction and return after it settles.",
           }),
         ),
     )
@@ -706,6 +814,21 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.context",
             summary: "Get session context",
             description: "Retrieve the active context messages for a session (all messages after the last compaction).",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.fileChange.list", "/api/session/:sessionID/file-change", {
+        params: { sessionID: Session.ID },
+        success: Schema.Struct({ data: Schema.Array(SessionEvent.FileChange.Info) }),
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.file-change.list",
+            summary: "List captured file changes",
+            description: "Retrieve durable current file changes for a session and its completed direct children.",
           }),
         ),
     )
@@ -799,7 +922,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
           follow: BooleanFromString.pipe(Schema.optional),
         },
         success: HttpApiSchema.StreamSse({
-          data: Schema.Union([SessionEvent.PublicDurable, EventLog.Synced]).annotate({ identifier: "SessionLogItem" }),
+          data: SessionLogItem,
         }),
         error: SessionNotFoundError,
       })

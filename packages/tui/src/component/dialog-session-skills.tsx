@@ -72,28 +72,34 @@ export function DialogSessionSkills(props: DialogSessionSkillsProps) {
       ...grouped().active.filter((skill) => !skill.conflicts.length),
       ...grouped().active.filter((skill) => skill.conflicts.length),
       ...grouped().inactive,
-    ].map((skill) => ({
-      title: skill.name,
-      titleView:
-        skill.conflicts.length ? (
-          <span style={{ fg: themeV2.text.feedback.warning.default }}>{skill.name}</span>
-        ) : skill.state === "inactive" ? (
-          <span style={{ fg: themeV2.text.subdued }}>{skill.name}</span>
-        ) : undefined,
-      description: skill.scope,
-      footer:
-        skill.conflicts.length ? (
-          <span style={{ fg: themeV2.text.feedback.warning.default }}>Needs choice</span>
-        ) : skill.state === "active" ? (
-          <span style={{ fg: themeV2.text.action.primary.focused }}>Active</span>
-        ) : (
-          <span style={{ fg: themeV2.text.subdued }}>Inactive</span>
-        ),
-      category: skill.conflicts.length ? "Conflict" : skill.state === "active" ? "Active" : "Available",
-      state: skill.conflicts.length ? "failed" : skill.state === "active" ? "connected" : "disabled",
-      value: skill,
-      onSelect: () => setSelected(skill),
-    })),
+    ].map((skill) => {
+      const secondLine = skill.state === "inactive"
+      return {
+        title: skill.name,
+        titleView:
+          skill.conflicts.length ? (
+            <span style={{ fg: themeV2.text.feedback.warning.default }}>{skill.name}</span>
+          ) : skill.state === "inactive" ? (
+            <span style={{ fg: themeV2.text.subdued }}>{`\n${skill.name}`}</span>
+          ) : undefined,
+        description: skill.conflicts.length ? `${skill.conflicts.length + 1} sources` : skill.scope,
+        footer:
+          skill.conflicts.length ? (
+            <span style={{ fg: themeV2.text.feedback.warning.default }}>Needs choice</span>
+          ) : skill.state === "active" ? (
+            <span style={{ fg: themeV2.text.action.primary.focused }}>Active</span>
+          ) : secondLine ? (
+            <span style={{ fg: themeV2.text.subdued }}>{"\nInactive"}</span>
+          ) : (
+            <span style={{ fg: themeV2.text.subdued }}>Inactive</span>
+          ),
+        category: skill.conflicts.length ? "Conflict" : skill.state === "active" ? "Active" : "Available",
+        state: secondLine ? undefined : skill.conflicts.length ? "failed" : "connected",
+        gutter: secondLine ? () => <text fg={themeV2.text.subdued}>{"\n○"}</text> : undefined,
+        value: skill,
+        onSelect: () => setSelected(skill),
+      }
+    }),
   )
 
   return (

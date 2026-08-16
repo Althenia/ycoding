@@ -344,7 +344,7 @@
       },
       "accent": {
         "100": "#97E8C4",
-        "200": "#67D7AA",
+        "200": "#67D7A4",
         "300": "#4FA884",
         "400": "#3D8568",
         "500": "#2F674F",
@@ -409,7 +409,7 @@
           "subdued": "#B48F4A"
         },
         "success": {
-          "default": "#67D7AA",
+          "default": "#67D7A4",
           "subdued": "#4FA884"
         },
         "info": {
@@ -462,13 +462,13 @@
     },
     "diff": {
       "text": {
-        "added": "#67D7AA",
+        "added": "#67D7A4",
         "removed": "#EF7D84",
         "context": "$hue.neutral.100",
         "hunkHeader": "#828bb8"
       },
       "background": {
-        "added": "#67D7AA1A",
+        "added": "#67D7A41A",
         "removed": "#EF7D841A",
         "context": "$hue.neutral.900"
       },

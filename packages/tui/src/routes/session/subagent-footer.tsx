@@ -9,25 +9,62 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { formatCacheDiagnostics, formatDiagnosticsModel } from "../../util/cache-diagnostics"
 import { Keymap } from "../../context/keymap"
 
-export function subagentSiblingSessionIDs(tasks: ReadonlyArray<SessionOrchestrationTask>) {
-  return [...tasks]
-    .toSorted((left, right) => {
-      const created = left.time.created - right.time.created
-      if (created !== 0) return created
-      return left.sessionID.localeCompare(right.sessionID)
-    })
-    .map((task) => task.sessionID)
+type SubagentPagination = {
+  page(parentID: string): {
+    readonly data: ReadonlyArray<SessionOrchestrationTask>
+    readonly offset: number
+    readonly position: "top" | "older"
+  } | undefined
+  navigation(parentID: string): { readonly older: boolean; readonly newer: boolean }
+  sync(parentID: string): Promise<void>
+  loadOlder(parentID: string): Promise<void>
+  loadNewer(parentID: string): Promise<void>
 }
 
-export function subagentSiblingSessionID(
-  tasks: ReadonlyArray<SessionOrchestrationTask>,
-  currentSessionID: string,
-  direction: -1 | 1,
-) {
-  const siblings = subagentSiblingSessionIDs(tasks)
-  const current = siblings.indexOf(currentSessionID)
-  if (current < 0 || siblings.length < 2) return undefined
-  return siblings[(current + direction + siblings.length) % siblings.length]
+export async function hydrateSubagentPage(input: {
+  pagination: SubagentPagination
+  parentID: string
+  currentSessionID: string
+}) {
+  const containsCurrent = () => input.pagination.page(input.parentID)?.data.some((task) => task.sessionID === input.currentSessionID)
+  if (containsCurrent()) return input.pagination.page(input.parentID)
+  await input.pagination.sync(input.parentID)
+  // The bounded API has no child-ID cursor. Walk only while opening or navigating this one child;
+  // each load replaces the resident page instead of retaining prior task records.
+  while (!containsCurrent() && input.pagination.navigation(input.parentID).older)
+    await input.pagination.loadOlder(input.parentID)
+  return input.pagination.page(input.parentID)
+}
+
+export async function navigateSubagentSibling(input: {
+  pagination: SubagentPagination
+  parentID: string
+  currentSessionID: string
+  direction: -1 | 1
+}) {
+  const page = await hydrateSubagentPage(input)
+  const current = page?.data.findIndex((task) => task.sessionID === input.currentSessionID) ?? -1
+  if (current < 0 || !page) return undefined
+  if (input.direction === 1) {
+    const next = page.data[current + 1]
+    if (next) return next.sessionID
+    if (input.pagination.navigation(input.parentID).older) {
+      await input.pagination.loadOlder(input.parentID)
+      return input.pagination.page(input.parentID)?.data[0]?.sessionID
+    }
+    await input.pagination.sync(input.parentID)
+    const first = input.pagination.page(input.parentID)?.data[0]?.sessionID
+    return first === input.currentSessionID ? undefined : first
+  }
+  const previous = page.data[current - 1]
+  if (previous) return previous.sessionID
+  if (input.pagination.navigation(input.parentID).newer) {
+    await input.pagination.loadNewer(input.parentID)
+    return input.pagination.page(input.parentID)?.data.at(-1)?.sessionID
+  }
+  while (input.pagination.navigation(input.parentID).older) await input.pagination.loadOlder(input.parentID)
+  const last = input.pagination.page(input.parentID)?.data.at(-1)?.sessionID
+  return last === input.currentSessionID ? undefined : last
 }
 
 const money = new Intl.NumberFormat("en-US", {
@@ -47,7 +84,6 @@ export type SubagentEconomics = {
   strip: readonly string[]
   context?: string
   cacheHit?: string
-  prefix?: string
   reads?: string
   writes?: string
   spent?: string
@@ -70,7 +106,6 @@ export function subagentEconomics(
   const context = diagnostics
     ? `${compactNumber(diagnostics.context.total)} / ${diagnostics.context.limit === undefined ? "unreported" : compactNumber(diagnostics.context.limit)}${diagnostics.context.percent === undefined ? "" : ` · ${diagnostics.context.percent}%`}`
     : undefined
-  const prefix = diagnostics?.requests?.latestInvalidation === "stable-hit" ? "stable" : undefined
   const reads = diagnostics?.cache.readReported ? number(diagnostics.tokens.cacheRead) : undefined
   const writes = diagnostics?.cache.writeReported ? number(diagnostics.tokens.cacheWrite) : undefined
   const spent = session.cost > 0 ? money.format(session.cost) : undefined
@@ -84,7 +119,6 @@ export function subagentEconomics(
   const strip = [
     context ? `Context ${context}` : undefined,
     diagnostics && !hit ? "hit unreported" : undefined,
-    prefix ? `prefix ${prefix}` : undefined,
     diagnostics ? (reads ? `${reads} read` : "read unreported") : undefined,
     diagnostics ? (writes ? `${writes} write` : "write unreported") : undefined,
     spent,
@@ -96,7 +130,6 @@ export function subagentEconomics(
     strip,
     context,
     cacheHit,
-    prefix,
     reads,
     writes,
     spent,
@@ -297,12 +330,11 @@ export function SubagentFooter() {
   const data = useData()
   const session = createMemo(() => data.session.get(route.sessionID))
   const parentID = createMemo(() => session()?.parentID)
-  const siblings = createMemo(() => {
+  const page = createMemo(() => {
     const parent = parentID()
-    if (!parent) return []
-    const tasks = data.session.subagent.list(parent)
-    return subagentSiblingSessionIDs(tasks).flatMap((id) => tasks.find((task) => task.sessionID === id) ?? [])
+    return parent ? data.session.subagent.page(parent) : undefined
   })
+  const siblings = createMemo(() => page()?.data ?? [])
   const parent = createMemo(() => (parentID() ? data.session.get(parentID()!) : undefined))
 
   createEffect(
@@ -312,11 +344,6 @@ export function SubagentFooter() {
     ),
   )
   createEffect(() => {
-    const id = parentID()
-    if (!id) return
-    void data.session.subagent.sync(id).catch(() => undefined)
-  })
-  createEffect(() => {
     siblings().forEach((task) => {
       if (data.session.get(task.sessionID)) return
       void data.session.sync(task.sessionID).catch(() => undefined)
@@ -325,7 +352,8 @@ export function SubagentFooter() {
 
   const economics = createMemo(() => subagentEconomics(session(), data.session.diagnostics.get(route.sessionID), parent()?.title))
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
-  const current = createMemo(() => siblings().findIndex((task) => task.sessionID === route.sessionID) + 1)
+  const current = createMemo(() => (page()?.offset ?? 0) + siblings().findIndex((task) => task.sessionID === route.sessionID) + 1)
+  const total = createMemo(() => page()?.summary.total ?? siblings().length)
   const agent = createMemo(() => currentTask()?.agent ?? "subagent")
   const context = createMemo(() => {
     const [total, percent] = economics()?.context?.split(" · ") ?? []
@@ -342,7 +370,7 @@ export function SubagentFooter() {
         fallback={
           <>
             <box width={21} flexShrink={0}>
-              <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {siblings().length})</text>
+              <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
             </box>
             <box width={13} flexShrink={0}>
               <text fg={themeV2.text.subdued} wrapMode="none">{context()}</text>
@@ -354,16 +382,32 @@ export function SubagentFooter() {
               <text fg={themeV2.text.subdued} wrapMode="none">{economics()?.spent} · durable · resumable</text>
             </box>
             <box flexGrow={1} />
-            <text fg={themeV2.text.action.primary.default} wrapMode="none" onMouseUp={() => {
-              const sibling = subagentSiblingSessionID(siblings(), route.sessionID, 1)
-              if (sibling) navigation.navigate({ type: "session", sessionID: sibling })
-            }}>→ next</text>
+            <text
+              fg={themeV2.text.action.primary.default}
+              wrapMode="none"
+              onMouseUp={() => {
+                const id = parentID()
+                if (!id) return
+                void navigateSubagentSibling({
+                  pagination: data.session.subagent,
+                  parentID: id,
+                  currentSessionID: route.sessionID,
+                  direction: 1,
+                })
+                  .then((sibling) => {
+                    if (sibling) navigation.navigate({ type: "session", sessionID: sibling })
+                  })
+                  .catch(() => undefined)
+              }}
+            >
+              → next
+            </text>
           </>
         }
       >
         <>
           <box width={23} flexShrink={0}>
-            <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {siblings().length})</text>
+            <text fg={themeV2.text.default} wrapMode="none">{agent()} ({current()} of {total()})</text>
           </box>
           <box width={14} flexShrink={0}>
             <text fg={themeV2.text.subdued} wrapMode="none">{context()}</text>

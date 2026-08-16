@@ -2,7 +2,9 @@ export * as EventFeed from "./event-feed"
 
 import { EventV2 } from "@ycoding-ai/core/event"
 import { isYCodingEvent, YCodingEvent } from "@ycoding-ai/protocol/groups/event"
+import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { Cause, Context, Effect, Layer, Queue, Schema, Scope, Stream } from "effect"
+import { ProcessIdentity } from "./process-identity"
 
 export const SubscriberCapacity = 4_096
 
@@ -27,16 +29,20 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/ser
 
 const encode = Schema.encodeUnknownSync(YCodingEvent)
 
-export function frame(event: YCodingEvent) {
-  return `data: ${JSON.stringify(encode(event))}\n\n`
+export function frame(
+  sourceEpoch: ServiceStatus.Epoch,
+  event: { readonly id: EventV2.ID; readonly type: string; readonly data: unknown },
+) {
+  return `data: ${JSON.stringify(encode({ ...event, sourceEpoch }))}\n\n`
 }
 
 export const make = Effect.fn("EventFeed.make")(function* (
+  sourceEpoch: ServiceStatus.Epoch,
   observe: (subscriber: EventV2.Subscriber) => Effect.Effect<EventV2.Unsubscribe>,
   options?: { readonly capacity?: number; readonly encode?: (event: YCodingEvent) => string },
 ) {
   const capacity = options?.capacity ?? SubscriberCapacity
-  const render = options?.encode ?? frame
+  const render = options?.encode ?? ((event) => frame(sourceEpoch, event))
   const subscribers = new Set<Queue.Queue<string, Error>>()
 
   const fail = (error: Error) =>
@@ -85,6 +91,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2.Service
-    return yield* make(events.listen)
+    const identity = yield* ProcessIdentity
+    return yield* make(identity.sourceEpoch, events.listen)
   }),
 )

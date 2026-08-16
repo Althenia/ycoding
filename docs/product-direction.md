@@ -35,10 +35,10 @@ Durable state owns prompt admission, session history, instructions, compaction r
 The runtime supports three explicit modes:
 
 - `normal`: standard interactive execution;
-- `yolo`: autonomous execution under the configured permission policy;
+- `yolo` (`0-3`): tiered autonomous execution — `1` questions/forms, `2` + permissions (`true` → `2`), `3` + guardrail reviews; `goal` active also auto-answers questions/permissions at `0` but guardrails still require `3`;
 - `goal`: repeated progress toward a durable goal until completion, stop, or a bounded no-progress terminal state.
 
-Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Guardrail reviews are never auto-approved by autonomous mode. Completion claims require verification evidence.
+Autonomy remains visible, inspectable, interruptible, and subject to permission ceilings and Session guardrails. Only effective YOLO 3 auto-approves guardrail reviews; `normal`, YOLO 0-2, and active `goal` below YOLO 3 keep reviews enforced. The expanded AUTONOMY sidebar reports Guardrails as `auto · YOLO 3` only at effective YOLO 3 and as `enforced` otherwise. Completion claims require verification evidence.
 
 ### 5. Durable background orchestration
 

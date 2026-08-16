@@ -20,19 +20,27 @@ test("captures populated subagent chat states at reference terminal dimensions",
       ...viewport,
       args: { sessionID },
       settle: "Claude Sonnet 5",
-      stable: ["Claude Sonnet 5", "◦ docs-sync", "SUBAGENT ECONOMICS"],
+      stable: ["Claude Sonnet 5", "◦ docs-sync"],
       route,
     })
     expect(lines).toHaveLength(viewport.height)
-    expect(lines.join("\n")).toContain("Provider cache audit")
-    // Board 15 records the sibling switcher with lowercase agent identifiers. The previous
-    // title-cased expectation encoded pre-redesign output and blocked this capture from refreshing.
+    // Board 15 row 5: chips carry the short sibling identity, and the reserved right block stays intact.
     expect(lines.join("\n")).toContain("◦ docs-sync")
-    expect(lines.join("\n")).toContain("? test-triage")
+    expect(lines.join("\n")).toContain("1 of 3  ·  ↑ parent  ← prev  → next")
     if (viewport.width >= 120) {
+      expect(lines.join("\n")).toContain("Provider cache audit")
+      const switcher = lines.find((line) => line.includes("↑ Provider cache audit")) ?? ""
+      const navigation = "1 of 3  ·  ↑ parent  ← prev  → next"
+      expect(switcher).toContain("◦ docs-sync")
+      expect(switcher).toContain("? test-triage")
+      expect(switcher.indexOf(navigation)).toBe(viewport.width - 3 - navigation.length)
       expect(lines[14]?.indexOf("DOCS-SYNC SUBAGENT")).toBe(3)
       expect(lines[17]?.indexOf("Traced the telemetry fields to their documented counterparts and preserved the parent session's write restrictions.")).toBe(3)
-      expect(lines.join("\n")).toContain("Thought: no writes outside docs/ · 3ms")
+      // The shared grid right-aligns the duration as the row status, so it is no longer part of the
+      // label run. Board 15 row 20 keeps the label at the content column with the duration at the edge.
+      const thought = lines.find((line) => line.includes("Thought: no writes outside docs/")) ?? ""
+      expect(thought).toContain("Thought: no writes outside docs/")
+      expect(thought.trimEnd().endsWith("3ms")).toBe(true)
       expect(lines.join("\n")).toMatch(/working \d+m\d{2}s/)
     }
     if (viewport.width >= 120) {
@@ -47,6 +55,11 @@ test("captures populated subagent chat states at reference terminal dimensions",
       expect(lines[59]?.indexOf("Context")).toBe(3)
       expect(lines[61]?.indexOf("18.4K / 200K · 9%")).toBe(3)
       expect(lines[67]?.indexOf("docs-sync (1 of 3)")).toBe(3)
+    }
+    if (viewport.width === 80) {
+      expect(lines.join("\n")).toContain("↑ Pr…")
+      expect(lines.join("\n")).not.toContain("? test-triage")
+      expect(lines.join("\n")).not.toContain("◦ keymap-audit")
     }
     expect(lines.join("\n")).not.toContain("┃")
     await Bun.write(path.resolve(import.meta.dir, `../../../../.aphrodite/renders/subagent-chat-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))

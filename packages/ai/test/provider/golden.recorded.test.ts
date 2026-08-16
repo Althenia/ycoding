@@ -11,7 +11,11 @@ import { describeRecordedGoldenScenarios } from "../recorded-golden"
 const openAI = OpenAI.configure({
   apiKey: process.env.OPENAI_API_KEY ?? "fixture",
 })
-const openAIChat = openAI.chat("gpt-4o-mini")
+const openAIChat = OpenAICompatible.configure({
+  apiKey: process.env.OPENAI_API_KEY ?? "fixture",
+  baseURL: "https://api.openai.com/v1",
+  provider: "openai",
+}).model("gpt-4o-mini")
 const openAIResponses = openAI.responses("gpt-5.5")
 const anthropic = Anthropic.configure({
   apiKey: process.env.ANTHROPIC_API_KEY ?? "fixture",
@@ -75,9 +79,15 @@ describeRecordedGoldenScenarios([
   {
     name: "OpenAI Chat gpt-4o-mini",
     prefix: "openai-chat",
+    protocol: "openai-chat",
     model: openAIChat,
     requires: ["OPENAI_API_KEY"],
-    scenarios: ["text", "tool-call", "tool-loop", { id: "image-tool-result", maxTokens: 40 }],
+    scenarios: [
+      "text",
+      { id: "tool-call", cassette: "openai-chat/streams-tool-call" },
+      "tool-loop",
+      { id: "image-tool-result", maxTokens: 40 },
+    ],
   },
   {
     name: "OpenAI Responses gpt-5.5",

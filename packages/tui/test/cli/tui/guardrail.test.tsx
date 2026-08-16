@@ -33,6 +33,7 @@ const status: GuardrailStatusOutput = {
 test("formats guardrail profile and family counters", () => {
   expect(module.guardrailSummary(status)).toEqual({
     profile: "Standard + 2 custom",
+    header: "Standard · 1 blocked",
     decisions: "3 approvals · 1 blocked",
     shells: "Shells 2 / 8",
     subagents: "Subagents 4 / 8",
@@ -61,7 +62,7 @@ test("attributes child reviews to their root family and exposes explicit guardra
   })
   const source = await Bun.file(new URL("../../../src/routes/session/guardrail.tsx", import.meta.url)).text()
   expect(source).toContain('kind="guardrail"')
-  expect(source).toContain('options={{ once: "Allow once", always: "Allow for this session", reject: "Deny" }}')
+  expect(source).toContain('options={{ reject: "Deny", once: "Allow once", always: "Allow for this session" }}')
   expect(source).toContain('const reply = (value: "once" | "always" | "reject") => {')
   expect(source).toContain("reply: value")
   expect(source).toContain('defaultOption="reject"')
@@ -102,18 +103,18 @@ test("renders a warning-framed guardrail approval", async () => {
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 96, height: 18, kittyKeyboard: true },
+    { width: 96, height: 24, kittyKeyboard: true },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Guardrail blocked"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("!!")
-    expect(frame).toContain("guardrail · Destructive Git operation needs approval")
-    expect(frame).toContain("Guardrails apply even in YOLO mode.")
+    expect(frame).not.toContain("!!")
+    expect(frame).toContain("Destructive Git operation")
+    expect(frame).toContain("guardrails apply even in YOLO mode.")
     expect(frame).toContain("Action: shell")
-    expect(frame).toContain("Resource: git reset --hard")
+    expect(frame).toContain("Blocked")
     expect(frame).toContain("git reset --hard")
     expect(frame).toContain("Allow once")
     expect(frame).toContain("Deny")
@@ -165,13 +166,17 @@ test("defaults guardrails to deny and ordinary permissions to allow once", async
       expect(selected).toBeDefined()
       expect(unselected).toBeDefined()
       const selectedBox = requireBoxRenderable(selected, `session.${kind}.action.${defaultOption}`)
+      const selectedBand = requireBoxRenderable(
+        descendants(selectedBox).find((item) => item.id === `session.${kind}.action.${defaultOption}.band`),
+        `session.${kind}.action.${defaultOption}.band`,
+      )
       const unselectedBox = requireBoxRenderable(
         unselected,
         `session.${kind}.action.${defaultOption === "once" ? "reject" : "once"}`,
       )
-      expect(selectedBox.backgroundColor.toInts()).not.toEqual(unselectedBox.backgroundColor.toInts())
+      expect(selectedBand.backgroundColor.toInts()).not.toEqual(unselectedBox.backgroundColor.toInts())
       return {
-        selected: selectedBox.backgroundColor.toInts(),
+        selected: selectedBand.backgroundColor.toInts(),
         unselected: unselectedBox.backgroundColor.toInts(),
       }
     } finally {

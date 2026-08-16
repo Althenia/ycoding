@@ -77,13 +77,14 @@ describe("SessionProjector", () => {
       const inputID = SessionMessage.ID.make("msg_manual_compaction")
       yield* SessionPending.admitCompaction(db, events, { id: inputID, sessionID })
 
-      yield* events.publish(SessionEvent.Compaction.Failed, {
+      yield* events.publish(SessionEvent.Compaction.FailedV1, {
         sessionID,
         reason: "auto",
         error: { type: "compaction.failed", message: "Auto compaction failed" },
       })
 
       expect(yield* SessionPending.compaction(db, sessionID)).toMatchObject({ id: inputID })
+      expect(yield* SessionPending.list(db, sessionID)).toEqual([])
     }),
   )
 
@@ -300,12 +301,6 @@ describe("SessionProjector", () => {
       })
       expect(secondPage.map((message) => (message.type === "user" ? message.text : message.type))).toEqual(["second"])
       expect(
-        yield* sessions.messageRemainder({ sessionID, afterID: firstPage[0]!.id, order: "asc" }),
-      ).toEqual(1)
-      expect(
-        yield* sessions.messageRemainder({ sessionID, afterID: secondPage[0]!.id, order: "asc" }),
-      ).toEqual(0)
-      expect(
         (yield* sessions.messages({
           sessionID,
           limit: 1,
@@ -316,6 +311,18 @@ describe("SessionProjector", () => {
       expect(
         (yield* sessions.context(sessionID)).map((message) => (message.type === "user" ? message.text : message.type)),
       ).toEqual(["first", "second"])
+
+      const projection = yield* sessions.snapshot(sessionID)
+      expect(projection.session.id).toBe(sessionID)
+      expect(projection.messages.map((message) => (message.type === "user" ? message.text : message.type))).toEqual([
+        "first",
+        "second",
+      ])
+      expect(projection.watermark).toEqual({
+        type: "log.synced",
+        aggregateID: sessionID,
+        seq: EventV2.Seq.make(yield* EventV2.latestSequence((yield* Database.Service).db, sessionID)),
+      })
     }).pipe(Effect.provide(sessionsLayer)),
   )
 
@@ -422,7 +429,7 @@ describe("SessionProjector", () => {
         }),
         output: { output: "/project", cursor: 8, size: 8, truncated: false },
       })
-      yield* events.publish(SessionEvent.Compaction.Started, {
+      yield* events.publish(SessionEvent.Compaction.StartedV1, {
         sessionID,
         reason: "manual",
         recent: "recent context",
@@ -447,7 +454,7 @@ describe("SessionProjector", () => {
           .all()
           .pipe(Effect.orDie),
       ).toEqual([{ data: expect.objectContaining({ status: "running", summary: "", recent: "recent context" }) }])
-      yield* events.publish(SessionEvent.Compaction.Ended, {
+      yield* events.publish(SessionEvent.Compaction.EndedV1, {
         sessionID,
         reason: "manual",
         text: "summary",
@@ -494,7 +501,7 @@ describe("SessionProjector", () => {
       expect(
         yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
       ).toMatchObject({
-        agent: "build",
+        agent: build,
         model,
         time_updated: DateTime.toEpochMillis(created),
       })
@@ -778,6 +785,7 @@ describe("SessionProjector", () => {
         sessionID,
         assistantMessageID: SessionMessage.ID.make("msg_assistant_completed"),
         ordinal: 0,
+        phase: "commentary",
       })
 
       const rows = yield* db
@@ -796,7 +804,7 @@ describe("SessionProjector", () => {
           type: "assistant",
           agent: build,
           model,
-          content: [SessionMessage.AssistantText.make({ type: "text", text: "" })],
+          content: [SessionMessage.AssistantText.make({ type: "text", text: "", phase: "commentary" })],
           time: { created: DateTime.makeUnsafe(1), completed: DateTime.makeUnsafe(2) },
         }),
         SessionMessage.Assistant.make({

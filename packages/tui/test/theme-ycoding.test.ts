@@ -32,7 +32,7 @@ test("resolves the YCoding dark semantic palette", () => {
   expectColor(theme.scrollbar.default, "#3B424D")
   expectColor(theme.text.default, "#F2F4F7")
   expectColor(theme.text.subdued, "#98A2B3")
-  expectColor(theme.text.feedback.success.default, "#67D7AA")
+  expectColor(theme.text.feedback.success.default, "#67D7A4")
   expectColor(theme.text.feedback.info.default, "#79B8FF")
   expectColor(theme.text.feedback.warning.default, "#F0BE62")
   expectColor(theme.text.feedback.error.default, "#EF7D84")
@@ -95,7 +95,7 @@ test("preserves the YCoding dark semantic text hierarchy", () => {
 test("resolves diff context colors from each mode's semantic tokens", () => {
   expectColor(theme.diff.text.context, "#98A2B3")
   expectColor(theme.diff.background.context, "#0F1115")
-  expectColor(theme.diff.text.added, "#67D7AA")
+  expectColor(theme.diff.text.added, "#67D7A4")
   expectColor(theme.diff.text.removed, "#EF7D84")
   expectColor(theme.diff.lineNumber.text, "#5D6673")
 

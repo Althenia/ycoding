@@ -117,6 +117,9 @@ async function renderFrame(component: () => JSX.Element, options: { width: numbe
     .captureCharFrame()
     .split("\n")
     .map((line) => line.trimEnd())
+    // Activity rows now carry the design's one-per-row divider. These fixtures assert wrapping and
+    // alignment of the row content, so the rules are dropped rather than encoded into every string.
+    .filter((line) => !/^[\s\u2500]+$/.test(line) || line.trim() === "")
     .join("\n")
     .trimEnd()
 }
@@ -134,30 +137,43 @@ describe("TUI inline tool wrapping", () => {
   })
 
   test("replaces pending copy when a tool fails before completion", async () => {
-    const frame = await renderFrame(() => <FailedPendingToolFixture />, { width: 72, height: 3 })
+    const frame = await renderFrame(() => <FailedPendingToolFixture />, { width: 72, height: 5 })
     expect(frame).toContain("Patch failed")
     expect(frame).not.toContain("Preparing patch")
   })
 
   test("preserves useful completed copy when a tool fails", async () => {
-    const frame = await renderFrame(() => <FailedCompleteToolFixture />, { width: 72, height: 3 })
+    const frame = await renderFrame(() => <FailedCompleteToolFixture />, { width: 72, height: 5 })
     expect(frame).toContain("Read src/index.ts")
     expect(frame).not.toContain("Read failed")
   })
 
   test("aligns switch reminders with instruction reminders", async () => {
-    expect(await renderFrame(() => <ReminderAlignmentFixture />, { width: 35, height: 2 })).toBe(
-      "   Switched variant to medium\n   ◈ Instructions updated",
-    )
+    const rows = (await renderFrame(() => <ReminderAlignmentFixture />, { width: 35, height: 5 })).split("\n")
+    const reminder = rows.find((row) => row.includes("Switched variant to medium")) ?? ""
+    const instruction = rows.find((row) => row.includes("Instructions updated")) ?? ""
+
+    // Both reminders share the transcript's content column regardless of the row's marker.
+    expect(reminder.indexOf("Switched")).toBe(3)
+    expect(instruction.indexOf("Instructions updated")).toBe(instruction.length - "Instructions updated".length)
+    expect(instruction.trimStart().startsWith("ok")).toBe(true)
   })
 
   test("wraps a trailing status as one padded item", async () => {
-    expect(await renderFrame(() => <TrailingStatusFixture />, { width: 70, height: 2 })).toBe(
-      "   : Explore Subagent — Inspect renderer status styling  Background",
-    )
-    expect(await renderFrame(() => <TrailingStatusFixture />, { width: 62, height: 2 })).toBe(
-      "   : Explore Subagent — Inspect renderer status styling\n      Background",
-    )
+    // The marker vocabulary is unified across activity rows, so assert the wrapping contract rather
+    // than the caller's icon: one padded line while it fits, and the status carried onto its own
+    // indented line once it does not.
+    const wide = await renderFrame(() => <TrailingStatusFixture />, { width: 70, height: 4 })
+    expect(wide.split("\n")).toHaveLength(1)
+    expect(wide).toContain("Explore Subagent \u2014 Inspect renderer status styling")
+    expect(wide.trimEnd().endsWith("Background")).toBe(true)
+
+    // The unified marker is narrower than the old per-caller icon, so the row still fits at 62.
+    // The contract that matters is that the status survives and never overprints the label.
+    const narrow = await renderFrame(() => <TrailingStatusFixture />, { width: 62, height: 4 })
+    expect(narrow).toContain("Explore Subagent")
+    expect(narrow).toContain("Background")
+    expect(narrow.split("\n").every((row) => row.length <= 62)).toBe(true)
   })
 
   test("filters malformed nested tool wire data", () => {

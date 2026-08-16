@@ -41,6 +41,7 @@ const PROFILES: Record<string, CacheProfile> = {
   "claude-sonnet-4-6": anthropic(1024),
   "claude-sonnet-4-5": anthropic(1024),
   "claude-sonnet-4": anthropic(1024),
+  "claude-3-5-sonnet": anthropic(1024),
   // Anthropic — 2048
   "claude-opus-4-7": anthropic(2048),
   "claude-mythos-preview": anthropic(2048),
@@ -51,6 +52,19 @@ const PROFILES: Record<string, CacheProfile> = {
   "claude-haiku-4-5": anthropic(4096),
   // Implicit-prefix families. No inline markers are emitted for these, but the
   // minimum still explains a flat 0% ratio on a short prefix.
+  // OpenAI explicit per-model entries ensure early cache start is calculated and
+  // maintained per model namespace. The generic gpt- prefix remains as fallback
+  // for future models.
+  "gpt-5-6": implicit(1024),
+  "gpt-5": implicit(1024),
+  "gpt-5-mini": implicit(1024),
+  "gpt-5-nano": implicit(1024),
+  "gpt-4o": implicit(1024),
+  "gpt-4o-mini": implicit(1024),
+  "gpt-4-1": implicit(1024),
+  "gpt-4-1-mini": implicit(1024),
+  "gpt-4-turbo": implicit(1024),
+  "gpt-3-5-turbo": implicit(1024),
   "gpt-": implicit(1024),
   o1: implicit(1024),
   o3: implicit(1024),
@@ -59,6 +73,12 @@ const PROFILES: Record<string, CacheProfile> = {
   "gemini-2-5-flash": implicit(1024),
   "gemini-3-pro": implicit(4096),
   "gemini-3-flash": implicit(1024),
+  // Meta Llama 4 family — implicit cache, per-model namespace like OpenAI
+  "llama-4-maverick": implicit(1024),
+  "llama-4-scout": implicit(1024),
+  "llama-4-behemoth": implicit(1024),
+  "llama-3-3": implicit(1024),
+  "llama-3-2": implicit(1024),
 }
 
 // Longest key first so prefix matching is unambiguous regardless of insertion
@@ -72,6 +92,9 @@ const VENDOR_PREFIX = /^(?:[a-z]{2,4}\.)?(?:anthropic|amazon|meta|mistral|google
 // and the dated-snapshot suffix every platform uses.
 const VERSION_SUFFIX = /-v\d+:\d+$/
 const SNAPSHOT_SUFFIX = /-\d{6,8}$/
+const ALIASES: Readonly<Record<string, string>> = {
+  "claude-4-sonnet": "claude-sonnet-4",
+}
 
 /**
  * Reduce a platform-qualified model id to the bare family id used as a profile
@@ -81,6 +104,7 @@ const SNAPSHOT_SUFFIX = /-\d{6,8}$/
  */
 export const normalizeCacheModelID = (modelID: string): string => {
   let id = modelID.toLowerCase().trim()
+  id = id.replace(/^anthropic--/, "")
   id = id.replace(VENDOR_PREFIX, "")
   // A remaining slash means a vendor we do not enumerate — keep the last
   // segment, which is still the model id.
@@ -92,7 +116,8 @@ export const normalizeCacheModelID = (modelID: string): string => {
   id = id.replace(SNAPSHOT_SUFFIX, "")
   if (id.endsWith("-latest")) id = id.slice(0, -"-latest".length)
   // Vendors disagree on whether a minor version is dotted or dashed.
-  return id.replaceAll(".", "-")
+  id = id.replaceAll(".", "-")
+  return ALIASES[id] ?? id
 }
 
 /**

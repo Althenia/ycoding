@@ -1,11 +1,9 @@
 #!/usr/bin/env bun
 
-import { $ } from "bun"
 import { rm } from "fs/promises"
 import path from "path"
 import { Script } from "@ycoding-ai/script"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
-import pkg from "../package.json"
 import { modelsData } from "./generate"
 import { BUN_BINARY } from "../src/binary"
 
@@ -25,7 +23,6 @@ await rm(outdir, { recursive: true, force: true })
 
 const singleFlag = process.argv.includes("--single")
 const baselineFlag = process.argv.includes("--baseline")
-const skipInstall = process.argv.includes("--skip-install")
 const plugin = createSolidTransformPlugin()
 
 const allTargets: {
@@ -55,8 +52,6 @@ const targets = singleFlag
       return item.abi === undefined
     })
   : allTargets
-
-if (!skipInstall) await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
 
 for (const item of targets) {
   const target = [

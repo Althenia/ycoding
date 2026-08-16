@@ -52,7 +52,9 @@ export const { use: usePromptStash, provider: PromptStashProvider } = createSimp
         return store.entries
       },
       push(entry: Omit<StashEntry, "timestamp">) {
-        const stash = structuredClone(unwrap({ ...entry, timestamp: Date.now() }))
+        const prompt = parsePromptInfo(structuredClone(unwrap(entry.prompt)))
+        if (!prompt) return
+        const stash = { prompt, timestamp: Date.now() }
         let trimmed = false
         setStore(
           produce((draft) => {

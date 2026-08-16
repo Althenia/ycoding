@@ -4,4 +4,4 @@
 
 - The TUI is being ported from legacy APIs to the new V2 APIs. New and migrated TUI behavior should use `sdk.client.v2` and the location-scoped data in `packages/tui/src/context/data.tsx` instead of adding dependencies on legacy sync state.
 - Preserve established TUI behavior unless the task intentionally changes it.
-- Load the `ycoding-dev` skill before interactively running, debugging, or verifying ycoding's V2 CLI, TUI, or server.
+- Load the `ycoding` skill before interactively running, debugging, or verifying ycoding's V2 CLI, TUI, or server.

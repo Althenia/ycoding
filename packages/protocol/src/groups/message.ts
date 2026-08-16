@@ -2,50 +2,21 @@ import { Session } from "@ycoding-ai/schema/session"
 import { SessionMessage } from "@ycoding-ai/schema/session-message"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
-import { InvalidCursorError, SessionNotFoundError, UnknownError } from "../errors.js"
-
-export const SessionMessagesQuery = Schema.Struct({
-  limit: Schema.optional(
-    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1), Schema.isLessThanOrEqualTo(1000)),
-  ).annotate({
-    description: "Maximum number of messages to return. When omitted, the endpoint returns its default page size.",
-  }),
-  order: Schema.optional(Schema.Union([Schema.Literal("asc"), Schema.Literal("desc")])).annotate({
-    description: "Message order for the first page. Use desc for newest first or asc for oldest first.",
-  }),
-  cursor: Schema.optional(
-    Schema.String.annotate({
-      description:
-        "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response. Do not combine with order.",
-    }),
-  ),
-}).annotate({ identifier: "SessionMessagesQuery" })
+import { SessionNotFoundError, UnknownError } from "../errors.js"
 
 export const MessageGroup = HttpApiGroup.make("server.message")
   .add(
     HttpApiEndpoint.get("session.messages", "/api/session/:sessionID/message", {
       params: { sessionID: Session.ID },
-      query: SessionMessagesQuery,
       success: Schema.Struct({
         data: Schema.Array(SessionMessage.Info),
-        cursor: Schema.Struct({
-          previous: Schema.String.pipe(Schema.optional),
-          next: Schema.String.pipe(Schema.optional),
-          // Opaque cursors alone cannot describe how much history exists, so a client had to walk
-          // every archive page to learn its size. This is how many messages the `next` cursor still
-          // has behind it, which sizes unloaded history without transferring it. Page counts stay
-          // with the client, which alone knows the page size it will request. Absent when there is
-          // no `next` cursor; a reported 0 means history is exhausted rather than unreported.
-          messages: Schema.Number.pipe(Schema.optional),
-        }),
       }).annotate({ identifier: "SessionMessagesResponse" }),
-      error: [InvalidCursorError, SessionNotFoundError, UnknownError],
+      error: [SessionNotFoundError, UnknownError],
     }).annotateMerge(
       OpenApi.annotations({
         identifier: "v2.message.list",
         summary: "Get session messages",
-        description:
-          "Retrieve projected messages for a session. Items keep the requested order across pages; use cursor.next or cursor.previous to move through the ordered timeline.",
+        description: "Retrieve every current projected message for a session in canonical ascending order.",
       }),
     ),
   )

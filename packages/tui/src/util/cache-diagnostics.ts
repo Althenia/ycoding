@@ -6,6 +6,14 @@ export function formatDiagnosticsModel(model: SessionCacheDiagnostics["model"] |
   return `${model.providerID}/${model.id}${model.variant ? `#${model.variant}` : ""}`
 }
 
+/**
+ * Rail context rows identify the measured model by id and variant. The provider is omitted because the
+ * rail is already scoped to one session and the row width is shared with a right-aligned value.
+ */
+export function contextModelLabel(model: SessionCacheDiagnostics["model"]) {
+  return `${model.id}${model.variant ? `#${model.variant}` : ""}`
+}
+
 export function cacheHitPercent(value: number | undefined) {
   return typeof value === "number" && Number.isFinite(value) ? Math.round(value * 100) : undefined
 }
@@ -47,31 +55,6 @@ export interface ProviderRequestDiagnostics {
     | "cache-disabled"
     | "retry-fallback"
   readonly latestNamespace?: string
-}
-
-export function cachePrefixLabel(value: ProviderRequestDiagnostics["latestInvalidation"]) {
-  switch (value) {
-    case "stable-hit":
-      return "stable"
-    case "first-request":
-      return "first"
-    case "prefix-changed":
-      return "changed"
-    case "system-prefix-changed":
-      return "system changed"
-    case "tool-prefix-changed":
-      return "tools changed"
-    case "below-minimum":
-      return "below minimum"
-    case "provider-not-reported":
-      return "unreported"
-    case "cache-disabled":
-      return "disabled"
-    case "retry-fallback":
-      return "retry"
-    default:
-      return undefined
-  }
 }
 
 const invalidationLabel = (value: ProviderRequestDiagnostics["latestInvalidation"]) => {

@@ -1,11 +1,7 @@
-import { expect, mock, test } from "bun:test"
-import { createTestRenderer } from "@opentui/core/testing"
-import { Effect, FileSystem } from "effect"
-import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
-import { Global } from "@ycoding-ai/core/global"
+import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { createEventStream, createFetch, json, type FetchHandler } from "../fixture/tui-client"
+import { json, type FetchHandler } from "../fixture/tui-client"
 import { captureRoute } from "./capture"
 
 const HEIGHT = 69
@@ -71,22 +67,6 @@ const guardrails = [
     standard: true,
   },
 ]
-const archivePages = [400, 400, 404].map((count, page) =>
-  Array.from({ length: count }, (_, index) => ({
-    id: `msg_archive_${page + 1}_${String(index).padStart(4, "0")}`,
-    type: "synthetic" as const,
-    text: "",
-    description: "",
-    time: { created: -(page * 1_000 + index + 1) },
-  })),
-)
-const hotFillers = Array.from({ length: 48 }, (_, index) => ({
-  id: `msg_hot_${String(index).padStart(2, "0")}`,
-  type: "synthetic" as const,
-  text: "",
-  description: "",
-  time: { created: index + 2 },
-}))
 const subagents = [
   {
     sessionID: "ses_docs_sync",
@@ -161,16 +141,8 @@ const sessionRoute: FetchHandler = (url, request) => {
   if (url.pathname === "/api/session") return json({ data: [session, childSession], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/message`) {
-    const cursor = url.searchParams.get("cursor")
-    const page = cursor?.startsWith("archive-") ? Number(cursor.slice("archive-".length)) - 1 : undefined
-    if (page !== undefined && archivePages[page])
-      return json({
-        data: archivePages[page],
-        cursor: page < archivePages.length - 1 ? { next: `archive-${page + 2}` } : {},
-      })
     return json({
       data: [
-        ...hotFillers.toReversed(),
         {
           id: "msg_compaction",
           type: "compaction",
@@ -228,7 +200,6 @@ const sessionRoute: FetchHandler = (url, request) => {
         },
         { id: "msg_user", type: "user", text: "Where is provider cache telemetry recorded?", time: { created: 1 } },
       ],
-      cursor: { next: "archive-1", messages: 1_204 },
     })
   }
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`].includes(url.pathname))
@@ -237,7 +208,12 @@ const sessionRoute: FetchHandler = (url, request) => {
   if ([`/api/session/${childSession.id}/permission`, `/api/session/${childSession.id}/form`].includes(url.pathname))
     return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/todo`) return json({ data: todos })
-  if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: subagents })
+  if (url.pathname === `/api/session/${sessionID}/subagent`)
+    return json({
+      data: subagents,
+      summary: { total: subagents.length, active: 1, running: 1, waiting: 0 },
+      cursor: {},
+    })
   if (url.pathname === `/api/session/${sessionID}/skills`) return json({ data: skills })
   if (url.pathname === "/api/shell") return json({ location, data: shells })
   if (url.pathname === "/api/mcp")
@@ -317,9 +293,7 @@ const targets = [
     // rail renders taller than the design it falls below the fold. Waiting on it turns a graded row
     // difference into a capture crash that freezes the whole board.
     stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "SKILLS", "MCP"],
-    trackHistory: true,
     transcript: [
-      ["~ archived", "pages 1–3", "1,204 messages", "⌃x ↑ load"],
       ["ok", "Inspect cache telemetry callers", "done"],
       ["!!", "guardrail", "write outside workspace", "needs approval"],
       ["◦", "subagent", "docs-sync", "running"],
@@ -347,9 +321,7 @@ test("captures composed routes at reference terminal dimensions", async () => {
   await mkdir(output, { recursive: true })
 
   for (const target of targets) {
-    const lines = "trackHistory" in target && target.trackHistory
-      ? await captureTrackedHistory({ ...target, height: HEIGHT })
-      : await captureRoute({ ...target, height: HEIGHT })
+    const lines = await captureRoute({ ...target, height: HEIGHT })
     expect(lines).toHaveLength(HEIGHT)
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(target.width)
     await Bun.write(path.join(output, `${target.name}.txt`), lines.join("\n"))
@@ -360,105 +332,26 @@ test("captures composed routes at reference terminal dimensions", async () => {
       expect(line?.slice(0, 143)).toContain(status)
     }
     if (target.name === "session-189x69") {
-      expectAt(lines, 6, 53, "~ archived · pages 1–3 · 1,204 messages · ⌃x ↑ load")
-      expectAt(lines, 10, 69, "Where is provider cache telemetry recorded?")
-      expectAt(lines, 15, 3, "YCODING")
+      expectAt(lines, 29, 92, "Where is provider cache telemetry recorded?")
+      expectAt(lines, 16, 3, "YCODING")
       expectAt(lines, 23, 3, "ok")
       expectAt(lines, 23, 10, "Inspect cache telemetry callers")
       expectAt(lines, 26, 3, "ok")
       expectAt(lines, 26, 10, "grep")
       expectAt(lines, 26, 15, '"cache_read"')
-      expectAt(lines, 30, 3, "!!")
-      expectAt(lines, 30, 10, "guardrail")
-      expectAt(lines, 30, 20, "· write outside workspace")
-      expectAt(lines, 33, 3, "◦")
-      expectAt(lines, 33, 10, "subagent")
-      expectAt(lines, 33, 19, "docs-sync")
-      expectAt(lines, 37, 3, "..")
-      expectAt(lines, 37, 10, "Fix shared cache accounting")
-      expectAt(lines, 41, 47, "~ compacted · 42 messages → 1.2k tokens")
+      expectAt(lines, 6, 3, "!!")
+      expectAt(lines, 6, 10, "guardrail")
+      expectAt(lines, 6, 20, "· write outside workspace")
+      expectAt(lines, 9, 3, "◦")
+      expectAt(lines, 9, 10, "subagent")
+      expectAt(lines, 9, 19, "docs-sync")
+      expectAt(lines, 12, 3, "..")
+      expectAt(lines, 12, 10, "Fix shared cache accounting")
+      expectAt(lines, 14, 51, "~ compacted · 42 messages → 1.2k tokens")
     }
   }
 }, 120_000)
 
 function expectAt(lines: string[], row: number, column: number, text: string) {
   expect(lines[row - 1]?.slice(column, column + text.length)).toBe(text)
-}
-
-async function captureTrackedHistory(input: (typeof targets)[number] & { height: number }) {
-  const capture = await boot(input)
-  try {
-    await waitFor(capture.frame, () => input.stable?.every((text) => capture.frame().includes(text)) ?? true)
-    await openArchivePage(capture, 1)
-    await openArchivePage(capture, 2)
-    await openArchivePage(capture, 3)
-    pressArchiveShortcut(capture)
-    await waitFor(
-      capture.frame,
-      () =>
-        capture.frame().includes("pages 1–3 · 1,204 messages · ⌃x ↑ load") &&
-        capture.frame().includes("Two places record it."),
-    )
-    return capture.lines()
-  } finally {
-    await capture.dispose()
-  }
-}
-
-async function openArchivePage(capture: Awaited<ReturnType<typeof boot>>, page: number) {
-  pressArchiveShortcut(capture)
-  await waitFor(capture.frame, () =>
-    capture.lines().some((line) => line.includes(`page ${page}`) && line.includes("⌃x ↑ hide")),
-  )
-}
-
-function pressArchiveShortcut(capture: Awaited<ReturnType<typeof boot>>) {
-  capture.input.pressKey("\x1b[5~")
-}
-
-async function boot(input: (typeof targets)[number] & { height: number }) {
-  const setup = await createTestRenderer({ width: input.width, height: input.height, useThread: false, kittyKeyboard: true })
-  const core = await import("@opentui/core")
-  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
-  const runtime = await import("../../src/plugin/runtime")
-  const pluginRuntime = runtime.createPluginRuntime()
-  pluginRuntime.update({ status: input.pluginStatus ?? [] })
-  mock.module("../../src/plugin/runtime", () => ({ ...runtime, createPluginRuntime: () => pluginRuntime }))
-  const events = createEventStream()
-  const calls = createFetch(input.route, events)
-  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request), idleTimeout: 30 })
-  const { run } = await import("../../src/app")
-  const task = Effect.runPromise(
-    run({
-      server: { endpoint: { url: server.url.toString() } },
-      config: { get: async () => ({}), update: async () => ({}) },
-      packages: { resolve: async () => undefined },
-      args: input.args ?? {},
-      log: () => {},
-    }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
-  )
-
-  return {
-    frame: () => setup.captureCharFrame(),
-    lines: () => {
-      const frame = setup.captureCharFrame()
-      return (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n")
-    },
-    input: setup.mockInput,
-    async dispose() {
-      if (!setup.renderer.isDestroyed) setup.renderer.destroy()
-      await task.catch(() => {})
-      await server.stop()
-      mock.restore()
-    },
-  }
-}
-
-async function waitFor(frame: () => string, condition: () => boolean) {
-  const deadline = Date.now() + 15_000
-  while (Date.now() < deadline) {
-    if (condition()) return
-    await Bun.sleep(20)
-  }
-  throw new Error(`screen did not settle:\n${frame()}`)
 }

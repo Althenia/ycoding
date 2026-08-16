@@ -3,18 +3,18 @@ import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { onCleanup } from "solid-js"
 
-export function DialogThemeList() {
+export function DialogThemeList(props: { themes?: string[]; current?: string; defaultTheme?: string } = {}) {
   const theme = useTheme()
-  const options = Object.keys(theme.all())
-    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))
-    .map((value) => ({
+  const { themeV2 } = theme.contextual("elevated")
+  const options = (props.themes ?? Object.keys(theme.all()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }))).map((value) => ({
       title: value,
+      description: value === (props.defaultTheme ?? "ycoding") ? "default" : undefined,
       value: value,
     }))
   const dialog = useDialog()
   let confirmed = false
   let ref: DialogSelectRef<string>
-  const initial = theme.selected
+  const initial = props.current ?? theme.selected
 
   onCleanup(() => {
     if (!confirmed) theme.set(initial)
@@ -22,7 +22,7 @@ export function DialogThemeList() {
 
   return (
     <DialogSelect
-      title="Themes"
+      title="Select theme"
       options={options}
       current={initial}
       onMove={(opt) => {
@@ -45,6 +45,11 @@ export function DialogThemeList() {
         const first = ref.filtered[0]
         if (first) theme.set(first.value)
       }}
+      footer={
+        <box position="relative" top={-1}>
+          <text fg={themeV2.text.subdued}>←/→ preview</text>
+        </box>
+      }
     />
   )
 }

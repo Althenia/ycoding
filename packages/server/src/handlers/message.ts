@@ -1,28 +1,8 @@
-import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionV2 } from "@ycoding-ai/core/session"
-import { Effect, Schema } from "effect"
+import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { SessionNotFoundError, UnknownError } from "@ycoding-ai/protocol/errors"
 import { Api } from "../api"
-import { InvalidCursorError, SessionNotFoundError, UnknownError } from "@ycoding-ai/protocol/errors"
-
-const DefaultMessagesLimit = 50
-
-const Cursor = Schema.Struct({
-  id: SessionMessage.ID,
-  order: Schema.Union([Schema.Literal("asc"), Schema.Literal("desc")]),
-  direction: Schema.Union([Schema.Literal("previous"), Schema.Literal("next")]),
-})
-
-const decodeCursor = Schema.decodeUnknownSync(Cursor)
-
-const cursor = {
-  encode(message: SessionMessage.Info, order: "asc" | "desc", direction: "previous" | "next") {
-    return Buffer.from(JSON.stringify({ id: message.id, order, direction })).toString("base64url")
-  },
-  decode(input: string) {
-    return decodeCursor(JSON.parse(Buffer.from(input, "base64url").toString("utf8")))
-  },
-}
 
 export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handlers) =>
   Effect.gen(function* () {
@@ -31,20 +11,8 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
     return handlers.handle(
       "session.messages",
       Effect.fn(function* (ctx) {
-        if (ctx.query.cursor && ctx.query.order !== undefined)
-          return yield* new InvalidCursorError({ message: "Cursor cannot be combined with order" })
-        const decoded = yield* Effect.try({
-          try: () => (ctx.query.cursor ? cursor.decode(ctx.query.cursor) : undefined),
-          catch: () => new InvalidCursorError({ message: "Invalid cursor" }),
-        })
-        const order = decoded?.order ?? ctx.query.order ?? "desc"
         const messages = yield* session
-          .messages({
-            sessionID: ctx.params.sessionID,
-            limit: ctx.query.limit ?? DefaultMessagesLimit,
-            order,
-            cursor: decoded ? { id: decoded.id, direction: decoded.direction } : undefined,
-          })
+          .messages({ sessionID: ctx.params.sessionID, order: "asc" })
           .pipe(
             Effect.catchTag("Session.NotFoundError", (error) =>
               Effect.fail(
@@ -66,32 +34,7 @@ export const MessageHandler = HttpApiBuilder.group(Api, "server.message", (handl
               )
             }),
           )
-        const first = messages[0]
-        const last = messages.at(-1)
-        // Describes what the `next` cursor still has behind it. Absent rather than zero when there
-        // is no next cursor at all, so a client can tell "no more history" from "not reported".
-        const remaining = last
-          ? yield* session
-              .messageRemainder({ sessionID: ctx.params.sessionID, afterID: last.id, order })
-              .pipe(
-                Effect.catchTag("Session.NotFoundError", (error) =>
-                  Effect.fail(
-                    new SessionNotFoundError({
-                      sessionID: error.sessionID,
-                      message: `Session not found: ${error.sessionID}`,
-                    }),
-                  ),
-                ),
-              )
-          : undefined
-        return {
-          data: messages,
-          cursor: {
-            previous: first ? cursor.encode(first, order, "previous") : undefined,
-            next: last ? cursor.encode(last, order, "next") : undefined,
-            messages: remaining,
-          },
-        }
+        return { data: messages }
       }),
     )
   }),

@@ -42,7 +42,12 @@ test("a concurrent same-version start cannot invalidate a resolved endpoint", as
 
   expect(starts).toEqual([])
   expect(await Bun.file(registration).json()).toEqual(original)
-  expect(await health(resolved.url)).toEqual({ healthy: true, version: "test", pid: original.pid })
+  expect(await health(resolved.url)).toEqual({
+    healthy: true,
+    version: "test",
+    pid: original.pid,
+    sourceEpoch: original.id,
+  })
 })
 
 test("waits for a registered service to finish starting", async () => {
@@ -145,7 +150,12 @@ test("waits for a slow winner while bounding lock probes", async () => {
   const info = await Bun.file(registration).json()
   try {
     expect(endpoint.url).toBe(info.url)
-    expect(await health(endpoint.url)).toEqual({ healthy: true, version: "test", pid: info.pid })
+    expect(await health(endpoint.url)).toEqual({
+      healthy: true,
+      version: "test",
+      pid: info.pid,
+      sourceEpoch: info.id,
+    })
     expect((await Bun.file(registration + ".starts").text()).trim().split("\n")).toHaveLength(2)
   } finally {
     process.kill(info.pid, "SIGTERM")

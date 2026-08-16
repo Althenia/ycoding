@@ -7,6 +7,7 @@ import {
   Task,
   TeamView,
   truncateUtf8,
+  ListAnchor,
   type Change,
   type NotificationType,
   type State,
@@ -18,8 +19,10 @@ import { EventV2 } from "../event"
 import { KeyedMutex } from "../effect/keyed-mutex"
 import { PermissionV2 } from "../permission"
 import { Hash } from "../util/hash"
+import { canonicalJSON } from "./context-manifest"
 import { Context, Effect, Layer, Schema } from "effect"
-import { and, asc, eq, inArray } from "drizzle-orm"
+import { SqlError } from "effect/unstable/sql/SqlError"
+import { and, asc, count, desc, eq, gt, inArray, lt, or, sql } from "drizzle-orm"
 import { SessionV2 } from "../session"
 import { SessionExecution } from "./execution"
 import { SessionAutonomy } from "./autonomy"
@@ -32,6 +35,8 @@ import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 
 const TeamViewBytes = 32 * 1024
 const terminalStates = new Set<State>(["cancelled", "completed", "failed", "lost"])
+const PageSize = 10
+type DatabaseService = Database.Interface["db"]
 export { truncateUtf8 }
 export const failureText = (input: string) => truncateUtf8(input, 16 * 1024)
 
@@ -40,6 +45,165 @@ export const selectModel = (
   agent: Model.Ref | undefined,
   parent: Model.Ref | undefined,
 ) => spawn ?? agent ?? parent
+
+const taskRank = (state: State): ListAnchor["rank"] => {
+  if (state === "waiting") return 0
+  if (state === "starting") return 1
+  if (state === "running") return 2
+  if (state === "cancelling") return 3
+  return 4
+}
+
+const taskPriority = sql<number>`case ${SessionTaskTable.state}
+  when 'waiting' then 0
+  when 'starting' then 1
+  when 'running' then 2
+  when 'cancelling' then 3
+  else 4
+end`
+
+export type Page = {
+  readonly data: ReadonlyArray<Task>
+  readonly summary: {
+    readonly total: number
+    readonly active: number
+    readonly running: number
+    readonly waiting: number
+  }
+  readonly cursor: {
+    readonly previous?: ListAnchor
+    readonly next?: ListAnchor
+  }
+}
+
+export const page = Effect.fn("SessionOrchestration.page")(function* (
+  db: DatabaseService,
+  input: { readonly parentID: SessionSchema.ID; readonly limit?: number; readonly cursor?: ListAnchor },
+) {
+  const limit = Math.min(input.limit ?? PageSize, PageSize)
+  return yield* db
+    .transaction(() =>
+      Effect.gen(function* () {
+        const parent = yield* db
+          .select({ id: SessionTable.id })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, input.parentID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!parent) return yield* new SessionV2.NotFoundError({ sessionID: input.parentID })
+
+        const summary = yield* db
+          .select({
+            total: count(),
+            active: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} in ('starting', 'running', 'waiting', 'cancelling') then 1 else 0 end), 0)`,
+            running: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} = 'running' then 1 else 0 end), 0)`,
+            waiting: sql<number>`coalesce(sum(case when ${SessionTaskTable.state} = 'waiting' then 1 else 0 end), 0)`,
+          })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.parent_id, input.parentID))
+          .get()
+          .pipe(Effect.orDie)
+        const cursor = input.cursor
+        const previous = cursor?.direction === "previous"
+        const boundary = cursor
+          ? previous
+            ? or(
+                lt(taskPriority, cursor.rank),
+                and(eq(taskPriority, cursor.rank), gt(SessionTaskTable.time_updated, cursor.updated)),
+                and(
+                  eq(taskPriority, cursor.rank),
+                  eq(SessionTaskTable.time_updated, cursor.updated),
+                  lt(SessionTaskTable.session_id, cursor.sessionID),
+                ),
+              )
+            : or(
+                gt(taskPriority, cursor.rank),
+                and(eq(taskPriority, cursor.rank), lt(SessionTaskTable.time_updated, cursor.updated)),
+                and(
+                  eq(taskPriority, cursor.rank),
+                  eq(SessionTaskTable.time_updated, cursor.updated),
+                  gt(SessionTaskTable.session_id, cursor.sessionID),
+                ),
+              )
+          : undefined
+        const rows = yield* db
+          .select()
+          .from(SessionTaskTable)
+          .where(and(eq(SessionTaskTable.parent_id, input.parentID), boundary))
+          .orderBy(
+            previous ? desc(taskPriority) : asc(taskPriority),
+            previous ? asc(SessionTaskTable.time_updated) : desc(SessionTaskTable.time_updated),
+            previous ? desc(SessionTaskTable.session_id) : asc(SessionTaskTable.session_id),
+          )
+          .limit(limit + 1)
+          .all()
+          .pipe(Effect.orDie)
+        const hasMore = rows.length > limit
+        const data = (previous ? rows.slice(0, limit).toReversed() : rows.slice(0, limit)).map(taskFromRow)
+        const first = data[0]
+        const last = data.at(-1)
+        const previousCursor =
+          first && (previous ? hasMore : cursor !== undefined)
+            ? ListAnchor.make({
+                rank: taskRank(first.state),
+                updated: first.time.updated,
+                sessionID: first.sessionID,
+                direction: "previous",
+              })
+            : undefined
+        const nextCursor =
+          last && (previous ? cursor !== undefined : hasMore)
+            ? ListAnchor.make({
+                rank: taskRank(last.state),
+                updated: last.time.updated,
+                sessionID: last.sessionID,
+                direction: "next",
+              })
+            : undefined
+        return {
+          data,
+          summary: {
+            total: summary?.total ?? 0,
+            active: summary?.active ?? 0,
+            running: summary?.running ?? 0,
+            waiting: summary?.waiting ?? 0,
+          },
+          cursor: {
+            previous: previousCursor,
+            next: nextCursor,
+          },
+        }
+      }),
+    )
+    .pipe(Effect.catchTag("SqlError", Effect.die))
+})
+
+export const snapshot = Effect.fn("SessionOrchestration.snapshot")(function* (
+  db: DatabaseService,
+  parentID: SessionSchema.ID,
+) {
+  return yield* db
+    .transaction(() =>
+      Effect.gen(function* () {
+        const parent = yield* db
+          .select({ sequence: SessionTable.orchestration_revision })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, parentID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!parent) return yield* new SessionV2.NotFoundError({ sessionID: parentID })
+        const versions = yield* db
+          .select({ sessionID: SessionTaskTable.session_id, revision: SessionTaskTable.revision })
+          .from(SessionTaskTable)
+          .where(eq(SessionTaskTable.parent_id, parentID))
+          .orderBy(asc(SessionTaskTable.session_id))
+          .all()
+          .pipe(Effect.orDie)
+        return { sequence: parent.sequence, digest: Hash.sha256(canonicalJSON(versions)) }
+      }),
+    )
+    .pipe(Effect.catchTag("SqlError", Effect.die))
+})
 
 export const identities = (parentID: SessionSchema.ID, messageID: SessionMessage.ID, callID: string) => {
   const digest = Hash.sha256(`${parentID}\0${messageID}\0${callID}`)
@@ -185,6 +349,11 @@ export interface Interface {
   ) => Effect.Effect<Task, SessionV2.NotFoundError | NotFoundError | ForbiddenError>
   readonly launch: (input: LaunchInput) => Effect.Effect<Task, LaunchError>
   readonly list: (parentID: SessionSchema.ID) => Effect.Effect<ReadonlyArray<Task>, SessionV2.NotFoundError>
+  readonly page: (input: {
+    readonly parentID: SessionSchema.ID
+    readonly limit?: number
+    readonly cursor?: ListAnchor
+  }) => Effect.Effect<Page, SessionV2.NotFoundError>
   readonly send: (input: {
     readonly parentID: SessionSchema.ID
     readonly childID: SessionSchema.ID
@@ -212,10 +381,7 @@ export interface Interface {
     childID: SessionSchema.ID,
     text: string,
     data?: Schema.Json,
-  ) => Effect.Effect<
-    { readonly question: Question; readonly autoAnswered: boolean },
-    TaskNotFoundError | ConflictError
-  >
+  ) => Effect.Effect<{ readonly question: Question; readonly autoAnswered: boolean }, TaskNotFoundError | ConflictError>
   readonly settle: (
     childID: SessionSchema.ID,
     result:
@@ -406,6 +572,7 @@ const layer = Layer.effect(
           .pipe(Effect.orDie)
         return rows.map(taskFromRow)
       }),
+      page: Effect.fn("SessionOrchestration.page")((input) => page(db, input)),
       send: Effect.fn("SessionOrchestration.send")((input) =>
         locks.withLock(input.childID)(
           Effect.gen(function* () {
@@ -501,7 +668,7 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             const row = yield* owned(input.parentID, input.childID)
             if (row.state === "cancelled") return taskFromRow(row)
-            if (row.state !== "running" && row.state !== "waiting")
+            if (row.state !== "starting" && row.state !== "running" && row.state !== "waiting")
               return yield* new ConflictError({ message: `Cannot cancel task in ${row.state}` })
             yield* publish(input.childID, { type: "cancel_requested" })
             yield* execution.interrupt(input.childID)
@@ -557,35 +724,33 @@ const layer = Layer.effect(
               data,
               time: Date.now(),
             })
-            if (
-              yield* autonomy
-                .isAutonomous(childID)
-                .pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))
-            ) {
-              yield* sessions.synthetic({
-                id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
-                sessionID: childID,
-                text: `Parent answer:\n${JSON.stringify({
-                  questionID: question.id,
-                  text: SessionAutonomy.AutomaticAnswer,
-                })}`,
-                description: "Autonomous subagent answer",
-                metadata: {
-                  source: "subagent_parent",
-                  parentID: row.parent_id,
-                  childID,
-                  kind: "answer",
-                  questionID: question.id,
-                },
-                delivery: "steer",
-                resume: false,
-              }).pipe(
-                Effect.mapError((error) =>
-                  error._tag === "Session.NotFoundError"
-                    ? new TaskNotFoundError({ childID })
-                    : new ConflictError({ message: `Conflicting autonomous answer for ${question.id}` }),
-                ),
-              )
+            if (yield* autonomy.canAutoAnswer(childID).pipe(Effect.mapError(() => new TaskNotFoundError({ childID })))) {
+              yield* sessions
+                .synthetic({
+                  id: identities(row.parent_id, row.parent_assistant_message_id, row.tool_call_id).answer(question.id),
+                  sessionID: childID,
+                  text: `Parent answer:\n${JSON.stringify({
+                    questionID: question.id,
+                    text: SessionAutonomy.AutomaticAnswer,
+                  })}`,
+                  description: "Autonomous subagent answer",
+                  metadata: {
+                    source: "subagent_parent",
+                    parentID: row.parent_id,
+                    childID,
+                    kind: "answer",
+                    questionID: question.id,
+                  },
+                  delivery: "steer",
+                  resume: false,
+                })
+                .pipe(
+                  Effect.mapError((error) =>
+                    error._tag === "Session.NotFoundError"
+                      ? new TaskNotFoundError({ childID })
+                      : new ConflictError({ message: `Conflicting autonomous answer for ${question.id}` }),
+                  ),
+                )
               yield* execution.wake(childID)
               return { question, autoAnswered: true }
             }

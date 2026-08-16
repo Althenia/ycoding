@@ -12,7 +12,7 @@ import { SessionOrchestration } from "../session/orchestration"
 export interface Interface {
   readonly session: Pick<
     SessionV2.Interface,
-    "get" | "create" | "messages" | "prompt" | "generate" | "command" | "resume" | "interrupt" | "synthetic"
+    "get" | "create" | "messages" | "prompt" | "generate" | "command" | "resume" | "interrupt" | "synthetic" | "compact"
   >
   readonly job: Pick<Job.Interface, "start" | "wait" | "block" | "background" | "cancel">
   readonly orchestration: SessionOrchestration.Interface
@@ -57,6 +57,10 @@ export const layerWithCell = (cell: Cell) =>
         resume: (sessionID) => require(cell, (runtime) => runtime.session.resume(sessionID)),
         interrupt: (sessionID) => require(cell, (runtime) => runtime.session.interrupt(sessionID)),
         synthetic: (input) => require(cell, (runtime) => runtime.session.synthetic(input)),
+        compact: ((input: SessionV2.AdvisorCompactInput | SessionV2.ManualCompactInput) => {
+          if (input.trigger === undefined) return require(cell, (runtime) => runtime.session.compact(input))
+          return require(cell, (runtime) => runtime.session.compact(input))
+        }) as SessionV2.Interface["compact"],
       },
       job: {
         start: (input) => require(cell, (runtime) => runtime.job.start(input)),
@@ -70,6 +74,7 @@ export const layerWithCell = (cell: Cell) =>
         get: (parentID, childID) => require(cell, (runtime) => runtime.orchestration.get(parentID, childID)),
         launch: (input) => require(cell, (runtime) => runtime.orchestration.launch(input)),
         list: (parentID) => require(cell, (runtime) => runtime.orchestration.list(parentID)),
+        page: (input) => require(cell, (runtime) => runtime.orchestration.page(input)),
         send: (input) => require(cell, (runtime) => runtime.orchestration.send(input)),
         answer: (input) => require(cell, (runtime) => runtime.orchestration.answer(input)),
         cancel: (input) => require(cell, (runtime) => runtime.orchestration.cancel(input)),

@@ -155,6 +155,7 @@ function failedTool(inputID: string): V2Event[] {
 // live events the prompt admission triggers, keyed by the generated message ID.
 async function run(input: {
   turn: (inputID: string) => V2Event[]
+  files?: Array<{ url: string; filename: string; mime: string }>
   pendingForms?: FormInfo[]
   attached?: boolean
   format?: "default" | "json"
@@ -163,7 +164,7 @@ async function run(input: {
   renderToolError?: (part: SessionMessageAssistantTool) => Promise<void>
 }) {
   const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
-  const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {} }]
+  const values: V2Event[] = [{ id: "evt_connected", type: "server.connected", data: {}, sourceEpoch: "1" }]
   let wake: (() => void) | undefined
   const stream = (async function* (): AsyncGenerator<V2Event, void, unknown> {
     while (true) {
@@ -204,7 +205,7 @@ async function run(input: {
     sessionID: "ses_1",
     location,
     message: "hello",
-    files: [],
+    files: input.files ?? [],
     thinking: false,
     format: input.format ?? "default",
     auto: false,
@@ -242,6 +243,22 @@ afterEach(() => {
 })
 
 describe("runNonInteractivePrompt", () => {
+  test("forwards prepared file URIs without embedding file content in text", async () => {
+    const files = [
+      { url: "file:///tmp/note.txt", filename: "note.txt", mime: "text/plain" },
+      { url: "file:///tmp/document.pdf", filename: "document.pdf", mime: "application/pdf" },
+    ]
+    const sdk = await run({ files, turn: (id) => [prompted(id), settled()] })
+
+    expect(sdk.session.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "hello",
+        files: files.map((file) => ({ uri: file.url, name: file.filename })),
+      }),
+      expect.anything(),
+    )
+  })
+
   test("cancels session and global form blockers and exits on pre-promotion interrupt", async () => {
     const sdk = await run({
       pendingForms: [form("frm_pending", "ses_1"), form("frm_pending_global", "global")],

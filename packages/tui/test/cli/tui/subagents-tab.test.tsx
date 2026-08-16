@@ -21,7 +21,13 @@ function findScrollBox(root: Renderable): ScrollBoxRenderable | undefined {
   return root.getChildren().map(findScrollBox).find(Boolean)
 }
 
-async function renderMetadata(input: { model?: string; status?: string; width?: number }) {
+async function renderMetadata(input: {
+  model?: string
+  status?: string
+  cacheHit?: string
+  elapsed?: string
+  width?: number
+}) {
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -32,11 +38,16 @@ async function renderMetadata(input: { model?: string; status?: string; width?: 
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <box flexDirection="row">
+            <box flexDirection="column">
               <box flexGrow={1}>
                 <text>Task</text>
               </box>
-              <module.SubagentMetadata model={input.model} status={input.status} active={false} />
+              <module.SubagentMetadata
+                model={input.model}
+                cacheHit={input.cacheHit}
+                elapsed={input.elapsed}
+                status={input.status}
+              />
             </box>
           </ThemeProvider>
         </ConfigProvider>
@@ -58,8 +69,10 @@ test("formats provider, model, and optional variant", () => {
     }),
   ).toBe("openai/gpt-5.6-luna#high")
   expect(module.formatSubagentModel({ providerID: "openai", id: "gpt-5.6-sol" })).toBe("openai/gpt-5.6-sol")
-  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-sonnet-5" })).toBe("Sonnet 5")
-  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe("Haiku 4.5")
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-sonnet-5", variant: "max" })).toBe(
+    "anthropic/claude-sonnet-5#max",
+  )
+  expect(module.formatSubagentModel({ providerID: "anthropic", id: "claude-haiku-4-5" })).toBe("anthropic/claude-haiku-4-5")
   expect(module.formatSubagentModel(undefined)).toBeUndefined()
   expect(module.formatSubagentCacheHit(undefined)).toBe("—")
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
@@ -279,21 +292,90 @@ test("cancels waiting managed tasks through the durable endpoint", async () => {
   expect(interrupted).toBe(false)
 })
 
-test("renders model and running status on one row", async () => {
+test("cancels a starting subagent from sequential Ctrl+X then K", async () => {
+  function LeaderProbe() {
+    const leaderActive = Keymap.useLeaderActive()
+    return <text>{leaderActive() ? "leader pending" : ""}</text>
+  }
+
+  const task: SessionOrchestrationTask = {
+    sessionID: "ses_child",
+    parentID: "ses_parent",
+    description: "Start review",
+    agent: "reviewer",
+    model: { providerID: "openai", id: "gpt-5.6" },
+    background: true,
+    state: "starting",
+    revision: 1,
+    time: { created: 1, updated: 1 },
+  }
+  const cancellations: Array<{ pathname: string; method: string }> = []
+  const calls = createFetch((url, request) => {
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({ data: [task], summary: { total: 1, active: 1, running: 0, waiting: 0 }, cursor: {} })
+    if (url.pathname === "/api/session/ses_parent/subagent/ses_child/cancel") {
+      cancellations.push({ pathname: url.pathname, method: request.method })
+      return json({ ...task, state: "cancelled" })
+    }
+    return undefined
+  })
+  const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
+    import("../../../src/config"),
+    import("../../../src/context/theme"),
+  ])
+  const config = createTuiResolvedConfig()
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={config}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <Keymap.Provider config={config}>
+              <ClientProvider api={createApi(calls.fetch)}>
+                <DataProvider>
+                  <LocationProvider>
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_parent" }}>
+                      <LeaderProbe />
+                      <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                    </RouteProvider>
+                  </LocationProvider>
+                </DataProvider>
+              </ClientProvider>
+            </Keymap.Provider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 80, height: 32, kittyKeyboard: true },
+  )
+  app.renderer.start()
+
+  try {
+    await app.waitForFrame((frame) => frame.includes("starting") && frame.includes("Start review"))
+    app.mockInput.pressKey("x", { ctrl: true })
+    await app.waitForFrame((frame) => frame.includes("leader pending"))
+    app.mockInput.pressKey("k")
+    for (let tick = 0; tick < 50 && cancellations.length === 0; tick++) await Bun.sleep(0)
+
+    expect(cancellations).toEqual([{ pathname: "/api/session/ses_parent/subagent/ses_child/cancel", method: "POST" }])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("renders model and running status without a second task row", async () => {
   const app = await renderMetadata({
     model: "openai/gpt-5.6-luna#high",
     status: "Running",
   })
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("openai/gpt-5.6-luna#high · Running")
-    expect(
-      frame
-        .split("\n")
-        .find((line) => line.includes("Running"))
-        ?.trimEnd()
-        .endsWith("Running"),
-    ).toBe(true)
+    const rows = frame.split("\n").map((line) => line.trimEnd())
+    const titleRow = rows.find((line) => line.includes("Task"))
+    const modelRow = rows.find((line) => line.includes("openai/gpt-5.6-luna#high"))
+    expect(titleRow).toBeDefined()
+    expect(modelRow).toBeDefined()
+    expect(modelRow).toContain("openai/gpt-5.6-luna#high")
+    expect(rows.filter((line) => line.includes("openai/gpt-5.6-luna#high"))).toHaveLength(1)
   } finally {
     app.renderer.destroy()
   }
@@ -327,25 +409,20 @@ test("omits model metadata when the session has no model", async () => {
   }
 })
 
-test("clips a long model label while preserving running status", async () => {
-  const model = `provider/${"model".repeat(16)}#variant`
-  const app = await renderMetadata({ model, status: "Running", width: 48 })
+test("renders a long model id untruncated on its own row without colliding with telemetry", async () => {
+  const model = "openrouter/deepseek/deepseek-v4-flash-0731"
+  const app = await renderMetadata({
+    model,
+    status: "attached",
+    cacheHit: "100% hit",
+    elapsed: "12s",
+    width: 120,
+  })
   try {
     const frame = app.captureCharFrame()
-    expect(frame).not.toContain(model)
-    expect(frame).toContain(model.slice(0, 12))
-    const contentRows = frame.split("\n").filter((line) => line.trim().length > 0)
-    expect(contentRows).toHaveLength(1)
-    expect(contentRows[0]).toContain("Task")
-    expect(contentRows[0]).toContain(model.slice(0, 12))
-    expect(contentRows[0]).toContain("Running")
-    expect(
-      frame
-        .split("\n")
-        .find((line) => line.includes("Running"))
-        ?.trimEnd()
-        .endsWith("Running"),
-    ).toBe(true)
+    expect(frame).toContain("openrouter/deepseek/deepseek-v4-fla")
+    expect(frame).not.toContain("deepsee100%")
+    expect(frame).not.toContain("0730%")
   } finally {
     app.renderer.destroy()
   }
@@ -399,7 +476,12 @@ test("renders section headings while keyboard navigation selects only task rows 
     },
   ]
   const calls = createFetch((url) => {
-    if (url.pathname === "/api/session/ses_parent/subagent") return json({ data: tasks })
+    if (url.pathname === "/api/session/ses_parent/subagent")
+      return json({
+        data: tasks,
+        summary: { total: tasks.length, active: 2, running: 1, waiting: 1 },
+        cursor: {},
+      })
     return undefined
   })
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
@@ -452,8 +534,11 @@ test("renders section headings while keyboard navigation selects only task rows 
     const initial = app.captureCharFrame()
     expect(initial).toContain("ACTIVE")
     expect(initial).toContain("INACTIVE")
-    expect(initial).toContain("reviewer  · Review implementation")
-    expect(initial).toContain("general  · Archive results")
+    // Each task keeps its status, agent, description, and metadata on one bounded row.
+    expect(initial).toContain("running         reviewer")
+    expect(initial).toContain("completed       general")
+    expect(initial).toContain("· Review implementation")
+    expect(initial).toContain("· Archive results")
     const sectionRoots = findScrollBox(app.renderer.root)?.getChildren() ?? []
     expect(sectionRoots).toHaveLength(2)
     expect(sectionRoots.every((child) => child instanceof BoxRenderable)).toBe(true)

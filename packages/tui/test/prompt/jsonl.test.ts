@@ -12,6 +12,27 @@ test("stash JSONL skips corruption and retains newest entries", () => {
   expect(result[0]?.prompt.text).toBe("2")
 })
 
+test("stash JSONL strips legacy data attachments and preserves managed refs", () => {
+  const managed = `ycoding-attachment://sha256/${"a".repeat(64)}`
+  const result = parsePromptStash(
+    JSON.stringify({
+      prompt: {
+        text: "review",
+        files: [
+          { uri: "data:application/pdf;base64,AAA=", name: "legacy.pdf" },
+          { uri: managed, name: "managed.pdf" },
+        ],
+        agents: [],
+        pasted: [],
+      },
+      timestamp: 1,
+    }),
+  )
+
+  expect(result[0]?.prompt.files).toEqual([{ uri: managed, name: "managed.pdf" }])
+  expect(JSON.stringify(result)).not.toContain("data:")
+})
+
 test("frecency JSONL skips corruption, keeps latest path state, and limits entries", () => {
   const entries = Array.from({ length: MAX_FRECENCY_ENTRIES + 1 }, (_, index) =>
     JSON.stringify({ path: String(index), frequency: 1, lastOpen: index }),

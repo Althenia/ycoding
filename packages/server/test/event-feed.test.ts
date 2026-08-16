@@ -2,11 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { YCodingEvent } from "@ycoding-ai/protocol/groups/event"
+import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { DateTime, Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect"
 import { it } from "../../core/test/lib/effect"
 import { EventFeed } from "../src/event-feed"
 
 const Internal = EventV2.ephemeral({ type: "test.internal", schema: { value: Schema.String } })
+const sourceEpoch = ServiceStatus.Epoch.make("source_test")
 
 const event = (id: string): EventV2.Payload<typeof AgentV2.Event.Updated> => ({
   id: EventV2.ID.make(`evt_${id}`),
@@ -39,8 +41,8 @@ function makeSource() {
 describe("EventFeed", () => {
   test("preserves the public SSE frame encoding", () => {
     const payload = event("wire")
-    expect(EventFeed.frame(payload)).toBe(
-      `data: ${JSON.stringify(Schema.encodeUnknownSync(YCodingEvent)(payload))}\n\n`,
+    expect(EventFeed.frame(sourceEpoch, payload)).toBe(
+      `data: ${JSON.stringify(Schema.encodeUnknownSync(YCodingEvent)({ ...payload, sourceEpoch }))}\n\n`,
     )
   })
 
@@ -48,7 +50,7 @@ describe("EventFeed", () => {
     Effect.gen(function* () {
       let encodes = 0
       const source = makeSource()
-      const feed = yield* EventFeed.make(source.observe, {
+      const feed = yield* EventFeed.make(sourceEpoch, source.observe, {
         encode: (event) => {
           encodes += 1
           return event.type
@@ -72,7 +74,7 @@ describe("EventFeed", () => {
   it.effect("fails only the subscriber that exceeds its lag capacity", () =>
     Effect.gen(function* () {
       const source = makeSource()
-      const feed = yield* EventFeed.make(source.observe, {
+      const feed = yield* EventFeed.make(sourceEpoch, source.observe, {
         capacity: 1,
         encode: (event) => event.id,
       })
@@ -116,7 +118,7 @@ describe("EventFeed", () => {
   it.effect("filters internal events before they consume subscriber capacity", () =>
     Effect.gen(function* () {
       const source = makeSource()
-      const feed = yield* EventFeed.make(source.observe, { capacity: 1, encode: (event) => event.type })
+      const feed = yield* EventFeed.make(sourceEpoch, source.observe, { capacity: 1, encode: (event) => event.type })
       const stream = yield* feed.subscribe
 
       yield* source.publish(internal("one"))
@@ -130,7 +132,7 @@ describe("EventFeed", () => {
   it.effect("disconnects current subscribers after an encoding failure and continues for later subscribers", () =>
     Effect.gen(function* () {
       const source = makeSource()
-      const feed = yield* EventFeed.make(source.observe, {
+      const feed = yield* EventFeed.make(sourceEpoch, source.observe, {
         encode: (event) => {
           if (event.id === EventV2.ID.make("evt_bad")) throw new Error("invalid event")
           return event.id

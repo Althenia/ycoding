@@ -44,12 +44,19 @@ export function DialogSkill(props: DialogSkillProps) {
     if (showError()) return []
     const list = skills() ?? []
     const maxWidth = Math.max(0, ...list.map((s) => s.name.length))
-    return list.map((skill) => ({
-      title: skill.name.padEnd(maxWidth),
-      description: skill.description?.replace(/\s+/g, " ").trim(),
-      value: skill.id,
+    const classified = list.map((skill) => ({
+      skill,
+      category: skill.location.startsWith(`${data.location.info()?.project.directory}/`) ? "Project" : "Global",
+    }))
+    const firstSecondary = classified.findIndex((item) => item.category !== classified[0]?.category)
+    return classified.map((item, index) => ({
+      title: item.skill.name.padEnd(maxWidth),
+      titleView: index === firstSecondary ? <>{`\n${item.skill.name.padEnd(maxWidth)}`}</> : undefined,
+      description: item.skill.description?.replace(/\s+/g, " ").trim(),
+      category: item.category,
+      value: item.skill.id,
       onSelect: () => {
-        props.onSelect(skill.id)
+        props.onSelect(item.skill.id)
         dialog.clear()
       },
     }))
@@ -57,7 +64,7 @@ export function DialogSkill(props: DialogSkillProps) {
 
   return (
     <DialogSelect
-      title="Skills"
+      title="Run skill"
       options={options()}
       renderFilter={!showError() && !skills.loading}
       locked={showError() || skills.loading}

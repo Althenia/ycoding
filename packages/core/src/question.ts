@@ -96,7 +96,7 @@ const layer = Layer.effect(
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const autonomous = yield* autonomy
-            .isAutonomous(input.sessionID)
+            .canAutoAnswer(input.sessionID)
             .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
           if (autonomous) {
             return input.questions.map((question) => {

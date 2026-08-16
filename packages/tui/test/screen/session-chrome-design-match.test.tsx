@@ -1,7 +1,9 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
+import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { json } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
+import { railWidth } from "../../src/routes/session/rail"
 import { renderScreen } from "./harness"
 
 const sessionID = "ses_chrome_design_match"
@@ -108,18 +110,39 @@ async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
   const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     const lines = screen.lines()
-    expect(lines.findIndex((line) => line.includes("─") && line.indexOf("─") < viewport.width / 2)).toBe(57)
-    expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(59)
-    expect(lines.findIndex((line) => line.includes("Enter send"))).toBe(61)
-    expect(lines[59]?.indexOf("Message YCoding…")).toBe(3)
-    expect(lines[61]?.indexOf("Enter send")).toBe(3)
-    expect(lines[60]).not.toContain("Build")
-    expect(lines.findIndex((line) => line.includes("goal off") && line.includes("YOLO off"))).toBe(67)
+    const ruleRow = lines.findIndex((line) => line.includes("─") && line.indexOf("─") < viewport.width / 2)
+    const footerRow = lines.findIndex((line) => line.includes("goal off") && line.includes("YOLO off"))
+    // A resting chat composer occupies only its rule and input row.
+    // Its surrounding surface is six rows tall, matching the landing composer before the shared footer row.
+    expect(ruleRow).toBe(60)
+    expect(footerRow - ruleRow).toBe(7)
+    expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(61)
+    expect(lines[61]?.indexOf("Message YCoding…")).toBe(3)
+    expect(lines.some((line) => line.includes("Enter send"))).toBe(false)
+    expect(lines[62]).not.toContain("Build")
+    expect(footerRow).toBe(67)
     expect(lines[67]).toContain("subagents 0")
     expect(lines.slice(68).join("\n")).not.toContain(directory)
-    const header = lines.find((line) => line.includes("y. ycoding") && line.includes("ready"))
+    const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
     expect(header).toContain("Build · Claude Opus 5 · max")
     expect(header?.indexOf("ready")).toBe(viewport.width - 3 - "ready".length)
+  } finally {
+    await screen.dispose()
+  }
+}
+
+async function expectComposerSurface(viewport: typeof DESIGN_VIEWPORT) {
+  const screen = await renderScreen({ ...viewport, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    const lines = screen.lines()
+    const mainWidth = viewport.width - railWidth(viewport.width)
+    const spans = screen.spans().lines
+    const rule = [...(lines[60] ?? "")].flatMap((character, column) => (character === "─" ? [column] : []))
+    const ruleBackground = spans[60]?.spans.find((span) => span.text.includes("─"))?.bg.toInts()
+    const promptBackground = spans[61]?.spans.find((span) => span.text.includes("Message YCoding…"))?.bg.toInts()
+
+    expect([rule[0], rule.at(-1)]).toEqual([0, mainWidth - 1])
+    expect(promptBackground).toEqual(ruleBackground)
   } finally {
     await screen.dispose()
   }
@@ -128,4 +151,8 @@ async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
 describe("active-session chrome Penpot design match", () => {
   test("matches the 189x69 chrome rows", () => expectChrome(DESIGN_VIEWPORT), 60_000)
   test("matches the 220x69 chrome rows", () => expectChrome(DESIGN_VIEWPORT_WIDE), 60_000)
+  test("fills the main column behind the composer at responsive widths", async () => {
+    await expectComposerSurface(DESIGN_VIEWPORT)
+    await expectComposerSurface(DESIGN_VIEWPORT_WIDE)
+  }, 60_000)
 })

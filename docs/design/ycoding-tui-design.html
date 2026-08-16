@@ -291,7 +291,7 @@
 <tr><td class="k"><code>!!</code></td><td>guardrail blocked</td><td>WARNING</td><td><b class="k">new</b> — <code>guardrail.tsx</code> had no designed row</td></tr>
 <tr><td class="k"><code>?</code></td><td>subagent awaiting input</td><td>WARNING</td><td><b class="k">new</b> — <code>task.question.text</code> never surfaced</td></tr>
 <tr><td class="k"><code>◦</code></td><td>subagent identity</td><td>INFO</td><td><b class="k">new</b></td></tr>
-<tr><td class="k"><code>~</code></td><td>compaction / archive boundary</td><td>MUTED</td><td><b class="k">new</b></td></tr>
+<tr><td class="k"><code>~</code></td><td>compaction checkpoint</td><td>MUTED</td><td><b class="k">new</b></td></tr>
 </table>
 
 <!-- 4 HEADER -->
@@ -390,7 +390,6 @@
   <div class="body">
     <div class="main">
       <div class="tr">
-        <div class="bnd"><i></i><span>~ archived · pages 1–3 · 1,204 messages · ⌃x ↑ load</span><i></i></div>
         <div class="bubwrap"><div class="bub">Where is provider cache telemetry recorded?</div></div>
         <div class="who">YCODING</div>
         <div class="say">Two places record it. The runtime writes counters into the durable session store; the TUI reads them for the rail. Recording path is <u>packages/core/src/provider/usage.ts:88</u>.</div>
@@ -995,7 +994,6 @@ const D=[
  ["Session timeline","dialog-timeline.tsx","⌃x g","Session timeline",[
    ["g","Today"],["s","● Fix shared cache accounting","2 min ago","Active"],
    ["r","Add failing test","8 min ago","Done","ok"],["r","Verify baseline","14 min ago","Done","ok"],
-   ["g","Archived"],["r","pages 1–3","1,204 messages","⌃x ↑"]],""],
 
  ["Subagents","dialog-subagent.tsx","↓","Subagents",[
    ["g","Active"],["s","test-triage","Triage 2 failing tests","Awaiting input","warn"],
@@ -1060,7 +1058,7 @@ const D=[
 
  ["Export options","dialog-export-options.tsx","⌃x x","Export session",[
    ["g","Format"],["s","● Markdown"],["r","JSON"],["r","Plain text"],
-   ["g","Range"],["r","Whole session","","1,292 msgs"],["r","Hot window only","","50 msgs"]],""],
+   ["g","Range"],["r","Whole session","","1,292 msgs"]],""],
 
  ["Export result","dialog-export-result.tsx","","Export complete",[
    ["g","Written to"],["r","~/Downloads/provider-cache-audit.md","","1.2 MB","ok"],

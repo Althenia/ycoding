@@ -1,4 +1,0 @@
-[submodule "vendor/opentui"]
-	path = vendor/opentui
-	url = https://github.com/anomalyco/opentui.git
-	branch = native-image-lib

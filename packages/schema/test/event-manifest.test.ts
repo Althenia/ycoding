@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DateTime, Schema } from "effect"
 import {
   AbsolutePath,
   Agent,
@@ -11,6 +12,7 @@ import {
   Project,
   Reference,
   Session,
+  SessionCompaction,
   Workspace,
 } from "../src/index.js"
 import { EventManifest } from "../src/event-manifest.js"
@@ -49,6 +51,7 @@ describe("public event manifest", () => {
     expect(Workspace.Event).toBe(WorkspaceEvent)
     expect(Workspace.Event.Definitions).toBe(WorkspaceEvent.Definitions)
     expect(EventManifest.Latest.get("session.created")).toBe(SessionEvent.Created)
+    expect(EventManifest.Latest.get("session.input.consumed")).toBe(SessionEvent.InputConsumed)
     expect(EventManifest.Latest.get("session.step.ended")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Latest.get("agent.updated")).toBe(Agent.Event.Updated)
     expect(EventManifest.Latest.get("project.updated")).toBe(Project.Event.Updated)
@@ -67,6 +70,53 @@ describe("public event manifest", () => {
     expect(IdeEvent.Definitions).toEqual([IdeEvent.Installed])
     expect(EventManifest.Durable.get("session.step.ended.1")).toBe(SessionEvent.Step.Ended)
     expect(EventManifest.Durable.has("session.step.ended.2")).toBe(false)
+  })
+
+  test("defines public compaction jobs without provider-private state", () => {
+    const admission = Schema.decodeUnknownSync(SessionCompaction.Admission)({
+      id: "cmp_01",
+      sessionID: "ses_01",
+      trigger: "manual",
+      admissionMode: "background",
+      status: "pending",
+      requestedThrough: { messageID: "msg_01", seq: 7 },
+      timeCreated: 1,
+    })
+
+    expect(String(admission.id)).toBe("cmp_01")
+    expect(admission).not.toHaveProperty("admissionMode")
+    const historicalMessage = Schema.decodeUnknownSync(SessionMessage.CompactionPending)({
+      id: "msg_compaction_historical",
+      type: "compaction",
+      jobID: "cmp_01",
+      trigger: "manual",
+      admissionMode: "background",
+      status: "pending",
+      time: { created: 1 },
+    })
+    expect(historicalMessage).not.toHaveProperty("admissionMode")
+    expect(() => Schema.decodeUnknownSync(SessionCompaction.ID)("compaction_01")).toThrow()
+    expect(SessionEvent.Compaction.Started.durable?.version).toBe(2)
+    expect(EventManifest.Latest.get("session.compaction.started")).toBe(SessionEvent.Compaction.Started)
+    expect(EventManifest.Durable.has("session.compaction.started.1")).toBeTrue()
+    expect(EventManifest.Durable.has("session.compaction.started.2")).toBeTrue()
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.Compaction.StartedV1.data)({
+        sessionID: "ses_01",
+        reason: "manual",
+        recent: "legacy context",
+      }),
+    ).toMatchObject({ reason: "manual", recent: "legacy context" })
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.Compaction.Ended.data)({
+        sessionID: "ses_01",
+        jobID: "cmp_01",
+        revision: 2,
+        boundary: { messageID: "msg_01", seq: 7 },
+        metrics: { excludedMessages: 1, excludedParts: 2, inputTokens: 3, retainedTokens: 4 },
+        providerState: { secret: "must-not-be-public" },
+      }),
+    ).not.toHaveProperty("providerState")
   })
 
   test("excludes removed v1 event types", () => {
@@ -103,10 +153,12 @@ describe("public event manifest", () => {
         "session.forked.2",
         "session.input.promoted.1",
         "session.input.admitted.1",
+        "session.input.consumed.1",
         "session.execution.started.1",
         "session.execution.succeeded.1",
         "session.execution.failed.1",
         "session.execution.interrupted.1",
+        "session.file-change.recorded.1",
         "session.instructions.updated.2",
         "session.synthetic.1",
         "session.task.updated.1",
@@ -129,9 +181,14 @@ describe("public event manifest", () => {
         "session.reasoning.ended.1",
         "session.retry.scheduled.1",
         "session.compaction.admitted.1",
+        "session.compaction.admitted.2",
         "session.compaction.started.1",
+        "session.compaction.started.2",
         "session.compaction.ended.1",
+        "session.compaction.ended.2",
+        "session.compaction.replaced.1",
         "session.compaction.failed.1",
+        "session.compaction.failed.2",
         "session.revert.staged.1",
         "session.revert.cleared.1",
         "session.revert.committed.1",
@@ -144,6 +201,7 @@ describe("public event manifest", () => {
     expect(SessionEvent.PublicDurableDefinitions).not.toContain(SessionEvent.ProviderRequestRecorded)
     expect(SessionEvent.DurableDefinitions).toEqual([
       ...SessionEvent.PublicDurableDefinitions,
+      ...SessionEvent.Compaction.LegacyDurableDefinitions,
       SessionEvent.UsageRecorded,
       SessionEvent.ProviderRequestRecorded,
     ])
@@ -222,5 +280,33 @@ describe("public event manifest", () => {
 
     expect(SessionEvent.Deleted.data.make({ sessionID })).toEqual({ sessionID })
     expect(SessionEvent.Deleted.durable?.version).toBe(2)
+  })
+
+  test("decodes exact consumed input IDs and keeps historical user messages compatible", () => {
+    const sessionID = SessionID.make("ses_receipt")
+    const inputIDs = [SessionMessage.ID.make("msg_first"), SessionMessage.ID.make("msg_second")] as const
+
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.InputConsumed.data)({
+        sessionID,
+        inputIDs,
+      }),
+    ).toEqual({ sessionID, inputIDs })
+
+    const historical = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: "msg_historical",
+      type: "user",
+      text: "Historical prompt",
+      time: { created: 1 },
+    })
+    const consumed = Schema.decodeUnknownSync(SessionMessage.User)({
+      id: "msg_consumed",
+      type: "user",
+      text: "Consumed prompt",
+      time: { created: 1, consumed: 2 },
+    })
+
+    expect(historical.time.consumed).toBeUndefined()
+    expect(DateTime.toEpochMillis(consumed.time.consumed!)).toBe(2)
   })
 })

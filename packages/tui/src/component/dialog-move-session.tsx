@@ -189,7 +189,8 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
           directory: item.location,
           subdirectory: item.location !== item.root.directory,
         } as const,
-        category: item.root.directory === current ? "Current" : "Other",
+        category: "Recent workspaces",
+        description: item.root.directory === current ? "current" : undefined,
         titleWidth,
         truncateTitle: "left" as const,
       }
@@ -301,7 +302,8 @@ export function DialogMoveSession(props: DialogMoveSessionProps) {
   }
 
   async function create() {
-    const name = await DialogProjectCopyName.show(dialog)
+    const session = route.data.type === "session" ? sessionData.session.get(route.data.sessionID) : undefined
+    const name = await DialogProjectCopyName.show(dialog, session ? `${session.title} (copy)` : undefined)
     if (name === null) return
     props.onSelect({ type: "new", name })
   }

@@ -5,7 +5,7 @@ import { Agent } from "./agent.js"
 import { Location } from "./location.js"
 import { Model } from "./model.js"
 import { Project } from "./project.js"
-import { DateTimeUtcFromMillis, optional, RelativePath } from "./schema.js"
+import { DateTimeUtcFromMillis, NonNegativeInt, optional, RelativePath } from "./schema.js"
 import { SessionEvent } from "./session-event.js"
 import { SessionID } from "./session-id.js"
 import { SessionMessage } from "./session-message.js"
@@ -49,7 +49,6 @@ export const Info = Schema.Struct({
   time: Schema.Struct({
     created: DateTimeUtcFromMillis,
     updated: DateTimeUtcFromMillis,
-    archived: DateTimeUtcFromMillis.pipe(optional),
   }),
   title: Schema.String,
   location: Location.Ref,
@@ -63,3 +62,23 @@ export const ListAnchor = Schema.Struct({
   direction: Schema.Literals(["previous", "next"]),
 }).annotate({ identifier: "Session.ListAnchor" })
 export interface ListAnchor extends Schema.Schema.Type<typeof ListAnchor> {}
+
+/**
+ * Structured result returned when a model switch is refused because the current
+ * context cannot fit the target model. `maximum_safe_summary_boundary` is an
+ * advisory message ID: summarizing up to and including that message while
+ * keeping `keep_recent_messages` after it is estimated to fit the target
+ * budget, so the caller may offer summarization; it is omitted when no such
+ * boundary exists.
+ */
+export const ModelSwitchBlocked = Schema.Struct({
+  status: Schema.Literal("blocked"),
+  currentModel: Model.Ref,
+  targetModel: Model.Ref,
+  currentContextTokens: NonNegativeInt,
+  targetSafeInputTokens: NonNegativeInt,
+  requiredReductionTokens: NonNegativeInt,
+  maximumSafeSummaryBoundary: SessionMessage.ID.pipe(optional),
+  reason: Schema.Literal("context-window-exceeded"),
+}).annotate({ identifier: "Session.ModelSwitchBlocked" })
+export interface ModelSwitchBlocked extends Schema.Schema.Type<typeof ModelSwitchBlocked> {}

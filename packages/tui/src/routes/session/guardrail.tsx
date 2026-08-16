@@ -3,7 +3,6 @@ import { createSignal, For, Show } from "solid-js"
 import { useClient } from "../../context/client"
 import { useTheme } from "../../context/theme"
 import { useToast } from "../../ui/toast"
-import { GLYPHS } from "../../ui/glyph"
 import { Prompt } from "./permission"
 
 export type GuardrailRequest = GuardrailRequestListOutput[number]
@@ -27,6 +26,8 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
   const { themeV2 } = useTheme().contextual("elevated")
   const [submitting, setSubmitting] = createSignal(false)
   const presentation = () => guardrailPresentation(props.request)
+  const resource = () => presentation().resources[0] ?? presentation().action
+  const needsContext = () => props.request.sessionID !== props.request.rootSessionID || presentation().resources.length > 1
 
   const reply = (value: "once" | "always" | "reject") => {
     if (submitting()) return
@@ -49,26 +50,26 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
       instance={props.request.id}
       escapeKey="reject"
       defaultOption="reject"
-      options={{ once: "Allow once", always: "Allow for this session", reject: "Deny" }}
+      options={{ reject: "Deny", once: "Allow once", always: "Allow for this session" }}
       onSelect={(option) => reply(option)}
-      header={
-        <box flexDirection="row" gap={1}>
-          <text fg={themeV2.text.feedback.warning.default}>{GLYPHS.guardrailBlocked.glyph}</text>
-          <text fg={themeV2.text.default}>{presentation().title}</text>
-        </box>
-      }
       body={
-        <box paddingLeft={1} gap={1}>
-          <text fg={themeV2.text.default}>
-            guardrail · {presentation().reason} <span style={{ fg: themeV2.text.feedback.warning.default }}>needs approval</span>
-          </text>
-          <text fg={themeV2.text.feedback.warning.default}>Guardrails apply even in YOLO mode.</text>
-          <text fg={themeV2.text.subdued}>Actor: {presentation().actor}</text>
-          <text fg={themeV2.text.subdued}>Action: {presentation().action}</text>
-          <Show when={presentation().resources.length > 0}>
-            <box flexDirection="column">
-              <For each={presentation().resources.slice(0, 8)}>
-                {(resource) => <text fg={themeV2.text.default}>Resource: {resource}</text>}
+        <box flexDirection="column">
+          <box paddingLeft={3} paddingRight={3}>
+            <text fg={themeV2.text.feedback.info.default}>{presentation().reason}</text>
+          </box>
+          <box paddingLeft={3} paddingRight={3} flexDirection="row">
+            <text fg={themeV2.text.feedback.warning.default}>!</text>
+            <box width={2} flexShrink={0} />
+            <text fg={themeV2.text.feedback.warning.default}>{resource()}</text>
+            <box flexGrow={1} />
+            <text fg={themeV2.text.feedback.warning.default}>Blocked</text>
+          </box>
+          <Show when={needsContext()}>
+            <box paddingLeft={6} paddingRight={3} flexDirection="column">
+              <text fg={themeV2.text.subdued}>Actor: {presentation().actor}</text>
+              <text fg={themeV2.text.subdued}>Action: {presentation().action}</text>
+              <For each={presentation().resources.slice(1, 8)}>
+                {(value) => <text fg={themeV2.text.subdued}>Resource: {value}</text>}
               </For>
               <Show when={presentation().resources.length > 8}>
                 <text fg={themeV2.text.subdued}>+{presentation().resources.length - 8} more</text>

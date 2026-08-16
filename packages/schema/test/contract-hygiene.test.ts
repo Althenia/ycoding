@@ -148,6 +148,11 @@ describe("contract hygiene", () => {
       type: "text",
       text: "hello",
     })
+    expect(SessionMessage.AssistantText.make({ type: "text", text: "working", phase: "commentary" })).toEqual({
+      type: "text",
+      text: "working",
+      phase: "commentary",
+    })
     expect(
       SessionMessage.AssistantReasoning.make({ type: "reasoning", text: "thinking", state: { id: "opaque" } }),
     ).toEqual({ type: "reasoning", text: "thinking", state: { id: "opaque" } })
@@ -236,6 +241,19 @@ describe("contract hygiene", () => {
         time: { created: DateTime.makeUnsafe(0) },
       }),
     ).not.toHaveProperty("summary")
+  })
+
+  test("keeps legacy pending compaction outside current pending inputs", () => {
+    const legacy = {
+      admittedSeq: 1,
+      id: "msg_legacy_compaction",
+      sessionID: "ses_legacy",
+      timeCreated: 1,
+      type: "compaction",
+    }
+
+    expect(() => Schema.decodeUnknownSync(SessionPending.Info)(legacy)).toThrow()
+    expect(Schema.decodeUnknownSync(SessionPending.LegacyInfo)(legacy)).toMatchObject({ type: "compaction" })
   })
 
   test("keeps revert state current-only", () => {

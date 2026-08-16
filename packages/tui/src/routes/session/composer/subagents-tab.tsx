@@ -9,8 +9,10 @@ import { useClient } from "../../../context/client"
 import { useTheme } from "../../../context/theme"
 import { Locale } from "../../../util/locale"
 import { Keymap } from "../../../context/keymap"
+import { stringWidth } from "../../../util/string-width"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
+import { railPlacement, railWidth } from "../rail"
 import { useComposerTab } from "./index"
 
 export { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
@@ -49,8 +51,6 @@ const taskStateOrder = {
 } as const
 
 export function formatSubagentModel(model: { providerID: string; id: string; variant?: string } | undefined) {
-  if (model?.providerID === "anthropic" && model.id === "claude-sonnet-5") return "Sonnet 5"
-  if (model?.providerID === "anthropic" && model.id === "claude-haiku-4-5") return "Haiku 4.5"
   return formatDiagnosticsModel(model)
 }
 
@@ -137,58 +137,73 @@ export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
 }
 
 export function canCancelSubagent(state: SessionOrchestrationTask["state"]) {
-  return state === "running" || state === "waiting"
+  return state === "starting" || state === "running" || state === "waiting"
 }
 
 export function cancelManagedSubagent(client: CancelClient, parentID: string, childID: string) {
   return client.api.session.subagent.cancel({ parentID, childID })
 }
 
-export function SubagentMetadata(props: {
+/** Status column, longest rendered agent label, and the description floor the metadata may not eat. */
+const STATUS_WIDTH = 16
+const AGENT_WIDTH = 16
+const TITLE_MIN_WIDTH = 8
+/** Composer padding (3 left, 4 right) plus the row's own right padding. */
+const COMPOSER_INSET = 8
+
+/**
+ * The picker row shares its terminal with the docked rail, so the widest row it can own is the
+ * terminal minus the rail and the composer insets. Trailing fields drop whole rather than collide,
+ * and the model truncates only when it cannot fit on its own.
+ */
+export function subagentMetadata(input: {
+  width: number
   model?: string
+  status?: string
   cacheHit?: string
   elapsed?: string
-  status?: string
-  active: boolean
 }) {
+  const budget =
+    input.width -
+    (railPlacement(input.width) === "docked" ? Math.round(railWidth(input.width)) : 0) -
+    COMPOSER_INSET -
+    STATUS_WIDTH -
+    AGENT_WIDTH -
+    TITLE_MIN_WIDTH -
+    4
+  const fields = [input.model, input.status, input.cacheHit, input.elapsed].filter(
+    (value): value is string => Boolean(value),
+  )
+  for (let count = fields.length; count > 1; count--) {
+    const value = fields.slice(0, count).join(" · ")
+    if (stringWidth(value) <= budget) return value
+  }
+  return Locale.truncateWidth(fields[0] ?? "", budget)
+}
+
+export function SubagentMetadata(props: { model?: string; cacheHit?: string; elapsed?: string; status?: string }) {
   const { themeV2 } = useTheme()
-  const color = () => (props.active ? themeV2.text.action.primary.focused : themeV2.text.subdued)
-  const telemetry = () => [props.cacheHit, props.elapsed].filter((value): value is string => Boolean(value))
+  const dimensions = useTerminalDimensions()
+  const metadata = createMemo(() =>
+    subagentMetadata({
+      width: dimensions().width,
+      model: props.model,
+      status: props.status,
+      cacheHit: props.cacheHit,
+      elapsed: props.elapsed,
+    }),
+  )
 
   return (
-    <box flexDirection="row" minWidth={0} gap={1}>
-      <Show when={props.model}>
-        <box minWidth={0} maxWidth={40} flexShrink={1}>
-          <text fg={color()} wrapMode="none">
-            {props.model}
+    <Show when={metadata()}>
+      {(value) => (
+        <box flexShrink={0}>
+          <text fg={themeV2.text.subdued} wrapMode="none">
+            {value()}
           </text>
         </box>
-      </Show>
-      <Show when={props.model && (telemetry().length > 0 || props.status)}>
-        <text fg={color()} flexShrink={0}>
-          ·
-        </text>
-      </Show>
-      <For each={telemetry()}>
-        {(item, index) => (
-          <>
-            <text fg={color()} wrapMode="none" flexShrink={0}>
-              {item}
-            </text>
-            <Show when={index() < telemetry().length - 1 || props.status}>
-              <text fg={color()} flexShrink={0}>
-                ·
-              </text>
-            </Show>
-          </>
-        )}
-      </For>
-      <Show when={props.status}>
-        <text fg={color()} wrapMode="none" flexShrink={0}>
-          {props.status}
-        </text>
-      </Show>
-    </box>
+      )}
+    </Show>
   )
 }
 
@@ -204,20 +219,9 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   const session = createMemo(() => data.session.get(props.sessionID))
   const parentID = createMemo(() => session()?.parentID ?? props.sessionID)
-  const entries = createMemo(() => {
-    const tasks = entriesFromTasks(data.session.subagent.list(parentID()), route.sessionID)
-    const taskIDs = new Set(tasks.map((task) => task.sessionID))
-    return [
-      ...tasks,
-      ...entriesFromBtwSessions(
-        data.session.family(parentID()).flatMap((sessionID) => {
-          const session = data.session.get(sessionID)
-          return session ? [session] : []
-        }),
-        route.sessionID,
-      ).filter((entry) => !taskIDs.has(entry.sessionID)),
-    ]
-  })
+  const page = createMemo(() => data.session.subagent.page(parentID()))
+  const pager = createMemo(() => data.session.subagent.navigation(parentID()))
+  const entries = createMemo(() => entriesFromTasks(page()?.data ?? [], route.sessionID))
   const sections = createMemo(() => subagentSections(entries()))
   const [now, setNow] = createSignal(Date.now())
 
@@ -237,7 +241,8 @@ export function SubagentsTab(props: { sessionID: string }) {
   })
 
   const [store, setStore] = createStore({ selected: 0 })
-  let selectedSessionID = ""
+  let selectedEntryID = ""
+  let activeRouteSessionID = ""
   let wasActive = false
   let scroll: ScrollBoxRenderable | undefined
 
@@ -248,27 +253,35 @@ export function SubagentsTab(props: { sessionID: string }) {
     const active = composer.active("subagents")
     if (!active) {
       if (wasActive) {
-        selectedSessionID = ""
+        selectedEntryID = ""
+        activeRouteSessionID = ""
         setStore("selected", 0)
       }
       wasActive = false
       return
     }
     const list = entries()
-    if (selectedSessionID !== route.sessionID && list.length > 0) {
+    if (activeRouteSessionID !== route.sessionID) {
+      activeRouteSessionID = route.sessionID
+      selectedEntryID = route.sessionID
+    }
+    const selectedIdx = list.findIndex((entry) => entry.sessionID === selectedEntryID)
+    if (selectedIdx < 0 && list.length > 0) {
       const currentIdx = list.findIndex((entry) => entry.current)
       const next = currentIdx >= 0 ? currentIdx : 0
-      selectedSessionID = route.sessionID
+      selectedEntryID = list[next]!.sessionID
       setStore("selected", next)
       const scrollCurrentIntoView = () => scrollToIndex(next, true)
       scrollCurrentIntoView()
       requestAnimationFrame(scrollCurrentIntoView)
     }
+    if (selectedIdx >= 0 && selectedIdx !== store.selected) setStore("selected", selectedIdx)
     wasActive = true
     if (store.selected >= list.length) moveTo(Math.max(0, list.length - 1))
   })
 
   function moveTo(next: number, center = false) {
+    selectedEntryID = entries()[next]?.sessionID ?? ""
     setStore("selected", next)
     scrollToIndex(next, center)
   }
@@ -296,6 +309,8 @@ export function SubagentsTab(props: { sessionID: string }) {
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
           { label: "⌃x k", shortcut: "cancel", gapAfter: 4 },
           { label: "r", shortcut: "answer", gapAfter: 3 },
+          ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
+          ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
           { label: "Esc", shortcut: "close" },
         ]
       },
@@ -322,6 +337,26 @@ export function SubagentsTab(props: { sessionID: string }) {
             return
           }
           moveTo(store.selected - 1, true)
+        },
+      },
+      {
+        id: "composer.subagent.older",
+        title: "Load older subagents",
+        group: "Composer",
+        bind: "ctrl+n",
+        run() {
+          if (!pager().older) return
+          void data.session.subagent.loadOlder(parentID()).catch((error) => console.error("Failed to load older subagents", error))
+        },
+      },
+      {
+        id: "composer.subagent.newer",
+        title: "Load newer subagents",
+        group: "Composer",
+        bind: "ctrl+p",
+        run() {
+          if (!pager().newer) return
+          void data.session.subagent.loadNewer(parentID()).catch((error) => console.error("Failed to load newer subagents", error))
         },
       },
       {
@@ -359,7 +394,7 @@ export function SubagentsTab(props: { sessionID: string }) {
         id: "composer.subagent.interrupt",
         title: "Cancel subagent",
         group: "Composer",
-        bind: "ctrl+x k",
+        bind: "<leader>k",
         run() {
           const entry = selectedEntry()
           if (!entry || !canCancelSubagent(entry.status)) return
@@ -379,8 +414,9 @@ export function SubagentsTab(props: { sessionID: string }) {
     <Show when={composer.active("subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
+        width="100%"
+        maxWidth={dimensions().width}
         maxHeight={16}
-        maxWidth={139}
         paddingTop={2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
@@ -404,63 +440,53 @@ export function SubagentsTab(props: { sessionID: string }) {
                     })
                     return (
                       <>
-                        <box flexDirection="row" minWidth={0} flexGrow={1}>
-                          <box
-                            flexDirection="row"
-                            minWidth={0}
-                            flexGrow={1}
-                            paddingLeft={0}
-                            paddingRight={1}
-                            paddingTop={active() ? 1 : 0}
-                            paddingBottom={active() ? 1 : entry.status === "running" || entry.status === "completed" ? 2 : 0}
-                            backgroundColor={
-                              active()
-                                ? themeV2.background.action.primary.focused
-                                : entry.current
-                                  ? themeV2.background.action.primary.selected
-                                  : themeV2.background.action.primary.default
-                            }
-                            onMouseOver={() => setStore("selected", entryIndex())}
-                            onMouseUp={() => {
-                              setStore("selected", entryIndex())
-                              navigate({
-                                type: "session",
-                                sessionID: entry.sessionID,
-                              })
-                            }}
-                          >
-                            <box width={16} flexShrink={0}>
-                              <text fg={statusColor()} wrapMode="none">
-                                {taskStatusLabel(entry.status)}
-                              </text>
-                            </box>
+                        <box
+                          flexDirection="row"
+                          minWidth={0}
+                          flexGrow={1}
+                          paddingRight={1}
+                          backgroundColor={active() ? themeV2.background.surface.offset : undefined}
+                          onMouseOver={() => moveTo(entryIndex())}
+                          onMouseUp={() => {
+                            moveTo(entryIndex())
+                            navigate({
+                              type: "session",
+                              sessionID: entry.sessionID,
+                            })
+                          }}
+                        >
+                          <box width={STATUS_WIDTH} flexShrink={0}>
+                            <text fg={statusColor()} wrapMode="none">
+                              {taskStatusLabel(entry.status)}
+                            </text>
+                          </box>
+                          <box flexShrink={0}>
                             <text
                               fg={
-                                active()
-                                  ? themeV2.text.action.primary.focused
-                                  : entry.current
-                                    ? themeV2.text.action.primary.selected
-                                    : themeV2.text.action.primary.default
+                                active() || entry.current
+                                  ? themeV2.text.feedback.info.default
+                                  : themeV2.text.default
                               }
                               attributes={active() ? TextAttributes.BOLD : undefined}
                               wrapMode="none"
                             >
-                              {entry.agent}
+                              {Locale.truncateWidth(entry.agent, AGENT_WIDTH)}
                             </text>
-                            <text fg={themeV2.text.subdued} wrapMode="none">
-                              {`  · ${entry.title}`}
-                            </text>
-                            <box flexGrow={1} />
-                            <SubagentMetadata
-                              model={entry.status === "running" ? "attached" : entry.model}
-                              cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
-                              elapsed={dimensions().width >= 100 ? formatSubagentElapsed(entry.startedAt, now()) : undefined}
-                              active={active()}
-                            />
                           </box>
+                          <box flexDirection="row" minWidth={0} flexGrow={1} flexShrink={1} paddingLeft={2} paddingRight={2}>
+                            <text fg={themeV2.text.subdued} wrapMode="none" truncate>
+                              {`· ${entry.title}`}
+                            </text>
+                          </box>
+                          <SubagentMetadata
+                            model={entry.model}
+                            cacheHit={formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID))}
+                            elapsed={formatSubagentElapsed(entry.startedAt, now())}
+                            status={entry.status === "running" ? "attached" : undefined}
+                          />
                         </box>
                         <Show when={entry.awaitingInput && entry.detail}>
-                          <box paddingLeft={16} paddingBottom={1}>
+                          <box paddingLeft={16}>
                             <text fg={themeV2.text.feedback.warning.default} wrapMode="none">
                               ? {entry.detail}
                             </text>
@@ -473,6 +499,20 @@ export function SubagentsTab(props: { sessionID: string }) {
               </box>
             )}
           </For>
+          <Show when={pager().older || pager().newer}>
+            <box flexDirection="row" gap={3} paddingTop={1}>
+              <Show when={pager().newer}>
+                <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
+                  newer
+                </text>
+              </Show>
+              <Show when={pager().older}>
+                <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
+                  {page()?.position === "top" ? `+${Math.max(0, (page()?.summary.total ?? 0) - entries().length)} more` : "older"}
+                </text>
+              </Show>
+            </box>
+          </Show>
         </Show>
       </scrollbox>
     </Show>

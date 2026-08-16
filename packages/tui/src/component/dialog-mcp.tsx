@@ -23,7 +23,7 @@ function statusError(status: McpServer["status"]) {
 
 function Status(props: { status: McpServer["status"]["status"]; loading: boolean }) {
   const { themeV2 } = useTheme().contextual("elevated")
-  if (props.loading) return <span style={{ fg: themeV2.text.subdued }}>⋯ Loading</span>
+  if (props.loading) return <span style={{ fg: themeV2.text.subdued }}>Connecting</span>
   const presentation = () => mcpStatusPresentation(props.status)
   const color = (tone: McpTone) => {
     if (tone === "success") return themeV2.text.feedback.success.default
@@ -38,7 +38,7 @@ function Status(props: { status: McpServer["status"]["status"]; loading: boolean
         attributes: presentation().tone === "subdued" ? undefined : TextAttributes.BOLD,
       }}
     >
-      {presentation().symbol} {presentation().label}
+      {presentation().label}
     </span>
   )
 }
@@ -86,7 +86,17 @@ export function DialogMcp() {
     return servers().map((server) => ({
       value: server.name,
       title: server.name,
-      description: server.status.status,
+      description: (server as McpServer & { transport?: string }).transport,
+      state:
+        server.status.status === "connected"
+          ? ("connected" as const)
+          : server.status.status === "disabled"
+            ? ("disabled" as const)
+            : server.status.status === "pending"
+              ? ("connecting" as const)
+              : server.status.status === "failed" || server.status.status === "needs_client_registration"
+                ? ("error" as const)
+                : undefined,
       footer: <Status status={server.status.status} loading={loadingMcp === server.name} />,
     }))
   })
@@ -142,6 +152,11 @@ export function DialogMcp() {
     void call.catch(toast.error).finally(() => setLoading(null))
   }
 
+  const toggleFocused = () => {
+    const name = focused()
+    if (name) toggle(name)
+  }
+
   return (
     <box>
       <Show
@@ -154,27 +169,41 @@ export function DialogMcp() {
             preserveSelection
             onMove={(option) => setFocused(option.value as string)}
             onSelect={(option) => open(option.value as string)}
-            actions={[
+            bindings={[
               {
-                title: "toggle",
-                command: "dialog.mcp.toggle",
-                onTrigger: (option) => {
-                  setFocused(option.value as string)
-                  toggle(option.value as string)
-                },
+                id: "dialog.mcp.toggle",
+                title: "Toggle MCP server",
+                group: "Dialog",
+                run: toggleFocused,
               },
             ]}
             footer={
-              <Show
-                when={focusedServer()?.status.status === "needs_auth"}
-                fallback={
-                  <Show when={focusedError()}>
-                    <text fg={themeV2.text.subdued}>enter to view error</text>
-                  </Show>
-                }
-              >
-                <text fg={themeV2.text.feedback.warning.default}>enter or space to authorize in browser</text>
-              </Show>
+              <box position="relative" top={-1}>
+                <Show
+                  when={focusedServer()?.status.status === "needs_auth"}
+                  fallback={
+                    <Show
+                      when={focusedError()}
+                      fallback={
+                        <text fg={themeV2.text.subdued} onMouseUp={toggleFocused}>
+                          space toggle
+                        </text>
+                      }
+                    >
+                      <box flexDirection="row" gap={2}>
+                        <text fg={themeV2.text.subdued}>enter to view error</text>
+                        <text fg={themeV2.text.subdued} onMouseUp={toggleFocused}>
+                          space toggle
+                        </text>
+                      </box>
+                    </Show>
+                  }
+                >
+                  <text fg={themeV2.text.feedback.warning.default} onMouseUp={toggleFocused}>
+                    enter or space to authorize in browser
+                  </text>
+                </Show>
+              </box>
             }
           />
         }

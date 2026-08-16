@@ -158,7 +158,168 @@ function normalize(input: Record<string, SourceProvider>): readonly Snapshot[] {
     }
     providers.push({ info, models, environment: [...item.env] })
   }
-  return providers
+  return ensureDeepseekFallback(providers, input)
+}
+
+const DEEPSEEK_DATED: ReadonlyArray<{
+  readonly id: string
+  readonly base: string
+  readonly name: string
+  readonly family: string
+  readonly release: string
+  readonly cost: { input: Money.USDPerMillionTokens; output: Money.USDPerMillionTokens; cache_read: Money.USDPerMillionTokens }
+}> = [
+  {
+    id: "deepseek-v4-pro-0813",
+    base: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro 0813",
+    family: "deepseek-thinking",
+    release: "2026-08-12",
+    cost: {
+      input: 0.435 as unknown as Money.USDPerMillionTokens,
+      output: 0.87 as unknown as Money.USDPerMillionTokens,
+      cache_read: 0.003625 as unknown as Money.USDPerMillionTokens,
+    },
+  },
+  {
+    id: "deepseek-v4-flash-0793",
+    base: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash 0793",
+    family: "deepseek-flash",
+    release: "2026-07-31",
+    cost: {
+      input: 0.14 as unknown as Money.USDPerMillionTokens,
+      output: 0.28 as unknown as Money.USDPerMillionTokens,
+      cache_read: 0.0028 as unknown as Money.USDPerMillionTokens,
+    },
+  },
+]
+
+function ensureDeepseekFallback(
+  snapshots: Snapshot[],
+  raw: Record<string, SourceProvider>,
+): readonly Snapshot[] {
+  const hasDeepseek = raw["deepseek"] !== undefined
+  const existing = snapshots.find((snapshot) => snapshot.info.id === "deepseek")
+  const result = [...snapshots]
+  if (!hasDeepseek) {
+    const syntheticProvider: SourceProvider = {
+      id: "deepseek",
+      name: "DeepSeek",
+      env: ["DEEPSEEK_API_KEY"],
+      npm: "@ai-sdk/openai-compatible",
+      api: "https://api.deepseek.com/v1",
+      models: {
+        "deepseek-v4-pro": {
+          id: "deepseek-v4-pro",
+          name: "DeepSeek V4 Pro",
+          family: "deepseek-thinking",
+          release_date: "2026-08-12",
+          attachment: false,
+          reasoning: true,
+          reasoning_options: [
+            { type: "toggle" },
+            { type: "effort", values: ["high", "max"] },
+          ],
+          tool_call: true,
+          interleaved: { field: "reasoning_content" },
+          temperature: true,
+          limit: { context: 1_000_000, output: 384_000 },
+          modalities: { input: ["text"], output: ["text"] },
+          cost: {
+            input: 0.435 as unknown as Money.USDPerMillionTokens,
+            output: 0.87 as unknown as Money.USDPerMillionTokens,
+            cache_read: 0.003625 as unknown as Money.USDPerMillionTokens,
+          },
+        },
+        "deepseek-v4-flash": {
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          family: "deepseek-flash",
+          release_date: "2026-07-31",
+          attachment: false,
+          reasoning: true,
+          reasoning_options: [
+            { type: "toggle" },
+            { type: "effort", values: ["high", "max"] },
+          ],
+          tool_call: true,
+          interleaved: { field: "reasoning_content" },
+          temperature: true,
+          limit: { context: 1_000_000, output: 384_000 },
+          modalities: { input: ["text"], output: ["text"] },
+          cost: {
+            input: 0.14 as unknown as Money.USDPerMillionTokens,
+            output: 0.28 as unknown as Money.USDPerMillionTokens,
+            cache_read: 0.0028 as unknown as Money.USDPerMillionTokens,
+          },
+        },
+      },
+    }
+    const providerID = ProviderV2.ID.make(syntheticProvider.id)
+    const info = {
+      id: providerID,
+      name: syntheticProvider.name,
+      package: ProviderV2.aisdk(syntheticProvider.npm!),
+      settings: { baseURL: syntheticProvider.api! },
+    } satisfies ProviderV2.Info
+    const models: ModelV2.Info[] = []
+    for (const model of Object.values(syntheticProvider.models)) {
+      const baseCost = cost(model.cost)
+      const variants = reasoningVariants(syntheticProvider, model)
+      models.push(modelInfo(providerID, ModelV2.ID.make(model.id), model, { cost: baseCost, variants }))
+    }
+    for (const dated of DEEPSEEK_DATED) {
+      const baseEntry = syntheticProvider.models[dated.base]
+      if (!baseEntry) continue
+      const baseCost = cost(dated.cost as SourceModel["cost"])
+      const variants = reasoningVariants(syntheticProvider, {
+        ...baseEntry,
+        id: dated.id,
+        name: dated.name,
+        family: dated.family,
+        release_date: dated.release,
+        cost: dated.cost as SourceModel["cost"],
+      })
+      models.push(
+        modelInfo(providerID, ModelV2.ID.make(dated.id), {
+          ...baseEntry,
+          id: dated.id,
+          name: dated.name,
+          family: dated.family,
+          release_date: dated.release,
+          cost: dated.cost as SourceModel["cost"],
+        }, { cost: baseCost, variants }),
+      )
+    }
+    result.push({ info, models, environment: [...syntheticProvider.env] })
+    return result
+  }
+  if (!existing) return result
+  const present = new Set(existing.models.map((model) => model.id as string))
+  const providerRaw = raw["deepseek"]!
+  for (const dated of DEEPSEEK_DATED) {
+    if (present.has(dated.id as string)) continue
+    const baseEntry = providerRaw.models[dated.base] ?? providerRaw.models[dated.id]
+    if (!baseEntry) continue
+    const target: SourceModel = {
+      ...baseEntry,
+      id: dated.id,
+      name: dated.name,
+      family: dated.family,
+      release_date: dated.release,
+      cost: dated.cost as SourceModel["cost"],
+      reasoning_options: [
+        { type: "toggle" },
+        { type: "effort", values: ["high", "max"] },
+      ] as SourceModel["reasoning_options"],
+    }
+    const baseCost = cost(target.cost)
+    const variants = reasoningVariants(providerRaw, target)
+    const full = modelInfo(existing.info.id, ModelV2.ID.make(dated.id), target, { cost: baseCost, variants })
+    ;(existing.models as ModelV2.Info[]).push(full)
+  }
+  return result
 }
 
 function released(date: string) {
@@ -267,8 +428,22 @@ function reasoningVariants(provider: SourceProvider, model: SourceModel): NonNul
   return []
 }
 
+function normalizeDeepseekEffort(effort: string): string {
+  if (effort === "xhigh") return "max"
+  if (effort === "low" || effort === "medium") return "high"
+  return effort
+}
+
 function settingsForEffort(npm: string, modelID: string, effort: string): ProviderV2.Settings | undefined {
-  if (npm === "@openrouter/ai-sdk-provider") return { reasoning: { effort } }
+  const normalized = modelID.includes("deepseek") ? normalizeDeepseekEffort(effort) : effort
+  if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek")) {
+    if (normalized === "none") return { thinking: { type: "disabled" } }
+    return { reasoning_effort: normalized, thinking: { type: "enabled" } }
+  }
+  if (npm === "@openrouter/ai-sdk-provider") {
+    if (modelID.includes("deepseek")) return { reasoning: { effort: normalized } }
+    return { reasoning: { effort } }
+  }
   if (npm === "@ai-sdk/anthropic" || npm === "@ai-sdk/google-vertex/anthropic") {
     if (anthropicManualThinking(modelID)) return { effort }
     return {
@@ -350,6 +525,14 @@ function budgetVariants(
 }
 
 function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info["variants"]> {
+  if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek"))
+    return [
+      { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
+      {
+        id: ModelV2.VariantID.make("thinking"),
+        settings: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+      },
+    ]
   if (npm === "@ai-sdk/gateway") {
     const upstream = gatewayPackage(modelID)
     if (upstream) return toggleVariants(upstream, modelID)

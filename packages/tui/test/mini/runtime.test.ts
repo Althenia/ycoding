@@ -5,7 +5,6 @@ import type { LifecycleInput } from "../../src/mini/runtime.lifecycle"
 import type { FooterEvent, MiniHost } from "../../src/mini/types"
 import { catalogModel, catalogProvider, stubCatalogLists } from "./fixture/catalog"
 import { createFooterApiFixture } from "./fixture/footer-api"
-import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
 function defer<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -219,10 +218,7 @@ describe("run interactive runtime", () => {
     )
     spyOn(sdk.message, "list").mockImplementation(
       () =>
-        ok({
-          data: [{ id: "msg-user", type: "user", text: "previous prompt", time: { created: 1 } }],
-          cursor: {},
-        }) as never,
+        ok([{ id: "msg-user", type: "user", text: "previous prompt", time: { created: 1 } }]) as never,
     )
     stubCatalogLists(sdk, {
       providers: [catalogProvider("openai", "OpenAI")],
@@ -357,7 +353,7 @@ describe("run interactive runtime", () => {
 
     expect(aborted).toBe(2)
     expect(messages).toHaveBeenCalledWith(
-      { sessionID: "ses-resume-abort", limit: 200, order: "desc" },
+      { sessionID: "ses-resume-abort" },
       { signal: expect.any(AbortSignal) },
     )
     expect(session).toHaveBeenCalledTimes(1)

@@ -1,5 +1,6 @@
 import { Schema } from "effect"
 import { Skill } from "@ycoding-ai/schema/skill"
+import { Session } from "@ycoding-ai/schema/session"
 
 export class InvalidRequestError extends Schema.TaggedErrorClass<InvalidRequestError>()(
   "InvalidRequestError",
@@ -69,6 +70,12 @@ export class SessionNotFoundError extends Schema.TaggedErrorClass<SessionNotFoun
     message: Schema.String,
   },
   { httpApiStatus: 404 },
+) {}
+
+export class ModelSwitchBlockedError extends Schema.TaggedErrorClass<ModelSwitchBlockedError>()(
+  "ModelSwitchBlockedError",
+  Session.ModelSwitchBlocked.fields,
+  { httpApiStatus: 409 },
 ) {}
 
 export class MessageNotFoundError extends Schema.TaggedErrorClass<MessageNotFoundError>()(

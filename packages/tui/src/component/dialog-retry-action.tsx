@@ -6,6 +6,7 @@ import { useTheme } from "../context/theme"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { Link } from "../ui/link"
 import { BgPulse } from "./bg-pulse"
+import { DialogSelect } from "../ui/dialog-select"
 
 const GO_URL = "https://opencode.ai/go"
 const PAD_X = 3
@@ -18,6 +19,14 @@ export type DialogRetryActionProps = {
   label: string
   link?: string
   onClose?: (dontShowAgain?: boolean) => void
+  request?: {
+    provider: string
+    error: string
+    retryAfter?: string
+    onRetry?: () => void
+    onRetryDifferentModel?: () => void
+    onCancelTurn?: () => void
+  }
 }
 
 function runAction(props: DialogRetryActionProps, dialog: ReturnType<typeof useDialog>) {
@@ -42,6 +51,56 @@ export function DialogRetryAction(props: DialogRetryActionProps) {
   const showGoTreatment = () => props.link === GO_URL
   const textBg = () => (showGoTreatment() ? panelOverlay(themeV2.background.default) : undefined)
   const [selected, setSelected] = createSignal<"dismiss" | "action">("action")
+
+  if (props.request)
+    return (
+      <DialogSelect
+        title="Request failed"
+        options={[
+          {
+            title: props.request.error,
+            description: props.request.retryAfter,
+            footer: "Failed",
+            state: "error",
+            category: props.request.provider,
+            value: "error",
+          },
+          {
+            title: "Retry now",
+            titleView: <>{"\nRetry now"}</>,
+            category: "Choose",
+            value: "retry",
+            onSelect: (dialog) => {
+              props.request?.onRetry?.()
+              dialog.clear()
+            },
+          },
+          {
+            title: "Retry with a different model",
+            category: "Choose",
+            value: "model",
+            onSelect: (dialog) => {
+              props.request?.onRetryDifferentModel?.()
+              dialog.clear()
+            },
+          },
+          {
+            title: "Cancel the turn",
+            category: "Choose",
+            value: "cancel",
+            onSelect: (dialog) => {
+              props.request?.onCancelTurn?.()
+              dialog.clear()
+            },
+          },
+          {
+            title: props.label,
+            value: "legacy-action",
+            onSelect: () => runAction(props, dialog),
+          },
+        ]}
+      />
+    )
 
   Keymap.createLayer(() => ({
     mode: "modal",

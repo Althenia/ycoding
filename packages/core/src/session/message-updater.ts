@@ -13,6 +13,7 @@ export interface Adapter {
   readonly getAssistant: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<SessionMessage.Assistant | undefined, never, never>
+  readonly getUser: (messageID: SessionMessage.ID) => Effect.Effect<SessionMessage.User | undefined, never, never>
   readonly getSkillActivation: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<SessionMessage.Skill | SessionMessage.Assistant | undefined, never, never>
@@ -21,6 +22,7 @@ export interface Adapter {
   ) => Effect.Effect<SessionMessage.Shell | undefined, never, never>
   readonly getCompaction: () => Effect.Effect<SessionMessage.Compaction | undefined, never, never>
   readonly updateAssistant: (assistant: SessionMessage.Assistant) => Effect.Effect<void, never, never>
+  readonly updateUser: (user: SessionMessage.User) => Effect.Effect<void, never, never>
   readonly updateSkillActivation: (
     message: SessionMessage.Skill | SessionMessage.Assistant,
   ) => Effect.Effect<void, never, never>
@@ -65,6 +67,12 @@ export function memory(state: MemoryState): Adapter {
         return assistant?.type === "assistant" ? assistant : undefined
       })
     },
+    getUser(messageID) {
+      return Effect.sync(() => {
+        const message = state.messages.findLast((item) => item.id === messageID)
+        return message?.type === "user" ? message : undefined
+      })
+    },
     getSkillActivation(messageID) {
       return Effect.sync(() => {
         const message = state.messages.findLast((item) => item.id === messageID)
@@ -92,6 +100,13 @@ export function memory(state: MemoryState): Adapter {
         const current = state.messages[index]
         if (current?.type !== "assistant") return
         state.messages[index] = assistant
+      })
+    },
+    updateUser(user) {
+      return Effect.sync(() => {
+        const index = state.messages.findLastIndex((message) => message.id === user.id)
+        if (index < 0 || state.messages[index]?.type !== "user") return
+        state.messages[index] = user
       })
     },
     updateSkillActivation(message) {
@@ -126,7 +141,99 @@ export function memory(state: MemoryState): Adapter {
   }
 }
 
-export function update(adapter: Adapter, event: SessionEvent.Event) {
+type LegacyCompactionEvent =
+  | typeof SessionEvent.Compaction.AdmittedV1.Type
+  | typeof SessionEvent.Compaction.StartedV1.Type
+  | typeof SessionEvent.Compaction.Delta.Type
+  | typeof SessionEvent.Compaction.EndedV1.Type
+  | typeof SessionEvent.Compaction.Replaced.Type
+  | typeof SessionEvent.Compaction.FailedV1.Type
+
+type UpdaterEvent =
+  | Exclude<
+      SessionEvent.Event,
+      | typeof SessionEvent.Compaction.Admitted.Type
+      | typeof SessionEvent.Compaction.Started.Type
+      | typeof SessionEvent.Compaction.Ended.Type
+      | typeof SessionEvent.Compaction.Failed.Type
+    >
+  | LegacyCompactionEvent
+
+const isLegacyCompactionEvent = (event: UpdaterEvent): event is LegacyCompactionEvent =>
+  event.type === "session.compaction.delta" ||
+  (event.type.startsWith("session.compaction.") && "durable" in event && event.durable.version === 1)
+
+const updateLegacyCompaction = (adapter: Adapter, event: LegacyCompactionEvent) => {
+  if (event.type === "session.compaction.admitted" || event.type === "session.compaction.replaced") return Effect.void
+  if (event.type === "session.compaction.started")
+    return adapter.appendMessage(
+      SessionMessage.CompactionRunningV1.make({
+        id: event.data.inputID ?? SessionMessage.ID.fromEvent(event.id),
+        type: "compaction",
+        status: "running",
+        metadata: event.metadata,
+        reason: event.data.reason,
+        summary: "",
+        recent: event.data.recent,
+        time: { created: event.created },
+      }),
+    )
+  if (event.type === "session.compaction.delta")
+    return Effect.gen(function* () {
+      const current = yield* adapter.getCompaction()
+      if (current?.status !== "running") return
+      if (!("summary" in current)) return
+      yield* adapter.updateCompaction({ ...current, summary: current.summary + event.data.text })
+    })
+  if (event.type === "session.compaction.ended")
+    return Effect.gen(function* () {
+      const current = yield* adapter.getCompaction()
+      if (current?.status === "running" && "reason" in current) {
+        yield* adapter.updateCompaction(
+          SessionMessage.CompactionCompletedV1.make({
+            ...current,
+            status: "completed",
+            reason: event.data.reason,
+            summary: event.data.text,
+            recent: event.data.recent,
+            ...(event.data.messages === undefined ? {} : { messages: event.data.messages }),
+            ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
+          }),
+        )
+        return
+      }
+      yield* adapter.appendMessage(
+        SessionMessage.CompactionCompletedV1.make({
+          id: SessionMessage.ID.fromEvent(event.id),
+          type: "compaction",
+          status: "completed",
+          metadata: event.metadata,
+          reason: event.data.reason,
+          summary: event.data.text,
+          recent: event.data.recent,
+          ...(event.data.messages === undefined ? {} : { messages: event.data.messages }),
+          ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
+          time: { created: event.created },
+        }),
+      )
+    })
+  return Effect.gen(function* () {
+    const current = yield* adapter.getCompaction()
+    const failed = SessionMessage.CompactionFailedV1.make({
+      id: current?.id ?? event.data.inputID ?? SessionMessage.ID.fromEvent(event.id),
+      type: "compaction",
+      status: "failed",
+      metadata: current?.metadata ?? event.metadata,
+      reason: event.data.reason,
+      error: event.data.error,
+      time: current?.time ?? { created: event.created },
+    })
+    if (current?.status === "running") return yield* adapter.updateCompaction(failed)
+    yield* adapter.appendMessage(failed)
+  })
+}
+
+export function update(adapter: Adapter, event: UpdaterEvent) {
   type DraftAssistant = WritableDraft<SessionMessage.Assistant>
   type DraftTool = WritableDraft<SessionMessage.AssistantTool>
   type DraftText = WritableDraft<SessionMessage.AssistantText>
@@ -161,6 +268,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
   })
 
   return Effect.gen(function* () {
+    if (isLegacyCompactionEvent(event)) return yield* updateLegacyCompaction(adapter, event)
     yield* SessionEvent.match(event, {
       "session.created": () => Effect.void,
       "session.usage.updated": () => Effect.void,
@@ -214,6 +322,17 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.forked": () => Effect.void,
       "session.input.promoted": () => Effect.void,
       "session.input.admitted": () => Effect.void,
+      "session.input.consumed": (event) =>
+        Effect.forEach(
+          event.data.inputIDs,
+          (inputID) =>
+            Effect.gen(function* () {
+              const user = yield* adapter.getUser(inputID)
+              if (!user || user.time.consumed) return
+              yield* adapter.updateUser({ ...user, time: { ...user.time, consumed: event.created } })
+            }),
+          { discard: true },
+        ),
       "session.execution.started": () => Effect.void,
       "session.execution.succeeded": () => clearCurrentRetry,
       "session.execution.failed": () => clearCurrentRetry,
@@ -380,7 +499,9 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       },
       "session.text.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
-          draft.content.push(castDraft(SessionMessage.AssistantText.make({ type: "text", text: "" })))
+          draft.content.push(
+            castDraft(SessionMessage.AssistantText.make({ type: "text", text: "", phase: event.data.phase })),
+          )
         })
       },
       "session.text.delta": (event) => {
@@ -392,7 +513,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.text.ended": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           const match = latestText(draft)
-          if (match) match.text = event.data.text
+          if (match) {
+            match.text = event.data.text
+            match.phase = event.data.phase
+          }
         })
       },
       "session.tool.input.started": (event) => {
@@ -483,6 +607,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
           }
         })
       },
+      "session.file-change.recorded": () => Effect.void,
       "session.reasoning.started": (event) => {
         return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
           draft.content.push(
@@ -523,71 +648,10 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
         })
       },
       "session.compaction.admitted": () => Effect.void,
-      "session.compaction.started": (event) =>
-        adapter.appendMessage(
-          SessionMessage.CompactionRunning.make({
-            id: event.data.inputID ?? SessionMessage.ID.fromEvent(event.id),
-            type: "compaction",
-            status: "running",
-            metadata: event.metadata,
-            reason: event.data.reason,
-            summary: "",
-            recent: event.data.recent ?? "",
-            time: { created: event.created },
-          }),
-        ),
-      "session.compaction.delta": (event) =>
-        Effect.gen(function* () {
-          const current = yield* adapter.getCompaction()
-          if (current?.status !== "running") return
-          yield* adapter.updateCompaction({ ...current, summary: current.summary + event.data.text })
-        }),
-      "session.compaction.ended": (event) => {
-        return Effect.gen(function* () {
-          const current = yield* adapter.getCompaction()
-          if (current?.status === "running") {
-            yield* adapter.updateCompaction({
-              ...current,
-              status: "completed",
-              reason: event.data.reason,
-              summary: event.data.text,
-              recent: event.data.recent,
-              ...(event.data.messages === undefined ? {} : { messages: event.data.messages }),
-              ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
-            })
-            return
-          }
-          yield* adapter.appendMessage(
-            SessionMessage.Compaction.make({
-              id: SessionMessage.ID.fromEvent(event.id),
-              type: "compaction",
-              status: "completed",
-              metadata: event.metadata,
-              reason: event.data.reason,
-              summary: event.data.text,
-              recent: event.data.recent,
-              ...(event.data.messages === undefined ? {} : { messages: event.data.messages }),
-              ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
-              time: { created: event.created },
-            }),
-          )
-        })
-      },
-      "session.compaction.failed": (event) =>
-        Effect.gen(function* () {
-          const current = yield* adapter.getCompaction()
-          const failed = SessionMessage.CompactionFailed.make({
-            id: current?.id ?? event.data.inputID ?? SessionMessage.ID.fromEvent(event.id),
-            type: "compaction",
-            status: "failed",
-            metadata: current?.metadata ?? event.metadata,
-            reason: event.data.reason,
-            error: event.data.error,
-            time: current?.time ?? { created: event.created },
-          })
-          if (current?.status === "running") return yield* adapter.updateCompaction(failed)
-          yield* adapter.appendMessage(failed)
-        }),
+      "session.compaction.started": () => Effect.void,
+      "session.compaction.delta": () => Effect.void,
+      "session.compaction.ended": () => Effect.void,
+      "session.compaction.failed": () => Effect.void,
       "session.revert.staged": () => Effect.void,
       "session.revert.cleared": () => Effect.void,
       "session.revert.committed": () => Effect.void,

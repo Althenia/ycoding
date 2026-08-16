@@ -16,6 +16,8 @@ import type {
   SessionActiveOutput,
   SessionGetInput,
   SessionGetOutput,
+  SessionSnapshotInput,
+  SessionSnapshotOutput,
   SessionDiagnosticsInput,
   SessionDiagnosticsOutput,
   SessionAutonomyGetInput,
@@ -56,6 +58,8 @@ import type {
   SessionCommandOutput,
   SessionSkillInput,
   SessionSkillOutput,
+  SessionUsageInput,
+  SessionUsageOutput,
   SessionSkillsInput,
   SessionSkillsOutput,
   SessionResolveSkillConflictInput,
@@ -76,6 +80,8 @@ import type {
   SessionRevertCommitOutput,
   SessionContextInput,
   SessionContextOutput,
+  SessionFileChangeListInput,
+  SessionFileChangeListOutput,
   SessionPendingListInput,
   SessionPendingListOutput,
   SessionInstructionsEntryListInput,
@@ -551,6 +557,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      snapshot: (input: SessionSnapshotInput, requestOptions?: RequestOptions) =>
+        request<SessionSnapshotOutput>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/snapshot`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
       diagnostics: (input: SessionDiagnosticsInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionDiagnosticsOutput }>(
           {
@@ -600,16 +617,17 @@ export function make(options: ClientOptions) {
         ),
       subagent: {
         list: (input: SessionSubagentListInput, requestOptions?: RequestOptions) =>
-          request<{ readonly data: SessionSubagentListOutput }>(
+          request<SessionSubagentListOutput>(
             {
               method: "GET",
               path: `/api/session/${encodeURIComponent(input.parentID)}/subagent`,
+              query: { limit: input["limit"], cursor: input["cursor"] },
               successStatus: 200,
               declaredStatuses: [404, 400, 401],
               empty: false,
             },
             requestOptions,
-          ).then((value) => value.data),
+          ),
         launch: (input: SessionSubagentLaunchInput, requestOptions?: RequestOptions) =>
           request<{ readonly data: SessionSubagentLaunchOutput }>(
             {
@@ -733,7 +751,7 @@ export function make(options: ClientOptions) {
             path: `/api/session/${encodeURIComponent(input.sessionID)}/model`,
             body: { model: input["model"] },
             successStatus: 204,
-            declaredStatuses: [404, 400, 401],
+            declaredStatuses: [404, 409, 500, 400, 401],
             empty: true,
           },
           requestOptions,
@@ -816,6 +834,17 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      usage: (input: SessionUsageInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionUsageOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/usage`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
       skills: (input: SessionSkillsInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionSkillsOutput }>(
           {
@@ -940,6 +969,19 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      "file-change": {
+        list: (input: SessionFileChangeListInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionFileChangeListOutput }>(
+            {
+              method: "GET",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/file-change`,
+              successStatus: 200,
+              declaredStatuses: [404, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
       pending: {
         list: (input: SessionPendingListInput, requestOptions?: RequestOptions) =>
           request<{ readonly data: SessionPendingListOutput }>(
@@ -1089,17 +1131,16 @@ export function make(options: ClientOptions) {
     },
     message: {
       list: (input: MessageListInput, requestOptions?: RequestOptions) =>
-        request<MessageListOutput>(
+        request<{ readonly data: MessageListOutput }>(
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/message`,
-            query: { limit: input["limit"], order: input["order"], cursor: input["cursor"] },
             successStatus: 200,
-            declaredStatuses: [400, 404, 500, 401],
+            declaredStatuses: [404, 500, 400, 401],
             empty: false,
           },
           requestOptions,
-        ),
+        ).then((value) => value.data),
     },
     model: {
       list: (input?: ModelListInput, requestOptions?: RequestOptions) =>

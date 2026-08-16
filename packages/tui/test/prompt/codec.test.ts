@@ -1,50 +1,42 @@
 import { describe, expect, test } from "bun:test"
-import type { Prompt } from "@ycoding-ai/schema"
 import { projectedPromptInput } from "../../src/prompt/codec"
 
 describe("prompt codec", () => {
-  test("converts projected URI and inline attachments without mutation", () => {
+  test("projects durable managed attachments to opaque attachment URIs without mutation", () => {
+    const digest = "a".repeat(64)
     const input = {
-      text: "Review @note.ts and image.png with @scan",
+      text: "Review @note.ts with @scan",
       files: [
         {
-          data: "",
+          content: {
+            type: "managed",
+            digest,
+            bytes: 42,
+            path: `attachments/sha256/${digest.slice(0, 2)}/${digest}`,
+          },
           mime: "text/plain",
-          source: { type: "uri", uri: "file:///tmp/note.ts" },
           name: "note.ts",
           mention: { start: 7, end: 15, text: "@note.ts" },
-        },
-        {
-          data: "YWJj",
-          mime: "image/png",
-          source: { type: "inline" },
-          name: "image.png",
           description: "screenshot",
         },
       ],
-      agents: [{ name: "scan", mention: { start: 35, end: 40, text: "@scan" } }],
-    } satisfies Prompt
+      agents: [{ name: "scan", mention: { start: 21, end: 26, text: "@scan" } }],
+    }
     const before = structuredClone(input)
 
-    const output = projectedPromptInput(input)
+    const output = projectedPromptInput(input as never)
 
     expect(output).toEqual({
       text: input.text,
       files: [
         {
-          uri: "file:///tmp/note.ts",
+          uri: `ycoding-attachment://sha256/${digest}`,
           name: "note.ts",
-          description: undefined,
+          description: "screenshot",
           mention: { start: 7, end: 15, text: "@note.ts" },
         },
-        {
-          uri: "data:image/png;base64,YWJj",
-          name: "image.png",
-          description: "screenshot",
-          mention: undefined,
-        },
       ],
-      agents: [{ name: "scan", mention: { start: 35, end: 40, text: "@scan" } }],
+      agents: [{ name: "scan", mention: { start: 21, end: 26, text: "@scan" } }],
     })
     expect(input).toEqual(before)
     expect(output.files?.[0]?.mention).not.toBe(input.files[0].mention)

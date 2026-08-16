@@ -10,5 +10,13 @@ export const migrations = (
     import("./migration/20260727001011_observation-sessionless-identity"),
     import("./migration/20260728025034_dusty_havok"),
     import("./migration/20260728084114_provider-request-optional-cost"),
+    import("./migration/20260801114207_drop-session-archived"),
+    import("./migration/20260803004514_session-file-change-ledger"),
+    import("./migration/20260803011247_session-usage"),
+    import("./migration/20260804120956_selective-compaction-harness"),
+    import("./migration/20260804123002_continuation-generation-fence"),
+    import("./migration/20260804142728_session-authority-revisions"),
+    import("./migration/20260806071025_drop-compaction-admission-mode"),
+    import("./migration/20260808031138_provider-request-cache-read-reported"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

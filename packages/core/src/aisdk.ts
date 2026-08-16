@@ -26,6 +26,7 @@ import {
   Model,
   ProviderID,
   ProviderMetadata,
+  TransportReason,
   ToolResultValue,
   ToolSchemaProjection,
   UnknownProviderReason,
@@ -1042,12 +1043,19 @@ function llmError(method: string, error: unknown) {
     error instanceof LLMError
       ? new InvalidProviderOutputReason({ message: error.message })
       : (aiSdkProviderReason(error) ??
-        new UnknownProviderReason({ message: error instanceof Error ? error.message : String(error) }))
+        (isTransportError(error)
+          ? new TransportReason({ message: error.message })
+          : new UnknownProviderReason({ message: error instanceof Error ? error.message : String(error) })))
   return new LLMError({
     module: "AISDK",
     method,
     reason,
   })
+}
+
+function isTransportError(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false
+  return /(?:socket|connection) (?:was )?closed unexpectedly|cannot connect to api/i.test(error.message)
 }
 
 export const node = makeLocationNode({ service: Service, layer: locationLayer, deps: [] })

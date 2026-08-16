@@ -329,7 +329,11 @@ const instructionEventType = EventV2.versionedType(
   SessionEvent.InstructionsUpdated.type,
   SessionEvent.InstructionsUpdated.durable.version,
 )
-const compactionEventType = EventV2.versionedType(
+const legacyCompactionEventType = EventV2.versionedType(
+  SessionEvent.Compaction.EndedV1.type,
+  SessionEvent.Compaction.EndedV1.durable.version,
+)
+const currentCompactionEventType = EventV2.versionedType(
   SessionEvent.Compaction.Ended.type,
   SessionEvent.Compaction.Ended.durable.version,
 )
@@ -338,7 +342,13 @@ const revertedEventType = EventV2.versionedType(
   SessionEvent.RevertEvent.Committed.type,
   SessionEvent.RevertEvent.Committed.durable.version,
 )
-const relevantEventTypes = [instructionEventType, compactionEventType, movedEventType, revertedEventType]
+const relevantEventTypes = [
+  instructionEventType,
+  legacyCompactionEventType,
+  currentCompactionEventType,
+  movedEventType,
+  revertedEventType,
+]
 
 type InstructionEventRow = typeof EventTable.$inferSelect
 
@@ -417,7 +427,7 @@ function fold(rows: ReadonlyArray<InstructionEventRow>) {
     | undefined
   >((state, row) => {
     if (row.type === movedEventType || row.type === revertedEventType) return undefined
-    if (row.type === compactionEventType)
+    if (row.type === legacyCompactionEventType || row.type === currentCompactionEventType)
       return state
         ? { epochStart: row.seq, throughSeq: row.seq, initial: state.current, current: state.current }
         : undefined

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { CacheHint, LLM, Message, Model, ToolCallPart, ToolResultPart } from "../src"
 import { Auth, LLMClient } from "../src/route"
-import { AmazonBedrock, GoogleVertexMessages, OpenRouter } from "../src/providers"
+import { AmazonBedrock, GoogleVertexMessages, OpenAI, OpenRouter } from "../src/providers"
 import * as AnthropicMessages from "../src/protocols/anthropic-messages"
 import * as Gemini from "../src/protocols/gemini"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -43,6 +43,11 @@ const openai56Model = OpenAIChat.route
   })
   .model({ id: "gpt-5.6" })
 
+const openai56ResponsesModel = OpenAI.configure({
+  baseURL: "https://api.openai.test/v1/",
+  apiKey: "test",
+}).model("gpt-5.6")
+
 const geminiModel = Gemini.route
   .with({
     endpoint: { baseURL: "https://generativelanguage.test/v1beta/" },
@@ -53,7 +58,7 @@ const geminiModel = Gemini.route
 const openrouterModel = OpenRouter.configure({ apiKey: "test" }).model("anthropic/claude-sonnet-4.5")
 
 test("pins the provider-native cache policy revision", () => {
-  expect(CACHE_POLICY_REVISION).toBe("provider-native/v5")
+  expect(CACHE_POLICY_REVISION).toBe("provider-native/v7")
 })
 
 const unknownAnthropicModel = AnthropicMessages.route
@@ -380,11 +385,9 @@ describe("applyCachePolicy", () => {
     expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral", ttlSeconds: 3600 } })
   })
 
-  test("marks GPT-5.6 Responses user and assistant text inside the raw tail window", () => {
+  test("marks GPT-5.6 Responses input boundaries without marking assistant output", () => {
     const request = LLM.request({
-      model: Model.update(openai56Model, {
-        route: openai56Model.route.with({ id: "openai-responses" }),
-      }),
+      model: openai56ResponsesModel,
       messages: [
         Message.user("older user"),
         Message.assistant("first assistant"),
@@ -392,15 +395,128 @@ describe("applyCachePolicy", () => {
         Message.user("latest user"),
         Message.assistant("tail assistant"),
       ],
-      cache: { messages: { tail: 2 } },
+      cache: { messages: { tail: Number.MAX_SAFE_INTEGER } },
       providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
     })
 
     const applied = applyCachePolicy(request)
+    expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[1]?.content[0]).not.toHaveProperty("cache")
     expect(applied.messages[3]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
-    expect((applied.messages[1]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
-    expect((applied.messages[2]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
-    expect(applied.messages[4]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[2]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[4]?.content[0]).not.toHaveProperty("cache")
+  })
+
+  test("bounds GPT-5.6 explicit candidates while retaining the system anchor and recent rolling anchors", () => {
+    const messages = Array.from({ length: 60 }, (_, index) => [
+      Message.user(`user ${index}`),
+      Message.assistant([ToolCallPart.make({ id: `call_${index}`, name: "lookup", input: {} })]),
+      Message.tool({ id: `call_${index}`, name: "lookup", result: `result ${index}` }),
+    ]).flat()
+    const apply = (mode: "implicit" | "explicit") =>
+      applyCachePolicy(
+        LLM.request({
+          model: Model.update(openai56Model, {
+            route: openai56Model.route.with({ id: "openai-responses" }),
+          }),
+          system: "Stable system",
+          messages,
+          cache: { system: true, messages: { tail: 50 } },
+          providerOptions: { openai: { promptCacheOptions: { mode, ttl: "30m" } } },
+        }),
+      )
+    const marked = (request: ReturnType<typeof apply>) => [
+      ...request.system.filter((part) => part.cache !== undefined).map((part) => part.text),
+      ...request.messages.flatMap((message) =>
+        message.content.flatMap((part) => {
+          if (!("cache" in part) || !part.cache) return []
+          if (part.type === "text") return [part.text]
+          if (part.type === "tool-result") return [String(part.result.value)]
+          return []
+        }),
+      ),
+    ]
+
+    const automatic = marked(apply("implicit"))
+    expect(automatic).toHaveLength(49)
+    expect(automatic[0]).toBe("Stable system")
+    expect(automatic).toContain("user 0")
+    expect(automatic).toContain("result 0")
+    expect(automatic).toContain("result 59")
+    expect(automatic).not.toContain("user 1")
+    expect(automatic).not.toContain("result 1")
+
+    const explicit = marked(apply("explicit"))
+    expect(explicit).toHaveLength(50)
+    expect(explicit[0]).toBe("Stable system")
+    expect(explicit).toContain("user 0")
+    expect(explicit).toContain("result 0")
+    expect(explicit).toContain("result 59")
+    expect(explicit).not.toContain("user 1")
+  })
+
+  test("bounds pre-marked GPT-5.6 candidates while retaining the system anchor and newest messages", () => {
+    const cache = new CacheHint({ type: "ephemeral" })
+    const applied = applyCachePolicy(
+      LLM.request({
+        model: Model.update(openai56Model, {
+          route: openai56Model.route.with({ id: "openai-responses" }),
+        }),
+        system: { type: "text", text: "Stable system", cache },
+        messages: Array.from({ length: 60 }, (_, index) =>
+          Message.user([{ type: "text", text: `user ${index}`, cache }]),
+        ),
+        cache: "none",
+        providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+      }),
+    )
+    const marked = [
+      ...applied.system.filter((part) => part.cache !== undefined).map((part) => part.text),
+      ...applied.messages.flatMap((message) =>
+        message.content.flatMap((part) => ("cache" in part && part.cache && part.type === "text" ? [part.text] : [])),
+      ),
+    ]
+
+    expect(marked).toHaveLength(50)
+    expect(marked[0]).toBe("Stable system")
+    expect(marked).toContain("user 0")
+    expect(marked).toContain("user 1")
+    expect(marked).toContain("user 59")
+    expect(marked).not.toContain("user 2")
+  })
+
+  test("retains stable earliest prefix within 50 window for long mainchat history", () => {
+    // Simulate 60 messages (mainchat) vs subagent short history: system + first user must stay cached
+    const longMessages = Array.from({ length: 60 }, (_, i) => Message.user(`user ${i}`))
+    const shortMessages = Array.from({ length: 10 }, (_, i) => Message.user(`user ${i}`))
+    const mk = (msgs: typeof longMessages) =>
+      applyCachePolicy(
+        LLM.request({
+          model: Model.update(openai56Model, { route: openai56Model.route.with({ id: "openai-responses" }) }),
+          system: "Stable system",
+          messages: msgs,
+          cache: { system: true, messages: { tail: 50 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+        }),
+      )
+    const longMarked = [
+      ...mk(longMessages).system.filter((p) => p.cache !== undefined).map((p) => p.text),
+      ...mk(longMessages).messages.flatMap((m) => m.content.flatMap((p) => ("cache" in p && p.cache && p.type === "text" ? [p.text] : []))),
+    ]
+    const shortMarked = [
+      ...mk(shortMessages).system.filter((p) => p.cache !== undefined).map((p) => p.text),
+      ...mk(shortMessages).messages.flatMap((m) => m.content.flatMap((p) => ("cache" in p && p.cache && p.type === "text" ? [p.text] : []))),
+    ]
+    // Long history must still contain system and first two users within 50 window (stable prefix exceeds 1024-token minimum)
+    expect(longMarked).toContain("Stable system")
+    expect(longMarked).toContain("user 0")
+    expect(longMarked).toContain("user 1")
+    expect(longMarked).toContain("user 59")
+    expect(longMarked).not.toContain("user 2")
+    // Short history retains all without eviction
+    expect(shortMarked).toContain("user 0")
+    expect(shortMarked).toContain("user 9")
+    expect(shortMarked).toHaveLength(11)
   })
 
   test("marks GPT-5.6 Chat user and assistant text inside the raw tail window", () => {
@@ -597,7 +713,7 @@ describe("applyCachePolicy", () => {
     }),
   )
 
-  it.effect("explicit tail policy does not search before trailing media", () =>
+  it.effect("explicit tail policy selects the last cacheable message before trailing media", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -614,7 +730,11 @@ describe("applyCachePolicy", () => {
         }),
       )
 
-      expect(JSON.stringify(prepared.body)).not.toContain("cache_control")
+      const body = prepared.body as {
+        messages: Array<{ content: Array<{ cache_control?: unknown }> }>
+      }
+      expect(body.messages[0]?.content[0]?.cache_control).toEqual({ type: "ephemeral" })
+      expect(body.messages[1]?.content[0]?.cache_control).toBeUndefined()
     }),
   )
 
@@ -1148,7 +1268,7 @@ describe("volatile messages", () => {
     expect(placement(second.messages).at(-1)).toEqual([undefined])
   })
 
-  test("explicit tail policy skips a volatile tail message", () => {
+  test("explicit tail policy anchors the last cacheable message before a volatile tail", () => {
     const applied = applyCachePolicy(
       LLM.request({
         model: anthropicModel,
@@ -1157,7 +1277,31 @@ describe("volatile messages", () => {
       }),
     )
 
-    expect(placement(applied.messages)).toEqual([[undefined], [undefined]])
+    expect(placement(applied.messages)).toEqual([[new CacheHint({ type: "ephemeral" })], [undefined]])
+  })
+
+  test("explicit tail policy preserves two rolling anchors before two volatile messages", () => {
+    const applied = applyCachePolicy(
+      LLM.request({
+        model: anthropicModel,
+        messages: [
+          Message.user("u1"),
+          Message.assistant("a1"),
+          Message.user("u2"),
+          volatileUser("TeamView: child running"),
+          volatileUser("TeamView: approval pending"),
+        ],
+        cache: { messages: { tail: 2 } },
+      }),
+    )
+
+    expect(placement(applied.messages)).toEqual([
+      [undefined],
+      [new CacheHint({ type: "ephemeral" })],
+      [new CacheHint({ type: "ephemeral" })],
+      [undefined],
+      [undefined],
+    ])
   })
 
   test("'latest-user-message' falls back to the newest non-volatile user message", () => {
