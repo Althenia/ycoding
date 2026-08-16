@@ -1,0 +1,11 @@
+export * as Plugin from "./plugin.js"
+
+export { Agent } from "@ycoding-ai/schema/agent"
+export { Command } from "@ycoding-ai/schema/command"
+export { Connection } from "@ycoding-ai/schema/connection"
+export { Credential } from "@ycoding-ai/schema/credential"
+export { Integration } from "@ycoding-ai/schema/integration"
+export { Model } from "@ycoding-ai/schema/model"
+export { Provider } from "@ycoding-ai/schema/provider"
+export { Reference } from "@ycoding-ai/schema/reference"
+export { Skill } from "@ycoding-ai/schema/skill"

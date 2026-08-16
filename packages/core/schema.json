@@ -1,0 +1,5695 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "353f00e5-deec-4d45-9fde-e1a2bccff0b2",
+  "prevIds": [
+    "2350eff0-26ca-40e5-ba53-d1b28aaebaec"
+  ],
+  "ddl": [
+    {
+      "name": "workspace",
+      "entityType": "tables"
+    },
+    {
+      "name": "data_migration",
+      "entityType": "tables"
+    },
+    {
+      "name": "account_state",
+      "entityType": "tables"
+    },
+    {
+      "name": "account",
+      "entityType": "tables"
+    },
+    {
+      "name": "control_account",
+      "entityType": "tables"
+    },
+    {
+      "name": "credential",
+      "entityType": "tables"
+    },
+    {
+      "name": "event_sequence",
+      "entityType": "tables"
+    },
+    {
+      "name": "event",
+      "entityType": "tables"
+    },
+    {
+      "name": "kv",
+      "entityType": "tables"
+    },
+    {
+      "name": "permission",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_activation",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_feedback",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_global_scope",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_legacy_cleanup",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_observation",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_operation",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_project_scope",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_scope",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_terminal",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_trash",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_version",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_artifact_write",
+      "entityType": "tables"
+    },
+    {
+      "name": "project_directory",
+      "entityType": "tables"
+    },
+    {
+      "name": "project",
+      "entityType": "tables"
+    },
+    {
+      "name": "instruction_blob",
+      "entityType": "tables"
+    },
+    {
+      "name": "instruction_entry",
+      "entityType": "tables"
+    },
+    {
+      "name": "instruction_state",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_message",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_pending",
+      "entityType": "tables"
+    },
+    {
+      "name": "session",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_task_notification",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_task",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_todo",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_share",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "''",
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "branch",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "extra",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_used",
+      "entityType": "columns",
+      "table": "workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "data_migration"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_completed",
+      "entityType": "columns",
+      "table": "data_migration"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "account_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active_account_id",
+      "entityType": "columns",
+      "table": "account_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active_org_id",
+      "entityType": "columns",
+      "table": "account_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "url",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "access_token",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "refresh_token",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "token_expiry",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "url",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "access_token",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "refresh_token",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "token_expiry",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "control_account"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "integration_id",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "label",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "connector_id",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "method_id",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "credential"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "aggregate_id",
+      "entityType": "columns",
+      "table": "event_sequence"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "event_sequence"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "owner_id",
+      "entityType": "columns",
+      "table": "event_sequence"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "event"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "aggregate_id",
+      "entityType": "columns",
+      "table": "event"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "event"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created",
+      "entityType": "columns",
+      "table": "event"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "event"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "event"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "kv"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "kv"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "kv"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "kv"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "action",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "resource",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "permission"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "message_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "call_id",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "boundary_seq",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activated_at",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deactivated_at",
+      "entityType": "columns",
+      "table": "project_artifact_activation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version_id",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "action",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "actor",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_global_scope"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": {
+        "as": "('global')",
+        "type": "virtual"
+      },
+      "name": "scope_type",
+      "entityType": "columns",
+      "table": "project_artifact_global_scope"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "singleton",
+      "entityType": "columns",
+      "table": "project_artifact_global_scope"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cursor",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "attempts",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "removed_count",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "skipped_count",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "failed_count",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error_code",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_attempt_at",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_at",
+      "entityType": "columns",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version_id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activation_set_digest",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active_artifact_count",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "external_confounded",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "eligible",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "terminal_outcome",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "goal_status",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repeat_fix",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "latency_ms",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_tokens",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "output_tokens",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cache_read_tokens",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_tool_count",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "failed_tool_count",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "terminal_message_id",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "observed_at",
+      "entityType": "columns",
+      "table": "project_artifact_observation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_fingerprint",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expected_revision",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expected_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expected_digest",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source_digest",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target_digest",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "final_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deletion_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "automatic_session_id",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "automatic_insight_digest",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "phase",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "project_artifact_operation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_project_scope"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": {
+        "as": "('project')",
+        "type": "virtual"
+      },
+      "name": "scope_type",
+      "entityType": "columns",
+      "table": "project_artifact_project_scope"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "project_artifact_project_scope"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_scope"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "project_artifact_scope"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "storage_id",
+      "entityType": "columns",
+      "table": "project_artifact_scope"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_artifact_scope"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "project_artifact_scope"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "stage",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "current_version_id",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fallback_version_id",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "shadowed_scope_id",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_used_at",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "project_artifact"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "terminal_message_id",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "boundary_seq",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_id",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "goal_mode",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "managed_activation_count",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "standard_invocation_count",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "external_confounded",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "terminal_outcome",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "goal_status",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repeat_fix",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "observed_at",
+      "entityType": "columns",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deletion_id",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prior_stage",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prior_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deleted_at",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "purge_after",
+      "entityType": "columns",
+      "table": "project_artifact_trash"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "artifact_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_digest",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_relpath",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "creator_agent_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "creator_session_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "insight_digest",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_version_id",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "origin_evidence_digest",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_qualified_at",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_evaluated_at",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_restored_at",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_governor_transition_at",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_state_changed",
+      "entityType": "columns",
+      "table": "project_artifact_version"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope_id",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "insight_digest",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "result",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "version_id",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_digest",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_artifact_write"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "project_directory"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "project_directory"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "project_directory"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "strategy",
+      "entityType": "columns",
+      "table": "project_directory"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project_directory"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "worktree",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "vcs",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "icon_url",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "icon_url_override",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "icon_color",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_initialized",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sandboxes",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "commands",
+      "entityType": "columns",
+      "table": "project"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "hash",
+      "entityType": "columns",
+      "table": "instruction_blob"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "instruction_blob"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "instruction_entry"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "instruction_entry"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "instruction_entry"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "removed",
+      "entityType": "columns",
+      "table": "instruction_entry"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "instruction_entry"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "instruction_entry"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "instruction_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "epoch_start",
+      "entityType": "columns",
+      "table": "instruction_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "through_seq",
+      "entityType": "columns",
+      "table": "instruction_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "initial_values",
+      "entityType": "columns",
+      "table": "instruction_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "current_values",
+      "entityType": "columns",
+      "table": "instruction_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "seq",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "session_message"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "delivery",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admitted_seq",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_pending"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fork_session_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fork_message_id",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "fork_seq",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "path",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "title",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "real",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "cost",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "tokens_input",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "tokens_output",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "tokens_reasoning",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "tokens_cache_read",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "tokens_cache_write",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revert",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "permission",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "autonomy",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_archived",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_suspended",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "task_session_id",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_id",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "type",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "excerpt",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "delivered",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_delivered",
+      "entityType": "columns",
+      "table": "session_task_notification"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "parent_assistant_message_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tool_call_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "description",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_digest",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "background",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "delivery",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "progress",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "progress_time",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "question_id",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "question",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "question_data",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "question_time",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "attempt_started",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_task"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "priority",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "position",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_todo"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_share"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "session_share"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "secret",
+      "entityType": "columns",
+      "table": "session_share"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "url",
+      "entityType": "columns",
+      "table": "session_share"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "session_share"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_updated",
+      "entityType": "columns",
+      "table": "session_share"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_workspace_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "workspace"
+    },
+    {
+      "columns": [
+        "active_account_id"
+      ],
+      "tableTo": "account",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "SET NULL",
+      "nameExplicit": false,
+      "name": "fk_account_state_active_account_id_account_id_fk",
+      "entityType": "fks",
+      "table": "account_state"
+    },
+    {
+      "columns": [
+        "aggregate_id"
+      ],
+      "tableTo": "event_sequence",
+      "columnsTo": [
+        "aggregate_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_event_aggregate_id_event_sequence_aggregate_id_fk",
+      "entityType": "fks",
+      "table": "event"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_permission_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "permission"
+    },
+    {
+      "columns": [
+        "version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "project_artifact_activation_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_activation"
+    },
+    {
+      "columns": [
+        "version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "project_artifact_feedback_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "columns": [
+        "scope_id",
+        "scope_type"
+      ],
+      "tableTo": "project_artifact_scope",
+      "columnsTo": [
+        "id",
+        "type"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "project_artifact_global_scope_parent_fk",
+      "entityType": "fks",
+      "table": "project_artifact_global_scope"
+    },
+    {
+      "columns": [
+        "version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "project_artifact_observation_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "columns": [
+        "scope_id"
+      ],
+      "tableTo": "project_artifact_scope",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_operation_scope_id_project_artifact_scope_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        "expected_version_id",
+        "scope_id",
+        "kind",
+        "artifact_id",
+        "expected_digest"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id",
+        "content_digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": true,
+      "name": "project_artifact_operation_expected_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        "source_version_id",
+        "source_scope_id",
+        "kind",
+        "artifact_id",
+        "source_digest"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id",
+        "content_digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": true,
+      "name": "project_artifact_operation_source_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        "final_version_id",
+        "scope_id",
+        "kind",
+        "artifact_id",
+        "target_digest"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id",
+        "content_digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": true,
+      "name": "project_artifact_operation_final_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_project_scope_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact_project_scope"
+    },
+    {
+      "columns": [
+        "scope_id",
+        "scope_type"
+      ],
+      "tableTo": "project_artifact_scope",
+      "columnsTo": [
+        "id",
+        "type"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "project_artifact_project_scope_parent_fk",
+      "entityType": "fks",
+      "table": "project_artifact_project_scope"
+    },
+    {
+      "columns": [
+        "scope_id"
+      ],
+      "tableTo": "project_artifact_scope",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_scope_id_project_artifact_scope_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact"
+    },
+    {
+      "columns": [
+        "shadowed_scope_id"
+      ],
+      "tableTo": "project_artifact_scope",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_shadowed_scope_id_project_artifact_scope_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact"
+    },
+    {
+      "columns": [
+        "current_version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": true,
+      "name": "project_artifact_current_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact"
+    },
+    {
+      "columns": [
+        "fallback_version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": true,
+      "name": "project_artifact_fallback_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_terminal_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "columns": [
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact",
+      "columnsTo": [
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_trash_scope_id_kind_artifact_id_project_artifact_scope_id_kind_artifact_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact_trash"
+    },
+    {
+      "columns": [
+        "prior_version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": true,
+      "name": "project_artifact_trash_prior_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_trash"
+    },
+    {
+      "columns": [
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact",
+      "columnsTo": [
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_version_scope_id_kind_artifact_id_project_artifact_scope_id_kind_artifact_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        "parent_version_id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": true,
+      "name": "project_artifact_version_parent_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        "origin_version_id",
+        "origin_scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": true,
+      "name": "project_artifact_version_origin_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        "scope_id"
+      ],
+      "tableTo": "project_artifact_scope",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_artifact_write_scope_id_project_artifact_scope_id_fk",
+      "entityType": "fks",
+      "table": "project_artifact_write"
+    },
+    {
+      "columns": [
+        "version_id",
+        "scope_id",
+        "content_digest"
+      ],
+      "tableTo": "project_artifact_version",
+      "columnsTo": [
+        "id",
+        "scope_id",
+        "content_digest"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": true,
+      "name": "project_artifact_write_version_owner_fk",
+      "entityType": "fks",
+      "table": "project_artifact_write"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_project_directory_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "project_directory"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_instruction_entry_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "instruction_entry"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_instruction_state_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "instruction_state"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_message_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_message"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_pending_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_pending"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "session"
+    },
+    {
+      "columns": [
+        "task_session_id"
+      ],
+      "tableTo": "session_task",
+      "columnsTo": [
+        "session_id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_task_notification_task_session_id_session_task_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task_notification"
+    },
+    {
+      "columns": [
+        "parent_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_task_notification_parent_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task_notification"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_task_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task"
+    },
+    {
+      "columns": [
+        "parent_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_task_parent_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_task"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_todo_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_todo"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_share_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_share"
+    },
+    {
+      "columns": [
+        "email",
+        "url"
+      ],
+      "nameExplicit": false,
+      "name": "control_account_pk",
+      "entityType": "pks",
+      "table": "control_account"
+    },
+    {
+      "columns": [
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_pk",
+      "entityType": "pks",
+      "table": "project_artifact"
+    },
+    {
+      "columns": [
+        "scope_id",
+        "session_id",
+        "insight_digest"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_write_pk",
+      "entityType": "pks",
+      "table": "project_artifact_write"
+    },
+    {
+      "columns": [
+        "project_id",
+        "directory"
+      ],
+      "nameExplicit": false,
+      "name": "project_directory_pk",
+      "entityType": "pks",
+      "table": "project_directory"
+    },
+    {
+      "columns": [
+        "session_id",
+        "key"
+      ],
+      "nameExplicit": false,
+      "name": "instruction_entry_pk",
+      "entityType": "pks",
+      "table": "instruction_entry"
+    },
+    {
+      "columns": [
+        "session_id",
+        "position"
+      ],
+      "nameExplicit": false,
+      "name": "session_todo_pk",
+      "entityType": "pks",
+      "table": "session_todo"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "workspace_pk",
+      "table": "workspace",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "name"
+      ],
+      "nameExplicit": false,
+      "name": "data_migration_pk",
+      "table": "data_migration",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "account_state_pk",
+      "table": "account_state",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "account_pk",
+      "table": "account",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "credential_pk",
+      "table": "credential",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "aggregate_id"
+      ],
+      "nameExplicit": false,
+      "name": "event_sequence_pk",
+      "table": "event_sequence",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "event_pk",
+      "table": "event",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "key"
+      ],
+      "nameExplicit": false,
+      "name": "kv_pk",
+      "table": "kv",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "permission_pk",
+      "table": "permission",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_activation_pk",
+      "table": "project_artifact_activation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_feedback_pk",
+      "table": "project_artifact_feedback",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "scope_id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_global_scope_pk",
+      "table": "project_artifact_global_scope",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_legacy_cleanup_pk",
+      "table": "project_artifact_legacy_cleanup",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_observation_pk",
+      "table": "project_artifact_observation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_operation_pk",
+      "table": "project_artifact_operation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "scope_id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_project_scope_pk",
+      "table": "project_artifact_project_scope",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_scope_pk",
+      "table": "project_artifact_scope",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_terminal_pk",
+      "table": "project_artifact_terminal",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "deletion_id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_trash_pk",
+      "table": "project_artifact_trash",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_artifact_version_pk",
+      "table": "project_artifact_version",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "project_pk",
+      "table": "project",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "hash"
+      ],
+      "nameExplicit": false,
+      "name": "instruction_blob_pk",
+      "table": "instruction_blob",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "instruction_state_pk",
+      "table": "instruction_state",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_message_pk",
+      "table": "session_message",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_pending_pk",
+      "table": "session_pending",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_pk",
+      "table": "session",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_notification_pk",
+      "table": "session_task_notification",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_pk",
+      "table": "session_task",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_share_pk",
+      "table": "session_share",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "aggregate_id",
+          "isExpression": false
+        },
+        {
+          "value": "seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "event_aggregate_seq_idx",
+      "entityType": "indexes",
+      "table": "event"
+    },
+    {
+      "columns": [
+        {
+          "value": "aggregate_id",
+          "isExpression": false
+        },
+        {
+          "value": "type",
+          "isExpression": false
+        },
+        {
+          "value": "seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "event_aggregate_type_seq_idx",
+      "entityType": "indexes",
+      "table": "event"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        },
+        {
+          "value": "action",
+          "isExpression": false
+        },
+        {
+          "value": "resource",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "permission_project_action_resource_idx",
+      "entityType": "indexes",
+      "table": "permission"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "version_id",
+          "isExpression": false
+        },
+        {
+          "value": "source",
+          "isExpression": false
+        },
+        {
+          "value": "boundary_seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_activation\".\"session_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "project_artifact_activation_identity_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_activation"
+    },
+    {
+      "columns": [
+        {
+          "value": "version_id",
+          "isExpression": false
+        },
+        {
+          "value": "source",
+          "isExpression": false
+        },
+        {
+          "value": "boundary_seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_activation\".\"session_id\" IS NULL",
+      "origin": "manual",
+      "name": "project_artifact_activation_sessionless_identity_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_activation"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "deactivated_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_activation_session_open_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_activation"
+    },
+    {
+      "columns": [
+        {
+          "value": "version_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_feedback_version_created_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "columns": [
+        {
+          "value": "singleton",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_global_scope_singleton_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_global_scope"
+    },
+    {
+      "columns": [
+        {
+          "value": "version_id",
+          "isExpression": false
+        },
+        {
+          "value": "terminal_message_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_observation\".\"terminal_message_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "project_artifact_observation_version_terminal_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_observation"
+    },
+    {
+      "columns": [
+        {
+          "value": "version_id",
+          "isExpression": false
+        },
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_observation\".\"terminal_message_id\" IS NULL",
+      "origin": "manual",
+      "name": "project_artifact_observation_version_session_absent_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_observation"
+    },
+    {
+      "columns": [
+        {
+          "value": "version_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_observation\".\"terminal_message_id\" IS NULL AND \"project_artifact_observation\".\"session_id\" IS NULL",
+      "origin": "manual",
+      "name": "project_artifact_observation_sessionless_absent_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_observation"
+    },
+    {
+      "columns": [
+        {
+          "value": "version_id",
+          "isExpression": false
+        },
+        {
+          "value": "eligible",
+          "isExpression": false
+        },
+        {
+          "value": "observed_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_observation_version_eligible_observed_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_observation"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "request_fingerprint",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_operation_request_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "automatic_session_id",
+          "isExpression": false
+        },
+        {
+          "value": "automatic_insight_digest",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_operation\".\"automatic_session_id\" IS NOT NULL AND \"project_artifact_operation\".\"automatic_insight_digest\" IS NOT NULL",
+      "origin": "manual",
+      "name": "project_artifact_operation_automatic_retry_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "artifact_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_operation\".\"phase\" IN ('preparing', 'available')",
+      "origin": "manual",
+      "name": "project_artifact_operation_active_artifact_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        {
+          "value": "phase",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_operation_recovery_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_operation"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_project_scope_project_id_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_project_scope"
+    },
+    {
+      "columns": [
+        {
+          "value": "storage_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_scope_storage_id_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_scope"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "stage",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        },
+        {
+          "value": "artifact_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_scope_stage_kind_updated_idx",
+      "entityType": "indexes",
+      "table": "project_artifact"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "terminal_message_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_terminal\".\"terminal_message_id\" IS NOT NULL",
+      "origin": "manual",
+      "name": "project_artifact_terminal_message_identity_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "boundary_seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"project_artifact_terminal\".\"terminal_message_id\" IS NULL",
+      "origin": "manual",
+      "name": "project_artifact_terminal_boundary_identity_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "columns": [
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "agent_id",
+          "isExpression": false
+        },
+        {
+          "value": "model_id",
+          "isExpression": false
+        },
+        {
+          "value": "goal_mode",
+          "isExpression": false
+        },
+        {
+          "value": "observed_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_terminal_cohort_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "artifact_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_trash_scope_kind_id_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_trash"
+    },
+    {
+      "columns": [
+        {
+          "value": "purge_after",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_trash_purge_after_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_trash"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "artifact_id",
+          "isExpression": false
+        },
+        {
+          "value": "content_digest",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_version_scope_kind_id_digest_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "artifact_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_version_scope_kind_id_created_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        {
+          "value": "scope_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_write_scope_created_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_write"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "project_artifact_write_session_created_idx",
+      "entityType": "indexes",
+      "table": "project_artifact_write"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_message_session_seq_idx",
+      "entityType": "indexes",
+      "table": "session_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "type",
+          "isExpression": false
+        },
+        {
+          "value": "seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_message_session_type_seq_idx",
+      "entityType": "indexes",
+      "table": "session_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_message_session_time_created_id_idx",
+      "entityType": "indexes",
+      "table": "session_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_created",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_message_time_created_idx",
+      "entityType": "indexes",
+      "table": "session_message"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "delivery",
+          "isExpression": false
+        },
+        {
+          "value": "admitted_seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_pending_session_delivery_seq_idx",
+      "entityType": "indexes",
+      "table": "session_pending"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": "\"session_pending\".\"type\" = 'compaction'",
+      "origin": "manual",
+      "name": "session_pending_session_compaction_idx",
+      "entityType": "indexes",
+      "table": "session_pending"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "admitted_seq",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_pending_session_admitted_seq_idx",
+      "entityType": "indexes",
+      "table": "session_pending"
+    },
+    {
+      "columns": [
+        {
+          "value": "project_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_project_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "workspace_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_workspace_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "parent_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_parent_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "time_suspended",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": "\"session\".\"time_suspended\" is not null",
+      "origin": "manual",
+      "name": "session_time_suspended_idx",
+      "entityType": "indexes",
+      "table": "session"
+    },
+    {
+      "columns": [
+        {
+          "value": "task_session_id",
+          "isExpression": false
+        },
+        {
+          "value": "type",
+          "isExpression": false
+        },
+        {
+          "value": "revision",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_task_notification_transition_idx",
+      "entityType": "indexes",
+      "table": "session_task_notification"
+    },
+    {
+      "columns": [
+        {
+          "value": "delivered",
+          "isExpression": false
+        },
+        {
+          "value": "time_created",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_task_notification_delivery_idx",
+      "entityType": "indexes",
+      "table": "session_task_notification"
+    },
+    {
+      "columns": [
+        {
+          "value": "parent_id",
+          "isExpression": false
+        },
+        {
+          "value": "parent_assistant_message_id",
+          "isExpression": false
+        },
+        {
+          "value": "tool_call_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "session_task_launch_identity_idx",
+      "entityType": "indexes",
+      "table": "session_task"
+    },
+    {
+      "columns": [
+        {
+          "value": "parent_id",
+          "isExpression": false
+        },
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "time_updated",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_task_parent_state_updated_idx",
+      "entityType": "indexes",
+      "table": "session_task"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_todo_session_idx",
+      "entityType": "indexes",
+      "table": "session_todo"
+    },
+    {
+      "columns": [
+        "id",
+        "type"
+      ],
+      "nameExplicit": true,
+      "name": "project_artifact_scope_id_type_unique",
+      "entityType": "uniques",
+      "table": "project_artifact_scope"
+    },
+    {
+      "columns": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id"
+      ],
+      "nameExplicit": true,
+      "name": "project_artifact_version_owner_unique",
+      "entityType": "uniques",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        "id",
+        "scope_id",
+        "kind",
+        "artifact_id",
+        "content_digest"
+      ],
+      "nameExplicit": true,
+      "name": "project_artifact_version_digest_owner_unique",
+      "entityType": "uniques",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        "id",
+        "scope_id",
+        "content_digest"
+      ],
+      "nameExplicit": true,
+      "name": "project_artifact_version_write_unique",
+      "entityType": "uniques",
+      "table": "project_artifact_version"
+    },
+    {
+      "columns": [
+        "input_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_task_input_id_unique",
+      "entityType": "uniques",
+      "table": "session_task"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'paa_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_activation_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_activation"
+    },
+    {
+      "value": "\"source\" IN ('skill-tool', 'session-skill', 'command', 'agent-selected', 'subagent-launch', 'manual')",
+      "name": "project_artifact_activation_source_check",
+      "entityType": "checks",
+      "table": "project_artifact_activation"
+    },
+    {
+      "value": "(\"session_id\" IS NULL OR (length(\"session_id\") >= 3 AND substr(\"session_id\", 1, 3) = 'ses'))",
+      "name": "project_artifact_activation_session_check",
+      "entityType": "checks",
+      "table": "project_artifact_activation"
+    },
+    {
+      "value": "(\"message_id\" IS NULL OR length(\"message_id\") > 0) AND (\"call_id\" IS NULL OR length(\"call_id\") > 0)",
+      "name": "project_artifact_activation_optional_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_activation"
+    },
+    {
+      "value": "typeof(\"boundary_seq\") = 'integer' AND \"boundary_seq\" >= 0 AND typeof(\"activated_at\") = 'integer' AND \"activated_at\" >= 0 AND (\"deactivated_at\" IS NULL OR (typeof(\"deactivated_at\") = 'integer' AND \"deactivated_at\" >= 0))",
+      "name": "project_artifact_activation_number_check",
+      "entityType": "checks",
+      "table": "project_artifact_activation"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'paf_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_feedback_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "value": "\"action\" IN ('disable', 'delete', 'revert', 'restore', 'enable', 'promote')",
+      "name": "project_artifact_feedback_action_check",
+      "entityType": "checks",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "value": "\"actor\" IN ('user', 'automatic-governor')",
+      "name": "project_artifact_feedback_actor_check",
+      "entityType": "checks",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0",
+      "name": "project_artifact_feedback_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_feedback"
+    },
+    {
+      "value": "\"singleton\" = 1",
+      "name": "project_artifact_global_scope_singleton_check",
+      "entityType": "checks",
+      "table": "project_artifact_global_scope"
+    },
+    {
+      "value": "\"id\" = 1",
+      "name": "project_artifact_legacy_cleanup_singleton_check",
+      "entityType": "checks",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "value": "\"status\" IN ('pending', 'partial', 'complete', 'failed')",
+      "name": "project_artifact_legacy_cleanup_status_check",
+      "entityType": "checks",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "value": "typeof(\"attempts\") = 'integer' AND \"attempts\" >= 0 AND typeof(\"removed_count\") = 'integer' AND \"removed_count\" >= 0 AND typeof(\"skipped_count\") = 'integer' AND \"skipped_count\" >= 0 AND typeof(\"failed_count\") = 'integer' AND \"failed_count\" >= 0",
+      "name": "project_artifact_legacy_cleanup_counts_check",
+      "entityType": "checks",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "value": "(\"last_attempt_at\" IS NULL OR (typeof(\"last_attempt_at\") = 'integer' AND \"last_attempt_at\" >= 0)) AND (\"completed_at\" IS NULL OR (typeof(\"completed_at\") = 'integer' AND \"completed_at\" >= 0))",
+      "name": "project_artifact_legacy_cleanup_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_legacy_cleanup"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'pao_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_observation_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "length(\"activation_set_digest\") = 64 AND \"activation_set_digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "project_artifact_observation_digest_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "\"terminal_outcome\" IN ('succeeded', 'failed', 'interrupted')",
+      "name": "project_artifact_observation_terminal_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "\"goal_status\" IN ('none', 'completed', 'stopped', 'exhausted')",
+      "name": "project_artifact_observation_goal_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "(\"session_id\" IS NULL OR (length(\"session_id\") >= 3 AND substr(\"session_id\", 1, 3) = 'ses'))",
+      "name": "project_artifact_observation_session_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "(\"terminal_message_id\" IS NULL OR length(\"terminal_message_id\") > 0)",
+      "name": "project_artifact_observation_message_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "typeof(\"external_confounded\") = 'integer' AND \"external_confounded\" IN (0, 1) AND typeof(\"eligible\") = 'integer' AND \"eligible\" IN (0, 1) AND typeof(\"repeat_fix\") = 'integer' AND \"repeat_fix\" IN (0, 1)",
+      "name": "project_artifact_observation_boolean_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "typeof(\"active_artifact_count\") = 'integer' AND \"active_artifact_count\" >= 0 AND (\"latency_ms\" IS NULL OR (typeof(\"latency_ms\") = 'integer' AND \"latency_ms\" >= 0)) AND (\"input_tokens\" IS NULL OR (typeof(\"input_tokens\") = 'integer' AND \"input_tokens\" >= 0)) AND (\"output_tokens\" IS NULL OR (typeof(\"output_tokens\") = 'integer' AND \"output_tokens\" >= 0)) AND (\"cache_read_tokens\" IS NULL OR (typeof(\"cache_read_tokens\") = 'integer' AND \"cache_read_tokens\" >= 0)) AND (\"completed_tool_count\" IS NULL OR (typeof(\"completed_tool_count\") = 'integer' AND \"completed_tool_count\" >= 0)) AND (\"failed_tool_count\" IS NULL OR (typeof(\"failed_tool_count\") = 'integer' AND \"failed_tool_count\" >= 0)) AND typeof(\"observed_at\") = 'integer' AND \"observed_at\" >= 0",
+      "name": "project_artifact_observation_number_check",
+      "entityType": "checks",
+      "table": "project_artifact_observation"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'pop_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_operation_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "length(\"artifact_id\") BETWEEN 1 AND 64 AND \"artifact_id\" NOT GLOB '*[^a-z0-9-]*' AND substr(\"artifact_id\", 1, 1) GLOB '[a-z0-9]' AND substr(\"artifact_id\", -1, 1) GLOB '[a-z0-9]' AND \"artifact_id\" NOT IN ('aux', 'clock$', 'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9', 'con', 'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9', 'nul', 'prn')",
+      "name": "project_artifact_operation_artifact_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "\"kind\" IN ('skill', 'command', 'agent', 'plugin')",
+      "name": "project_artifact_operation_kind_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "\"operation\" IN ('create', 'update', 'promotion', 'fork', 'shadow', 'remove', 'restore', 'disable', 'enable', 'revert', 'purge')",
+      "name": "project_artifact_operation_operation_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "\"phase\" IN ('preparing', 'available', 'finalized', 'aborted')",
+      "name": "project_artifact_operation_phase_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "length(\"request_fingerprint\") = 64 AND \"request_fingerprint\" NOT GLOB '*[^0-9a-f]*' AND (\"expected_digest\" IS NULL OR (length(\"expected_digest\") = 64 AND \"expected_digest\" NOT GLOB '*[^0-9a-f]*')) AND (\"source_digest\" IS NULL OR (length(\"source_digest\") = 64 AND \"source_digest\" NOT GLOB '*[^0-9a-f]*')) AND (\"target_digest\" IS NULL OR (length(\"target_digest\") = 64 AND \"target_digest\" NOT GLOB '*[^0-9a-f]*')) AND (\"automatic_insight_digest\" IS NULL OR (length(\"automatic_insight_digest\") = 64 AND \"automatic_insight_digest\" NOT GLOB '*[^0-9a-f]*'))",
+      "name": "project_artifact_operation_digest_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"expected_version_id\" IS NULL OR (length(\"expected_version_id\") BETWEEN 5 AND 64 AND substr(\"expected_version_id\", 1, 4) = 'pav_' AND substr(\"expected_version_id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"expected_version_id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"expected_version_id\", -1, 1) GLOB '[a-z0-9]')) AND (\"source_version_id\" IS NULL OR (length(\"source_version_id\") BETWEEN 5 AND 64 AND substr(\"source_version_id\", 1, 4) = 'pav_' AND substr(\"source_version_id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"source_version_id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"source_version_id\", -1, 1) GLOB '[a-z0-9]')) AND (\"target_version_id\" IS NULL OR (length(\"target_version_id\") BETWEEN 5 AND 64 AND substr(\"target_version_id\", 1, 4) = 'pav_' AND substr(\"target_version_id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"target_version_id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"target_version_id\", -1, 1) GLOB '[a-z0-9]')) AND (\"final_version_id\" IS NULL OR (length(\"final_version_id\") BETWEEN 5 AND 64 AND substr(\"final_version_id\", 1, 4) = 'pav_' AND substr(\"final_version_id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"final_version_id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"final_version_id\", -1, 1) GLOB '[a-z0-9]'))",
+      "name": "project_artifact_operation_version_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"deletion_id\" IS NULL OR (length(\"deletion_id\") BETWEEN 5 AND 64 AND substr(\"deletion_id\", 1, 4) = 'pad_' AND substr(\"deletion_id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"deletion_id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"deletion_id\", -1, 1) GLOB '[a-z0-9]'))",
+      "name": "project_artifact_operation_deletion_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"automatic_session_id\" IS NULL OR (length(\"automatic_session_id\") >= 3 AND substr(\"automatic_session_id\", 1, 3) = 'ses'))",
+      "name": "project_artifact_operation_session_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"expected_revision\" IS NULL AND \"expected_version_id\" IS NULL AND \"expected_digest\" IS NULL) OR (\"expected_revision\" IS NOT NULL AND \"expected_version_id\" IS NOT NULL AND \"expected_digest\" IS NOT NULL)",
+      "name": "project_artifact_operation_expectation_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"operation\" IN ('promotion', 'fork', 'shadow') AND \"source_scope_id\" IS NOT NULL AND \"source_version_id\" IS NOT NULL AND \"source_digest\" IS NOT NULL) OR (\"operation\" NOT IN ('promotion', 'fork', 'shadow') AND \"source_scope_id\" IS NULL AND \"source_version_id\" IS NULL AND \"source_digest\" IS NULL)",
+      "name": "project_artifact_operation_source_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"target_version_id\" IS NULL AND \"target_digest\" IS NULL) OR (\"target_version_id\" IS NOT NULL AND \"target_digest\" IS NOT NULL)",
+      "name": "project_artifact_operation_target_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"automatic_session_id\" IS NULL AND \"automatic_insight_digest\" IS NULL) OR (\"automatic_session_id\" IS NOT NULL AND \"automatic_insight_digest\" IS NOT NULL)",
+      "name": "project_artifact_operation_automatic_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"phase\" <> 'finalized' AND \"final_version_id\" IS NULL) OR (\"phase\" = 'finalized' AND ((\"operation\" IN ('remove', 'purge') AND \"final_version_id\" IS NULL) OR (\"operation\" NOT IN ('remove', 'purge') AND \"final_version_id\" IS NOT NULL AND \"target_version_id\" IS NOT NULL AND \"target_digest\" IS NOT NULL AND \"target_version_id\" = \"final_version_id\")))",
+      "name": "project_artifact_operation_finalization_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "\"target_version_id\" IS NULL OR \"final_version_id\" IS NULL OR \"target_version_id\" = \"final_version_id\"",
+      "name": "project_artifact_operation_final_target_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"operation\" IN ('remove', 'restore', 'purge') AND \"deletion_id\" IS NOT NULL) OR (\"operation\" NOT IN ('remove', 'restore', 'purge') AND \"deletion_id\" IS NULL)",
+      "name": "project_artifact_operation_deletion_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "(\"expected_revision\" IS NULL OR (typeof(\"expected_revision\") = 'integer' AND \"expected_revision\" >= 0)) AND typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0 AND typeof(\"time_updated\") = 'integer' AND \"time_updated\" >= 0 AND \"time_updated\" >= \"time_created\"",
+      "name": "project_artifact_operation_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_operation"
+    },
+    {
+      "value": "\"type\" IN ('project', 'global')",
+      "name": "project_artifact_scope_type_check",
+      "entityType": "checks",
+      "table": "project_artifact_scope"
+    },
+    {
+      "value": "length(\"storage_id\") = 36 AND \"storage_id\" = lower(\"storage_id\") AND \"storage_id\" NOT GLOB '*[^0-9a-f-]*' AND length(\"storage_id\") - length(replace(\"storage_id\", '-', '')) = 4 AND substr(\"storage_id\", 9, 1) = '-' AND substr(\"storage_id\", 14, 1) = '-' AND substr(\"storage_id\", 19, 1) = '-' AND substr(\"storage_id\", 24, 1) = '-'",
+      "name": "project_artifact_scope_storage_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_scope"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'pas_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_scope_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_scope"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0 AND typeof(\"time_updated\") = 'integer' AND \"time_updated\" >= 0",
+      "name": "project_artifact_scope_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_scope"
+    },
+    {
+      "value": "length(\"artifact_id\") BETWEEN 1 AND 64 AND \"artifact_id\" NOT GLOB '*[^a-z0-9-]*' AND substr(\"artifact_id\", 1, 1) GLOB '[a-z0-9]' AND substr(\"artifact_id\", -1, 1) GLOB '[a-z0-9]' AND \"artifact_id\" NOT IN ('aux', 'clock$', 'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9', 'con', 'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9', 'nul', 'prn')",
+      "name": "project_artifact_id_check",
+      "entityType": "checks",
+      "table": "project_artifact"
+    },
+    {
+      "value": "typeof(\"revision\") = 'integer' AND \"revision\" >= 0",
+      "name": "project_artifact_revision_check",
+      "entityType": "checks",
+      "table": "project_artifact"
+    },
+    {
+      "value": "\"kind\" IN ('skill', 'command', 'agent', 'plugin')",
+      "name": "project_artifact_kind_check",
+      "entityType": "checks",
+      "table": "project_artifact"
+    },
+    {
+      "value": "\"stage\" IN ('trial', 'active', 'degraded', 'disabled', 'quarantine')",
+      "name": "project_artifact_stage_check",
+      "entityType": "checks",
+      "table": "project_artifact"
+    },
+    {
+      "value": "(\"last_used_at\" IS NULL OR (typeof(\"last_used_at\") = 'integer' AND \"last_used_at\" >= 0)) AND typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0 AND typeof(\"time_updated\") = 'integer' AND \"time_updated\" >= 0",
+      "name": "project_artifact_time_check",
+      "entityType": "checks",
+      "table": "project_artifact"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'pat_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_terminal_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "(\"session_id\" IS NULL OR (length(\"session_id\") >= 3 AND substr(\"session_id\", 1, 3) = 'ses'))",
+      "name": "project_artifact_terminal_session_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "(\"terminal_message_id\" IS NULL OR length(\"terminal_message_id\") > 0)",
+      "name": "project_artifact_terminal_message_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "length(\"model_id\") > 0",
+      "name": "project_artifact_terminal_model_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "\"kind\" IN ('skill', 'command', 'agent', 'plugin')",
+      "name": "project_artifact_terminal_kind_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "\"terminal_outcome\" IN ('succeeded', 'failed', 'interrupted')",
+      "name": "project_artifact_terminal_outcome_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "\"goal_status\" IN ('none', 'completed', 'stopped', 'exhausted')",
+      "name": "project_artifact_terminal_goal_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "typeof(\"goal_mode\") = 'integer' AND \"goal_mode\" IN (0, 1) AND typeof(\"external_confounded\") = 'integer' AND \"external_confounded\" IN (0, 1) AND typeof(\"repeat_fix\") = 'integer' AND \"repeat_fix\" IN (0, 1)",
+      "name": "project_artifact_terminal_boolean_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "typeof(\"boundary_seq\") = 'integer' AND \"boundary_seq\" >= 0 AND typeof(\"managed_activation_count\") = 'integer' AND \"managed_activation_count\" >= 0 AND typeof(\"standard_invocation_count\") = 'integer' AND \"standard_invocation_count\" >= 0 AND typeof(\"observed_at\") = 'integer' AND \"observed_at\" >= 0",
+      "name": "project_artifact_terminal_number_check",
+      "entityType": "checks",
+      "table": "project_artifact_terminal"
+    },
+    {
+      "value": "length(\"deletion_id\") BETWEEN 5 AND 64 AND substr(\"deletion_id\", 1, 4) = 'pad_' AND substr(\"deletion_id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"deletion_id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"deletion_id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_trash_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_trash"
+    },
+    {
+      "value": "\"prior_stage\" IN ('trial', 'active', 'degraded', 'disabled', 'quarantine')",
+      "name": "project_artifact_trash_stage_check",
+      "entityType": "checks",
+      "table": "project_artifact_trash"
+    },
+    {
+      "value": "typeof(\"deleted_at\") = 'integer' AND \"deleted_at\" >= 0 AND typeof(\"purge_after\") = 'integer' AND \"purge_after\" >= 0",
+      "name": "project_artifact_trash_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_trash"
+    },
+    {
+      "value": "\"purge_after\" = \"deleted_at\" + 2592000000",
+      "name": "project_artifact_trash_expiry_check",
+      "entityType": "checks",
+      "table": "project_artifact_trash"
+    },
+    {
+      "value": "length(\"id\") BETWEEN 5 AND 64 AND substr(\"id\", 1, 4) = 'pav_' AND substr(\"id\", 5) NOT GLOB '*[^a-z0-9-]*' AND substr(\"id\", 5, 1) GLOB '[a-z0-9]' AND substr(\"id\", -1, 1) GLOB '[a-z0-9]'",
+      "name": "project_artifact_version_id_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "\"state\" IN ('trial', 'active', 'degraded', 'disabled', 'quarantine', 'superseded')",
+      "name": "project_artifact_version_state_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "length(\"content_digest\") = 64 AND \"content_digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "project_artifact_version_digest_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "(\"insight_digest\" IS NULL OR (length(\"insight_digest\") = 64 AND \"insight_digest\" NOT GLOB '*[^0-9a-f]*')) AND (\"origin_evidence_digest\" IS NULL OR (length(\"origin_evidence_digest\") = 64 AND \"origin_evidence_digest\" NOT GLOB '*[^0-9a-f]*'))",
+      "name": "project_artifact_version_optional_digest_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "length(\"content_relpath\") > 0 AND substr(\"content_relpath\", 1, 1) GLOB '[A-Za-z0-9]' AND substr(\"content_relpath\", -1, 1) <> '/' AND \"content_relpath\" NOT GLOB '*[^A-Za-z0-9._/-]*' AND \"content_relpath\" NOT GLOB '*//*' AND \"content_relpath\" NOT GLOB '*/./*' AND \"content_relpath\" NOT GLOB '*/.' AND \"content_relpath\" NOT GLOB '*/../*' AND \"content_relpath\" NOT GLOB '*/..'",
+      "name": "project_artifact_version_relpath_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "\"source\" IN ('agent', 'user', 'promotion', 'fork', 'restore')",
+      "name": "project_artifact_version_source_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "(\"creator_session_id\" IS NULL OR (length(\"creator_session_id\") >= 3 AND substr(\"creator_session_id\", 1, 3) = 'ses'))",
+      "name": "project_artifact_version_session_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "(\"source\" IN ('promotion', 'fork') AND \"origin_scope_id\" IS NOT NULL AND \"origin_version_id\" IS NOT NULL AND \"origin_evidence_digest\" IS NOT NULL) OR (\"source\" IN ('agent', 'user', 'restore') AND \"origin_scope_id\" IS NULL AND \"origin_version_id\" IS NULL AND \"origin_evidence_digest\" IS NULL)",
+      "name": "project_artifact_version_origin_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "(\"first_qualified_at\" IS NULL OR (typeof(\"first_qualified_at\") = 'integer' AND \"first_qualified_at\" >= 0)) AND (\"last_evaluated_at\" IS NULL OR (typeof(\"last_evaluated_at\") = 'integer' AND \"last_evaluated_at\" >= 0)) AND (\"last_restored_at\" IS NULL OR (typeof(\"last_restored_at\") = 'integer' AND \"last_restored_at\" >= 0)) AND (\"last_governor_transition_at\" IS NULL OR (typeof(\"last_governor_transition_at\") = 'integer' AND \"last_governor_transition_at\" >= 0)) AND typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0 AND typeof(\"time_state_changed\") = 'integer' AND \"time_state_changed\" >= 0",
+      "name": "project_artifact_version_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_version"
+    },
+    {
+      "value": "\"operation\" IN ('create', 'update', 'reconcile')",
+      "name": "project_artifact_write_operation_check",
+      "entityType": "checks",
+      "table": "project_artifact_write"
+    },
+    {
+      "value": "\"result\" IN ('created', 'updated', 'reconciled')",
+      "name": "project_artifact_write_result_check",
+      "entityType": "checks",
+      "table": "project_artifact_write"
+    },
+    {
+      "value": "length(\"session_id\") >= 3 AND substr(\"session_id\", 1, 3) = 'ses'",
+      "name": "project_artifact_write_session_check",
+      "entityType": "checks",
+      "table": "project_artifact_write"
+    },
+    {
+      "value": "length(\"insight_digest\") = 64 AND \"insight_digest\" NOT GLOB '*[^0-9a-f]*' AND length(\"content_digest\") = 64 AND \"content_digest\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "project_artifact_write_digest_check",
+      "entityType": "checks",
+      "table": "project_artifact_write"
+    },
+    {
+      "value": "typeof(\"time_created\") = 'integer' AND \"time_created\" >= 0",
+      "name": "project_artifact_write_time_check",
+      "entityType": "checks",
+      "table": "project_artifact_write"
+    }
+  ],
+  "renames": []
+}

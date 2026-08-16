@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@ycoding-ai/client",
+  "version": "1.17.13",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./src/promise/index.ts",
+    "./promise": "./src/promise/index.ts",
+    "./promise/api": "./src/promise/api.ts",
+    "./service": "./src/promise/service.ts",
+    "./effect": "./src/effect/index.ts",
+    "./effect/api": "./src/effect/api.ts",
+    "./effect/service": "./src/effect/service.ts"
+  },
+  "scripts": {
+    "build": "bun run script/build-package.ts",
+    "generate": "bun run script/build.ts",
+    "check:generated": "bun run generate && git diff --exit-code -- src/promise/generated src/effect/generated src/effect/api",
+    "test": "bun test --timeout 5000",
+    "typecheck": "tsgo --noEmit"
+  },
+  "dependencies": {
+    "@ycoding-ai/schema": "workspace:*",
+    "@ycoding-ai/protocol": "workspace:*"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.98"
+  },
+  "peerDependenciesMeta": {
+    "effect": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@ycoding-ai/httpapi-codegen": "workspace:*",
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "effect": "catalog:"
+  }
+}

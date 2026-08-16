@@ -1,0 +1,13 @@
+import { Plugin } from "@ycoding-ai/plugin"
+
+export default Plugin.define({
+  id: "directory-plugin",
+  setup: async (ctx) => {
+    await ctx.agent.transform((agents) => {
+      agents.update("directory", (agent) => {
+        agent.description = "Loaded from plugin directory"
+        agent.mode = "subagent"
+      })
+    })
+  },
+})

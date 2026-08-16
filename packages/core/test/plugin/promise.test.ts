@@ -1,0 +1,314 @@
+import { describe, expect } from "bun:test"
+import { Message, SystemPart } from "@ycoding-ai/ai"
+import { DateTime, Effect, Schema } from "effect"
+import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Catalog } from "@ycoding-ai/core/catalog"
+import { ModelV2 } from "@ycoding-ai/core/model"
+import { PluginV2 } from "@ycoding-ai/core/plugin"
+import { PluginHooks } from "@ycoding-ai/core/plugin/hooks"
+import { PluginHost } from "@ycoding-ai/core/plugin/host"
+import { PluginPromise } from "@ycoding-ai/core/plugin/promise"
+import { SessionV2 } from "@ycoding-ai/core/session"
+import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionPending } from "@ycoding-ai/core/session/pending"
+import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
+import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { Plugin } from "@ycoding-ai/plugin"
+import type { SessionHooks } from "@ycoding-ai/plugin/effect/session"
+import { Model } from "@ycoding-ai/schema/model"
+import { Provider } from "@ycoding-ai/schema/provider"
+import { testEffect } from "../lib/effect"
+import { PluginTestLayer } from "./fixture"
+import { host as testHost } from "./host"
+
+const it = testEffect(PluginTestLayer)
+
+describe("fromPromise", () => {
+  it.effect("forwards transient session generation", () =>
+    Effect.gen(function* () {
+      const host = testHost({
+        session: {
+          generate: (input) => Effect.succeed({ text: `${input.sessionID}: ${input.prompt}` }),
+        },
+      })
+
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-session-generate",
+          setup: async (ctx) => {
+            expect(await ctx.session.generate({ sessionID: "ses_generate", prompt: "Summarize" })).toEqual({
+              text: "ses_generate: Summarize",
+            })
+          },
+        }),
+      ).effect(host)
+    }),
+  )
+
+  it.effect("forwards synthetic session input", () =>
+    Effect.gen(function* () {
+      const input = {
+        sessionID: "ses_synthetic",
+        id: "msg_synthetic",
+        text: "Background work completed",
+        description: null,
+        metadata: { shellID: "shell_1" },
+        delivery: null,
+        resume: null,
+      }
+      let seen: unknown
+      const host = testHost({
+        session: {
+          synthetic: (value) => {
+            seen = value
+            return Effect.succeed(
+              SessionPending.Synthetic.make({
+                admittedSeq: 1,
+                id: SessionMessage.ID.make(input.id),
+                sessionID: SessionV2.ID.make(input.sessionID),
+                timeCreated: DateTime.makeUnsafe(0),
+                type: "synthetic",
+                data: {
+                  text: input.text,
+                  metadata: input.metadata,
+                },
+                delivery: "queue",
+              }),
+            )
+          },
+        },
+      })
+
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-session-synthetic",
+          setup: async (ctx) => {
+            await ctx.session.synthetic(input)
+          },
+        }),
+      ).effect(host)
+
+      expect(seen).toEqual({
+        ...input,
+        description: undefined,
+        delivery: undefined,
+        resume: undefined,
+      })
+    }),
+  )
+
+  it.effect("forwards standard client reads", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const host = yield* PluginHost.make(plugin)
+      const seen: string[] = []
+      const promisePlugin = Plugin.define({
+        id: "promise-client-reads",
+        setup: async (ctx) => {
+          const results = await Promise.all([
+            ctx.agent.list(),
+            ctx.catalog.provider.list(),
+            ctx.catalog.model.list(),
+            ctx.command.list(),
+            ctx.integration.list(),
+            ctx.plugin.list(),
+            ctx.reference.list(),
+            ctx.skill.list(),
+          ])
+          seen.push(...results.map((result) => result.location.directory))
+        },
+      })
+
+      yield* PluginPromise.fromPromise(promisePlugin).effect(host)
+
+      expect(seen).toHaveLength(8)
+      expect(new Set(seen).size).toBe(1)
+    }),
+  )
+
+  it.effect("forwards direct agent and model reads", () =>
+    Effect.gen(function* () {
+      const agents = yield* AgentV2.Service
+      const catalog = yield* Catalog.Service
+      const plugin = yield* PluginV2.Service
+      const host = yield* PluginHost.make(plugin)
+      yield* agents.transform((draft) =>
+        draft.update(AgentV2.ID.make("reviewer"), (agent) => {
+          agent.description = "Reviews code"
+        }),
+      )
+      yield* catalog.transform((draft) =>
+        draft.model.update(ProviderV2.ID.make("test"), ModelV2.ID.make("alias"), (model) => {
+          model.modelID = ModelV2.ID.make("gpt-5")
+        }),
+      )
+
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-direct-reads",
+          setup: async (ctx) => {
+            expect(await ctx.agent.get("reviewer")).toMatchObject({ description: "Reviews code" })
+            expect(await ctx.agent.get("missing")).toBeUndefined()
+            expect(await ctx.catalog.model.get("test", "alias")).toMatchObject({ modelID: "gpt-5" })
+            expect(await ctx.catalog.model.get("test", "missing")).toBeUndefined()
+          },
+        }),
+      ).effect(host)
+    }),
+  )
+
+  it.effect("loads a promise plugin and registers a transform hook", () =>
+    Effect.gen(function* () {
+      const agents = yield* AgentV2.Service
+      const plugin = yield* PluginV2.Service
+      const host = yield* PluginHost.make(plugin)
+
+      const promisePlugin = Plugin.define({
+        id: "promise-example",
+        setup: async (ctx) => {
+          expect(ctx.options.mode).toBe("strict")
+          await ctx.agent.transform((draft) => {
+            draft.update("reviewer", (item) => {
+              item.description = "Reviews code"
+              item.mode = "subagent"
+            })
+          })
+        },
+      })
+
+      const adapted = PluginPromise.fromPromise(promisePlugin)
+      yield* adapted.effect({ ...host, options: { mode: "strict" } })
+
+      expect(yield* agents.get(AgentV2.ID.make("reviewer"))).toMatchObject({
+        description: "Reviews code",
+        mode: "subagent",
+      })
+    }),
+  )
+
+  it.effect("forwards session context hooks", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const hooks = yield* PluginHooks.Service
+      const host = yield* PluginHost.make(plugin)
+      yield* PluginPromise.fromPromise(
+        Plugin.define({
+          id: "promise-session-context",
+          setup: async (ctx) => {
+            await ctx.session.hook("context", (event) => {
+              event.system.push(SystemPart.make("Promise hook"))
+              delete event.tools.echo
+            })
+          },
+        }),
+      ).effect(host)
+      const event: SessionHooks["context"] = {
+        sessionID: SessionV2.ID.make("ses_promise_session_context"),
+        agent: AgentV2.ID.make("build"),
+        model: Model.Ref.make({ providerID: Provider.ID.make("test"), id: Model.ID.make("model") }),
+        system: [SystemPart.make("Initial")],
+        messages: [Message.user("Hello")],
+        tools: { echo: { description: "Echo", input: { type: "object" } } },
+      }
+
+      yield* hooks.trigger("session", "context", event)
+
+      expect(event.system.map((part) => part.text)).toEqual(["Initial", "Promise hook"])
+      expect(event.tools).toEqual({})
+    }),
+  )
+
+  it.effect("disposes a hook registration on request", () =>
+    Effect.gen(function* () {
+      const agents = yield* AgentV2.Service
+      const plugin = yield* PluginV2.Service
+      const host = yield* PluginHost.make(plugin)
+
+      const promisePlugin = Plugin.define({
+        id: "promise-dispose",
+        setup: async (ctx) => {
+          const registration = await ctx.agent.transform((draft) => {
+            draft.update("temp", (item) => {
+              item.description = "temporary"
+            })
+          })
+          await registration.dispose()
+        },
+      })
+
+      const adapted = PluginPromise.fromPromise(promisePlugin)
+      yield* adapted.effect(host)
+
+      expect(yield* agents.get(AgentV2.ID.make("temp"))).toBeUndefined()
+    }),
+  )
+
+  it.effect("runs the setup cleanup when the plugin scope closes", () =>
+    Effect.gen(function* () {
+      const plugin = yield* PluginV2.Service
+      const host = yield* PluginHost.make(plugin)
+      const events: string[] = []
+      const promisePlugin = Plugin.define({
+        id: "promise-cleanup",
+        setup: async () => {
+          events.push("setup")
+          return async () => {
+            await Promise.resolve()
+            events.push("cleanup")
+          }
+        },
+      })
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* PluginPromise.fromPromise(promisePlugin).effect(host)
+          expect(events).toEqual(["setup"])
+        }),
+      )
+
+      expect(events).toEqual(["setup", "cleanup"])
+    }),
+  )
+
+  it.effect("constructs plain Promise tool declarations in the host", () =>
+    Effect.gen(function* () {
+      const plugins = yield* PluginV2.Service
+      const registry = yield* ToolRegistry.Service
+      const host = yield* PluginHost.make(plugins)
+      const progress: ToolRegistry.Progress[] = []
+      const promisePlugin = Plugin.define({
+        id: "promise-tool",
+        setup: async (ctx) => {
+          await ctx.tool.transform((tools) => {
+            tools.add({
+              name: "hello",
+              options: { codemode: false },
+              description: "Hello",
+              input: Schema.Struct({ name: Schema.String }),
+              output: Schema.String,
+              execute: async ({ name }, context) => {
+                await context.progress({ structured: { phase: "greeting" } })
+                return `Hello, ${name}!`
+              },
+            })
+          })
+        },
+      })
+
+      yield* PluginPromise.fromPromise(promisePlugin).effect(host)
+
+      const materialized = yield* registry.materialize()
+      expect(materialized.definitions).toContainEqual(expect.objectContaining({ name: "hello", description: "Hello" }))
+      expect(
+        yield* materialized.settle({
+          sessionID: SessionV2.ID.make("ses_promise_tool"),
+          agent: AgentV2.ID.make("build"),
+          messageID: SessionMessage.ID.make("msg_promise_tool"),
+          progress: (update) => Effect.sync(() => progress.push(update)),
+          call: { type: "tool-call", id: "call_promise_tool", name: "hello", input: { name: "world" } },
+        }),
+      ).toMatchObject({ result: { type: "text", value: "Hello, world!" } })
+      expect(progress).toEqual([{ structured: { phase: "greeting" }, content: [] }])
+    }),
+  )
+})
