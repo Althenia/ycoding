@@ -75,6 +75,30 @@ describe("McpInstructions", () => {
     ),
   )
 
+  it.effect("normalizes and bounds each server instruction block deterministically", () =>
+    Effect.gen(function* () {
+      const service = yield* McpInstructions.Service
+      const generation = yield* service.load(selection()).pipe(Effect.flatMap(readInitial))
+
+      expect(McpInstructions.MAX_SERVER_BYTES).toBe(2048)
+      expect(generation.text.indexOf('name="alpha"')).toBeLessThan(generation.text.indexOf('name="zeta"'))
+      expect(generation.text).not.toContain("\r")
+      expect(generation.text).not.toContain("tail text")
+      expect(generation.text).toContain("[truncated to 2048 UTF-8 bytes]")
+      expect(generation.text).not.toMatch(/[ \t]+$/m)
+    }).pipe(
+      Effect.provide(
+        layer(
+          () => [
+            instructions("zeta", `${"é".repeat(1400)}\r\ntail text   \r\n`),
+            instructions("alpha", "Alpha line with spaces   \r\nSecond line\t \r\n"),
+          ],
+          () => [tool("zeta"), tool("alpha")],
+        ),
+      ),
+    ),
+  )
+
   it.effect("omits instructions when the agent cannot use execute", () =>
     Effect.gen(function* () {
       const service = yield* McpInstructions.Service

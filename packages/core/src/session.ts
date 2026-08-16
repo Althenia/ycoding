@@ -12,6 +12,7 @@ import { SessionMessage } from "./session/message"
 import { InstructionState } from "./session/instruction-state"
 import { SessionCacheDiagnostics } from "./session/cache-diagnostics"
 import { SessionPermissionCeiling } from "./session/permission-ceiling"
+import { SessionProviderRequest } from "./session/provider-request"
 import { SessionAutonomy } from "./session/autonomy"
 import { Info, list } from "./session/skill-status"
 import { SessionGoal } from "./session/goal"
@@ -241,7 +242,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     after?: number
     follow?: boolean
-  }) => Stream.Stream<SessionEvent.DurableEvent | EventLog.Synced, NotFoundError>
+  }) => Stream.Stream<SessionEvent.PublicDurableEvent | EventLog.Synced, NotFoundError>
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: AgentV2.ID
@@ -348,6 +349,7 @@ const layer = Layer.effect(
     const execution = yield* SessionExecution.Service
     const autonomy = yield* SessionAutonomy.Service
     const store = yield* SessionStore.Service
+    const providerRequests = yield* SessionProviderRequest.Service
     const locations = yield* LocationServiceMap.Service
     const fs = yield* FSUtil.Service
     const jobs = yield* Job.Service
@@ -357,7 +359,7 @@ const layer = Layer.effect(
     const activeShells = new Set<SessionSchema.ID>()
     const shellLocks = KeyedMutex.makeUnsafe<SessionSchema.ID>()
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Info)
-    const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
+    const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
     const projectArtifactSource = Effect.fnUntraced(function* (location: Location.Ref) {
       return yield* ProjectArtifactSource.Service.pipe(
         Effect.map((source): ProjectArtifactSource.Interface | undefined => source),
@@ -465,10 +467,12 @@ const layer = Layer.effect(
       }),
       diagnostics: Effect.fn("V2Session.diagnostics")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        return SessionCacheDiagnostics.fromMessages(
+        const diagnostics = SessionCacheDiagnostics.fromMessages(
           yield* store.context(sessionID),
           session.revert?.messageID,
         )
+        if (!diagnostics) return diagnostics
+        return { ...diagnostics, requests: yield* providerRequests.summary(sessionID) }
       }),
       autonomy: {
         get: Effect.fn("V2Session.autonomy.get")(function* (sessionID) {
@@ -618,8 +622,8 @@ const layer = Layer.effect(
             .pipe(Effect.as(events.log({ aggregateID: input.sessionID, after: input.after, follow: input.follow }))),
         ).pipe(
           Stream.filter(
-            (item): item is SessionEvent.DurableEvent | EventLog.Synced =>
-              EventV2.isSynced(item) || isDurableSessionEvent(item),
+            (item): item is SessionEvent.PublicDurableEvent | EventLog.Synced =>
+              EventV2.isSynced(item) || isPublicDurableSessionEvent(item),
           ),
         ),
       prompt: Effect.fn("V2Session.prompt")((input) =>
@@ -1296,6 +1300,7 @@ export const node = makeGlobalNode({
     SessionExecution.node,
     SessionAutonomy.node,
     SessionStore.node,
+    SessionProviderRequest.node,
     LocationServiceMap.node,
     SessionProjector.node,
     FSUtil.node,

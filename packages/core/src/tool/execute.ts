@@ -1,6 +1,6 @@
 export * as ExecuteTool from "./execute"
 
-import { CodeMode, Tool, toolError } from "@ycoding-ai/codemode"
+import { CodeMode, DiscoveryPrompt, Tool, toolError } from "@ycoding-ai/codemode"
 import { ToolOutput } from "@ycoding-ai/ai"
 import { Effect, Ref, Schema } from "effect"
 import { definition, make, settle, type AnyTool } from "./tool"
@@ -56,14 +56,14 @@ export const create = (registrations: ReadonlyMap<string, Registration>) => {
         output: child.outputSchema,
         run: (input) => invoke(name, registration, input),
       })
-      const path = registration.namespace === undefined ? registration.name : `${registration.namespace}.${registration.name}`
+      const path =
+        registration.namespace === undefined ? registration.name : `${registration.namespace}.${registration.name}`
       tools[path] = value
     }
     return CodeMode.make<typeof tools>({ tools, ...hooks })
   }
-  const discovery = runtime(() => Effect.fail(toolError("Execute context is unavailable")))
   return make({
-    description: discovery.instructions(),
+    description: DiscoveryPrompt.EXECUTE_DESCRIPTION,
     input: CodeMode.Input,
     output: ExecuteOutput,
     structured: ExecuteMetadata,

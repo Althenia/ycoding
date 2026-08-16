@@ -2,6 +2,8 @@ import { expect } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
@@ -17,9 +19,11 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGoal } from "@ycoding-ai/core/session/goal"
+import { SessionHelperPolicy, localGoal, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
+import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -73,6 +77,47 @@ const client = Layer.mock(LLMClient.Service)({
 const models = Layer.mock(SessionRunnerModel.Service)({
   resolve: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
 })
+let goalMode: SessionHelperPolicy.GoalMode = "local"
+const helperPolicy = Layer.succeed(
+  SessionHelperPolicy.Service,
+  SessionHelperPolicy.Service.of({
+    get settings() {
+      return { titleMode: "local" as const, goalMode }
+    },
+    localTitle,
+    localGoal,
+    resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
+  }),
+)
+const cachePolicies: SessionCacheRuntime.PolicyInput[] = []
+const cacheObservations: SessionCacheRuntime.Observation[] = []
+const cacheRuntime = Layer.succeed(
+  SessionCacheRuntime.Service,
+  SessionCacheRuntime.Service.of({
+    policy: (input) =>
+      Effect.sync(() => {
+        cachePolicies.push(input)
+        return { ttlSeconds: 300 as const, promoted: false }
+      }),
+    observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
+  }),
+)
+const config = Layer.succeed(
+  Config.Service,
+  Config.Service.of({
+    entries: () =>
+      Effect.succeed([
+        new Config.Document({
+          type: "document",
+          info: new Config.Info({
+            efficiency: new ConfigEfficiency.Info({
+              prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: "adaptive" }),
+            }),
+          }),
+        }),
+      ]),
+  }),
+)
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -82,11 +127,15 @@ const it = testEffect(
       SessionStore.node,
       AgentV2.node,
       SessionAutonomy.node,
+      SessionHelperPolicy.node,
       SessionGoal.node,
     ]),
     [
       [llmClient, client],
       [SessionRunnerModel.node, models],
+      [SessionHelperPolicy.node, helperPolicy],
+      [Config.node, config],
+      [SessionCacheRuntime.node, cacheRuntime],
     ],
   ),
 )
@@ -103,16 +152,19 @@ const projects = Layer.succeed(
 )
 const locations = Layer.effect(
   LocationServiceMap.Service,
-  LayerMap.make(() =>
-    Layer.succeed(
-      SessionGoal.Service,
-      SessionGoal.Service.of({
-        synthesize: ({ text }) => {
-          if (text === "Interrupt synthesis") return Effect.interrupt
-          return Effect.succeed(text === "Use the fallback" ? undefined : "Repair the migration and verify the suite passes.")
-        },
-      }),
-    ) as unknown as Layer.Layer<LocationServices>,
+  LayerMap.make(
+    () =>
+      Layer.succeed(
+        SessionGoal.Service,
+        SessionGoal.Service.of({
+          synthesize: ({ text }) => {
+            if (text === "Interrupt synthesis") return Effect.interrupt
+            return Effect.succeed(
+              text === "Use the fallback" ? undefined : "Repair the migration and verify the suite passes.",
+            )
+          },
+        }),
+      ) as unknown as Layer.Layer<LocationServices>,
   ),
 )
 const setIt = testEffect(
@@ -171,9 +223,36 @@ const configureGoalAgent = Effect.gen(function* () {
   })
 })
 
-it.effect("synthesizes a concise goal from the raw request and recent conversation", () =>
+it.effect("uses the normalized user request as the local goal by default", () =>
   Effect.gen(function* () {
     requests = []
+    goalMode = "local"
+    const sessionID = SessionV2.ID.make("ses_goal_local")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "The project uses SQLite for durable state.")
+    const store = yield* SessionStore.Service
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((item) => (item ? Effect.succeed(item) : Effect.die("session missing"))))
+    const before = yield* store.context(sessionID)
+
+    expect(
+      yield* (yield* SessionGoal.Service).synthesize({
+        session,
+        text: "  Please investigate\n the migration failure, fix it, and run the relevant checks. ",
+      }),
+    ).toBe("Please investigate the migration failure, fix it, and run the relevant checks.")
+    expect(requests).toHaveLength(0)
+    expect(yield* store.context(sessionID)).toEqual(before)
+  }),
+)
+
+it.effect("preserves conversation-aware goal synthesis when model mode is enabled", () =>
+  Effect.gen(function* () {
+    requests = []
+    cachePolicies.length = 0
+    cacheObservations.length = 0
+    goalMode = "model"
     yield* configureGoalAgent
     const sessionID = SessionV2.ID.make("ses_goal_synthesis")
     yield* insertSession(sessionID)
@@ -195,11 +274,29 @@ it.effect("synthesizes a concise goal from the raw request and recent conversati
     expect(JSON.stringify(requests[0]?.messages)).toContain("The project uses SQLite for durable state.")
     expect(JSON.stringify(requests[0]?.messages)).toContain("Please investigate the migration failure")
     expect(yield* store.context(sessionID)).toEqual(before)
+    const promptCacheKey = requests[0]?.providerOptions?.openai?.promptCacheKey
+    expect(typeof promptCacheKey).toBe("string")
+    if (typeof promptCacheKey !== "string") return yield* Effect.die("prompt cache key missing")
+    expect(cachePolicies).toHaveLength(1)
+    expect(cachePolicies[0]).toMatchObject({
+      namespace: promptCacheKey,
+      modelID: "goal-model",
+      configured: "adaptive",
+    })
+    expect(cacheObservations).toEqual([
+      {
+        namespace: promptCacheKey,
+        cacheRead: 3,
+        cacheWrite: 2,
+        eligible: 15,
+      },
+    ])
   }),
 )
 
 it.effect("returns no synthesized goal for provider failure or empty output", () =>
   Effect.gen(function* () {
+    goalMode = "model"
     yield* configureGoalAgent
     const sessionID = SessionV2.ID.make("ses_goal_fallback")
     yield* insertSession(sessionID)
@@ -220,7 +317,10 @@ it.effect("keeps goal iteration and no-progress exhaustion behavior", () =>
     yield* insertSession(sessionID)
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 3 })
 
-    expect((yield* service.advance({ sessionID, progress: "first" })).goal).toMatchObject({ status: "active", iteration: 1 })
+    expect((yield* service.advance({ sessionID, progress: "first" })).goal).toMatchObject({
+      status: "active",
+      iteration: 1,
+    })
     expect((yield* service.advance({ sessionID, progress: "first" })).goal).toMatchObject({
       status: "active",
       iteration: 2,
@@ -239,38 +339,38 @@ it.effect("keeps goal iteration and no-progress exhaustion behavior", () =>
   }),
 )
 
-setIt.effect("stores synthesized goals without changing the admitted user prompt and falls back to trimmed raw text", () =>
-  Effect.gen(function* () {
-    const session = yield* SessionV2.Service
-    const events = yield* EventV2.Service
-    const created = yield* session.create({ location })
-    const inputID = SessionMessage.ID.create()
-    const rawText = "Fix the migration failure and run the relevant checks."
-    yield* events.publish(SessionEvent.InputAdmitted, {
-      sessionID: created.id,
-      inputID,
-      input: { type: "user", data: { text: rawText }, delivery: "steer" },
-    })
-    yield* events.publish(SessionEvent.InputPromoted, { sessionID: created.id, inputID })
-    const before = yield* session.context(created.id)
+setIt.effect(
+  "stores synthesized goals without changing the admitted user prompt and falls back to trimmed raw text",
+  () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const created = yield* session.create({ location })
+      const inputID = SessionMessage.ID.create()
+      const rawText = "Fix the migration failure and run the relevant checks."
+      yield* events.publish(SessionEvent.InputAdmitted, {
+        sessionID: created.id,
+        inputID,
+        input: { type: "user", data: { text: rawText }, delivery: "steer" },
+      })
+      yield* events.publish(SessionEvent.InputPromoted, { sessionID: created.id, inputID })
+      const before = yield* session.context(created.id)
 
-    expect(
-      yield* session.autonomy.set({ sessionID: created.id, mode: "goal", goal: rawText }),
-    ).toMatchObject({
-      mode: "goal",
-      goal: {
-        text: "Repair the migration and verify the suite passes.",
-        rawText,
-      },
-    })
-    expect(yield* session.context(created.id)).toEqual(before)
-    expect(
-      yield* session.autonomy.set({ sessionID: created.id, mode: "goal", goal: "  Use the fallback  " }),
-    ).toMatchObject({
-      mode: "goal",
-      goal: { text: "Use the fallback", rawText: "Use the fallback" },
-    })
-  }),
+      expect(yield* session.autonomy.set({ sessionID: created.id, mode: "goal", goal: rawText })).toMatchObject({
+        mode: "goal",
+        goal: {
+          text: "Repair the migration and verify the suite passes.",
+          rawText,
+        },
+      })
+      expect(yield* session.context(created.id)).toEqual(before)
+      expect(
+        yield* session.autonomy.set({ sessionID: created.id, mode: "goal", goal: "  Use the fallback  " }),
+      ).toMatchObject({
+        mode: "goal",
+        goal: { text: "Use the fallback", rawText: "Use the fallback" },
+      })
+    }),
 )
 
 setIt.effect("propagates goal synthesis interruption without storing a raw-text fallback", () =>

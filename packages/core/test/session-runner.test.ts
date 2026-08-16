@@ -14,7 +14,9 @@ import {
   type LLMClientShape,
   type LLMRequest,
 } from "@ycoding-ai/ai"
+import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
+import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Database } from "@ycoding-ai/core/database/database"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -37,12 +39,15 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionPermissionCeiling } from "@ycoding-ai/core/session/permission-ceiling"
+import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { ProviderRequestObserver } from "@ycoding-ai/core/session/provider-request-observer"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
+import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionUsage } from "@ycoding-ai/core/session/usage"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
@@ -54,6 +59,7 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
+import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Tool } from "@ycoding-ai/core/tool/tool"
 import {
   InstructionStateTable,
@@ -100,20 +106,33 @@ const client = Layer.succeed(
     prepare: () => Effect.die("unused"),
     stream: ((request: LLMRequest) => {
       requests.push(request)
-      if (responseStreams) return responseStreams.shift() ?? Stream.empty
+      const observed = <E>(stream: Stream.Stream<LLMEvent, E>) =>
+        Stream.unwrap(
+          ProviderRequestObserver.observe({
+            requestID: request.id ?? "request",
+            routeID: request.model.route.id,
+            transport: "test-client",
+            attempt: 1,
+            phase: "started",
+            time: 0,
+          }).pipe(Effect.as(stream)),
+        )
+      if (responseStreams) return observed(responseStreams.shift() ?? Stream.empty)
       if (responseStream) {
         const stream = responseStream
         responseStream = undefined
-        return stream
+        return observed(stream)
       }
       const events = streamFailure
         ? Stream.fail(streamFailure)
         : Stream.fromIterable(responses === undefined ? response : (responses.shift() ?? []))
-      if (!streamGate) return events
-      return Stream.unwrap(
-        (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
-          Effect.andThen(Deferred.await(streamGate)),
-          Effect.as(events),
+      if (!streamGate) return observed(events)
+      return observed(
+        Stream.unwrap(
+          (streamStarted ? Deferred.succeed(streamStarted, undefined) : Effect.void).pipe(
+            Effect.andThen(Deferred.await(streamGate)),
+            Effect.as(events),
+          ),
         ),
       )
     }) as unknown as LLMClientShape["stream"],
@@ -137,14 +156,66 @@ const reply = {
           })
         : event,
     ),
+  textWithCache: (text: string, id: string, cacheReadInputTokens: number, cacheWriteInputTokens: number) =>
+    fragmentFixture("text", id, [text]).completeEvents.map((event) =>
+      LLMEvent.is.stepFinish(event)
+        ? LLMEvent.stepFinish({
+            index: event.index,
+            reason: event.reason,
+            usage: {
+              inputTokens: 1_200,
+              nonCachedInputTokens: Math.max(0, 1_200 - cacheReadInputTokens - cacheWriteInputTokens),
+              cacheReadInputTokens,
+              cacheWriteInputTokens,
+            },
+          })
+        : event,
+    ),
+  textWithResponse: (text: string, id: string, responseID: string) =>
+    fragmentFixture("text", id, [text]).completeEvents.map((event) =>
+      LLMEvent.is.stepFinish(event)
+        ? LLMEvent.stepFinish({
+            index: event.index,
+            reason: event.reason,
+            providerMetadata: { openai: { responseId: responseID } },
+          })
+        : event,
+    ),
   tool: (id: string, name: string, input: unknown) => [
     LLMEvent.stepStart({ index: 0 }),
     LLMEvent.toolCall({ id, name, input }),
     LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
     LLMEvent.finish({ reason: "tool-calls" }),
   ],
+  toolWithResponse: (id: string, name: string, input: unknown, responseID: string) => [
+    LLMEvent.stepStart({ index: 0 }),
+    LLMEvent.toolCall({ id, name, input }),
+    LLMEvent.stepFinish({
+      index: 0,
+      reason: "tool-calls",
+      providerMetadata: { openai: { responseId: responseID } },
+    }),
+    LLMEvent.finish({ reason: "tool-calls" }),
+  ],
 }
 const model = Model.make({ id: "fake-model", provider: "fake", route: OpenAIChat.route })
+const anthropicCacheModel = Model.make({
+  id: "claude-sonnet-4-5",
+  provider: "anthropic",
+  route: AnthropicMessages.route,
+})
+const openAI56Model = Model.make({ id: "gpt-5.6", provider: "openai", route: OpenAIChat.route })
+const storedOpenAIResponsesModel = Model.make({
+  id: "gpt-5.6",
+  provider: "openai",
+  route: OpenAIResponses.route,
+  defaults: { providerOptions: { openai: { store: true } } },
+})
+const unstoredOpenAIResponsesModel = Model.make({
+  id: "gpt-5.6",
+  provider: "openai",
+  route: OpenAIResponses.route,
+})
 const defaultSystem = PROMPT_DEFAULT
 const withProjectArtifactGuidance = (...values: readonly string[]) =>
   [...values, ProjectArtifactInstructions.content].join("\n\n")
@@ -241,43 +312,46 @@ const permission = Layer.succeed(
 )
 const echo = Layer.effectDiscard(
   ToolRegistry.Service.use((registry) =>
-    registry.register({
-      echo: Tool.make({
-        description: "Echo text",
-        input: Schema.Struct({ text: Schema.String }),
-        output: Schema.Struct({ text: Schema.String }),
-        toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
-        execute: ({ text }, context) =>
-          Effect.gen(function* () {
-            authorizations.push(context)
-            executions.push(text)
-            activeToolExecutions++
-            maxActiveToolExecutions = Math.max(maxActiveToolExecutions, activeToolExecutions)
-            if (activeToolExecutions === toolExecutionsReady && toolExecutionsStarted) {
-              yield* Deferred.succeed(toolExecutionsStarted, undefined)
-            }
-            if (toolExecutionGate) yield* Deferred.await(toolExecutionGate)
-            return { text }
-          }).pipe(Effect.ensuring(Effect.sync(() => activeToolExecutions--))),
-      }),
-      defect: Tool.make({
-        description: "Fail unexpectedly",
-        input: Schema.Struct({}),
-        output: Schema.Struct({}),
-        execute: () =>
-          (toolExecutionGate ? Deferred.await(toolExecutionGate) : Effect.void).pipe(
-            Effect.andThen(Effect.die("unexpected tool defect")),
-          ),
-      }),
-      // BigInt output with no model content forces ToolOutputStore.bound onto its
-      // JSON.stringify encode path, which fails with a typed StorageError.
-      storefail: Tool.make({
-        description: "Produce output that cannot be persisted",
-        input: Schema.Struct({}),
-        output: Schema.Any,
-        execute: () => Effect.succeed({ big: 1n }),
-      }),
-    }, { codemode: false }),
+    registry.register(
+      {
+        echo: Tool.make({
+          description: "Echo text",
+          input: Schema.Struct({ text: Schema.String }),
+          output: Schema.Struct({ text: Schema.String }),
+          toModelOutput: ({ output }) => [{ type: "text", text: output.text }],
+          execute: ({ text }, context) =>
+            Effect.gen(function* () {
+              authorizations.push(context)
+              executions.push(text)
+              activeToolExecutions++
+              maxActiveToolExecutions = Math.max(maxActiveToolExecutions, activeToolExecutions)
+              if (activeToolExecutions === toolExecutionsReady && toolExecutionsStarted) {
+                yield* Deferred.succeed(toolExecutionsStarted, undefined)
+              }
+              if (toolExecutionGate) yield* Deferred.await(toolExecutionGate)
+              return { text }
+            }).pipe(Effect.ensuring(Effect.sync(() => activeToolExecutions--))),
+        }),
+        defect: Tool.make({
+          description: "Fail unexpectedly",
+          input: Schema.Struct({}),
+          output: Schema.Struct({}),
+          execute: () =>
+            (toolExecutionGate ? Deferred.await(toolExecutionGate) : Effect.void).pipe(
+              Effect.andThen(Effect.die("unexpected tool defect")),
+            ),
+        }),
+        // BigInt output with no model content forces ToolOutputStore.bound onto its
+        // JSON.stringify encode path, which fails with a typed StorageError.
+        storefail: Tool.make({
+          description: "Produce output that cannot be persisted",
+          input: Schema.Struct({}),
+          output: Schema.Any,
+          execute: () => Effect.succeed({ big: 1n }),
+        }),
+      },
+      { codemode: false },
+    ),
   ),
 )
 const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [ToolRegistry.node] })
@@ -346,6 +420,7 @@ const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect
 const projects = Layer.mock(Project.Service, {
   resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
 })
+let efficiencyConfig: ConfigEfficiency.Info | undefined
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -358,6 +433,7 @@ const config = Layer.succeed(
               buffer: 3_000,
               keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
             }),
+            ...(efficiencyConfig === undefined ? {} : { efficiency: efficiencyConfig }),
           }),
         }),
       ]),
@@ -423,6 +499,7 @@ const it = testEffect(
       Form.node,
       SessionProjector.node,
       SessionStore.node,
+      SessionProviderRequest.node,
       AgentV2.node,
       Catalog.node,
       ToolRegistry.node,
@@ -504,6 +581,7 @@ const setup = Effect.gen(function* () {
   modelResolveHook = Effect.void
   pluginFlushHook = Effect.void
   currentModel = model
+  efficiencyConfig = undefined
   skillBaselines.clear()
   responses = undefined
   streamFailure = undefined
@@ -864,9 +942,7 @@ describe("SessionRunnerLLM", () => {
       yield* db
         .update(SessionTable)
         .set({
-          permission: SessionPermissionCeiling.denyOnly([
-            { action: "echo", resource: "*", effect: "deny" },
-          ]),
+          permission: SessionPermissionCeiling.denyOnly([{ action: "echo", resource: "*", effect: "deny" }]),
         })
         .where(eq(SessionTable.id, sessionID))
         .run()
@@ -887,19 +963,22 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
       const contexts: Tool.Context[] = []
-      yield* registry.register({
-        location_context: Tool.make({
-          description: "Read application context",
-          input: Schema.Struct({ query: Schema.String }),
-          output: Schema.Struct({ answer: Schema.String }),
-          execute: ({ query }, context) =>
-            Effect.gen(function* () {
-              contexts.push(context)
-              yield* context.progress({ structured: { phase: "reading" } })
-              return { answer: query.toUpperCase() }
-            }),
-        }),
-      }, { codemode: false })
+      yield* registry.register(
+        {
+          location_context: Tool.make({
+            description: "Read application context",
+            input: Schema.Struct({ query: Schema.String }),
+            output: Schema.Struct({ answer: Schema.String }),
+            execute: ({ query }, context) =>
+              Effect.gen(function* () {
+                contexts.push(context)
+                yield* context.progress({ structured: { phase: "reading" } })
+                return { answer: query.toUpperCase() }
+              }),
+          }),
+        },
+        { codemode: false },
+      )
       yield* admit(session, "Use application context")
       responses = [reply.tool("call-location", "location_context", { query: "hello" }), []]
       const events = yield* EventV2.Service
@@ -946,14 +1025,17 @@ describe("SessionRunnerLLM", () => {
       const scope = yield* Scope.make()
       const executions: string[] = []
       yield* registry
-        .register({
-          reloaded: Tool.make({
-            description: "Record the advertised tool",
-            input: Schema.Struct({}),
-            output: Schema.Struct({ value: Schema.String }),
-            execute: () => Effect.sync(() => executions.push("advertised")).pipe(Effect.as({ value: "advertised" })),
-          }),
-        }, { codemode: false })
+        .register(
+          {
+            reloaded: Tool.make({
+              description: "Record the advertised tool",
+              input: Schema.Struct({}),
+              output: Schema.Struct({ value: Schema.String }),
+              execute: () => Effect.sync(() => executions.push("advertised")).pipe(Effect.as({ value: "advertised" })),
+            }),
+          },
+          { codemode: false },
+        )
         .pipe(Scope.provide(scope))
       yield* admit(session, "Use the reloaded tool")
       responses = [
@@ -971,14 +1053,17 @@ describe("SessionRunnerLLM", () => {
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
       yield* Scope.close(scope, Exit.void)
-      yield* registry.register({
-        reloaded: Tool.make({
-          description: "Record the replacement tool",
-          input: Schema.Struct({}),
-          output: Schema.Struct({ value: Schema.String }),
-          execute: () => Effect.sync(() => executions.push("replacement")).pipe(Effect.as({ value: "replacement" })),
-        }),
-      }, { codemode: false })
+      yield* registry.register(
+        {
+          reloaded: Tool.make({
+            description: "Record the replacement tool",
+            input: Schema.Struct({}),
+            output: Schema.Struct({ value: Schema.String }),
+            execute: () => Effect.sync(() => executions.push("replacement")).pipe(Effect.as({ value: "replacement" })),
+          }),
+        },
+        { codemode: false },
+      )
       yield* Deferred.succeed(streamGate, undefined)
       yield* Fiber.join(run)
 
@@ -995,6 +1080,221 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+      ])
+    }),
+  )
+
+  it.effect("promotes a stable Anthropic prefix from five minutes to one hour after observed reuse", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = anthropicCacheModel
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: "adaptive" }),
+      })
+      responses = [
+        reply.textWithCache("First", "cache-first", 0, 1_200),
+        reply.textWithCache("Second", "cache-second", 900, 0),
+        reply.textWithCache("Third", "cache-third", 900, 0),
+      ]
+
+      for (const prompt of ["First cache turn", "Second cache turn", "Third cache turn"]) {
+        yield* admit(session, prompt)
+        yield* session.resume(sessionID)
+      }
+
+      expect(requests.map((request) => request.cache)).toEqual([
+        { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 },
+        { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 },
+        { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 3600 },
+      ])
+    }),
+  )
+
+  it.effect("activates hybrid caching for direct GPT-5.6 OpenAI requests in auto mode", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = openAI56Model
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({
+          openai_mode: "auto",
+          openai_extended_retention: true,
+        }),
+      })
+      response = reply.stop()
+      yield* admit(session, "Use hybrid OpenAI caching")
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.providerOptions?.openai).toMatchObject({
+        promptCacheOptions: { mode: "implicit", ttl: "30m" },
+      })
+      expect(requests[0]?.cache).toEqual({ tools: true, system: true, messages: "latest-user-message" })
+    }),
+  )
+
+  it.effect("continues a compatible stored OpenAI Responses tool turn", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "auto" })
+      responses = [
+        reply.toolWithResponse("call-continued", "echo", { text: "continued" }, "resp_first"),
+        reply.textWithResponse("Done", "continued-done", "resp_second"),
+      ]
+
+      yield* admit(session, "Use the tool and continue")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[1]?.providerOptions?.openai).toMatchObject({
+        previousResponseId: "resp_first",
+        continuationInputStart: requests[0]!.messages.length + 1,
+      })
+      const records = yield* SessionProviderRequest.Service.pipe(
+        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+      )
+      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
+        { attempts: 1, continuation: "full" },
+        { attempts: 1, continuation: "continued" },
+      ])
+      expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("resp_first")
+      expect(JSON.stringify(records)).not.toContain("resp_first")
+    }),
+  )
+
+  it.effect("never enables OpenAI Responses storage to obtain continuation", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = unstoredOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responses = [
+        reply.toolWithResponse("call-unstored", "echo", { text: "unstored" }, "resp_unstored"),
+        reply.textWithResponse("Done", "unstored-done", "resp_unstored_done"),
+      ]
+
+      yield* admit(session, "Do not enable provider storage")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests.every((request) => request.providerOptions?.openai?.store !== true)).toBe(true)
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+    }),
+  )
+
+  it.effect("invalidates stored continuation when request options change after a tool", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const registry = yield* ToolRegistry.Service
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({
+        openai_responses_continuation: "auto",
+        prompt_cache: new ConfigEfficiency.PromptCache({ openai_mode: "auto" }),
+      })
+      yield* registry.register(
+        {
+          change_cache_policy: Tool.make({
+            description: "Change the OpenAI cache policy",
+            input: Schema.Struct({}),
+            output: Schema.Struct({ changed: Schema.Boolean }),
+            execute: () =>
+              Effect.sync(() => {
+                efficiencyConfig = new ConfigEfficiency.Info({
+                  openai_responses_continuation: "auto",
+                  prompt_cache: new ConfigEfficiency.PromptCache({ openai_mode: "implicit" }),
+                })
+                return { changed: true }
+              }),
+          }),
+        },
+        { codemode: false },
+      )
+      responses = [
+        reply.toolWithResponse("call-change-policy", "change_cache_policy", {}, "resp_policy"),
+        reply.textWithResponse("Done", "policy-done", "resp_policy_done"),
+      ]
+
+      yield* admit(session, "Change policy and continue safely")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]?.providerOptions?.openai?.promptCacheOptions).toEqual({ mode: "implicit", ttl: "30m" })
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("promptCacheOptions")
+    }),
+  )
+
+  it.effect("clears stored response state when an execution ends", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responses = [
+        reply.textWithResponse("First", "execution-first", "resp_execution_first"),
+        reply.textWithResponse("Second", "execution-second", "resp_execution_second"),
+      ]
+
+      yield* admit(session, "First execution")
+      yield* session.resume(sessionID)
+      yield* admit(session, "Second execution")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+    }),
+  )
+
+  it.effect("falls back once from invalid stored OpenAI response state without creating another logical request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responseStreams = [
+        Stream.fromIterable(reply.toolWithResponse("call-fallback", "echo", { text: "fallback" }, "resp_first")),
+        Stream.fail(invalidRequest()),
+        Stream.fromIterable(reply.textWithResponse("Recovered", "fallback-recovered", "resp_recovered")),
+      ]
+
+      yield* admit(session, "Recover stale response state")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_first" })
+      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[1]?.id).toBe(requests[2]?.id)
+      const records = yield* SessionProviderRequest.Service.pipe(
+        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+      )
+      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
+        { attempts: 1, continuation: "full" },
+        { attempts: 2, continuation: "fallback" },
+      ])
+    }),
+  )
+
+  it.effect("does not retry a second invalid request after the continuation fallback", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responseStreams = [
+        Stream.fromIterable(reply.toolWithResponse("call-fallback-once", "echo", { text: "once" }, "resp_once")),
+        Stream.fail(invalidRequest()),
+        Stream.fail(invalidRequest()),
+      ]
+
+      yield* admit(session, "Fallback only once")
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests).toHaveLength(3)
+      expect(requests[1]?.providerOptions?.openai).toHaveProperty("previousResponseId", "resp_once")
+      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      const records = yield* SessionProviderRequest.Service.pipe(
+        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+      )
+      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
+        { attempts: 1, continuation: "full" },
+        { attempts: 2, continuation: "fallback" },
       ])
     }),
   )
@@ -1058,6 +1358,15 @@ describe("SessionRunnerLLM", () => {
           mechanism: "openai-prefix-cache",
           readReported: true,
           writeReported: false,
+        },
+        requests: {
+          logical: 1,
+          physical: 1,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          latestInvalidation: "stable-hit",
+          tokens: { input: 100, output: 20, reasoning: 10, cache: { read: 900, write: 0 } },
         },
       })
       expect(diagnostics && "application" in diagnostics).toBe(false)
@@ -3827,17 +4136,20 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
-      yield* registry.register({
-        blocked: Tool.make({
-          description: "Fail because policy blocked execution",
-          input: Schema.Struct({}),
-          output: Schema.Struct({}),
-          execute: () =>
-            Effect.fail(new PermissionV2.BlockedError({ rules: [], permission: "blocked", resources: ["*"] })).pipe(
-              Effect.mapError(() => new Tool.Failure({ message: "Permission blocked" })),
-            ),
-        }),
-      }, { codemode: false })
+      yield* registry.register(
+        {
+          blocked: Tool.make({
+            description: "Fail because policy blocked execution",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () =>
+              Effect.fail(new PermissionV2.BlockedError({ rules: [], permission: "blocked", resources: ["*"] })).pipe(
+                Effect.mapError(() => new Tool.Failure({ message: "Permission blocked" })),
+              ),
+          }),
+        },
+        { codemode: false },
+      )
       yield* admit(session, "Call blocked")
 
       responses = [reply.tool("call-blocked", "blocked", {}), reply.stop()]
@@ -3862,14 +4174,17 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
-      yield* registry.register({
-        declined: Tool.make({
-          description: "Fail because the user declined approval",
-          input: Schema.Struct({}),
-          output: Schema.Struct({}),
-          execute: () => Effect.die(new PermissionV2.DeclinedError()),
-        }),
-      }, { codemode: false })
+      yield* registry.register(
+        {
+          declined: Tool.make({
+            description: "Fail because the user declined approval",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () => Effect.die(new PermissionV2.DeclinedError()),
+          }),
+        },
+        { codemode: false },
+      )
       yield* admit(session, "Call declined")
 
       response = reply.tool("call-declined", "declined", {})
@@ -3899,17 +4214,20 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
-      yield* registry.register({
-        corrected: Tool.make({
-          description: "Fail with user correction feedback",
-          input: Schema.Struct({}),
-          output: Schema.Struct({}),
-          execute: () =>
-            Effect.fail(new PermissionV2.CorrectedError({ feedback: "Use another tool" })).pipe(
-              Effect.mapError(() => new Tool.Failure({ message: "Use another tool" })),
-            ),
-        }),
-      }, { codemode: false })
+      yield* registry.register(
+        {
+          corrected: Tool.make({
+            description: "Fail with user correction feedback",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () =>
+              Effect.fail(new PermissionV2.CorrectedError({ feedback: "Use another tool" })).pipe(
+                Effect.mapError(() => new Tool.Failure({ message: "Use another tool" })),
+              ),
+          }),
+        },
+        { codemode: false },
+      )
       yield* admit(session, "Call corrected")
 
       responses = [reply.tool("call-corrected", "corrected", {}), reply.stop()]
@@ -4007,14 +4325,17 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       const registry = yield* ToolRegistry.Service
-      yield* registry.register({
-        question: Tool.make({
-          description: "Ask the user",
-          input: Schema.Struct({}),
-          output: Schema.Struct({}),
-          execute: () => Effect.die(new QuestionTool.CancelledError()),
-        }),
-      }, { codemode: false })
+      yield* registry.register(
+        {
+          question: Tool.make({
+            description: "Ask the user",
+            input: Schema.Struct({}),
+            output: Schema.Struct({}),
+            execute: () => Effect.die(new QuestionTool.CancelledError()),
+          }),
+        },
+        { codemode: false },
+      )
       yield* admit(session, "Ask then stop")
 
       responses = [reply.tool("call-question", "question", {}), []]
@@ -4546,6 +4867,22 @@ describe("SessionRunnerLLM", () => {
         { type: "session.step.started.1" },
         { type: "session.step.failed.1" },
       ])
+      const providerRequests = yield* SessionProviderRequest.Service
+      expect(
+        (yield* providerRequests.list(sessionID)).map((record) => ({
+          request: record.request,
+          attempts: record.attempts,
+          invalidation: record.invalidation,
+          continuation: record.continuation,
+        })),
+      ).toEqual([
+        {
+          request: 1,
+          attempts: 5,
+          invalidation: "retry-fallback",
+          continuation: "fallback",
+        },
+      ])
     }),
   )
 
@@ -4588,6 +4925,19 @@ describe("SessionRunnerLLM", () => {
       expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(3)
       expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(1)
       expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toHaveLength(2)
+
+      const providerRequests = yield* SessionProviderRequest.Service
+      expect(
+        (yield* providerRequests.list(sessionID)).map((record) => ({
+          request: record.request,
+          attempts: record.attempts,
+          source: record.source,
+        })),
+      ).toEqual([
+        { request: 1, attempts: 2, source: "step" },
+        { request: 2, attempts: 1, source: "step" },
+      ])
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 3, helpers: 0 })
     }),
   )
 

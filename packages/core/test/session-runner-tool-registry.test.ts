@@ -6,6 +6,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Image } from "@ycoding-ai/core/image"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
+import { SessionModelRequest } from "@ycoding-ai/core/session/model-request"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { executeTool, settleTool, toolDefinitions } from "./lib/tool"
@@ -145,6 +146,31 @@ describe("ToolRegistry", () => {
         ]),
       ).toEqual([])
       expect(yield* names([{ action: "edit", resource: "*", effect: "deny" }])).toEqual(["bash", "question"])
+    }),
+  )
+
+  it.effect("materializes registered subagent tools except denied capabilities", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register(
+        {
+          shell: make(),
+          read: make(),
+          edit: make(),
+          subagent: make(),
+          subagent_control: make(),
+        },
+        { codemode: false },
+      )
+      const permissions = SessionModelRequest.toolPermissions(
+        {
+          mode: "subagent",
+          permissions: [{ action: "*", resource: "*", effect: "allow" }],
+        },
+        [{ action: "edit", resource: "*", effect: "deny" }],
+      )
+
+      expect((yield* service.materialize(permissions)).definitions.map((tool) => tool.name)).toEqual(["read", "shell"])
     }),
   )
 

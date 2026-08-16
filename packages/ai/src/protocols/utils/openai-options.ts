@@ -41,6 +41,21 @@ const INCLUDABLES = new Set<string>(OpenAIResponseIncludables)
 const SERVICE_TIERS = new Set<string>(OpenAIServiceTiers)
 const PROMPT_CACHE_RETENTIONS = new Set<string>(OpenAIPromptCacheRetentions)
 const PROMPT_CACHE_OPTIONS_MODES = new Set<string>(OpenAIPromptCacheOptionsModes)
+const EXTENDED_PROMPT_CACHE_MODELS = new Set([
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.2",
+  "gpt-5.1-codex-max",
+  "gpt-5.1",
+  "gpt-5.1-codex",
+  "gpt-5.1-codex-mini",
+  "gpt-5.1-chat-latest",
+  "gpt-5",
+  "gpt-5-codex",
+  "gpt-4.1",
+])
+const MODEL_SNAPSHOT_SUFFIX = /-\d{4}-\d{2}-\d{2}$/
 
 export const OpenAIReasoningEffort = Schema.String
 export const OpenAITextVerbosity = TextVerbosity
@@ -62,6 +77,16 @@ const options = (request: LLMRequest) => request.providerOptions?.openai
 export const store = (request: LLMRequest): boolean | undefined => {
   const value = options(request)?.store
   return typeof value === "boolean" ? value : undefined
+}
+
+export const previousResponseId = (request: LLMRequest): string | undefined => {
+  const value = options(request)?.previousResponseId
+  return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
+export const continuationInputStart = (request: LLMRequest): number | undefined => {
+  const value = options(request)?.continuationInputStart
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
 export const reasoningEffort = (request: LLMRequest): string | undefined => {
@@ -134,6 +159,11 @@ export const isGpt56OrLater = (modelID: string): boolean => {
   const major = Number(match[1])
   const minor = match[2] ? Number(match[2]) : 0
   return major > 5 || (major === 5 && minor >= 6)
+}
+
+export const supportsExtendedPromptCacheRetention = (modelID: string): boolean => {
+  const normalized = modelID.toLowerCase().split("/").at(-1)?.replace(MODEL_SNAPSHOT_SUFFIX, "")
+  return normalized !== undefined && EXTENDED_PROMPT_CACHE_MODELS.has(normalized)
 }
 
 export * as OpenAIOptions from "./openai-options"

@@ -21,6 +21,7 @@ export function Dialog(
 
   let dismiss = false
   const width = () => {
+    if (dimensions().width < 100) return dimensions().width - 2
     if (props.size === "xlarge") return 116
     if (props.size === "large") return 88
     return 60
@@ -59,7 +60,7 @@ export function Dialog(
         }}
         width={width()}
         maxWidth={dimensions().width - 2}
-        backgroundColor={themeV2.background.default}
+        backgroundColor={themeV2.background.surface.offset}
         paddingTop={1}
       >
         {props.children}
@@ -74,7 +75,7 @@ function init() {
       element: JSX.Element
       onClose?: () => void
     }[],
-    size: "medium" as "medium" | "large" | "xlarge",
+    size: "large" as "medium" | "large" | "xlarge",
     centered: false,
   })
 
@@ -147,7 +148,7 @@ function init() {
         if (item.onClose) item.onClose()
       }
       batch(() => {
-        setStore("size", "medium")
+        setStore("size", "large")
         setStore("centered", false)
         setStore("stack", [])
       })
@@ -161,7 +162,7 @@ function init() {
       for (const item of store.stack) {
         if (item.onClose) item.onClose()
       }
-      setStore("size", "medium")
+      setStore("size", "large")
       setStore("centered", false)
       setStore("stack", [
         {
@@ -217,7 +218,7 @@ export function DialogProvider(props: ParentProps) {
       <box
         position="absolute"
         zIndex={3000}
-        onMouseDown={(evt: { button: number; preventDefault(): void; stopPropagation(): void }) => {
+        onMouseDown={(evt: { button: MouseButton; preventDefault(): void; stopPropagation(): void }) => {
           if (copyOnSelectEnabled()) return
           if (evt.button !== MouseButton.RIGHT) return
 

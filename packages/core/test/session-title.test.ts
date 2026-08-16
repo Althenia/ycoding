@@ -2,6 +2,8 @@ import { expect } from "bun:test"
 import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Config } from "@ycoding-ai/core/config"
+import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
@@ -10,9 +12,11 @@ import { EventV2 } from "@ycoding-ai/core/event"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
+import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionHelperPolicy, localGoal, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionTitle } from "@ycoding-ai/core/session/title"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Project } from "@ycoding-ai/core/project"
@@ -67,6 +71,48 @@ const client = Layer.mock(LLMClient.Service)({
 const models = Layer.mock(SessionRunnerModel.Service)({
   resolve: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
 })
+let titleMode: SessionHelperPolicy.TitleMode = "local"
+let anthropicTtl: NonNullable<ConfigEfficiency.PromptCache["anthropic_ttl"]> = "adaptive"
+const cachePolicies: SessionCacheRuntime.PolicyInput[] = []
+const cacheObservations: SessionCacheRuntime.Observation[] = []
+const cacheRuntime = Layer.succeed(
+  SessionCacheRuntime.Service,
+  SessionCacheRuntime.Service.of({
+    policy: (input) =>
+      Effect.sync(() => {
+        cachePolicies.push(input)
+        return { ttlSeconds: 300 as const, promoted: false }
+      }),
+    observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
+  }),
+)
+const config = Layer.succeed(
+  Config.Service,
+  Config.Service.of({
+    entries: () =>
+      Effect.succeed([
+        new Config.Document({
+          type: "document",
+          info: new Config.Info({
+            efficiency: new ConfigEfficiency.Info({
+              prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: anthropicTtl }),
+            }),
+          }),
+        }),
+      ]),
+  }),
+)
+const helperPolicy = Layer.succeed(
+  SessionHelperPolicy.Service,
+  SessionHelperPolicy.Service.of({
+    get settings() {
+      return { titleMode, goalMode: "local" as const }
+    },
+    localTitle,
+    localGoal,
+    resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
+  }),
+)
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -75,11 +121,15 @@ const it = testEffect(
       SessionProjector.node,
       SessionStore.node,
       AgentV2.node,
+      SessionHelperPolicy.node,
       SessionTitle.node,
     ]),
     [
       [llmClient, client],
       [SessionRunnerModel.node, models],
+      [SessionHelperPolicy.node, helperPolicy],
+      [Config.node, config],
+      [SessionCacheRuntime.node, cacheRuntime],
     ],
   ),
 )
@@ -121,9 +171,35 @@ const prompt = (sessionID: SessionV2.ID, text: string) =>
     })
   })
 
-it.effect("generates a title from the sole user message and renames the session", () =>
+it.effect("uses a deterministic local title by default without a provider call", () =>
   Effect.gen(function* () {
     requests = []
+    titleMode = "local"
+    const sessionID = SessionV2.ID.make("ses_title_local")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "# Help me debug the failing build\nIgnore this line")
+
+    const store = yield* SessionStore.Service
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((session) => (session ? Effect.succeed(session) : Effect.die("session missing"))))
+    yield* (yield* SessionTitle.Service).generateForFirstPrompt(session)
+
+    expect(requests).toHaveLength(0)
+    const renamed = yield* store.get(sessionID)
+    expect(renamed?.title).toBe("Help me debug the failing build")
+    expect(renamed?.tokens).toEqual({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } })
+    expect(renamed?.cost).toBe(Money.USD.zero)
+  }),
+)
+
+it.effect("preserves model-generated titles when explicitly enabled", () =>
+  Effect.gen(function* () {
+    requests = []
+    cachePolicies.length = 0
+    cacheObservations.length = 0
+    titleMode = "model"
+    anthropicTtl = "1h"
     const agentService = yield* AgentV2.Service
     yield* agentService.transform((editor) => {
       editor.update(AgentV2.ID.make("title"), (agent) => {
@@ -140,8 +216,7 @@ it.effect("generates a title from the sole user message and renames the session"
     const session = yield* store
       .get(sessionID)
       .pipe(Effect.flatMap((session) => (session ? Effect.succeed(session) : Effect.die("session missing"))))
-    const title = yield* SessionTitle.Service
-    yield* title.generateForFirstPrompt(session)
+    yield* (yield* SessionTitle.Service).generateForFirstPrompt(session)
 
     expect(requests).toHaveLength(1)
     expect(requests[0]?.http?.headers).toEqual({
@@ -157,12 +232,46 @@ it.effect("generates a title from the sole user message and renames the session"
     expect(renamed?.title).toBe("Generated Title")
     expect(renamed?.tokens).toEqual({ input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } })
     expect(renamed?.cost).toBeCloseTo(0.0000233)
+    expect(cachePolicies).toHaveLength(1)
+    expect(cachePolicies[0]).toMatchObject({
+      modelID: "title-model",
+      configured: "1h",
+    })
+    expect(requests[0]?.providerOptions?.openai?.promptCacheKey).toBe(cachePolicies[0]?.namespace)
+    expect(cacheObservations).toEqual([
+      {
+        namespace: cachePolicies[0]!.namespace,
+        cacheRead: 3,
+        cacheWrite: 2,
+        eligible: 15,
+      },
+    ])
+  }),
+)
+
+it.effect("leaves the generated title unchanged when title generation is off", () =>
+  Effect.gen(function* () {
+    requests = []
+    titleMode = "off"
+    const sessionID = SessionV2.ID.make("ses_title_off")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "Help me debug the failing build")
+
+    const store = yield* SessionStore.Service
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((session) => (session ? Effect.succeed(session) : Effect.die("session missing"))))
+    yield* (yield* SessionTitle.Service).generateForFirstPrompt(session)
+
+    expect(requests).toHaveLength(0)
+    expect((yield* store.get(sessionID))?.title).toBe("New session - fake")
   }),
 )
 
 it.effect("does not generate once a second user message exists", () =>
   Effect.gen(function* () {
     requests = []
+    titleMode = "local"
     const agentService = yield* AgentV2.Service
     yield* agentService.transform((editor) => {
       editor.update(AgentV2.ID.make("title"), (agent) => {
@@ -192,6 +301,7 @@ it.effect("does not generate once a second user message exists", () =>
 it.effect("does not generate for a child session", () =>
   Effect.gen(function* () {
     requests = []
+    titleMode = "local"
     const agentService = yield* AgentV2.Service
     yield* agentService.transform((editor) => {
       editor.update(AgentV2.ID.make("title"), (agent) => {
@@ -233,9 +343,10 @@ it.effect("does not generate for a child session", () =>
   }),
 )
 
-it.effect("does not generate when the title agent is removed", () =>
+it.effect("does not generate in model mode when the title agent is removed", () =>
   Effect.gen(function* () {
     requests = []
+    titleMode = "model"
     const sessionID = SessionV2.ID.make("ses_title_no_agent")
     yield* insertSession(sessionID)
     yield* prompt(sessionID, "Help me debug the failing build")

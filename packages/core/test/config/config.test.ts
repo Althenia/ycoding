@@ -97,6 +97,39 @@ const provider = {
 }
 
 describe("Config", () => {
+  it.effect("decodes provider efficiency policy without changing omitted defaults", () =>
+    Effect.sync(() => {
+      const decoded = Schema.decodeUnknownSync(Config.Info)({
+        efficiency: {
+          title: "local",
+          goal_synthesis: "model",
+          helper_model: "openai/gpt-5-mini#low",
+          prompt_cache: {
+            anthropic_ttl: "adaptive",
+            openai_mode: "explicit",
+            openai_extended_retention: true,
+          },
+          openai_responses_continuation: "auto",
+        },
+      })
+      expect(decoded.efficiency).toEqual({
+        title: "local",
+        goal_synthesis: "model",
+        helper_model: selection("openai/gpt-5-mini#low"),
+        prompt_cache: {
+          anthropic_ttl: "adaptive",
+          openai_mode: "explicit",
+          openai_extended_retention: true,
+        },
+        openai_responses_continuation: "auto",
+      })
+      expect(Schema.decodeUnknownSync(Config.Info)({}).efficiency).toBeUndefined()
+      expect(() =>
+        Schema.decodeUnknownSync(Config.Info)({ efficiency: { prompt_cache: { anthropic_ttl: "forever" } } }),
+      ).toThrow()
+    }),
+  )
+
   it.effect("ignores retired self-improvement settings without discarding unrelated settings", () =>
     Effect.sync(() => {
       const info = Schema.decodeUnknownSync(Config.Info)({

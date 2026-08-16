@@ -1,4 +1,4 @@
-import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
+import { RGBA, TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, Show } from "solid-js"
 import { getScrollAcceleration } from "../util/scroll"
@@ -6,6 +6,19 @@ import { useClipboard } from "../context/clipboard"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { useExit } from "../context/exit"
 import { describeOS, describeTerminal } from "../util/system"
+export function errorSelectionColors(mode?: "dark" | "light") {
+  if (mode === "light") {
+    return {
+      fill: RGBA.fromHex("#3B7DD8"),
+      foreground: RGBA.fromHex("#FFFFFF"),
+    }
+  }
+
+  return {
+    fill: RGBA.fromHex("#79B8FF"),
+    foreground: RGBA.fromHex("#0F1115"),
+  }
+}
 
 export function ErrorComponent(props: { error: Error; reset: () => void; mode?: "dark" | "light" }) {
   const term = useTerminalDimensions()
@@ -16,6 +29,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
   // Safe fallback palette per mode (mirrors theme/assets/ycoding.json) since the
   // theme context may be the thing that crashed.
   const isLight = props.mode === "light"
+  const selection = errorSelectionColors(props.mode)
   const colors = isLight
     ? {
         bg: "#ffffff",
@@ -23,8 +37,8 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         borderSubtle: "#d4d4d4",
         text: "#1a1a1a",
         muted: "#8a8a8a",
-        primary: "#3b7dd8",
-        onPrimary: "#ffffff",
+        primary: selection.fill,
+        onPrimary: selection.foreground,
         error: "#d1383d",
         success: "#3d9a57",
       }
@@ -34,8 +48,8 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         borderSubtle: "#3c3c3c",
         text: "#eeeeee",
         muted: "#808080",
-        primary: "#fab283",
-        onPrimary: "#0a0a0a",
+        primary: selection.fill,
+        onPrimary: selection.foreground,
         error: "#e06c75",
         success: "#7fd88f",
       }

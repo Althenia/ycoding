@@ -17,6 +17,8 @@ export type {
 export interface OpenAIOptionsInput {
   readonly [key: string]: unknown
   readonly store?: boolean
+  readonly previousResponseId?: string
+  readonly continuationInputStart?: number
   readonly promptCacheKey?: string
   // Pre-GPT-5.6 only: selects the maximum-retention policy. Rejected with a
   // 400 by GPT-5.6 and later models.
@@ -45,6 +47,8 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
   const openai = Object.fromEntries(
     definedEntries({
       store: options?.store,
+      previousResponseId: options?.previousResponseId,
+      continuationInputStart: options?.continuationInputStart,
       promptCacheKey: options?.promptCacheKey,
       reasoningEffort: options?.reasoningEffort,
       reasoningSummary: options?.reasoningSummary,

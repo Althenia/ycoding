@@ -7,7 +7,11 @@ import * as Azure from "../../src/providers/azure"
 import * as OpenAI from "../../src/providers/openai"
 import * as OpenAIResponses from "../../src/protocols/openai-responses"
 import * as ProviderShared from "../../src/protocols/shared"
-import { continuationRequest, nativeOpenAIResponsesContinuation } from "../continuation-scenarios"
+import {
+  continuationRequest,
+  continuationTool,
+  nativeOpenAIResponsesContinuation,
+} from "../continuation-scenarios"
 import { it } from "../lib/effect"
 import { dynamicResponse, fixedResponse } from "../lib/http"
 import { sseEvents } from "../lib/sse"
@@ -55,6 +59,47 @@ describe("OpenAI Responses route", () => {
         max_output_tokens: 20,
         temperature: 0,
       })
+    }),
+  )
+
+  it.effect("lowers a stored continuation to the prior response and new message suffix", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model,
+          system: "Use the current tool contract.",
+          messages: [
+            Message.user("Check Paris."),
+            Message.assistant([ToolCallPart.make({ id: "call_weather_1", name: "get_weather", input: { city: "Paris" } })]),
+            Message.tool(
+              ToolResultPart.make({ id: "call_weather_1", name: "get_weather", result: { temperature: 22 } }),
+            ),
+          ],
+          tools: [continuationTool],
+          providerOptions: {
+            openai: {
+              store: true,
+              previousResponseId: "resp_previous_1",
+              continuationInputStart: 2,
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.previous_response_id).toBe("resp_previous_1")
+      expect(prepared.body.input).toEqual([
+        { role: "system", content: "Use the current tool contract." },
+        { type: "function_call_output", call_id: "call_weather_1", output: "{\"temperature\":22}" },
+      ])
+      expect(prepared.body.tools).toHaveLength(1)
+      expect(prepared.body.tools?.[0]).toMatchObject({ type: "function", name: "get_weather" })
+    }),
+  )
+
+  it.effect("omits continuation fields when they are absent", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(request)
+      expect(prepared.body).not.toHaveProperty("previous_response_id")
     }),
   )
 
@@ -256,7 +301,14 @@ describe("OpenAI Responses route", () => {
           model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responsesWebSocket(
             "gpt-4.1-mini",
           ),
-          prompt: "Say hello.",
+          messages: [Message.user("Earlier."), Message.user("Say hello.")],
+          providerOptions: {
+            openai: {
+              store: true,
+              previousResponseId: "resp_ws_previous",
+              continuationInputStart: 1,
+            },
+          },
         }),
       ).pipe(Effect.provide(LLMClient.layer.pipe(Layer.provide(deps))))
 
@@ -268,7 +320,8 @@ describe("OpenAI Responses route", () => {
         type: "response.create",
         model: "gpt-4.1-mini",
         input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
-        store: false,
+        previous_response_id: "resp_ws_previous",
+        store: true,
       })
     }),
   )
@@ -615,13 +668,14 @@ describe("OpenAI Responses route", () => {
   )
 
   describe("prompt_cache_retention / prompt_cache_options family gating", () => {
-    // gpt-5.6 vs gpt-5.5 vs gpt-5 vs gpt-4.1 boundary: retention is pre-5.6
-    // only, cache_options is 5.6+ only. Sending either to the wrong family
-    // returns a 400 upstream, so both must be mutually exclusive on the wire.
+    // GPT-5.6+ uses cache_options. Earlier models only receive retention when
+    // OpenAI lists that exact family as supporting it; unsupported fields return
+    // a 400 upstream, so both controls are gated independently.
     const table = [
       { id: "gpt-5.5", retentionSent: true, optionsSent: false },
       { id: "gpt-5", retentionSent: true, optionsSent: false },
       { id: "gpt-4.1", retentionSent: true, optionsSent: false },
+      { id: "gpt-4o-mini", retentionSent: false, optionsSent: false },
       { id: "gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "gpt-5.6-mini", retentionSent: false, optionsSent: true },
       { id: "gpt-6", retentionSent: false, optionsSent: true },

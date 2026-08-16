@@ -758,6 +758,29 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       )
     }
 
+    function projectPending(item: SessionPendingInfo) {
+      if (item.type === "compaction") return
+      message.update(item.sessionID, (draft, index) => {
+        message.append(
+          draft,
+          index,
+          item.type === "user"
+            ? {
+                id: item.id,
+                type: "user",
+                ...item.data,
+                time: { created: item.timeCreated },
+              }
+            : {
+                id: item.id,
+                type: "synthetic",
+                ...item.data,
+                time: { created: item.timeCreated },
+              },
+        )
+      })
+    }
+
     const message = {
       update(sessionID: string, fn: (messages: SessionMessageInfo[], index: Map<string, number>) => void) {
         let evicted = false
@@ -1085,39 +1108,23 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           })
           break
         }
-        case "session.input.admitted":
-          addPending({
+        case "session.input.admitted": {
+          const pending = {
             id: event.data.inputID,
             sessionID: event.data.sessionID,
             admittedSeq: event.durable.seq,
             timeCreated: event.created,
             ...event.data.input,
-          })
+          }
+          addPending(pending)
           if (!store.session.input[event.data.sessionID]?.includes(event.data.inputID))
             setStore("session", "input", event.data.sessionID, [
               ...(store.session.input[event.data.sessionID] ?? []),
               event.data.inputID,
             ])
-          message.update(event.data.sessionID, (draft, index) => {
-            message.append(
-              draft,
-              index,
-              event.data.input.type === "user"
-                ? {
-                    id: event.data.inputID,
-                    type: "user",
-                    ...event.data.input.data,
-                    time: { created: event.created },
-                  }
-                : {
-                    id: event.data.inputID,
-                    type: "synthetic",
-                    ...event.data.input.data,
-                    time: { created: event.created },
-                  },
-            )
-          })
+          projectPending(pending)
           break
+        }
         case "session.instructions.updated":
           const instructions = event.metadata?.instructions
           if (
@@ -1681,6 +1688,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 sessionID,
                 reconcile(pending.filter((item) => item.type !== "compaction").map((item) => item.id)),
               )
+              pending.forEach(projectPending)
             })
           },
           invalidate(sessionID: string) {

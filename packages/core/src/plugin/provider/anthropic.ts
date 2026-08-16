@@ -305,9 +305,11 @@ export function makeAnthropicPlugin(options: AnthropicPluginOptions = {}) {
               reload: () => store.refresh(source),
               onEvent,
               onResponse: async (response) => {
+                const credentials = await store.resolve(source);
                 const snapshot = ClaudeUsage.normalizeHeaders({
                   providerID: ProviderV2.ID.make("anthropic"),
                   label: "Claude",
+                  subscriptionType: credentials?.subscriptionType,
                   observedAt: Date.now(),
                   headers: response.headers,
                 });

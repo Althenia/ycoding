@@ -36,6 +36,7 @@ describe("CodexUsage", () => {
     })
 
     expect(snapshot).toMatchObject({
+      label: "Codex Plus",
       source: "local_client_rpc",
       stability: "client_contract",
       windows: [
@@ -128,12 +129,77 @@ describe("CodexUsage", () => {
     })
 
     expect(snapshot).toMatchObject({
+      label: "Codex Pro",
       source: "provider_internal_api",
       stability: "best_effort",
       windows: [
         { id: "codex-primary", used: 31 },
         { id: "codex-secondary", used: 12 },
         { id: "codex-credits", unlimited: true },
+      ],
+    })
+  })
+
+  test("labels weekly-only account and Spark windows by reported duration", () => {
+    const snapshot = CodexUsage.normalize({
+      providerID,
+      label: "Codex",
+      updatedAt: 100,
+      source: "local_client_rpc",
+      stability: "client_contract",
+      response: {
+        rateLimits: {
+          planType: "plus",
+          primary: { usedPercent: 21, windowDurationMins: 10080 },
+          secondary: null,
+        },
+        rateLimitsByLimitId: {
+          "codex-spark": {
+            primary: { usedPercent: 9, windowDurationMins: 10080 },
+          },
+        },
+      },
+    })
+
+    expect(snapshot).toMatchObject({
+      label: "Codex Plus",
+      windows: [
+        { id: "codex-primary", label: "Weekly", used: 21 },
+        { id: "codex-spark-primary", label: "Spark weekly", used: 9 },
+      ],
+    })
+  })
+
+  test("normalizes backend rate_limit and additional_rate_limits windows", () => {
+    const snapshot = CodexUsage.normalize({
+      providerID,
+      label: "Codex",
+      updatedAt: 100,
+      source: "provider_internal_api",
+      stability: "best_effort",
+      response: {
+        plan_type: "pro",
+        rate_limit: {
+          primary_window: { used_percent: 36, limit_window_seconds: 604800, reset_at: 1_790_500_000 },
+        },
+        additional_rate_limits: [
+          {
+            limit_name: "GPT-5.3-Codex-Spark",
+            rate_limit: {
+              primary_window: { used_percent: 11, limit_window_seconds: 18000, reset_at: 1_790_000_000 },
+              secondary_window: { used_percent: 8, limit_window_seconds: 604800, reset_at: 1_790_500_000 },
+            },
+          },
+        ],
+      },
+    })
+
+    expect(snapshot).toMatchObject({
+      label: "Codex Pro",
+      windows: [
+        { id: "codex-primary", label: "Weekly", used: 36, resetAt: 1_790_500_000_000 },
+        { id: "gpt-5.3-codex-spark-primary", label: "Spark 5-hour", used: 11 },
+        { id: "gpt-5.3-codex-spark-secondary", label: "Spark weekly", used: 8 },
       ],
     })
   })

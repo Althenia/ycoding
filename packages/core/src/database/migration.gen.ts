@@ -8,5 +8,7 @@ export const migrations = (
     import("./migration/20260726182810_retire-self-improvement"),
     import("./migration/20260727000736_observation-session-identity"),
     import("./migration/20260727001011_observation-sessionless-identity"),
+    import("./migration/20260728025034_dusty_havok"),
+    import("./migration/20260728084114_provider-request-optional-cost"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

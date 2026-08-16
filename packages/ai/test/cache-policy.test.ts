@@ -36,6 +36,13 @@ const openaiModel = OpenAIChat.route
   })
   .model({ id: "gpt-4o-mini" })
 
+const openai56Model = OpenAIChat.route
+  .with({
+    endpoint: { baseURL: "https://api.openai.test/v1/" },
+    auth: Auth.bearer("test"),
+  })
+  .model({ id: "gpt-5.6" })
+
 const geminiModel = Gemini.route
   .with({
     endpoint: { baseURL: "https://generativelanguage.test/v1beta/" },
@@ -46,7 +53,7 @@ const geminiModel = Gemini.route
 const openrouterModel = OpenRouter.configure({ apiKey: "test" }).model("anthropic/claude-sonnet-4.5")
 
 test("pins the provider-native cache policy revision", () => {
-  expect(CACHE_POLICY_REVISION).toBe("provider-native/v2")
+  expect(CACHE_POLICY_REVISION).toBe("provider-native/v4")
 })
 
 const unknownAnthropicModel = AnthropicMessages.route
@@ -262,6 +269,43 @@ describe("applyCachePolicy", () => {
           },
         ],
       })
+    }),
+  )
+
+  it.effect("GPT-5.6 OpenAI implicit and explicit policies both honor explicit stable-prefix breakpoints", () =>
+    Effect.gen(function* () {
+      const explicit = yield* LLMClient.prepare(
+        LLM.request({
+          model: openai56Model,
+          system: "Stable system",
+          prompt: "hi",
+          cache: { tools: true, system: true, messages: { tail: 2 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit" } } },
+        }),
+      )
+      expect(JSON.stringify(explicit.body)).toContain("prompt_cache_breakpoint")
+
+      const implicit = yield* LLMClient.prepare(
+        LLM.request({
+          model: openai56Model,
+          system: "Stable system",
+          prompt: "hi",
+          cache: { tools: true, system: true, messages: { tail: 2 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "implicit" } } },
+        }),
+      )
+      expect(JSON.stringify(implicit.body)).toContain("prompt_cache_breakpoint")
+
+      const unsupported = yield* LLMClient.prepare(
+        LLM.request({
+          model: openaiModel,
+          system: "Stable system",
+          prompt: "hi",
+          cache: { tools: true, system: true, messages: { tail: 2 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "explicit" } } },
+        }),
+      )
+      expect(JSON.stringify(unsupported.body)).not.toContain("prompt_cache_breakpoint")
     }),
   )
 

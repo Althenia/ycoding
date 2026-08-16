@@ -15,7 +15,7 @@ Provider usage is a read-only Location-scoped service that normalizes quota, cre
 
 A snapshot includes:
 
-- provider ID and safe display label;
+- provider ID and safe display label, including a normalized provider-reported account type when available;
 - availability status;
 - source and stability classification;
 - update time;
@@ -73,6 +73,8 @@ Without a usable app-server snapshot, a ChatGPT OAuth credential may use the pro
 
 Primary, secondary, credit, reset-credit, and every additional named limit ID are preserved. Known Spark IDs render as Spark; unknown future IDs receive a sanitized display label instead of being discarded.
 
+Codex window labels follow the reported duration rather than assuming `primary` always means five hours or `secondary` always means weekly. This preserves weekly-only Plus/Pro account responses and separately reported Spark weekly windows.
+
 ## Cache and precedence
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
@@ -113,7 +115,9 @@ Both operations accept the Location query. `refresh=true` requests a source refr
 - Provider IDs are deduplicated across parallel running Sessions; account-level percentages are never added or averaged.
 - Unsupported providers are omitted. Unauthorized and error snapshots render `Usage unavailable`.
 - Spark and other named lanes render as separate windows within their provider section.
-- Percent windows use ten terminal cells.
+- Percent windows use ten stable ASCII characters (`#` used and `-` unused).
 - Values below 70% use normal styling, 70–89% warning styling, and 90% or higher error styling.
 - Near resets use relative duration; later resets use a concrete local timestamp.
 - Unknown values render as `Not reported`.
+- Claude Pro/Max and ChatGPT Plus/Pro labels are shown only when reported by the credential or provider account contract; missing tiers are not inferred from quota windows.
+- Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, and additional named windows render only when present in the normalized snapshot.

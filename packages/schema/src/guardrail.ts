@@ -56,10 +56,10 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   ruleIDs: Schema.Array(Schema.String),
   reason: Schema.String,
   standard: Schema.Boolean,
-  metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(optional),
+  metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
 }) {}
 
-export const Reply = Schema.Literals(["once", "reject"]).annotate({ identifier: "Guardrail.Reply" })
+export const Reply = Schema.Literals(["once", "always", "reject"]).annotate({ identifier: "Guardrail.Reply" })
 export type Reply = typeof Reply.Type
 
 export class Counter extends Schema.Class<Counter>("Guardrail.Counter")({

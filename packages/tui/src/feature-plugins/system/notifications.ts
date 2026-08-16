@@ -6,7 +6,7 @@ const id = "internal:notifications"
 const CHECKPOINT_MS = 500
 
 type Schedule = (delay: number, run: () => Promise<void>) => () => void
-type RequestKind = "form" | "question" | "permission"
+type RequestKind = "form" | "question" | "permission" | "guardrail"
 type RequestEpisode = {
   readonly key: string
   readonly kind: RequestKind
@@ -86,6 +86,10 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           const list = await context.client.question.list({ sessionID: episode.sessionID }, { signal })
           return list.some((item) => item.id === episode.id)
         }
+        if (episode.kind === "guardrail") {
+          const list = await context.client.guardrail.request.list({ sessionID: episode.sessionID }, { signal })
+          return list.some((item) => item.id === episode.id)
+        }
         const list = await context.client.permission.list({ sessionID: episode.sessionID }, { signal })
         return list.some((item) => item.id === episode.id)
       }
@@ -97,8 +101,11 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
             ? "Input needs response"
             : episode.kind === "question"
               ? "Question needs input"
+              : episode.kind === "guardrail"
+                ? "Guardrail approval needed"
               : "Permission needs input"
-        const sound: TuiAttentionSoundName = episode.kind === "permission" ? "permission" : "question"
+        const sound: TuiAttentionSoundName =
+          episode.kind === "permission" || episode.kind === "guardrail" ? "permission" : "question"
         return {
           title: episode.title ?? session?.title,
           message,
@@ -263,6 +270,16 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         ),
         context.data.on("permission.v2.replied", (event) =>
           clearRequest("permission", event.data.sessionID, event.data.requestID),
+        ),
+        context.data.on("guardrail.asked", (event) =>
+          addRequest({
+            kind: "guardrail",
+            id: event.data.id,
+            sessionID: event.data.rootSessionID,
+          }),
+        ),
+        context.data.on("guardrail.replied", (event) =>
+          clearRequest("guardrail", event.data.rootSessionID, event.data.requestID),
         ),
         context.data.on("session.execution.started", (event) => {
           const current = terminals.get(event.data.sessionID)

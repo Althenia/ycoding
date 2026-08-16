@@ -7,6 +7,7 @@ import { Schema } from "effect"
 export interface NormalizeHeadersInput {
   readonly providerID: ProviderV2.ID
   readonly label: string
+  readonly subscriptionType?: string
   readonly observedAt: number
   readonly headers: Headers | Readonly<Record<string, string>>
 }
@@ -14,6 +15,7 @@ export interface NormalizeHeadersInput {
 export interface NormalizeOAuthInput {
   readonly providerID: ProviderV2.ID
   readonly label: string
+  readonly subscriptionType?: string
   readonly updatedAt: number
   readonly response: unknown
 }
@@ -24,8 +26,8 @@ export class RequestError extends Schema.TaggedErrorClass<RequestError>()("Claud
 }) {}
 
 export interface LoadOAuthInput extends Omit<NormalizeOAuthInput, "response"> {
-  readonly resolve: () => Promise<{ readonly accessToken: string } | null>
-  readonly refresh: () => Promise<{ readonly accessToken: string } | null>
+  readonly resolve: () => Promise<{ readonly accessToken: string; readonly subscriptionType?: string } | null>
+  readonly refresh: () => Promise<{ readonly accessToken: string; readonly subscriptionType?: string } | null>
   readonly request: (accessToken: string) => Promise<{
     readonly status: number
     readonly retryAfter?: number
@@ -36,10 +38,14 @@ export interface LoadOAuthInput extends Omit<NormalizeOAuthInput, "response"> {
 export async function loadOAuth(input: LoadOAuthInput) {
   const current = await input.resolve()
   if (!current) throw new RequestError({ status: 401 })
+  let account = current
   let response = await input.request(current.accessToken)
   if (response.status === 401) {
     const refreshed = await input.refresh()
-    if (refreshed && refreshed.accessToken !== current.accessToken) response = await input.request(refreshed.accessToken)
+    if (refreshed && refreshed.accessToken !== current.accessToken) {
+      account = refreshed
+      response = await input.request(refreshed.accessToken)
+    }
   }
   if (response.status < 200 || response.status >= 300)
     throw new RequestError({
@@ -49,6 +55,7 @@ export async function loadOAuth(input: LoadOAuthInput) {
   return normalizeOAuth({
     providerID: input.providerID,
     label: input.label,
+    subscriptionType: account.subscriptionType ?? input.subscriptionType,
     updatedAt: input.updatedAt,
     response: response.body,
   })
@@ -63,7 +70,7 @@ export function normalizeHeaders(input: NormalizeHeadersInput) {
   ]
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
-    label: input.label,
+    label: accountLabel(input.label, input.subscriptionType),
     status: "available",
     source: "response_headers",
     stability: "observed",
@@ -93,7 +100,7 @@ export function normalizeOAuth(input: NormalizeOAuthInput) {
   })
   return new ProviderUsage.Snapshot({
     providerID: input.providerID,
-    label: input.label,
+    label: accountLabel(input.label, input.subscriptionType),
     status: "available",
     source: "provider_internal_api",
     stability: "best_effort",
@@ -167,10 +174,16 @@ function extraUsage(value: unknown) {
 }
 
 function bucketLabel(key: string) {
-  if (key === "five_hour") return "5-hour"
-  if (key === "seven_day") return "Weekly"
+  if (key === "five_hour") return "Session"
+  if (key === "seven_day") return "All models"
   const model = key.slice("seven_day_".length)
   return `${model.charAt(0).toUpperCase()}${model.slice(1).replaceAll("_", " ")} weekly`
+}
+
+function accountLabel(label: string, subscriptionType: string | undefined) {
+  const normalized = subscriptionType?.trim().toLowerCase()
+  const accountType = normalized === "pro" ? "Pro" : normalized === "max" ? "Max" : undefined
+  return accountType && !label.toLowerCase().includes(accountType.toLowerCase()) ? `${label} ${accountType}` : label
 }
 
 function percentage(value: unknown, field: string, ratio: boolean) {

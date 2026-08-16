@@ -142,7 +142,10 @@ function resourceServer(
       const http = Bun.serve({
         port: 0,
         fetch: async (request) => {
-          const body = (await request.clone().json().catch(() => undefined)) as { method?: string } | undefined
+          const body = (await request
+            .clone()
+            .json()
+            .catch(() => undefined)) as { method?: string } | undefined
           if (body?.method === "resources/list") state.resourceMethodRequests++
           if (body?.method === "resources/templates/list") state.templateMethodRequests++
           return transport.handleRequest(request)
@@ -591,7 +594,10 @@ test("caches unsupported MCP resource list methods", async () => {
         expect(yield* connection.resources()).toEqual([])
         expect(yield* connection.resourceTemplates()).toEqual([])
         expect(yield* connection.resourceTemplates()).toEqual([])
-        expect({ resources: server.state.resourceMethodRequests, templates: server.state.templateMethodRequests }).toEqual({
+        expect({
+          resources: server.state.resourceMethodRequests,
+          templates: server.state.templateMethodRequests,
+        }).toEqual({
           resources: 1,
           templates: 1,
         })
@@ -808,13 +814,25 @@ test("serializes concurrent MCP lifecycle operations", async () => {
   )
 })
 
-it.effect("advertises MCP output schemas to Code Mode", () =>
+it.effect("exposes MCP output schemas through Code Mode search", () =>
   Effect.gen(function* () {
     const registry = yield* ToolRegistry.Service
     yield* waitForTool(registry, "execute")
-    const execute = (yield* toolDefinitions(registry)).find((tool) => tool.name === "execute")
+    const settlement = yield* settleTool(registry, {
+      sessionID: SessionV2.ID.make("ses_mcp_discovery"),
+      ...toolIdentity,
+      call: {
+        type: "tool-call",
+        id: "call_mcp_discovery",
+        name: "execute",
+        input: { code: 'return search({ query: "demo search" })' },
+      },
+    })
+    const text = settlement.output?.content.find((part) => part.type === "text")?.text
+    const discovered = text === undefined ? undefined : JSON.parse(text)
 
-    expect(execute?.description).toContain("tools.demo.search(input: {}): Promise<{\n  ok: boolean,\n}>")
+    expect(discovered?.items[0]?.path).toBe("tools.demo.search")
+    expect(discovered?.items[0]?.signature).toBe("tools.demo.search(input: {}): Promise<{\n  ok: boolean,\n}>")
   }),
 )
 

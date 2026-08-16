@@ -131,6 +131,133 @@ test("session lifecycle updates the terminal title and prints the epilogue after
   }
 })
 
+test("explicit session bootstrap restores its location-scoped model without an invalid-model warning", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 32, useThread: false })
+  const core = await import("@opentui/core")
+  mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
+
+  const defaultDirectory = "/tmp/ycoding/default"
+  const sessionDirectory = "/tmp/ycoding/session-workspace"
+  const defaultLocation = { directory: defaultDirectory, project: { id: "proj_default", directory: defaultDirectory } }
+  const sessionLocation = { directory: sessionDirectory, project: { id: "proj_session", directory: sessionDirectory } }
+  const session = {
+    id: "ses_resume",
+    title: "Resume target",
+    projectID: "proj_session",
+    location: { directory: sessionDirectory },
+    agent: "build",
+    model: { providerID: "openrouter", id: "deepseek-v4-flash" },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: 0, updated: 0 },
+  }
+  const model = {
+    id: "deepseek-v4-flash",
+    modelID: "deepseek/deepseek-v4-flash",
+    providerID: "openrouter",
+    name: "DeepSeek V4 Flash",
+    capabilities: { tools: true, input: ["text"], output: ["text"] },
+    variants: [],
+    time: { released: 0 },
+    cost: [],
+    status: "active",
+    enabled: true,
+    limit: { context: 1_048_576, output: 32_768 },
+  }
+  const provider = { id: "openrouter", name: "OpenRouter", package: "@openrouter/ai-sdk-provider" }
+  const agent = {
+    id: "build",
+    name: "Build",
+    request: { headers: {}, body: {} },
+    mode: "primary",
+    hidden: false,
+    permissions: [],
+  }
+
+  const modelDirectories: Array<string | null> = []
+  const events = createEventStream()
+  const calls = createFetch((url) => {
+    const requestedDirectory = url.searchParams.get("location[directory]")
+    const location = requestedDirectory === sessionDirectory ? sessionLocation : defaultLocation
+    if (url.pathname === "/api/fs/list") return json({ location: defaultLocation, data: [] })
+    if (url.pathname === "/api/location") return json(location)
+    if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/ses_resume") return json({ data: session })
+    if (url.pathname === "/api/session/ses_resume/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/ses_resume/pending") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/permission") return json({ data: [] })
+    // The rail docks from 120 columns, so this 120-column session also loads its rail sections.
+    if (url.pathname === "/api/session/ses_resume/todo") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/guardrail/request") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/guardrail")
+      return json({
+        data: {
+          rootSessionID: "ses_resume",
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+        },
+      })
+    if (url.pathname === "/api/model") {
+      modelDirectories.push(requestedDirectory)
+      return json({ location, data: requestedDirectory === sessionDirectory ? [model] : [] })
+    }
+    if (url.pathname === "/api/provider")
+      return json({ location, data: requestedDirectory === sessionDirectory ? [provider] : [] })
+    if (url.pathname === "/api/agent") return json({ location, data: [agent] })
+    if (["/api/integration", "/api/command", "/api/skill", "/api/reference"].includes(url.pathname))
+      return json({ location, data: [] })
+    if (url.pathname === "/api/mcp") return json({ location, data: [] })
+    if (url.pathname === "/api/mcp/resource") return json({ location, data: { resources: [], templates: [] } })
+    if (url.pathname === "/api/shell") return json({ location, data: [] })
+    if (url.pathname === "/api/permission/request") return json({ location, data: [] })
+    if (url.pathname === "/api/form/request") return json({ location, data: [] })
+  }, events)
+  const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
+
+  let titled!: () => void
+  const titleReady = new Promise<void>((resolve) => {
+    titled = resolve
+  })
+  const setTitle = setup.renderer.setTerminalTitle.bind(setup.renderer)
+  setup.renderer.setTerminalTitle = (title) => {
+    if (title === "YC | Resume target") titled()
+    setTitle(title)
+  }
+
+  try {
+    const { run } = await import("../src/app")
+    const task = Effect.runPromise(
+      run({
+        server: { endpoint: { url: server.url.toString() } },
+        config: { get: async () => ({}), update: async () => ({}) },
+        packages: { resolve: async () => undefined },
+        args: { sessionID: "ses_resume" },
+        log: () => {},
+      }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
+    )
+
+    await titleReady
+    await Bun.sleep(100)
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain(sessionDirectory)
+    expect(frame).toContain("DeepSeek V4 Flash")
+    expect(frame).toContain("OpenRouter")
+    expect(frame).not.toContain("Model openrouter/deepseek-v4-flash is not valid")
+    expect(modelDirectories).toContain(sessionDirectory)
+    expect(modelDirectories).not.toContain(defaultDirectory)
+    setup.renderer.destroy()
+    await task
+  } finally {
+    if (!setup.renderer.isDestroyed) setup.renderer.destroy()
+    await server.stop()
+    mock.restore()
+  }
+})
+
 test("passive mouse selection never writes to the clipboard", async () => {
   const source = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
   expect(source).not.toContain("MouseButton.RIGHT")

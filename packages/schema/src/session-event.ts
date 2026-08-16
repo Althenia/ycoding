@@ -23,6 +23,7 @@ import { Snapshot } from "./snapshot.js"
 import { TokenUsage } from "./token-usage.js"
 import { SessionPending } from "./session-pending.js"
 import { Project } from "./project.js"
+import { ProviderRequest } from "./provider-request.js"
 import { SessionOrchestration } from "./session-orchestration.js"
 import { Permission } from "./permission.js"
 
@@ -138,6 +139,13 @@ export const UsageRecorded = Event.durable({
   },
 })
 export type UsageRecorded = typeof UsageRecorded.Type
+
+export const ProviderRequestRecorded = Event.durable({
+  type: "session.provider.request.recorded",
+  ...options,
+  schema: ProviderRequest.Record.fields,
+})
+export type ProviderRequestRecorded = typeof ProviderRequestRecorded.Type
 
 export const UsageUpdated = Event.ephemeral({
   type: "session.usage.updated",
@@ -642,11 +650,17 @@ export const Definitions = Event.inventory(
   RevertEvent.Committed,
 )
 
-// UsageRecorded is durable but internal: excluded from Definitions so it never reaches the public manifest.
-export const DurableDefinitions = Event.inventory(
+export const PublicDurableDefinitions = Event.inventory(
   ...Definitions.filter((definition) => definition.durability === "durable"),
-  UsageRecorded,
 )
+
+export const PublicDurable = Schema.Union(PublicDurableDefinitions, { mode: "oneOf" })
+  .pipe(Schema.toTaggedUnion("type"))
+  .annotate({ identifier: "Session.Event.PublicDurable" })
+export type PublicDurableEvent = typeof PublicDurable.Type
+
+// UsageRecorded and ProviderRequestRecorded remain durable for replay/projectors but are excluded from public logs.
+export const DurableDefinitions = Event.inventory(...PublicDurableDefinitions, UsageRecorded, ProviderRequestRecorded)
 
 export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" })
   .pipe(Schema.toTaggedUnion("type"))
@@ -654,7 +668,7 @@ export const Durable = Schema.Union(DurableDefinitions, { mode: "oneOf" })
 export type DurableEvent = typeof Durable.Type
 
 const Public = Schema.Union(Definitions, { mode: "oneOf" })
-export const All = Schema.Union([Public, UsageRecorded], { mode: "oneOf" })
+export const All = Schema.Union([Public, UsageRecorded, ProviderRequestRecorded], { mode: "oneOf" })
 export type Event = typeof All.Type
 export type Type = Event["type"]
 

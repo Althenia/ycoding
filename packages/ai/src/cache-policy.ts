@@ -17,8 +17,9 @@
 import { cacheProfile } from "./cache-profile"
 import { CacheHint, type CachePolicy, type CachePolicyObject } from "./schema/options"
 import { LLMRequest, Message, ToolDefinition, type ContentPart } from "./schema/messages"
+import { OpenAIOptions } from "./protocols/utils/openai-options"
 
-export const CACHE_POLICY_REVISION = "provider-native/v2"
+export const CACHE_POLICY_REVISION = "provider-native/v4"
 
 const AUTO: CachePolicyObject = {
   tools: true,
@@ -41,8 +42,8 @@ const resolve = (policy: CachePolicy | undefined): CachePolicyObject => {
   return policy
 }
 
-// Protocols whose wire format ignores inline cache markers (OpenAI's implicit
-// prefix caching, Gemini's implicit + out-of-band CachedContent). AI SDK routes
+// Protocols whose wire format ignores inline cache markers (older OpenAI
+// models and Gemini's implicit + out-of-band CachedContent). AI SDK routes
 // retain their generic protocol ID, so cache-capable adapters must also opt in
 // by route ID or the default policy never reaches their provider options.
 const RESPECTS_INLINE_HINTS = new Set(["anthropic-messages", "bedrock-converse"])
@@ -55,8 +56,14 @@ const INLINE_HINT_ROUTES = new Set([
 const INLINE_HINT_CAP = 4
 const EXTENDED_TTL_SECONDS = 3600
 
+const OPENAI_CACHE_PROTOCOLS = new Set(["openai-chat", "openai-responses"])
+
 const respectsInlineHints = (request: LLMRequest) =>
-  RESPECTS_INLINE_HINTS.has(request.model.route.protocol) || INLINE_HINT_ROUTES.has(request.model.route.id)
+  RESPECTS_INLINE_HINTS.has(request.model.route.protocol) ||
+  INLINE_HINT_ROUTES.has(request.model.route.id) ||
+  (OPENAI_CACHE_PROTOCOLS.has(request.model.route.protocol) &&
+    OpenAIOptions.isGpt56OrLater(request.model.id) &&
+    OpenAIOptions.promptCacheOptions(request) !== undefined)
 
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
   ttlSeconds !== undefined ? new CacheHint({ type: "ephemeral", ttlSeconds }) : new CacheHint({ type: "ephemeral" })

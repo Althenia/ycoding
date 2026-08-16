@@ -341,7 +341,7 @@ export type FileSystemEntry = { path: string; type: "file" | "directory" }
 
 export type PermissionV2Reply = "once" | "always" | "reject"
 
-export type GuardrailReply = "once" | "reject"
+export type GuardrailReply = "once" | "always" | "reject"
 
 export type GuardrailDecision = "allow" | "ask" | "deny" | "cap_exceeded"
 
@@ -477,6 +477,27 @@ export type ProviderRequest = {
 }
 
 export type PermissionV2Rule = { action: string; resource: string; effect: PermissionV2Effect }
+
+export type ProviderRequestSummary = {
+  logical: number
+  physical: number
+  helpers: number
+  continued: number
+  fallback: number
+  cost?: MoneyUSD
+  tokens: TokenUsageInfo
+  latestInvalidation?:
+    | "first-request"
+    | "stable-hit"
+    | "prefix-changed"
+    | "system-prefix-changed"
+    | "tool-prefix-changed"
+    | "below-minimum"
+    | "provider-not-reported"
+    | "cache-disabled"
+    | "retry-fallback"
+  latestNamespace?: string
+}
 
 export type SessionModelSelected = {
   id: string
@@ -698,16 +719,6 @@ export type SessionRevertCommitted = {
   data: { sessionID: string; to: string }
 }
 
-export type SessionUsageRecorded = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  type: "session.usage.recorded"
-  durable: { aggregateID: string; seq: number; version: 1 }
-  location?: LocationRef
-  data: { sessionID: string; source: "title" | "compaction" | "goal"; cost: MoneyUSD; tokens: TokenUsageInfo }
-}
-
 export type ModelsDevRefreshed = {
   id: string
   created: number
@@ -831,7 +842,7 @@ export type GuardrailAsked = {
     ruleIDs: Array<string>
     reason: string
     standard: boolean
-    metadata?: { [x: string]: any }
+    metadata?: { [x: string]: JsonValue }
   }
 }
 
@@ -1067,22 +1078,6 @@ export type V2EventServerConnected = {
 }
 
 export type SessionRevert = { messageID: string; snapshot?: string; files?: Array<FileDiffInfo> }
-
-export type SessionCacheDiagnostics = {
-  model: ModelRef
-  context: { total: number; limit?: number; remaining?: number; percent?: number }
-  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  cache: {
-    eligible: number
-    hitRatio?: number
-    mechanism: SessionCacheMechanism
-    readReported: boolean
-    writeReported: boolean
-    minimumTokens?: number
-    belowMinimum?: boolean
-  }
-  estimatedCost: MoneyUSD
-}
 
 export type SessionProviderCacheDiagnostics = {
   mechanism: SessionCacheMechanism
@@ -1765,6 +1760,23 @@ export type ProjectArtifactApiMetrics = {
 
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
+export type SessionCacheDiagnostics = {
+  model: ModelRef
+  context: { total: number; limit?: number; remaining?: number; percent?: number }
+  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
+  cache: {
+    eligible: number
+    hitRatio?: number
+    mechanism: SessionCacheMechanism
+    readReported: boolean
+    writeReported: boolean
+    minimumTokens?: number
+    belowMinimum?: boolean
+  }
+  estimatedCost?: MoneyUSD
+  requests?: ProviderRequestSummary
+}
+
 export type SessionRevertStaged = {
   id: string
   created: number
@@ -2248,7 +2260,7 @@ export type FormCreated = {
 
 export type ProjectArtifactApiListItem = ProjectArtifactArtifactSummary | ProjectArtifactApiTrashSummary
 
-export type SessionEventDurable =
+export type SessionEventPublicDurable =
   | SessionCreated
   | SessionAgentSelected
   | SessionModelSelected
@@ -2290,7 +2302,6 @@ export type SessionEventDurable =
   | SessionRevertStaged
   | SessionRevertCleared
   | SessionRevertCommitted
-  | SessionUsageRecorded
 
 export type SessionMessagesResponse = {
   data: Array<SessionMessageInfo>
@@ -2389,7 +2400,7 @@ export type V2Event =
   | McpResourcesChanged
   | V2EventServerConnected
 
-export type SessionLogItem = SessionEventDurable | EventLogSynced
+export type SessionLogItem = SessionEventPublicDurable | EventLogSynced
 
 export type UnauthorizedError = { readonly _tag: "UnauthorizedError"; readonly message: string }
 export const isUnauthorizedError = (value: unknown): value is UnauthorizedError =>
@@ -3528,7 +3539,7 @@ export type GuardrailRequestListOutput = {
 export type GuardrailRequestReplyInput = {
   readonly sessionID: { readonly sessionID: string; readonly requestID: string }["sessionID"]
   readonly requestID: { readonly sessionID: string; readonly requestID: string }["requestID"]
-  readonly reply: { readonly reply: "once" | "reject" }["reply"]
+  readonly reply: { readonly reply: "once" | "always" | "reject" }["reply"]
 }
 
 export type GuardrailRequestReplyOutput = void

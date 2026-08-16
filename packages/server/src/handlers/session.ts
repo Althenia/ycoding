@@ -1,6 +1,6 @@
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { InstructionEntry } from "@ycoding-ai/core/session/instruction-entry"
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Schema, Stream } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/unstable/httpapi"
 import { Api } from "../api"
 import { SessionsCursor } from "@ycoding-ai/protocol/groups/session"
@@ -23,8 +23,10 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionTodo } from "@ycoding-ai/core/session/todo"
 import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
 import { AgentV2 } from "@ycoding-ai/core/agent"
+import { SessionEvent } from "@ycoding-ai/core/session/event"
 
 const DefaultSessionsLimit = 50
+const isPublicDurableSessionEvent = Schema.is(SessionEvent.PublicDurable)
 
 export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handlers) =>
   Effect.gen(function* () {
@@ -859,7 +861,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           Effect.succeed(
             session
               .log({ sessionID: ctx.params.sessionID, after: ctx.query.after, follow: ctx.query.follow })
-              .pipe(Stream.orDie),
+              .pipe(
+                Stream.filter((item) => item.type === "log.synced" || isPublicDurableSessionEvent(item)),
+                Stream.orDie,
+              ),
           ),
         ),
       )

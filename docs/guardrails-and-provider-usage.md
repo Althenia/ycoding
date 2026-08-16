@@ -68,16 +68,19 @@ Managed project-artifact agents preserve their stored permission rules. An empty
 
 A child Session also inherits deny rules from its parent permission ceiling. Child configuration cannot widen a parent denial.
 
+Child model requests materialize the same Location-registered tool catalog as primary requests, filtered by the child's ordered permissions and inherited ceiling. Subagents always receive final deny rules for `subagent` and `subagent_control`, so permissive child rules can enable shell and other registered tools without enabling nested orchestration.
+
 ## Session guardrails
 
 Permissions decide whether an agent may attempt an action. Guardrails apply independently to the complete root Session family, including direct shell mode, the parent Session, and all descendant subagents.
 
-Guardrail reviews are not auto-approved by `yolo`, `goal`, or the TUI permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with only:
+Guardrail reviews are not auto-approved by `yolo`, `goal`, or the TUI permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
 
 - `Approve once`
+- `Always`
 - `Reject`
 
-Standard guardrail reviews do not expose a persistent approval option.
+`Always` is not a durable permission grant. It reuses approval only in the current Location-service/process lifetime for the exact root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. Each action is freshly evaluated first; a deny, a changed match, or a non-review result cannot reuse it. `once` is never reusable, and descendants share the root-family key.
 
 ### Runtime configuration
 
@@ -94,7 +97,7 @@ Standard guardrail reviews do not expose a persistent approval option.
 
 Defaults are 8 running shells, 8 running subagents, and 16 pending reviews per root Session family. Reservations release after success, failure, cancellation, or interruption.
 
-Setting `guardrails.enabled` to `false` disables the guardrail layer. Agent permissions and shell sandbox configuration still apply.
+`guardrails.enabled` configures guardrail-service enablement. Agent permissions and shell sandbox configuration remain independent, and no configuration or approval reply overrides a standard catastrophic deny.
 
 ### Standard policy
 
@@ -107,13 +110,18 @@ The code-owned standard profile:
 
 The matcher is conservative rather than a complete shell-language interpreter. Approval does not make a denied agent permission valid, and a permission approval does not bypass a guardrail review.
 
+Catastrophic standard denies are unoverrideable. For every other action, the first matching custom source layer decides before standard review or allow behavior. A source layer with enabled invalid configuration reviews mutation actions and retains its place in that ordering.
+
 ### Custom guardrails
 
-Custom files are loaded lexicographically from:
+Custom files are direct Markdown children, not a recursive tree:
 
 ```text
-~/.config/ycoding/guardrails/*.md
+<global YCoding config>/guardrails/*.md
+<repository Config.Directory>/guardrails/*.md
 ```
+
+Every discovered repository `Config.Directory` contributes a source layer. The nearest repository directory is evaluated first, then broader repository directories, then the global config directory. The first source layer that matches decides; standard mandatory review and standard allow behavior apply only when no custom layer decides. Within one source layer, rules sort by descending numeric `priority`, then deterministic lexical file path and rule ID.
 
 Each enabled file defines one rule in YAML frontmatter. The Markdown body is operator-facing explanation and is not injected into the model prompt.
 
@@ -143,11 +151,15 @@ Fields:
 | `actions` | yes | Non-empty action pattern list. |
 | `resources` | yes | Non-empty resource pattern list. |
 | `reason` | yes | Operator-facing reason. |
-| `priority` | no | Integer, default `0`. |
+| `priority` | no | Integer, default `0`; higher values sort first within the same source layer. |
 
-Precedence is: standard catastrophic denies, custom denies, standard mandatory reviews, custom reviews, custom allows, then the standard allow fallback. Within a class, higher priority wins, followed by lexical file path and rule order.
+An enabled invalid file is reported in guardrail status. It fails mutation actions closed with a review while preserving the source layer's priority; read-only actions remain available, and a valid matching deny in that layer remains a deny. A valid custom deny cannot weaken a catastrophic standard deny, and neither `once` nor `always` can bypass a deny.
 
 The Session sidebar displays the active profile, custom-rule count, approvals, blocked actions, family counters, and invalid-file count. It does not display raw rule files or command history.
+
+### Guardrail approval notification
+
+The TUI waits 500 ms after a pending guardrail checkpoint. If the review is still pending, it emits **Guardrail approval needed** for the root-family Session ownership/title. The system notification is root-owned and blurred-only, and the `permission` sound plays with normal attention policy. A review resolved before the checkpoint produces no notification episode.
 
 ## Provider usage
 
@@ -157,14 +169,16 @@ The `Provider Usage` command appears in the Session command palette only when at
 
 ```text
 Provider Usage
-Claude  live
-5-hour  ███████░░░ 68% used
-         resets in 2h 17m
-Codex
-Usage unavailable
+Claude Max  live
+Session       #######--- 68% used
+All models    ##-------- 24% used
+Extra usage   $38.00 left
+Codex Pro  app-server
+Weekly        ###------- 31% used
+Spark weekly  #--------- 7% used
 ```
 
-Percentage windows show ten-cell progress bars, reset times, freshness, and source stability. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Unsupported providers are omitted. Unauthorized and failed provider inquiries render `Usage unavailable`.
+Percentage windows show stable ten-character ASCII progress bars, reset times, freshness, and source stability. Claude Pro/Max and ChatGPT Plus/Pro are included in the safe provider label only when the account source reports the tier; YCoding does not infer a tier from missing quota categories. Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, credit, and additional named windows render only when reported. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Unsupported providers are omitted. Unauthorized and failed provider inquiries render `Usage unavailable`.
 
 Unknown values render as `Not reported`; they are never rendered as zero.
 
@@ -211,6 +225,8 @@ GET  /api/session/:sessionID/guardrail
 GET  /api/session/:sessionID/guardrail/request
 POST /api/session/:sessionID/guardrail/request/:requestID/reply
 ```
+
+The reply body uses the public union `once | always | reject`. The three routes are unchanged; only the Reply union and its transient `always` semantics are extended.
 
 Provider usage:
 

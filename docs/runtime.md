@@ -25,15 +25,46 @@ A drain discovers the session's Location when execution starts. There is no clus
 
 ### Steps and provider attempts
 
-One step is one logical LLM call. A normal step has one physical provider attempt. Context-overflow recovery may compact and rebuild the step for one additional attempt.
+One step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Context-overflow recovery completes the old request as a fallback, compacts the context, and rebuilds a new logical request.
+
+The durable provider-request ledger stores identifiers, model and route identity, stable prompt/cache digests, attempt counts, normalized tokens, cost, continuation mode, and invalidation reason. It does not store prompt, message, tool-result, or response text.
 
 The runtime reloads projected history before durable continuation. It does not delegate V2 orchestration to a legacy in-memory prompt loop.
+
+### Helper model traffic
+
+Session titles and goal text are local by default:
+
+- local title generation selects one sanitized line from the first user prompt and makes no provider request;
+- local goal synthesis collapses whitespace without changing the request's meaning and makes no provider request;
+- model-generated title and goal behavior requires explicit `efficiency` modes;
+- `title: "off"` keeps the initial generated Session title;
+- compaction remains model-based.
+
+Model-based helpers resolve the hidden agent's explicit model first, then `efficiency.helper_model`, then the current Session model. Helper provider requests use the same content-free request ledger as normal Session steps.
+
+### Stable tool prefix
+
+The provider sees one fixed `execute` tool definition. Its description explains the restricted JavaScript language and the search-first workflow, but it does not embed the current MCP or plugin tool catalog. Connecting, disconnecting, or refreshing an MCP server therefore does not change the provider-visible `execute` schema or the prompt-cache tool digest.
+
+The live catalog remains available inside CodeMode through `search(...)` and exact runtime tool paths. Direct non-CodeMode tool definition changes still rotate the prompt-cache namespace.
+
+MCP server instruction blocks are sorted by server ID, normalized to LF line endings, stripped of trailing whitespace, and limited to 2,048 UTF-8 bytes per server with an explicit truncation marker. These instructions can still change when server guidance changes, but their ordering and size are deterministic and bounded.
+
+### Provider prompt caching
+
+The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v4`, so requests created under older placement rules do not silently share the same namespace.
+
+Anthropic-compatible requests start with a concrete five-minute policy. The process-local cache runtime tracks provider-reported read and write usage by stable namespace. Two reusable observations within five minutes promote later requests for an extended-TTL-capable model to one hour. Missing telemetry, stale observations, namespace rotation, and unsupported model profiles remain at five minutes. The state is bounded, non-durable, and never required to reconstruct a Session.
+
+Public OpenAI Chat and Responses requests on GPT-5.6 and later use a stable prompt-cache key, explicit breakpoints after stable tools, system, and latest-user prefixes, and request-wide `{ mode: "implicit", ttl: "30m" }` by default under `openai_mode: "auto"`. Reserving one of the four write slots preserves OpenAI's managed latest-message breakpoint so growing tool-result tails remain eligible for rolling reuse. `openai_mode: "explicit"` disables the managed breakpoint and can use four YCoding-managed markers. Older public OpenAI models remain implicit and use opt-in `24h` retention only on supported families. The ChatGPT Codex backend has its own `openai-codex-responses` capability identity and receives the supported stable `prompt_cache_key`, but not public-API `prompt_cache_options`, `prompt_cache_breakpoint`, or `prompt_cache_retention` fields. Compatible gateways and unsupported families also omit GPT-5.6-only fields. Model-based title, goal, and compaction calls use the same policy and observation runtime as normal Session steps.
 
 ### Prompt delivery
 
 - **Steer** inputs promote at the next safe step boundary and require the active drain to continue.
 - **Queue** inputs remain pending until the session would otherwise become idle.
 - Promoting new user input resets the selected agent's step allowance.
+- Durable pending user and synthetic inputs are projected back into the hot transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
 
 ## Autonomy
 
@@ -62,15 +93,18 @@ Guardrails are a root-Session-family safety boundary independent of agent permis
 Current behavior:
 
 - recognized catastrophic shell commands are denied before process creation;
-- recognized high-impact shell and mutation actions create a distinct human review;
+- standard catastrophic denies are unoverrideable; otherwise the first matching custom source layer decides before standard review or allow behavior;
 - guardrail reviews remain reviews in `normal`, `yolo`, and `goal` modes and are not affected by TUI permission auto-approve;
 - direct Session shell, tool shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation use the same service boundary;
 - running shell, running subagent, and pending review caps are shared by the root Session family and release on settlement or interruption;
-- custom rules load from the global YCoding config `guardrails` directory;
-- malformed enabled custom files produce a visible invalid-file count and fail closed with review for mutation actions;
+- custom files are direct `guardrails/*.md` children of the global config directory and every discovered repository `Config.Directory`; nearer repository directories precede broader repositories, which precede the global directory;
+- within one custom source layer, matching rules sort by descending numeric priority and then deterministic lexical file-path/rule-ID order; enabled invalid configuration fails mutation actions closed with review while retaining its source-layer position;
+- replies are `once`, `always`, or `reject`; `always` is process-memory reuse for the root Session family and exact action, ordered rule IDs, ordered resources, and request metadata only after a fresh evaluation still asks;
 - pending reviews rehydrate through the canonical Session guardrail API and live events, including reviews initiated by child Sessions.
 
-The TUI labels this blocker **Session guardrail review** and offers only one-time approval or rejection. Permission approval does not bypass guardrails, and guardrail approval does not widen an agent permission denial.
+`once` is not reusable. A deny or a changed evaluation cannot reuse an `always` approval. The approval set is Location-service/process-memory only, is cleared with the service, and is never durable or global. Descendants share the root-family key.
+
+After a pending-review checkpoint of 500 ms, the TUI emits a root-owned notification titled with the root-family Session ownership and the message **Guardrail approval needed**. The root system notification is blurred-only, uses the `permission` sound, and is suppressed when the review resolves before the checkpoint. Permission approval does not bypass guardrails, and guardrail approval does not widen an agent permission denial.
 
 Operator configuration is documented in [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md).
 
@@ -89,7 +123,7 @@ Current behavior:
 - A child failure may still be reported when it blocks the requested outcome, but not as routine orchestration bookkeeping.
 - Running children receive a status, blocker, and ETA request every ten minutes.
 - The effective permission policy limits which subagents are available.
-- Configured and managed subagents can use shell according to ordered agent permission rules; empty managed-agent rules resolve to safe defaults with shell requiring approval.
+- Configured and managed subagents materialize the Location's registered tool catalog through their ordered permission rules and inherited parent ceiling. Empty managed-agent rules resolve to safe defaults with shell requiring approval; final `subagent` and `subagent_control` denies prevent nested orchestration.
 - Nested subagents are bounded by `experimental.subagent_depth`; the default depth is one.
 - Session restart and TUI rehydration use durable orchestration state rather than requiring the user to open every child chat.
 
@@ -203,7 +237,15 @@ Caching is split into distinct concerns:
 
 ### OpenAI
 
-For GPT-5.6 and later, OpenAI Chat and Responses lowering supports explicit `prompt_cache_options` and `prompt_cache_breakpoint` fields. Pre-5.6 models use the compatible retention field. The two model families are gated because sending the wrong cache fields can be rejected by the provider.
+For GPT-5.6 and later, public OpenAI Chat and Responses lowering supports `prompt_cache_options` and explicit `prompt_cache_breakpoint` fields. Auto mode combines explicit stable-prefix markers with OpenAI's implicit latest-message marker; explicit mode disables the managed marker. Pre-5.6 public models use the compatible retention field. The ChatGPT Codex backend uses key-only implicit caching because it rejects `prompt_cache_options`. Model family and route capability are both gated because sending the wrong cache fields can be rejected by the provider.
+
+### OpenAI Responses continuation
+
+Same-turn OpenAI Responses continuation is process-local and opt-in through effective provider storage. The runtime never turns on `store` to obtain continuation.
+
+A stored response can be reused only when the Session execution, route, model, prompt-cache namespace, system digest, tool digest, and semantic request-options digest all match. The next request sends `previous_response_id` plus only the message suffix after the represented response boundary; current system instructions and tools are always sent again.
+
+Continuation state is cleared when the execution ends, is interrupted, compacts, is deleted, or changes fingerprint. Response IDs are not written to Session history, request diagnostics, or the durable provider-request ledger. If a continued request fails before observable output with an invalid-request error, the runtime clears the response state and retries the same logical request once with full history. A second failure follows the normal provider-error path.
 
 ### Anthropic and compatible routes
 
@@ -215,21 +257,23 @@ The runtime preserves provider-reported cache reads, writes, creation detail, me
 
 The TUI exposes last-step context, provider-cache diagnostics, current model context, and total session cost.
 
+Session diagnostics also expose a bounded request summary: logical requests, transport attempts, helper calls, continued requests, fallbacks, raw token categories, estimated cost, and the latest cache invalidation reason. Only the first eight characters of the latest prompt-cache namespace are exposed; prompt content, full cache keys, system digests, tool digests, and internal provider-request events remain private. When any request lacks catalog pricing, estimated request cost is absent and the TUI renders `Estimated cost unavailable` instead of `$0.00`.
+
 ## Provider quota and credit diagnostics
 
 Provider usage is a read-only Location service separate from Session-local token and cost telemetry.
 
 - OpenRouter uses documented current-key data and optional management-credit data.
 - OpenAI organization usage uses documented usage and cost endpoints when an explicitly marked admin credential is available.
-- Claude subscription state combines live unified response headers with a cached OAuth usage snapshot for cold start and model-specific buckets.
-- Codex and Spark preserve global and named limit lanes from a configured app-server client contract, with a ChatGPT OAuth backend fallback.
+- Claude subscription state combines live unified response headers with a cached OAuth usage snapshot for cold start, session, all-model, model-specific, and extra-usage buckets. Reported Pro/Max type is included in the safe label.
+- Codex and Spark preserve weekly and every additional named limit lane from a configured app-server client contract, with a ChatGPT OAuth backend fallback. Reported Plus/Pro type is included in the safe label.
 - snapshots are cached by provider and credential identity; concurrent refreshes are deduplicated;
 - a failed refresh retains the last valid snapshot as `stale`;
 - provider failures never block Session execution;
 - unknown amounts remain absent and render as `Not reported`, not zero;
 - Protocol and TUI state contain normalized values only, not credential values or provider response bodies.
 
-The Session sidebar shows the active provider first, separates Spark and other named lanes, displays freshness and stability, and uses ten-cell progress bars for reported percentages.
+The Session command palette exposes a **Provider Usage** dialog. It keeps external quota windows separate from the local **YCoding requests** section, shows active provider windows with freshness and stability, separates Spark and other named lanes, and uses stable ten-character ASCII progress bars for reported percentages. Missing windows and account tiers remain unreported rather than becoming zero or being inferred. The command remains available when local request diagnostics exist even if no external quota provider is currently running.
 
 ## Terminal release behavior
 

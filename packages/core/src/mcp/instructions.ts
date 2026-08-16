@@ -14,6 +14,28 @@ const Summary = Schema.Struct({
 })
 type Summary = typeof Summary.Type
 
+export const MAX_SERVER_BYTES = 2048
+const truncationMarker = `\n[truncated to ${MAX_SERVER_BYTES} UTF-8 bytes]`
+const encoder = new TextEncoder()
+
+const normalize = (value: string) => {
+  const normalized = value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .trimEnd()
+  if (encoder.encode(normalized).length <= MAX_SERVER_BYTES) return normalized
+  const budget = MAX_SERVER_BYTES - encoder.encode(truncationMarker).length
+  let bytes = 0
+  let prefix = ""
+  for (const character of normalized) {
+    const size = encoder.encode(character).length
+    if (bytes + size > budget) break
+    bytes += size
+    prefix += character
+  }
+  return prefix.trimEnd() + truncationMarker
+}
+
 const entries = (servers: ReadonlyArray<Summary>) =>
   servers.flatMap((server) => [
     `  <server name="${server.server}">`,
@@ -90,7 +112,7 @@ export const layer = Layer.effect(
                 PermissionV2.evaluate(McpTool.name(tool.server, tool.name), "*", agent.permissions).effect !== "deny",
             )
           })
-          .map((item) => ({ server: item.server, instructions: item.instructions }))
+          .map((item) => ({ server: item.server, instructions: normalize(item.instructions) }))
           .toSorted((a, b) => a.server.localeCompare(b.server))
         return source(visible.length === 0 ? Instructions.removed : visible)
       }),

@@ -55,7 +55,8 @@ export const makeGuardrailGroup = <
           OpenApi.annotations({
             identifier: "v2.session.guardrail.request.reply",
             summary: "Reply to Session guardrail review",
-            description: "Approve once or reject a pending review owned by the Session root family.",
+            description:
+              "Approve once, grant Always approval for exact matching asks and metadata in this root Session family and current Location process, or reject. Always approval is neither durable nor global.",
           }),
         ),
     )

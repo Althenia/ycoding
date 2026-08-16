@@ -68,6 +68,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         readonly finish: Extract<LLMEvent, { type: "step-finish" }>["reason"]
         readonly tokens: ReturnType<typeof SessionUsage.tokens>
         readonly reporting: ReturnType<typeof SessionUsage.providerCache>
+        readonly providerState?: Record<string, unknown>
       }
     | undefined
 
@@ -462,6 +463,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
           finish: event.reason,
           tokens: SessionUsage.tokens(event.usage),
           reporting: SessionUsage.providerCache(event.usage),
+          providerState: providerState(event.providerMetadata),
         }
         if (event.reason === "content-filter") {
           providerFailed = true

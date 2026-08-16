@@ -5,9 +5,8 @@ import { optional } from "./schema.js"
 import { ToolContent } from "./llm.js"
 import { Model } from "./model.js"
 import { Prompt } from "./prompt.js"
-import { DateTimeUtcFromMillis, NonNegativeInt, PositiveInt, RelativePath, statics } from "./schema.js"
-import { ascending } from "./identifier.js"
-import { Event } from "./event.js"
+import { DateTimeUtcFromMillis, NonNegativeInt, PositiveInt, RelativePath } from "./schema.js"
+import { ID as SessionMessageID } from "./session-message-id.js"
 import { Shell as ShellSchema } from "./shell.js"
 import { FinishReason } from "./llm.js"
 import { SessionError } from "./session-error.js"
@@ -18,13 +17,7 @@ import { Money } from "./money.js"
 import { Snapshot } from "./snapshot.js"
 import { TokenUsage } from "./token-usage.js"
 
-export const ID = Schema.String.check(Schema.isStartsWith("msg_")).pipe(
-  Schema.brand("Session.Message.ID"),
-  statics((schema) => ({
-    create: () => schema.make("msg_" + ascending()),
-    fromEvent: (eventID: Event.ID) => schema.make(eventID.replace(/^evt_/, "msg_")),
-  })),
-)
+export const ID = SessionMessageID
 export type ID = typeof ID.Type
 
 const Base = {
@@ -36,12 +29,12 @@ const Base = {
 const projectArtifactScopeBrand: string = "ProjectArtifact.ScopeID"
 const projectArtifactVersionBrand: string = "ProjectArtifact.VersionID"
 const projectArtifactIDBrand: string = "ProjectArtifact.ID"
-const ArtifactScopeID = Schema.String.check(
-  Schema.isPattern(/^pas_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/),
-).pipe(Schema.brand(projectArtifactScopeBrand))
-const ArtifactVersionID = Schema.String.check(
-  Schema.isPattern(/^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/),
-).pipe(Schema.brand(projectArtifactVersionBrand))
+const ArtifactScopeID = Schema.String.check(Schema.isPattern(/^pas_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)).pipe(
+  Schema.brand(projectArtifactScopeBrand),
+)
+const ArtifactVersionID = Schema.String.check(Schema.isPattern(/^pav_[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)).pipe(
+  Schema.brand(projectArtifactVersionBrand),
+)
 const ArtifactID = Schema.String.check(
   Schema.isPattern(/^(?!(?:aux|com[1-9]|con|lpt[1-9]|nul|prn)$)[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/),
 ).pipe(Schema.brand(projectArtifactIDBrand))

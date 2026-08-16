@@ -5,6 +5,7 @@ import { Session } from "@ycoding-ai/schema/session"
 import { Money } from "@ycoding-ai/schema/money"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { ModelV2 } from "../model"
+import { OpenAICodex } from "../plugin/provider/openai-codex"
 import type { SessionMessage } from "./message"
 
 export interface CalculateInput {
@@ -33,6 +34,7 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "ai-sdk:@ai-sdk/amazon-bedrock": "bedrock-cache-point",
   "openai-chat": "openai-prefix-cache",
   "openai-responses": "openai-prefix-cache",
+  [OpenAICodex.routeID]: "openai-prefix-cache",
   "openai-compatible-chat": "openai-prefix-cache",
   "openai-compatible-responses": "openai-prefix-cache",
   "azure-openai-chat": "openai-prefix-cache",

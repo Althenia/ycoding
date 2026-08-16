@@ -1,6 +1,8 @@
 export * as SessionRunnerCache from "./cache"
 
-import type { LLMRequest } from "@ycoding-ai/ai"
+import type { CachePolicy, LLMRequest } from "@ycoding-ai/ai"
+import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
+import type { ConfigEfficiency } from "../../config/efficiency"
 import type { PermissionV2 } from "../../permission"
 import { Hash } from "../../util/hash"
 
@@ -16,6 +18,31 @@ export interface PromptCacheNamespaceInput {
   readonly system: LLMRequest["system"]
   readonly tools: LLMRequest["tools"]
 }
+
+export const systemDigest = (system: LLMRequest["system"]): string =>
+  Hash.sha256(
+    canonicalJson(
+      system.map((part) => ({
+        type: part.type,
+        text: part.text,
+        cache: part.cache ? { type: part.cache.type, ttlSeconds: part.cache.ttlSeconds } : undefined,
+      })),
+    ),
+  )
+
+export const toolDigest = (tools: LLMRequest["tools"]): string =>
+  Hash.sha256(
+    canonicalJson(
+      tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        outputSchema: tool.outputSchema,
+        cache: tool.cache ? { type: tool.cache.type, ttlSeconds: tool.cache.ttlSeconds } : undefined,
+        native: tool.native,
+      })),
+    ),
+  )
 
 export const promptCacheNamespace = (input: PromptCacheNamespaceInput): string =>
   Hash.sha256(
@@ -65,10 +92,35 @@ export const providerSessionNamespace = (input: ProviderSessionNamespaceInput): 
     }),
   )
 
+export interface EfficiencySettings {
+  readonly anthropicTtl: "adaptive" | "5m" | "1h"
+  readonly openaiMode: "auto" | "implicit" | "explicit"
+  readonly openaiExtendedRetention: boolean
+}
+
+export const efficiencySettings = (input?: ConfigEfficiency.Info): EfficiencySettings => ({
+  anthropicTtl: input?.prompt_cache?.anthropic_ttl ?? "adaptive",
+  openaiMode: input?.prompt_cache?.openai_mode ?? "auto",
+  openaiExtendedRetention: input?.prompt_cache?.openai_extended_retention ?? false,
+})
+
 export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
   readonly sessionID: string
   readonly routeID: string
+  readonly anthropicTtlSeconds?: 300 | 3600
+  readonly openaiMode?: "auto" | "implicit" | "explicit"
+  readonly openaiExtendedRetention?: boolean
 }
+
+const PUBLIC_OPENAI_CACHE_ROUTES = new Set(["openai-chat", "openai-responses"])
+const ANTHROPIC_CACHE_ROUTES = new Set([
+  "anthropic-messages",
+  "google-vertex-messages",
+  "ai-sdk:@ai-sdk/anthropic",
+  "ai-sdk:@ai-sdk/google-vertex/anthropic",
+  "ai-sdk:@ai-sdk/amazon-bedrock",
+  "bedrock-converse",
+])
 
 export const providerOptions = (input: ProviderOptionsInput) => {
   const promptCacheKey = promptCacheNamespace(input)
@@ -81,10 +133,48 @@ export const providerOptions = (input: ProviderOptionsInput) => {
     input.routeID === "ai-sdk:@openrouter/ai-sdk-provider"
       ? { prompt_cache_key: promptCacheKey, session_id: providerSessionID }
       : { promptCacheKey, sessionID: providerSessionID }
-  return { promptCacheKey, providerOptions: { openai: { promptCacheKey }, openrouter } }
+  const directOpenAI = input.providerID === "openai" && PUBLIC_OPENAI_CACHE_ROUTES.has(input.routeID)
+  const gpt56 = directOpenAI && OpenAIOptions.isGpt56OrLater(input.modelID)
+  const controlledOpenAI =
+    gpt56 &&
+    input.openaiMode !== undefined &&
+    input.openaiMode !== "implicit" &&
+    (input.openaiMode === "auto" || input.openaiMode === "explicit")
+  const openai = {
+    promptCacheKey,
+    ...(controlledOpenAI
+      ? {
+          promptCacheOptions: {
+            mode: input.openaiMode === "explicit" ? ("explicit" as const) : ("implicit" as const),
+            ttl: "30m" as const,
+          },
+        }
+      : directOpenAI &&
+          !gpt56 &&
+          input.openaiExtendedRetention === true &&
+          OpenAIOptions.supportsExtendedPromptCacheRetention(input.modelID)
+        ? { promptCacheRetention: "24h" as const }
+        : {}),
+  }
+  const cache: CachePolicy | undefined = controlledOpenAI
+    ? {
+        tools: true,
+        system: true,
+        messages: input.openaiMode === "auto" ? "latest-user-message" : { tail: 2 },
+      }
+    : input.anthropicTtlSeconds !== undefined && ANTHROPIC_CACHE_ROUTES.has(input.routeID)
+      ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }
+      : undefined
+  return {
+    promptCacheKey,
+    systemDigest: systemDigest(input.system),
+    toolDigest: toolDigest(input.tools),
+    providerOptions: { openai, openrouter },
+    ...(cache === undefined ? {} : { cache }),
+  }
 }
 
-function canonicalJson(value: unknown): string {
+export function canonicalJson(value: unknown): string {
   const encode = (current: unknown, ancestors: ReadonlySet<object>): string | undefined => {
     if (current === undefined) return undefined
     if (current === null) return "null"

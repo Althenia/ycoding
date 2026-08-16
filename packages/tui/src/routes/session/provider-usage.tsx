@@ -1,4 +1,4 @@
-import type { ProviderUsageListOutput, SessionInfo } from "@ycoding-ai/client"
+import type { ProviderUsageListOutput, SessionCacheDiagnostics, SessionInfo } from "@ycoding-ai/client"
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type Accessor } from "solid-js"
 import { useClient } from "../../context/client"
 import { useData } from "../../context/data"
@@ -14,6 +14,10 @@ import {
   stabilityLabel,
   usageSeverity,
 } from "../../util/provider-usage"
+import {
+  formatProviderRequestDiagnostics,
+  type ProviderRequestDiagnostics,
+} from "../../util/cache-diagnostics"
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 
@@ -66,8 +70,9 @@ export async function loadProviderUsageSnapshots(
 export function providerUsageCommandDefinition(
   snapshots: readonly ProviderUsageSnapshot[],
   run: () => void,
+  hasLocalDiagnostics = false,
 ): KeymapCommand | undefined {
-  if (visibleProviderSnapshots(snapshots).length === 0) return undefined
+  if (visibleProviderSnapshots(snapshots).length === 0 && !hasLocalDiagnostics) return undefined
   return {
     id: "session.provider-usage",
     title: "Provider Usage",
@@ -77,6 +82,11 @@ export function providerUsageCommandDefinition(
     run,
   }
 }
+
+type DiagnosticsWithRequests = SessionCacheDiagnostics & { readonly requests?: ProviderRequestDiagnostics }
+
+const providerRequestDiagnostics = (diagnostics: SessionCacheDiagnostics | null | undefined) =>
+  (diagnostics as DiagnosticsWithRequests | null | undefined)?.requests
 
 export function ProviderUsageCommand() {
   const route = useRouteData("session")
@@ -96,6 +106,9 @@ export function ProviderUsageCommand() {
       (sessionID) => data.session.status(sessionID),
     ),
   )
+  const diagnostics = createMemo(() => data.session.diagnostics.get(route.sessionID))
+
+  onMount(() => void data.session.diagnostics.sync(route.sessionID).catch(() => undefined))
 
   createEffect(
     on(
@@ -124,8 +137,10 @@ export function ProviderUsageCommand() {
     providerUsageCommandDefinition(snapshots(), () => {
       const ids = providerIDs()
       const initial = snapshots()
-      dialog.replace(() => <ProviderUsageDialog providerIDs={ids} initialSnapshots={initial} />)
-    }),
+      dialog.replace(() => (
+        <ProviderUsageDialog sessionID={route.sessionID} providerIDs={ids} initialSnapshots={initial} />
+      ))
+    }, providerRequestDiagnostics(diagnostics()) !== undefined),
   )
 
   Keymap.createLayer(() => ({
@@ -137,16 +152,20 @@ export function ProviderUsageCommand() {
 }
 
 export function ProviderUsageDialog(props: {
+  sessionID: string
   providerIDs: readonly string[]
   initialSnapshots: readonly ProviderUsageSnapshot[]
 }) {
   const client = useClient()
+  const data = useData()
   const dialog = useDialog()
   const guard = createProviderUsageGenerationGuard()
   const [snapshots, setSnapshots] = createSignal(visibleProviderSnapshots(props.initialSnapshots))
   const [refreshing, setRefreshing] = createSignal(true)
+  const diagnostics = createMemo(() => data.session.diagnostics.get(props.sessionID))
 
   onMount(() => {
+    void data.session.diagnostics.sync(props.sessionID).catch(() => undefined)
     const token = guard.next()
     void loadProviderUsageSnapshots(props.providerIDs, async (providerID) => {
       const result = await client.api.providerUsage.get({ providerID, refresh: true })
@@ -164,12 +183,18 @@ export function ProviderUsageDialog(props: {
   onCleanup(() => guard.invalidate())
 
   return (
-    <ProviderUsageDialogContent snapshots={snapshots} refreshing={refreshing} onClose={() => dialog.clear()} />
+    <ProviderUsageDialogContent
+      snapshots={snapshots}
+      diagnostics={diagnostics}
+      refreshing={refreshing}
+      onClose={() => dialog.clear()}
+    />
   )
 }
 
 export function ProviderUsageDialogContent(props: {
   snapshots: Accessor<readonly ProviderUsageSnapshot[]>
+  diagnostics?: Accessor<SessionCacheDiagnostics | null | undefined>
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
   onClose?: () => void
@@ -177,6 +202,10 @@ export function ProviderUsageDialogContent(props: {
   const { themeV2 } = useTheme().contextual("elevated")
   const now = createMemo(() => props.now?.() ?? Date.now())
   const snapshots = createMemo(() => visibleProviderSnapshots(props.snapshots()))
+  const local = createMemo(() => {
+    const requests = providerRequestDiagnostics(props.diagnostics?.())
+    return requests ? formatProviderRequestDiagnostics(requests) : undefined
+  })
 
   const statusColor = (status: ProviderUsageSnapshot["status"]) => {
     if (status === "unauthorized" || status === "stale") return themeV2.text.feedback.warning.default
@@ -192,7 +221,7 @@ export function ProviderUsageDialogContent(props: {
   }
 
   return (
-    <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={1}>
+    <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={0}>
       <box flexDirection="row" justifyContent="space-between">
         <box flexDirection="row" gap={1}>
           <text fg={themeV2.text.default}>
@@ -206,9 +235,43 @@ export function ProviderUsageDialogContent(props: {
           esc
         </text>
       </box>
+      <Show when={local()}>
+        {(value) => (
+          <box gap={0}>
+            <text fg={themeV2.text.default}>
+              <b>YCoding requests</b>
+            </text>
+            <text fg={themeV2.text.subdued}>
+              {`Logical requests ${value().logical} · Transport attempts ${value().physical}`}
+            </text>
+            <text fg={themeV2.text.subdued}>
+              {`Helpers ${value().helpers} · Continued ${value().continued} · Fallbacks ${value().fallback}`}
+            </text>
+            <text fg={themeV2.text.subdued}>
+              {`Raw input ${value().uncachedInput} · Raw output ${value().output}`}
+            </text>
+            <text fg={themeV2.text.subdued}>
+              {`Raw cache read ${value().cacheRead} · write ${value().cacheWrite}`}
+            </text>
+            <text fg={themeV2.text.subdued}>
+              {`Raw reasoning ${value().reasoning} · Estimated cost ${value().estimatedCost}`}
+            </text>
+            <Show when={value().latestInvalidation || value().latestNamespace}>
+              <text fg={themeV2.text.subdued}>
+                {[
+                  value().latestInvalidation ? `Last invalidation ${value().latestInvalidation}` : undefined,
+                  value().latestNamespace ? `Namespace ${value().latestNamespace}` : undefined,
+                ]
+                  .filter((item): item is string => item !== undefined)
+                  .join(" · ")}
+              </text>
+            </Show>
+          </box>
+        )}
+      </Show>
       <For each={snapshots()}>
         {(snapshot) => (
-          <box marginTop={1} gap={1}>
+          <box marginTop={1} gap={0}>
             <box flexDirection="row" gap={1}>
               <text fg={themeV2.text.default}>
                 <b>{snapshot.label}</b>

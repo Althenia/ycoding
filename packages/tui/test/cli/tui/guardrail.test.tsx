@@ -2,8 +2,14 @@
 import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import type { GuardrailStatusOutput } from "@ycoding-ai/client"
+import { ClientProvider } from "../../../src/context/client"
+import { ThemeProvider } from "../../../src/context/theme"
+import { Keymap } from "../../../src/context/keymap"
+import { ConfigProvider } from "../../../src/config"
+import { ToastProvider } from "../../../src/ui/toast"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { createApi, createFetch } from "../../fixture/tui-client"
 
 const module = await import("../../../src/feature-plugins/sidebar/guardrails")
 const prompt = await import("../../../src/routes/session/guardrail")
@@ -33,7 +39,7 @@ test("formats guardrail profile and family counters", () => {
   })
 })
 
-test("attributes child reviews to their root family and exposes no persistent approval", async () => {
+test("attributes child reviews to their root family and exposes explicit guardrail replies", async () => {
   const request = {
     id: "grq_review",
     rootSessionID: "ses_root",
@@ -54,8 +60,52 @@ test("attributes child reviews to their root family and exposes no persistent ap
   })
   const source = await Bun.file(new URL("../../../src/routes/session/guardrail.tsx", import.meta.url)).text()
   expect(source).toContain('kind="guardrail"')
-  expect(source).toContain('options={{ once: "Approve once", reject: "Reject" }}')
+  expect(source).toContain('options={{ once: "Approve once", always: "Always", reject: "Reject" }}')
+  expect(source).toContain('const reply = (value: "once" | "always" | "reject") => {')
   expect(source).not.toContain("Always allow")
+})
+
+test("renders the exact guardrail choices", async () => {
+  const transport = createFetch()
+  const request = {
+    id: "grq_review",
+    rootSessionID: "ses_root",
+    sessionID: "ses_child",
+    action: "shell",
+    resources: ["git reset --hard"],
+    ruleIDs: ["standard.review.git-destructive"],
+    reason: "Destructive Git operation",
+    standard: true,
+  }
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <ToastProvider>
+                  <prompt.GuardrailPrompt request={request} />
+                </ToastProvider>
+              </ThemeProvider>
+            </ClientProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 96, height: 18, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Session guardrail review"))
+
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Approve once")
+    expect(frame).toContain("Always")
+    expect(frame).toContain("Reject")
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("renders guardrail status without raw rules or command resources", async () => {
@@ -76,11 +126,12 @@ test("renders guardrail status without raw rules or command resources", async ()
     { width: 48, height: 14 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Guardrails"))
+  await app.waitForFrame((frame) => frame.includes("GUARDRAILS"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Guardrails")
+    // Rail sections render their name in the design's uppercase section style.
+    expect(frame).toContain("GUARDRAILS")
     expect(frame).toContain("Standard + 2 custom")
     expect(frame).toContain("3 approvals · 1 blocked")
     expect(frame).toContain("Shells 2 / 8")

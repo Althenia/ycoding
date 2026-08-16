@@ -5,7 +5,7 @@ import { Endpoint, type EndpointPatch } from "./endpoint"
 import { RequestExecutor } from "./executor"
 import { Framing } from "./framing"
 import { HttpTransport } from "./transport"
-import type { Transport, TransportRuntime } from "./transport"
+import type { Transport, TransportAttempt, TransportRuntime } from "./transport"
 import { WebSocketExecutor } from "./transport"
 import type { Protocol } from "./protocol"
 import { applyCachePolicy } from "../cache-policy"
@@ -446,16 +446,24 @@ export const streamRequest = (request: LLMRequest) =>
     }),
   )
 
-export const layer: Layer.Layer<Service, never, RequestExecutor.Service> = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const stream = streamRequestWith({
-      http: yield* RequestExecutor.Service,
-      webSocket: Option.getOrUndefined(yield* Effect.serviceOption(WebSocketExecutor.Service)),
-    })
-    return Service.of({ prepare: prepareWith as Interface["prepare"], stream, generate: generateWith(stream) })
-  }),
-)
+export interface LayerOptions {
+  readonly observeAttempt?: TransportAttempt.Observer
+}
+
+export const configured = (options?: LayerOptions): Layer.Layer<Service, never, RequestExecutor.Service> =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const stream = streamRequestWith({
+        http: yield* RequestExecutor.Service,
+        webSocket: Option.getOrUndefined(yield* Effect.serviceOption(WebSocketExecutor.Service)),
+        observeAttempt: options?.observeAttempt,
+      })
+      return Service.of({ prepare: prepareWith as Interface["prepare"], stream, generate: generateWith(stream) })
+    }),
+  )
+
+export const layer = configured()
 
 export const Route = { make } as const
 
@@ -465,4 +473,5 @@ export const LLMClient = {
   prepare,
   stream,
   generate,
+  configured,
 } as const

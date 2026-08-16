@@ -17,7 +17,7 @@ export function progressBar(percent: number | undefined, cells = 10) {
   if (percent === undefined || !Number.isFinite(percent)) return undefined
   const normalized = Math.min(100, Math.max(0, percent))
   const filled = Math.min(cells, Math.max(0, Math.round((normalized / 100) * cells)))
-  return `${"█".repeat(filled)}${"░".repeat(cells - filled)}`
+  return `${"#".repeat(filled)}${"-".repeat(cells - filled)}`
 }
 
 export function usageSeverity(percent: number | undefined): UsageSeverity {

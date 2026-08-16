@@ -144,6 +144,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
       "session.created": () => Effect.void,
       "session.usage.updated": () => Effect.void,
       "session.usage.recorded": () => Effect.void,
+      "session.provider.request.recorded": () => Effect.void,
       "session.agent.selected": (event) => {
         return adapter.appendMessage(
           SessionMessage.AgentSelected.make({

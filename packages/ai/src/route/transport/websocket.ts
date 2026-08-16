@@ -3,6 +3,7 @@ import { Headers } from "effect/unstable/http"
 import { LLMError, TransportReason } from "../../schema"
 import * as HttpTransport from "./http"
 import type { Transport } from "./index"
+import { TransportAttempt } from "./attempt"
 
 export interface WebSocketRequest {
   readonly url: string
@@ -237,7 +238,7 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
         message: input.encodeMessage(yield* input.toMessage(parts.jsonBody)),
       }
     }),
-  frames: (prepared, _request, runtime) => {
+  frames: (prepared, request, runtime) => {
     const webSocket = runtime.webSocket
     if (!webSocket) {
       return Stream.fail(
@@ -251,7 +252,16 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
     return Stream.unwrap(
       Effect.gen(function* () {
         const connection = yield* Effect.acquireRelease(
-          webSocket.open({ url: prepared.url, headers: prepared.headers }),
+          TransportAttempt.track(
+            {
+              requestID: request.id ?? "request",
+              routeID: request.model.route.id,
+              transport: "websocket-json",
+              attempt: 1,
+              observer: runtime.observeAttempt,
+            },
+            webSocket.open({ url: prepared.url, headers: prepared.headers }),
+          ),
           (connection) => connection.close,
         )
         yield* connection.sendText(prepared.message)

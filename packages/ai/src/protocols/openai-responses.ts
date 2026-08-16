@@ -154,6 +154,7 @@ const OpenAIResponsesCoreFields = {
   tools: optionalArray(OpenAIResponsesTools),
   tool_choice: Schema.optional(OpenAIResponsesToolChoice),
   store: Schema.optional(Schema.Boolean),
+  previous_response_id: Schema.optional(Schema.String),
   service_tier: Schema.optional(OpenAIOptions.OpenAIServiceTier),
   prompt_cache_key: Schema.optional(Schema.String),
   // Pre-GPT-5.6 only — rejected with a 400 by GPT-5.6+ models.
@@ -455,8 +456,11 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
         ]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
+  const previousResponseId = store === true ? OpenAIOptions.previousResponseId(request) : undefined
+  const continuationInputStart =
+    previousResponseId === undefined ? 0 : Math.min(OpenAIOptions.continuationInputStart(request) ?? 0, request.messages.length)
 
-  for (const message of request.messages) {
+  for (const message of request.messages.slice(continuationInputStart)) {
     if (message.role === "system") {
       const part = yield* ProviderShared.wrappedSystemUpdate("OpenAI Responses", message)
       const previous = input.at(-1)
@@ -572,6 +576,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 
 const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (request: LLMRequest) {
   const store = OpenAIOptions.store(request)
+  const previousResponseId = store === true ? OpenAIOptions.previousResponseId(request) : undefined
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const effort = OpenAIOptions.reasoningEffort(request)
   const summary = OpenAIOptions.reasoningSummary(request)
@@ -579,15 +584,20 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
-  // `prompt_cache_retention` (pre-5.6) and `prompt_cache_options` (5.6+) are
-  // mutually exclusive on the wire — sending either to the wrong family
-  // returns a 400 — so both are gated on the same family check here.
+  // `prompt_cache_retention` and `prompt_cache_options` are model-gated wire
+  // fields. Unsupported fields return a 400, so 24h retention is restricted to
+  // OpenAI's published allowlist while in-memory retention keeps legacy behavior.
   const isGpt56 = OpenAIOptions.isGpt56OrLater(request.model.id)
-  const retention = !isGpt56 ? OpenAIOptions.promptCacheRetention(request) : undefined
+  const configuredRetention = !isGpt56 ? OpenAIOptions.promptCacheRetention(request) : undefined
+  const retention =
+    configuredRetention === "24h" && !OpenAIOptions.supportsExtendedPromptCacheRetention(request.model.id)
+      ? undefined
+      : configuredRetention
   const cacheOptions = isGpt56 ? OpenAIOptions.promptCacheOptions(request) : undefined
   return {
     ...(instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
+    ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(retention ? { prompt_cache_retention: retention } : {}),
     ...(cacheOptions ? { prompt_cache_options: cacheOptions } : {}),

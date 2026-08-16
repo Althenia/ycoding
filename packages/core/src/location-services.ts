@@ -37,9 +37,11 @@ import { SessionCompaction } from "./session/compaction"
 import { SessionContext } from "./session/context"
 import { SessionGoal } from "./session/goal"
 import { SessionGuardrail } from "./session/guardrail"
+import { SessionHelperPolicy } from "./session/helper-policy"
 import { SessionGenerateNode } from "./session/generate-node"
 import { InstructionEntry } from "./session/instruction-entry"
 import { SessionInstructions } from "./session/instructions"
+import { SessionContinuation } from "./session/runner/continuation"
 import { SessionRunnerLLM } from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SessionTitle } from "./session/title"
@@ -98,12 +100,14 @@ const locationServiceNodes = [
   McpTool.node,
   SessionInstructions.node,
   SessionRunnerModel.node,
+  SessionHelperPolicy.node,
   SessionCompaction.node,
   SessionContext.node,
   SessionGoal.node,
   SessionTitle.node,
   SessionTodo.node,
   Snapshot.node,
+  SessionContinuation.node,
   SessionRunnerLLM.node,
   Vcs.node,
   // Start repository watches only after boot-critical filesystem and Git work.

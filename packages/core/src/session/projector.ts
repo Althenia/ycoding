@@ -18,6 +18,7 @@ import { InstructionState } from "./instruction-state"
 import {
   SessionPendingTable,
   SessionMessageTable,
+  SessionProviderRequestTable,
   SessionTable,
   SessionTaskNotificationTable,
   SessionTaskTable,
@@ -34,6 +35,7 @@ type MessageEvent = Exclude<
   | typeof SessionEvent.Deleted.Type
   | typeof SessionEvent.InstructionsUpdated.Type
   | typeof SessionEvent.Task.Updated.Type
+  | typeof SessionEvent.ProviderRequestRecorded.Type
 >
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Info)
@@ -59,12 +61,7 @@ const forkTitle = (value: string) => {
   return `${value} (fork #1)`
 }
 
-function applyUsage(
-  db: DatabaseService,
-  sessionID: SessionSchema.ID,
-  value: Usage,
-  sign = 1,
-) {
+function applyUsage(db: DatabaseService, sessionID: SessionSchema.ID, value: Usage, sign = 1) {
   return db
     .update(SessionTable)
     .set({
@@ -591,9 +588,7 @@ const layer = Layer.effectDiscard(
           .values({
             id: event.data.sessionID,
             project_id: event.data.projectID,
-            workspace_id: event.data.location.workspaceID
-              ? WorkspaceV2.ID.make(event.data.location.workspaceID)
-              : null,
+            workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
             parent_id: event.data.parentID,
             directory: event.data.location.directory,
             path: event.data.subpath,
@@ -676,6 +671,32 @@ const layer = Layer.effectDiscard(
         .pipe(Effect.orDie),
     )
     yield* events.project(SessionEvent.UsageRecorded, (event) => applyUsage(db, event.data.sessionID, event.data))
+    yield* events.project(SessionEvent.ProviderRequestRecorded, (event) =>
+      db
+        .insert(SessionProviderRequestTable)
+        .values({
+          id: event.data.id,
+          session_id: event.data.sessionID,
+          input_id: event.data.inputID,
+          source: event.data.source,
+          agent: event.data.agent,
+          model: event.data.model,
+          route_id: event.data.routeID,
+          prompt_cache_key: event.data.promptCacheKey,
+          system_digest: event.data.systemDigest,
+          tool_digest: event.data.toolDigest,
+          request: event.data.request,
+          attempts: event.data.attempts,
+          invalidation: event.data.invalidation,
+          continuation: event.data.continuation,
+          cost: event.data.cost,
+          tokens: event.data.tokens,
+          time_created: DateTime.toEpochMillis(event.data.time),
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie),
+    )
     yield* events.project(SessionEvent.Forked, (event) => projectFork(db, event))
     yield* events.project(SessionEvent.InputPromoted, (event) =>
       Effect.gen(function* () {

@@ -2902,6 +2902,78 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
   }
 })
 
+test("restores a pending steer after leaving and reopening a child session", async () => {
+  const events = createEventStream()
+  const childID = "session-child"
+  const messageID = "msg-child-steer"
+  const pending = {
+    id: messageID,
+    sessionID: childID,
+    admittedSeq: 0,
+    timeCreated: 100,
+    type: "user" as const,
+    data: { text: "Keep this steer visible" },
+    delivery: "steer" as const,
+  }
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${childID}/pending`) return json({ data: [pending] })
+    if (url.pathname === `/api/session/${childID}/message`) return json({ data: [], cursor: {} })
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    emitEvent(events, {
+      id: "evt-child-steer",
+      created: 100,
+      type: "session.input.admitted",
+      durable: durable(childID),
+      data: {
+        sessionID: childID,
+        inputID: messageID,
+        input: { type: "user", data: pending.data, delivery: "steer" },
+      },
+    })
+    await wait(() => sync.session.message.get(childID, messageID) !== undefined)
+    sync.session.message.evict(childID)
+    expect(sync.session.message.list(childID)).toEqual([])
+
+    sync.session.pending.invalidate(childID)
+    await Promise.all([sync.session.pending.sync(childID), sync.session.message.sync(childID)])
+
+    expect(sync.session.input.list(childID)).toEqual([messageID])
+    expect(sync.session.message.get(childID, messageID)).toMatchObject({
+      id: messageID,
+      type: "user",
+      text: "Keep this steer visible",
+    })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("skips initial instruction state and projects later updates with their message ID", async () => {
   const events = createEventStream()
   const calls = createFetch(undefined, events)

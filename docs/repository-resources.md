@@ -31,6 +31,8 @@ The same directory structure is supported globally under the YCoding configurati
 │   └── project.ts
 ├── plugins/
 │   └── policy.js
+├── guardrails/
+│   └── production.md
 └── themes/
     └── company-dark.json
 ```
@@ -43,6 +45,7 @@ Supported project resource domains are:
 - skills;
 - runtime plugins and hooks;
 - terminal themes.
+- custom guardrail rule files.
 
 There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
 
@@ -69,8 +72,29 @@ Resource-specific rules:
 | Skills   | Root `*.md` and recursive `**/SKILL.md` under each skill source.                      |
 | Plugins  | Direct children only: `plugin/*.{ts,js}` and `plugins/*.{ts,js}`.                     |
 | Themes   | Direct `themes/*.json` files.                                                         |
+| Guardrails | Direct children only: `guardrails/*.md` under the global config directory and every discovered repository `Config.Directory`. |
 
 A resource file must parse and validate successfully. Invalid files are skipped rather than partially loaded.
+
+## Guardrail custom-file location
+
+`guardrails/*.md` contains direct-child custom rule files under the global YCoding config directory and every discovered repository `Config.Directory`. Nested directories are not scanned. Repository source layers evaluate from the nearest directory to broader ancestors, followed by the global directory. Within one source layer, rules sort by descending numeric priority and then deterministic lexical file path and rule ID.
+
+Each enabled file is one YAML-frontmatter rule with an operator-facing Markdown explanation body. The fields are `id` (non-empty string), `enabled` (boolean, default `true`), `decision` (`allow` \| `ask` \| `deny`), non-empty `actions` and `resources` pattern arrays, `reason` (non-empty string), and `priority` (integer, default `0`). The first matching custom source layer decides after any catastrophic standard deny and before standard review or allow behavior. Enabled invalid configuration fails mutation actions closed with review while preserving its source-layer position. See [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md#custom-guardrails) for reply and notification behavior.
+
+## Custom-file contract index
+
+The detailed sections below are authoritative. This index makes scope, recursion, ID derivation, body handling, and omitted-field behavior explicit in one place. `unset` means the field is optional; it does not imply a default that is not verified by a runtime consumer.
+
+| Resource | Global and repository paths | Recursion / ID | Body and fields | Merge, defaults, and remarks |
+| --- | --- | --- | --- | --- |
+| Agents | `<global config>/agent/**/*.md`, `<global config>/agents/**/*.md`; `.ycoding/agent/**/*.md`, `.ycoding/agents/**/*.md` | Recursive. ID is the path below `agent` or `agents` without `.md`. | Markdown body is `system`. Frontmatter: `model`, `request.headers`, `request.body`, `description`, `mode` (`subagent` \| `primary` \| `all`), `hidden`, `color`, `steps`, `disabled`, `permissions`. | Same ID updates the earlier or built-in definition; request objects merge and permission rules append. Every frontmatter field is unset when omitted; the body is optional. |
+| Commands | `<global config>/command/**/*.md`, `<global config>/commands/**/*.md`; `.ycoding/command/**/*.md`, `.ycoding/commands/**/*.md` | Recursive. Name is the path below `command` or `commands` without `.md`. | Markdown body is required `template`. Frontmatter: `description`, `agent`, `model`, `subtask`. | Configured or Markdown command with the same name wins over an MCP prompt. Every frontmatter field is unset when omitted. |
+| Skills | `<global config>/skill` and `skills`; ancestor `.ycoding/skill` and `skills`; compatible `.claude/skills`, `.agents/skills`; configured local/HTTP(S) sources | Direct root `*.md` or recursive `**/SKILL.md`. Root-file ID is filename; `SKILL.md` ID is its directory. | Markdown is the skill content. Frontmatter: `name`, `description`, `slash`, `metadata`; recognized metadata includes `ycoding/slash`, `ycoding/autoinvoke`, and conflict lists. | `name` defaults to the ID. Other fields are unset when omitted. Compatibility roots contribute skills only and are re-read on demand. |
+| Plugins | `<global config>/plugin/*.{ts,js}`, `<global config>/plugins/*.{ts,js}`; equivalent `.ycoding` paths | Direct children only; nested files are not auto-discovered. Plugin identity is supplied by its exported plugin definition. | TypeScript or JavaScript module; options come from JSON `{ package, options }`. | JSON directives run after auto-discovered files and can remove exact, `*`, or `<prefix>.*` IDs. There is no Markdown body or frontmatter format. |
+| Themes | `<global config>/themes/*.json`; `.ycoding/themes/*.json` | Direct children only. ID is filename without `.json`. | Theme JSON shape is owned by `packages/ui/src/theme/theme.schema.json`. | Global, broad ancestor, then nearer project files load in order; later equal IDs replace earlier files. |
+| Ambient instructions | `<global config>/AGENTS.md`; project-root-to-current-directory `AGENTS.md` files | Direct `AGENTS.md` file at each discovered level; no recursive filename glob. There is no derived instruction ID exposed as a resource name. | Whole file is instruction content, truncated per `instruction_max_bytes`. | Broader context precedes narrower context. Top-level JSON `instructions` is Schema-accepted but is not a current discovery source. |
+| Guardrails | `<global config>/guardrails/*.md`; each discovered repository `Config.Directory` `/guardrails/*.md` | Direct children only; one file is one rule and its `id` comes from frontmatter. | Body is operator-facing explanation. Frontmatter is `id`, `enabled`, `decision` (`allow` \| `ask` \| `deny`), `actions`, `resources`, `reason`, `priority`. | `enabled` defaults to `true`; `priority` defaults to `0`. Nearest repository layer, then broader repository, then global. See the dedicated guardrail document for reply/reuse behavior. |
 
 ## Agents
 

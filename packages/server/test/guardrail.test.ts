@@ -65,7 +65,7 @@ test("guardrail handlers preserve family ownership and normalized output", async
 
   expect(await Effect.runPromise(guardrailStatus(service, childID))).toEqual(status)
   expect(await Effect.runPromise(guardrailRequests(service, parentID))).toEqual([request])
-  await Effect.runPromise(replyGuardrail(service, { sessionID: parentID, requestID, reply: "once" }))
+  await Effect.runPromise(replyGuardrail(service, { sessionID: parentID, requestID, reply: "always" }))
 
   await expect(
     Effect.runPromise(replyGuardrail(service, { sessionID: unrelatedID, requestID, reply: "reject" })),
@@ -73,7 +73,7 @@ test("guardrail handlers preserve family ownership and normalized output", async
   expect(calls).toEqual([
     ["status", childID],
     ["list", parentID],
-    ["reply", { sessionID: parentID, requestID, reply: "once" }],
+    ["reply", { sessionID: parentID, requestID, reply: "always" }],
     ["reply", { sessionID: unrelatedID, requestID, reply: "reject" }],
   ])
   expect(GuardrailHandler).toBeDefined()

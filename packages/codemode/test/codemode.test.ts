@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { Cause, Effect, Schema } from "effect"
-import { CodeMode, Tool, toolError } from "../src/index.js"
+import { CodeMode, DiscoveryPrompt, Tool, toolError } from "../src/index.js"
 
 const run = (tool: Tool.Definition<never>) =>
   Effect.runPromise(CodeMode.make({ tools: { host: { call: tool } } }).execute("return await tools.host.call({})"))
+
+test("provider execute prompt is fixed and search-first", () => {
+  expect(DiscoveryPrompt.EXECUTE_DESCRIPTION).toContain("search({ query:")
+  expect(DiscoveryPrompt.EXECUTE_DESCRIPTION).toContain(
+    "Catalog contents may change without changing this tool definition",
+  )
+  expect(DiscoveryPrompt.EXECUTE_DESCRIPTION).not.toContain("## Available tools")
+})
 
 class UnsafeHostError extends Schema.TaggedErrorClass<UnsafeHostError>()("UnsafeHostError", {
   reason: Schema.String,

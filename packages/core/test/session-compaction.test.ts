@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { LLMClient, LLMEvent, Model, SystemPart, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { Config } from "@ycoding-ai/core/config"
+import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
@@ -9,10 +10,13 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
+import { SessionHelperPolicy, localGoal, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
+import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -29,6 +33,11 @@ import { testEffect } from "./lib/effect"
 let requests: LLMRequest[] = []
 const model = Model.make({
   id: "summary-model",
+  provider: "test",
+  route: OpenAIChat.route.with({ limits: { context: 10_000, output: 1_000 } }),
+})
+const helperModel = Model.make({
+  id: "helper-summary-model",
   provider: "test",
   route: OpenAIChat.route.with({ limits: { context: 10_000, output: 1_000 } }),
 })
@@ -67,17 +76,66 @@ const client = Layer.mock(LLMClient.Service)({
   },
   generate: () => Effect.die("unused"),
 })
-const config = Layer.mock(Config.Service)({ entries: () => Effect.succeed([]) })
+let anthropicTtl: NonNullable<ConfigEfficiency.PromptCache["anthropic_ttl"]> = "adaptive"
+const config = Layer.mock(Config.Service)({
+  entries: () =>
+    Effect.succeed([
+      new Config.Document({
+        type: "document",
+        info: new Config.Info({
+          efficiency: new ConfigEfficiency.Info({
+            prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: anthropicTtl }),
+          }),
+        }),
+      }),
+    ]),
+})
+const cachePolicies: SessionCacheRuntime.PolicyInput[] = []
+const cacheObservations: SessionCacheRuntime.Observation[] = []
+const cacheRuntime = Layer.succeed(
+  SessionCacheRuntime.Service,
+  SessionCacheRuntime.Service.of({
+    policy: (input) =>
+      Effect.sync(() => {
+        cachePolicies.push(input)
+        return { ttlSeconds: 300 as const, promoted: false }
+      }),
+    observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
+  }),
+)
 const models = Layer.mock(SessionRunnerModel.Service)({
   resolve: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
 })
+let helperCalls = 0
+const helperPolicy = Layer.succeed(
+  SessionHelperPolicy.Service,
+  SessionHelperPolicy.Service.of({
+    settings: { titleMode: "local", goalMode: "local" },
+    localTitle,
+    localGoal,
+    resolveModel: () => {
+      helperCalls += 1
+      return Effect.succeed(SessionRunnerModel.resolved(helperModel, undefined, cost))
+    },
+  }),
+)
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionCompaction.node]),
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionProviderRequest.node,
+      SessionHelperPolicy.node,
+      SessionCompaction.node,
+    ]),
     [
       [llmClient, client],
       [Config.node, config],
+      [SessionCacheRuntime.node, cacheRuntime],
       [SessionRunnerModel.node, models],
+      [SessionHelperPolicy.node, helperPolicy],
     ],
   ),
 )
@@ -129,6 +187,10 @@ test("compaction prompt requires the checkpoint headings in order", () => {
 it.effect("manual compaction summarizes short context instead of no-op", () =>
   Effect.gen(function* () {
     requests = []
+    cachePolicies.length = 0
+    cacheObservations.length = 0
+    anthropicTtl = "1h"
+    helperCalls = 0
     const db = (yield* Database.Service).db
     const compaction = yield* SessionCompaction.Service
     const events = yield* EventV2.Service
@@ -187,6 +249,14 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(Array.from(yield* Fiber.join(delta)).map((event) => event.data.text)).toEqual(["manual summary"])
 
     expect(requests).toHaveLength(1)
+    expect(helperCalls).toBe(1)
+    expect(String(requests[0]?.model.id)).toBe("helper-summary-model")
+    const providerRequests = yield* SessionProviderRequest.Service
+    const recordedModel = (yield* providerRequests.list(sessionID))[0]?.model
+    expect({ providerID: String(recordedModel?.providerID), id: String(recordedModel?.id) }).toEqual({
+      providerID: "test",
+      id: "helper-summary-model",
+    })
     expect(requests[0]?.http?.headers).toEqual({
       "x-session-affinity": sessionID,
       "X-Session-Id": sessionID,
@@ -207,6 +277,20 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
       tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } },
     })
     expect(yield* autonomy.get(sessionID)).toEqual(goalBefore)
+    expect(cachePolicies).toHaveLength(1)
+    expect(cachePolicies[0]).toMatchObject({
+      modelID: "helper-summary-model",
+      configured: "1h",
+    })
+    expect(requests[0]?.providerOptions?.openai?.promptCacheKey).toBe(cachePolicies[0]?.namespace)
+    expect(cacheObservations).toEqual([
+      {
+        namespace: cachePolicies[0]!.namespace,
+        cacheRead: 3,
+        cacheWrite: 2,
+        eligible: 15,
+      },
+    ])
     expect(
       yield* db
         .select({ type: EventTable.type })
@@ -218,6 +302,7 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     ).toEqual([
       { type: EventV2.versionedType(SessionEvent.Compaction.Started.type, 1) },
       { type: EventV2.versionedType(SessionEvent.UsageRecorded.type, 1) },
+      { type: EventV2.versionedType(SessionEvent.ProviderRequestRecorded.type, 1) },
       { type: EventV2.versionedType(SessionEvent.Compaction.Ended.type, 1) },
     ])
   }),

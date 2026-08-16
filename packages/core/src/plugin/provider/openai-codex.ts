@@ -11,6 +11,7 @@ export * as OpenAICodex from "./openai-codex"
 
 /** ChatGPT-plan requests must target the codex backend instead of the public API. */
 export const baseURL = "https://chatgpt.com/backend-api/codex"
+export const routeID = "openai-codex-responses"
 
 const methodIDs: readonly string[] = ["chatgpt-browser", "chatgpt-headless"]
 

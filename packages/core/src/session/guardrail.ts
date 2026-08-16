@@ -21,7 +21,7 @@ export interface EvaluateInput {
   readonly sessionID: Session.ID
   readonly action: string
   readonly resources: ReadonlyArray<string>
-  readonly metadata?: Readonly<Record<string, unknown>>
+  readonly metadata?: Guardrail.Request["metadata"]
 }
 
 export interface Evaluation {
@@ -81,13 +81,26 @@ interface Pending {
   readonly request: Guardrail.Request
   readonly deferred: Deferred.Deferred<void, DeclinedError>
   readonly review: Reservation
+  readonly approvalKey: string
 }
 
 type LoadResult =
   | { readonly type: "document"; readonly document: ConfigGuardrail.Document }
   | { readonly type: "invalid"; readonly path: string }
 
+interface ApprovalKeyInput {
+  readonly rootSessionID: Session.ID
+  readonly action: string
+  readonly ruleIDs: ReadonlyArray<string>
+  readonly resources: ReadonlyArray<string>
+  readonly metadata?: Guardrail.Request["metadata"]
+}
+
 const noReservation: Reservation = { release: Effect.void }
+
+function approvalKey(input: ApprovalKeyInput) {
+  return JSON.stringify([input.rootSessionID, input.action, input.ruleIDs, input.resources, input.metadata ?? null])
+}
 
 export const layer = Layer.effect(
   Service,
@@ -105,6 +118,7 @@ export const layer = Layer.effect(
       reviews: settings?.max_pending_reviews ?? 16,
     })
     const pending = new Map<Guardrail.RequestID, Pending>()
+    const reusableApprovals = new Set<string>()
     const approvals = new Map<Session.ID, number>()
     const blocked = new Map<Session.ID, number>()
 
@@ -120,6 +134,7 @@ export const layer = Layer.effect(
         Effect.ensuring(
           Effect.sync(() => {
             pending.clear()
+            reusableApprovals.clear()
           }),
         ),
       ),
@@ -134,12 +149,12 @@ export const layer = Layer.effect(
       })
     }
 
-    const documents = Effect.fnUntraced(function* () {
-      const directory = path.join(global.config, "guardrails")
+    const loadDirectory = Effect.fnUntraced(function* (source: string) {
+      const directory = path.join(source, "guardrails")
       const files = yield* fs
         .scan("*.md", { cwd: directory, absolute: true, dot: false, symlink: false })
         .pipe(Effect.catch(() => Effect.succeed([])))
-      const results = yield* Effect.forEach(files.toSorted((left, right) => left.localeCompare(right)), (file) =>
+      const results = yield* Effect.forEach(files.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)), (file) =>
         fs.readFileStringSafe(file).pipe(
           Effect.map((content): LoadResult => {
             if (content === undefined) return { type: "invalid", path: file }
@@ -160,23 +175,32 @@ export const layer = Layer.effect(
       }
     })
 
+    const documents = Effect.fnUntraced(function* () {
+      const repositories = entries
+        .filter((entry): entry is Config.Directory => entry.type === "directory")
+        .filter((entry) => path.resolve(entry.path) !== path.resolve(global.config))
+        .toReversed()
+      return yield* Effect.forEach([...repositories.map((entry) => entry.path), global.config], loadDirectory)
+    })
+
     const evaluate = Effect.fn("SessionGuardrail.evaluate")(function* (input: EvaluateInput) {
       const rootSessionID = yield* root(input.sessionID)
-      if (settings?.enabled === false)
+      if (settings?.enabled === false) {
+        const standard = SessionGuardrailMatch.evaluate({ action: input.action, resources: input.resources })
         return {
           rootSessionID,
-          decision: "allow" as const,
-          ruleIDs: [],
-          standard: false,
+          ...(standard.decision === "deny"
+            ? standard
+            : { decision: "allow" as const, ruleIDs: [], standard: false }),
         }
+      }
       const loaded = yield* documents()
       return {
         rootSessionID,
         ...SessionGuardrailMatch.evaluate({
           action: input.action,
           resources: input.resources,
-          custom: loaded.rules,
-          invalidFiles: loaded.invalidFiles,
+          custom: loaded,
         }),
       }
     })
@@ -208,7 +232,18 @@ export const layer = Layer.effect(
               reason: result.reason ?? "Session guardrail denied this action",
             })
           }
-          if (result.decision === "allow") {
+          if (
+            result.decision === "allow" ||
+            reusableApprovals.has(
+              approvalKey({
+                rootSessionID: result.rootSessionID,
+                action: input.action,
+                ruleIDs: result.ruleIDs,
+                resources: input.resources,
+                metadata: input.metadata,
+              }),
+            )
+          ) {
             const reservation = yield* reserve(result.rootSessionID, input.action)
             yield* events.publish(Guardrail.Event.Decided, {
               rootSessionID: result.rootSessionID,
@@ -221,6 +256,13 @@ export const layer = Layer.effect(
           }
 
           const review = yield* counters.reserve(result.rootSessionID, "review")
+          const reusableApprovalKey = approvalKey({
+            rootSessionID: result.rootSessionID,
+            action: input.action,
+            ruleIDs: result.ruleIDs,
+            resources: input.resources,
+            metadata: input.metadata,
+          })
           const request = new Guardrail.Request({
             id: Guardrail.RequestID.create(),
             rootSessionID: result.rootSessionID,
@@ -230,10 +272,10 @@ export const layer = Layer.effect(
             ruleIDs: [...result.ruleIDs],
             reason: result.reason ?? "Session guardrail review required",
             standard: result.standard,
-            ...(input.metadata === undefined ? {} : { metadata: { ...input.metadata } }),
+            ...(input.metadata === undefined ? {} : { metadata: structuredClone(input.metadata) }),
           })
           const deferred = yield* Deferred.make<void, DeclinedError>()
-          pending.set(request.id, { request, deferred, review })
+          pending.set(request.id, { request, deferred, review, approvalKey: reusableApprovalKey })
           yield* events
             .publish(Guardrail.Event.Asked, request)
             .pipe(
@@ -253,23 +295,36 @@ export const layer = Layer.effect(
     )
 
     const reply = Effect.fn("SessionGuardrail.reply")(function* (input: ReplyInput) {
-      const item = pending.get(input.requestID)
-      if (!item) return yield* new RequestNotFoundError({ requestID: input.requestID })
+      if (!pending.has(input.requestID)) return yield* new RequestNotFoundError({ requestID: input.requestID })
       const rootSessionID = yield* root(input.sessionID)
-      if (rootSessionID !== item.request.rootSessionID)
-        return yield* new RequestNotFoundError({ requestID: input.requestID })
-      yield* events.publish(Guardrail.Event.Replied, {
-        rootSessionID: item.request.rootSessionID,
-        sessionID: item.request.sessionID,
-        requestID: item.request.id,
-        reply: input.reply,
-      })
-      if (input.reply === "reject") {
-        yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
-        return yield* Effect.void
-      }
-      yield* Deferred.succeed(item.deferred, undefined)
-      return yield* Effect.void
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const item = pending.get(input.requestID)
+          if (!item) return yield* new RequestNotFoundError({ requestID: input.requestID })
+          if (rootSessionID !== item.request.rootSessionID)
+            return yield* new RequestNotFoundError({ requestID: input.requestID })
+          pending.delete(input.requestID)
+          yield* events
+            .publish(Guardrail.Event.Replied, {
+              rootSessionID: item.request.rootSessionID,
+              sessionID: item.request.sessionID,
+              requestID: item.request.id,
+              reply: input.reply,
+            })
+            .pipe(
+              Effect.onError(() =>
+                Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id })),
+              ),
+            )
+          if (input.reply === "reject") {
+            yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
+            return yield* Effect.void
+          }
+          if (input.reply === "always") reusableApprovals.add(item.approvalKey)
+          yield* Deferred.succeed(item.deferred, undefined)
+          return yield* Effect.void
+        }),
+      )
     })
 
     const forSession = Effect.fn("SessionGuardrail.forSession")(function* (sessionID: Session.ID) {
@@ -285,11 +340,11 @@ export const layer = Layer.effect(
       return new Guardrail.Status({
         rootSessionID,
         profile: settings?.enabled === false ? "disabled" : "standard",
-        customRules: loaded.rules.length,
+        customRules: loaded.reduce((total, layer) => total + layer.rules.length, 0),
         approvals: approvals.get(rootSessionID) ?? 0,
         blocked: blocked.get(rootSessionID) ?? 0,
         counters: yield* counters.snapshot(rootSessionID),
-        invalidFiles: loaded.invalidFiles,
+        invalidFiles: loaded.flatMap((layer) => layer.invalidFiles),
       })
     })
 

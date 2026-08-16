@@ -52,7 +52,7 @@ const id = SessionV2.ID.create()
 const logEvents = (session: SessionV2.Interface, sessionID: SessionV2.ID, follow?: boolean) =>
   session
     .log({ sessionID, follow })
-    .pipe(Stream.filter((item): item is SessionEvent.DurableEvent => !EventV2.isSynced(item)))
+    .pipe(Stream.filter((item): item is SessionEvent.PublicDurableEvent => !EventV2.isSynced(item)))
 
 const assertCreateInputTypes = (session: SessionV2.Interface) => {
   // @ts-expect-error location or parentID is required.

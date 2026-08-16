@@ -3,6 +3,7 @@ import { Plugin } from "@ycoding-ai/plugin/tui"
 import { createMemo, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { formatCacheDiagnostics } from "../../util/cache-diagnostics"
+import { RailSection } from "../../routes/session/rail-section"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -12,7 +13,7 @@ const money = new Intl.NumberFormat("en-US", {
 export function SidebarCacheContent(props: {
   diagnostics: () => SessionCacheDiagnostics | null | undefined
   currentModel?: () => { identity: string; limit: number } | undefined
-  cost?: () => number
+  cost?: () => number | undefined
 }) {
   const { themeV2 } = useTheme()
   const diagnostics = createMemo(props.diagnostics)
@@ -24,7 +25,7 @@ export function SidebarCacheContent(props: {
   const currentModel = createMemo(() => props.currentModel?.())
 
   return (
-    <box>
+    <RailSection section="context" title="CONTEXT">
       <text fg={themeV2.text.default}>
         <b>Last step context</b>
       </text>
@@ -64,7 +65,7 @@ export function SidebarCacheContent(props: {
       <text fg={themeV2.text.subdued} marginTop={1}>
         {money.format(cost())} spent
       </text>
-    </box>
+    </RailSection>
   )
 }
 

@@ -4,6 +4,7 @@ import { Schema } from "effect"
 import { Model } from "./model.js"
 import { Money } from "./money.js"
 import { NonNegativeInt, optional } from "./schema.js"
+import { ProviderRequest } from "./provider-request.js"
 
 export const Mechanism = Schema.Literals([
   "openai-prefix-cache",
@@ -53,6 +54,7 @@ export const Info = Schema.Struct({
      */
     belowMinimum: Schema.Boolean.pipe(optional),
   }),
-  estimatedCost: Money.USD,
+  estimatedCost: Money.USD.pipe(optional),
+  requests: ProviderRequest.Summary.pipe(optional),
 }).annotate({ identifier: "Session.CacheDiagnostics" })
 export interface Info extends Schema.Schema.Type<typeof Info> {}

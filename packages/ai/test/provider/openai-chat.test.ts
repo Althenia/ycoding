@@ -109,13 +109,14 @@ describe("OpenAI Chat route", () => {
   )
 
   describe("prompt_cache_retention / prompt_cache_options family gating", () => {
-    // gpt-5.6 vs gpt-5.5 vs gpt-5 vs gpt-4.1 boundary: retention is pre-5.6
-    // only, cache_options is 5.6+ only. Sending either to the wrong family
-    // returns a 400 upstream, so both must be mutually exclusive on the wire.
+    // GPT-5.6+ uses cache_options. Earlier models only receive retention when
+    // OpenAI lists that exact family as supporting it; unsupported fields return
+    // a 400 upstream, so both controls are gated independently.
     const table = [
       { id: "gpt-5.5", retentionSent: true, optionsSent: false },
       { id: "gpt-5", retentionSent: true, optionsSent: false },
       { id: "gpt-4.1", retentionSent: true, optionsSent: false },
+      { id: "gpt-4o-mini", retentionSent: false, optionsSent: false },
       { id: "gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "gpt-5.6-mini", retentionSent: false, optionsSent: true },
       { id: "gpt-6", retentionSent: false, optionsSent: true },

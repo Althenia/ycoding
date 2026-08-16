@@ -85,6 +85,45 @@ test("provider usage methods use the public HTTP contract", async () => {
   ])
 })
 
+test("session diagnostics expose only bounded provider-request telemetry", async () => {
+  let request: Request | undefined
+  const diagnostics = {
+    model: { providerID: "openai", id: "gpt-5.6" },
+    context: { total: 32_600 },
+    tokens: { uncachedInput: 12_000, output: 900, reasoning: 300, cacheRead: 18_200, cacheWrite: 1_200 },
+    cache: {
+      eligible: 31_400,
+      mechanism: "openai-prefix-cache" as const,
+      readReported: true,
+      writeReported: true,
+    },
+    requests: {
+      logical: 6,
+      physical: 7,
+      helpers: 1,
+      continued: 3,
+      fallback: 1,
+      tokens: { input: 12_000, output: 900, reasoning: 300, cache: { read: 18_200, write: 1_200 } },
+      latestInvalidation: "tool-prefix-changed" as const,
+      latestNamespace: "a1b2c3d4",
+    },
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      request = input instanceof Request ? input : new Request(input, init)
+      return Response.json({ data: diagnostics })
+    },
+  })
+
+  const result = await client.session.diagnostics({ sessionID: "ses_test" })
+
+  expect(result).toEqual(diagnostics)
+  expect(result?.requests?.latestNamespace).toBe("a1b2c3d4")
+  expect(JSON.stringify(result)).not.toContain("promptCacheKey")
+  expect(request && new URL(request.url).pathname).toBe("/api/session/ses_test/diagnostics")
+})
+
 test("guardrail methods use the public HTTP contract", async () => {
   const requests: Request[] = []
   const status = {

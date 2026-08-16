@@ -28,7 +28,7 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
   const [submitting, setSubmitting] = createSignal(false)
   const presentation = () => guardrailPresentation(props.request)
 
-  const reply = (value: "once" | "reject") => {
+  const reply = (value: "once" | "always" | "reject") => {
     if (submitting()) return
     setSubmitting(true)
     void client.api.guardrail.request
@@ -48,7 +48,7 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
       semanticLabel={`${presentation().title}: ${presentation().action}`}
       instance={props.request.id}
       escapeKey="reject"
-      options={{ once: "Approve once", reject: "Reject" }}
+      options={{ once: "Approve once", always: "Always", reject: "Reject" }}
       onSelect={(option) => reply(option)}
       body={
         <box paddingLeft={1} gap={1}>

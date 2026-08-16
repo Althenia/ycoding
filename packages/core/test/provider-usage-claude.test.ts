@@ -8,7 +8,8 @@ describe("ClaudeUsage", () => {
   test("normalizes unified response headers as live percentages", () => {
     const snapshot = ClaudeUsage.normalizeHeaders({
       providerID,
-      label: "Claude Pro",
+      label: "Claude",
+      subscriptionType: "pro",
       observedAt: 100,
       headers: new Headers({
         "anthropic-ratelimit-unified-5h-utilization": "0.42",
@@ -21,6 +22,7 @@ describe("ClaudeUsage", () => {
     })
 
     expect(snapshot).toMatchObject({
+      label: "Claude Pro",
       status: "available",
       source: "response_headers",
       stability: "observed",
@@ -35,7 +37,8 @@ describe("ClaudeUsage", () => {
   test("normalizes OAuth windows, model lanes, and extra usage credits", () => {
     const snapshot = ClaudeUsage.normalizeOAuth({
       providerID,
-      label: "Claude Max",
+      label: "Claude",
+      subscriptionType: "max",
       updatedAt: 100,
       response: {
         five_hour: { utilization: 86, resets_at: "2026-07-28T00:00:00Z" },
@@ -46,11 +49,12 @@ describe("ClaudeUsage", () => {
     })
 
     expect(snapshot).toMatchObject({
+      label: "Claude Max",
       source: "provider_internal_api",
       stability: "best_effort",
       windows: [
-        { id: "five-hour", used: 86 },
-        { id: "seven-day", used: 27 },
+        { id: "five-hour", label: "Session", used: 86 },
+        { id: "seven-day", label: "All models", used: 27 },
         { id: "seven-day-sonnet", label: "Sonnet weekly", used: 45 },
         { id: "extra-usage", unit: "usd", used: 56.66, limit: 100, remaining: 43.34 },
       ],

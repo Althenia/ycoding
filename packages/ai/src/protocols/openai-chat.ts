@@ -470,11 +470,15 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
   const store = OpenAIOptions.store(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const reasoningEffort = OpenAIOptions.reasoningEffort(request)
-  // `prompt_cache_retention` (pre-5.6) and `prompt_cache_options` (5.6+) are
-  // mutually exclusive on the wire — sending either to the wrong family
-  // returns a 400 — so both are gated on the same family check here.
+  // `prompt_cache_retention` and `prompt_cache_options` are model-gated wire
+  // fields. Unsupported fields return a 400, so 24h retention is restricted to
+  // OpenAI's published allowlist while in-memory retention keeps legacy behavior.
   const isGpt56 = OpenAIOptions.isGpt56OrLater(request.model.id)
-  const retention = !isGpt56 ? OpenAIOptions.promptCacheRetention(request) : undefined
+  const configuredRetention = !isGpt56 ? OpenAIOptions.promptCacheRetention(request) : undefined
+  const retention =
+    configuredRetention === "24h" && !OpenAIOptions.supportsExtendedPromptCacheRetention(request.model.id)
+      ? undefined
+      : configuredRetention
   const cacheOptions = isGpt56 ? OpenAIOptions.promptCacheOptions(request) : undefined
   return {
     ...(store !== undefined ? { store } : {}),

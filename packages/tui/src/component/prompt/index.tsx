@@ -67,6 +67,7 @@ import {
 } from "../../util/session-autonomy"
 import { groupSessionShells, openBtwSession, steerBtwConclusion } from "../../util/session"
 import { DialogSessionGoal } from "../dialog-session-goal"
+import { ModeChips } from "./mode-chips"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
@@ -400,7 +401,10 @@ export function Prompt(props: PromptProps) {
     if (!sessionID || sessionID === syncedSessionID || !local.model.ready) return
     const session = data.session.get(sessionID)
     if (!session) return
-    const agent = session.agent && local.agent.list().find((agent) => agent.id === session.agent)
+    const agents = data.location.agent.list(session.location)
+    const models = data.location.model.list(session.location)
+    if (!agents || !models) return
+    const agent = session.agent && agents.find((agent) => agent.id === session.agent)
     if (agent && !args.agent) local.agent.set(agent.id)
     if (session.model) {
       local.model.set({
@@ -1927,6 +1931,7 @@ export function Prompt(props: PromptProps) {
           </Show>
           <Switch>
             <Match when={store.mode === "normal"}>
+              <ModeChips autonomy={props.autonomy} />
               <Switch>
                 <Match when={liveWorkStatusVisible()}>
                   <text fg={themeV2.text.subdued} wrapMode="none" truncate flexShrink={1}>

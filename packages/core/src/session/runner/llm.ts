@@ -4,10 +4,11 @@ import {
   LLMClient,
   LLMError,
   LLMEvent,
+  LLMRequest,
   isContextOverflowFailure,
-  type LLMRequest,
   type ProviderErrorEvent,
 } from "@ycoding-ai/ai"
+import { Money } from "@ycoding-ai/schema/money"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { Database } from "../../database/database"
@@ -21,6 +22,7 @@ import { SessionCacheDiagnostics } from "../cache-diagnostics"
 import { SessionContext } from "../context"
 import { SessionEvent } from "../event"
 import { SessionPending } from "../pending"
+import { SessionProviderRequest } from "../provider-request"
 import { SessionHistory } from "../history"
 import { SessionModelRequest } from "../model-request"
 import { SessionMessage } from "../message"
@@ -35,12 +37,19 @@ import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
 import { StepFailedError } from "../error"
 import { toSessionError } from "../to-session-error"
+import { SessionCacheRuntime } from "./cache-runtime"
+import { SessionContinuation } from "./continuation"
 import { SessionRunnerRetry } from "./retry"
 import { SessionUsage } from "../usage"
 
 type StepEnd = {
   readonly snapshot?: Snapshot.ID
   readonly files?: readonly RelativePath[]
+}
+
+type RequestTrackerState = {
+  current?: SessionProviderRequest.Tracker
+  continuationFallback?: boolean
 }
 
 const layer = Layer.effect(
@@ -55,6 +64,10 @@ const layer = Layer.effect(
     const db = (yield* Database.Service).db
     const compaction = yield* SessionCompaction.Service
     const title = yield* SessionTitle.Service
+    const providerRequests = yield* SessionProviderRequest.Service
+    const cacheRuntime = yield* SessionCacheRuntime.Service
+    const continuation = yield* SessionContinuation.Service
+    let executionGeneration = 0
     // Title generation is a side effect of the first step; it must not delay step continuation.
     // Tracked per process so repeated wakes before the second user message arrives don't
     // re-fire a redundant LLM call; `SessionTitle` itself is idempotent based on durable history.
@@ -87,6 +100,7 @@ const layer = Layer.effect(
       request?: LLMRequest,
     ) {
       if (!compaction.required(input, request) || (yield* SessionPending.compaction(db, input.session.id))) return false
+      yield* continuation.clear(input.session.id)
       const compacted = yield* compaction.compact(input)
       if (compacted.status === "completed") return true
       return yield* new StepFailedError({ error: compacted.error })
@@ -104,6 +118,8 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionPending.Delivery | undefined,
       step: number,
+      requestTrackerState: RequestTrackerState,
+      execution: number,
       recoverOverflow?: typeof compaction.compact,
       assistantMessageID?: SessionMessage.ID,
     ) {
@@ -138,11 +154,31 @@ const layer = Layer.effect(
       const originalPrepared = yield* modelRequests.prepare({
         context: loaded,
         step: currentStep,
+        execution,
+        disableContinuation: requestTrackerState.continuationFallback === true,
       })
       if (yield* compactBeforeStep(compactionInput, originalPrepared.request))
         return { _tag: "RestartAfterCompaction", step: currentStep } as const
+      let requestTracker = requestTrackerState.current
+      if (!requestTracker) {
+        requestTracker = yield* providerRequests.next({
+          sessionID: session.id,
+          inputID: loaded.messages.findLast((message) => message.type === "user")?.id,
+          source: "step",
+          agent: agent.id,
+          model: resolved.ref,
+          routeID: resolved.model.route.id,
+          promptCacheKey: originalPrepared.cache.promptCacheKey,
+          systemDigest: originalPrepared.cache.systemDigest,
+          toolDigest: originalPrepared.cache.toolDigest,
+        })
+        requestTrackerState.current = requestTracker
+      }
       const startSnapshot = yield* snapshots.capture()
-      const prepared = originalPrepared
+      const prepared = {
+        ...originalPrepared,
+        request: LLMRequest.update(originalPrepared.request, { id: requestTracker.requestID }),
+      }
       const effective = resolved
       const effectiveModel = effective.model
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
@@ -234,6 +270,53 @@ const layer = Layer.effect(
         ...settlement.reporting,
       })
 
+      const completeProviderRequest = (
+        settlement?: NonNullable<ReturnType<typeof publisher.stepSettlement>>,
+        override?: "provider-not-reported" | "retry-fallback",
+      ) => {
+        const usage = settlement
+          ? stepUsage(settlement)
+          : {
+              cost: Money.USD.zero,
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            }
+        const estimatedCost = settlement ? SessionUsage.estimatedCost(effective.cost, settlement.tokens) : undefined
+        const cache = settlement ? providerCache(settlement) : undefined
+        const invalidation =
+          override ??
+          (requestTrackerState.continuationFallback === true
+            ? "retry-fallback"
+            : settlement && settlement.tokens.cache.read > 0
+            ? "stable-hit"
+            : cache?.mechanism === "none"
+              ? "cache-disabled"
+              : cache && !cache.readReported && !cache.writeReported
+                ? "provider-not-reported"
+                : undefined)
+        return Effect.all(
+          [
+            requestTracker.complete({
+              tokens: usage.tokens,
+              ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
+              continuation:
+                requestTrackerState.continuationFallback === true
+                  ? "fallback"
+                  : originalPrepared.continuation.used
+                    ? "continued"
+                    : "full",
+              ...(invalidation === undefined ? {} : { invalidation }),
+            }),
+            cacheRuntime.observe({
+              namespace: originalPrepared.cache.promptCacheKey,
+              cacheRead: usage.tokens.cache.read,
+              cacheWrite: usage.tokens.cache.write,
+              eligible: usage.tokens.input + usage.tokens.cache.read + usage.tokens.cache.write,
+            }),
+          ],
+          { discard: true },
+        )
+      }
+
       const captureStepEnd = Effect.fnUntraced(function* () {
         const snapshot = yield* snapshots.capture()
         const files =
@@ -245,10 +328,7 @@ const layer = Layer.effect(
         return { snapshot, files }
       })
 
-      const publishStepEnd = (
-        settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>,
-        end: StepEnd,
-      ) =>
+      const publishStepEnd = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>, end: StepEnd) =>
         Effect.gen(function* () {
           const cache = providerCache(settlement)
           yield* serialized(
@@ -262,6 +342,15 @@ const layer = Layer.effect(
               ...end,
             }),
           )
+          const responseID = settlement.providerState?.responseId
+          if (originalPrepared.continuation.eligible && typeof responseID === "string" && responseID.length > 0)
+            yield* continuation.remember({
+              ...originalPrepared.continuation.fingerprint,
+              responseID,
+              representedMessages: originalPrepared.request.messages.length + 1,
+            })
+          else yield* continuation.clear(session.id)
+          yield* completeProviderRequest(settlement)
         })
 
       return yield* Effect.uninterruptibleMask((restore) =>
@@ -280,17 +369,32 @@ const layer = Layer.effect(
             !publisher.hasRetryEvidence() &&
             isContextOverflowFailure(overflowFailure ?? streamFailure) &&
             (yield* restore(
-              recoverOverflow({
-                session,
-                messages: loaded.messages,
-                model: effectiveModel,
-                cost: effective.cost,
-                system: prepared.request.system,
-              }),
-            ))
-              .status === "completed"
-          )
+              continuation.clear(session.id).pipe(
+                Effect.andThen(
+                  recoverOverflow({
+                    session,
+                    messages: loaded.messages,
+                    model: effectiveModel,
+                    cost: effective.cost,
+                    system: prepared.request.system,
+                  }),
+                ),
+              ),
+            )).status === "completed"
+          ) {
+            yield* completeProviderRequest(undefined, "retry-fallback")
             return { _tag: "RestartAfterOverflowCompaction", step: currentStep } as const
+          }
+
+          if (
+            originalPrepared.continuation.used &&
+            !publisher.hasRetryEvidence() &&
+            streamFailure instanceof LLMError &&
+            streamFailure.reason._tag === "InvalidRequest"
+          ) {
+            yield* continuation.clear(session.id)
+            return { _tag: "RestartWithoutContinuation", step: currentStep } as const
+          }
 
           // An unrecovered held-back overflow becomes the step's durable provider error. A
           // thrown LLM failure records the assistant failure unless a provider error was
@@ -379,6 +483,7 @@ const layer = Layer.effect(
           const stepSettlement = publisher.stepSettlement()
           if (stepSettlement && !stepFailure) yield* publishStepEnd(stepSettlement, yield* captureStepEnd())
           if (stepFailure) {
+            yield* continuation.clear(session.id)
             const end = yield* captureStepEnd()
             const cache = stepSettlement ? providerCache(stepSettlement) : undefined
             yield* serialized(
@@ -388,6 +493,11 @@ const layer = Layer.effect(
                 ...end,
               }),
             )
+            yield* completeProviderRequest(stepSettlement)
+          }
+          if (!stepSettlement) {
+            yield* continuation.clear(session.id)
+            yield* completeProviderRequest(undefined, "provider-not-reported")
           }
 
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
@@ -409,6 +519,7 @@ const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionPending.Delivery | undefined,
       step: number,
+      execution: number,
     ) {
       // Compaction restarts rebuild the request from compacted history without re-promoting.
       // Overflow recovery is one-shot: a post-compaction attempt must not recover another
@@ -417,9 +528,25 @@ const layer = Layer.effect(
       let currentPromotion = promotion
       let currentStep = step
       let assistantMessageID: SessionMessage.ID | undefined
+      const requestTrackerState: RequestTrackerState = {}
+      const completeRetryFallback = () =>
+        requestTrackerState.current?.complete({
+          invalidation: "retry-fallback",
+          continuation: "fallback",
+          cost: Money.USD.zero,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        }) ?? Effect.void
       while (true) {
         const attempt = yield* Effect.suspend(() =>
-          attemptStep(sessionID, currentPromotion, currentStep, recoverOverflow, assistantMessageID),
+          attemptStep(
+            sessionID,
+            currentPromotion,
+            currentStep,
+            requestTrackerState,
+            execution,
+            recoverOverflow,
+            assistantMessageID,
+          ),
         ).pipe(
           Effect.tapError((error) =>
             error instanceof SessionRunnerRetry.RetryableFailure
@@ -432,13 +559,16 @@ const layer = Layer.effect(
           ),
           Effect.retryOrElse(SessionRunnerRetry.schedule(events, sessionID), (error) => {
             if (!(error instanceof SessionRunnerRetry.RetryableFailure)) return Effect.fail(error)
-            return events
-              .publish(SessionEvent.Step.Failed, {
-                sessionID,
-                assistantMessageID: error.assistantMessageID,
-                error: error.error,
-              })
-              .pipe(Effect.andThen(Effect.fail(error.cause)))
+            return completeRetryFallback().pipe(
+              Effect.andThen(
+                events.publish(SessionEvent.Step.Failed, {
+                  sessionID,
+                  assistantMessageID: error.assistantMessageID,
+                  error: error.error,
+                }),
+              ),
+              Effect.andThen(Effect.fail(error.cause)),
+            )
           }),
         )
         if (attempt._tag === "Completed")
@@ -446,7 +576,15 @@ const layer = Layer.effect(
             needsContinuation: attempt.needsContinuation,
             step: attempt.step,
           }
-        if (attempt._tag === "RestartAfterOverflowCompaction") recoverOverflow = undefined
+        if (attempt._tag === "RestartWithoutContinuation") requestTrackerState.continuationFallback = true
+        if (attempt._tag === "RestartAfterOverflowCompaction") {
+          recoverOverflow = undefined
+          requestTrackerState.current = undefined
+        }
+        if (attempt._tag === "RestartAfterCompaction" && requestTrackerState.current) {
+          yield* completeRetryFallback()
+          requestTrackerState.current = undefined
+        }
         yield* Effect.yieldNow
         currentPromotion = undefined
         currentStep = attempt.step
@@ -471,6 +609,7 @@ const layer = Layer.effect(
                     return SessionModelRequest.baseSystem(yield* context.load(selected))
                   })
                 : undefined
+              yield* continuation.clear(sessionID)
               return yield* compaction.compactManual({
                 session,
                 messages,
@@ -498,10 +637,13 @@ const layer = Layer.effect(
     })
 
     // Execution lifecycle is published per busy period by SessionExecution, not per drain here.
-    const drain = Effect.fn("SessionRunner.drain")(function* (input: {
-      readonly sessionID: SessionSchema.ID
-      readonly force: boolean
-    }) {
+    const drainExecution = Effect.fn("SessionRunner.drainExecution")(function* (
+      input: {
+        readonly sessionID: SessionSchema.ID
+        readonly force: boolean
+      },
+      execution: number,
+    ) {
       yield* runPendingCompaction(input.sessionID)
       const hasSteer = yield* SessionPending.has(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionPending.has(db, input.sessionID, "queue")
@@ -517,7 +659,7 @@ const layer = Layer.effect(
         // a provider error suppresses it. Pending steers also continue the loop so
         // interjections are answered before the session goes idle.
         while (needsContinuation) {
-          const result = yield* runStep(input.sessionID, promotion, step)
+          const result = yield* runStep(input.sessionID, promotion, step, execution)
           // Steer/queue promotion inside runStep has already made the pending input a visible
           // user message by this point, so the first-user-message check below is reliable.
           if (!titleAttempted.has(input.sessionID)) {
@@ -543,6 +685,14 @@ const layer = Layer.effect(
       }
     })
 
+    const drain = Effect.fn("SessionRunner.drain")(function* (input: {
+      readonly sessionID: SessionSchema.ID
+      readonly force: boolean
+    }) {
+      const execution = ++executionGeneration
+      return yield* drainExecution(input, execution).pipe(Effect.ensuring(continuation.clear(input.sessionID)))
+    })
+
     return Service.of({ drain })
   }),
 )
@@ -555,6 +705,9 @@ export const node = makeLocationNode({
     llmClient,
     SessionContext.node,
     SessionModelRequest.node,
+    SessionProviderRequest.node,
+    SessionCacheRuntime.node,
+    SessionContinuation.node,
     SessionStore.node,
     SessionCompaction.node,
     SessionTitle.node,
