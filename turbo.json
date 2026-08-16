@@ -1,0 +1,32 @@
+{
+  "$schema": "https://v2-8-13.turborepo.dev/schema.json",
+  "globalEnv": ["CI", "YCODING_DISABLE_SHARE"],
+  "globalPassThroughEnv": ["CI", "YCODING_DISABLE_SHARE"],
+  "tasks": {
+    "typecheck": {},
+    "build": {
+      "dependsOn": [],
+      "outputs": ["dist/**"]
+    },
+    "@ycoding-ai/codemode#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@ycoding-ai/core#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@ycoding-ai/cli#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@ycoding-ai/tui#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@ycoding-ai/ui#test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    }
+  }
+}

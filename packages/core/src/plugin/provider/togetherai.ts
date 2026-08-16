@@ -1,0 +1,16 @@
+import { Effect } from "effect"
+import { define } from "@ycoding-ai/plugin/effect/plugin"
+
+export const TogetherAIPlugin = define({
+  id: "ycoding.provider.togetherai",
+  effect: Effect.fn(function* (ctx) {
+    yield* ctx.aisdk.hook(
+      "sdk",
+      Effect.fn(function* (evt) {
+        if (evt.package !== "@ai-sdk/togetherai") return
+        const mod = yield* Effect.promise(() => import("@ai-sdk/togetherai"))
+        evt.sdk = mod.createTogetherAI(evt.options)
+      }),
+    )
+  }),
+})

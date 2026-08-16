@@ -1,0 +1,2262 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'unsafe-inline'; img-src data: https:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>OKF Bundle Viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/dist/3d-force-graph.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+  <style>
+/* Shared tokens; the resolved data-theme attribute always supplies the palette. */
+:root {
+  --radius: 12px;
+  --radius-sm: 8px;
+  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Consolas, monospace;
+}
+
+:root, :root[data-theme="dark"] {
+  color-scheme: dark;
+  --void: #05070d;
+  --void-2: #080c16;
+  --panel: rgba(13, 19, 32, 0.72);
+  --panel-solid: #0c1220;
+  --panel-raised: rgba(24, 34, 54, 0.86);
+  --sunken: rgba(4, 7, 13, 0.6);
+  --hairline: rgba(126, 176, 224, 0.16);
+  --hairline-strong: rgba(126, 176, 224, 0.3);
+  --ink: #e8f1fb;
+  --ink-dim: #a9bcd4;
+  --muted: #6f829c;
+  --accent: #34e2ff;
+  --accent-2: #9d7bff;
+  --accent-soft: rgba(52, 226, 255, 0.14);
+  --accent-glow: rgba(52, 226, 255, 0.45);
+  --link: #6fd8ff;
+  --graph-bg: #05070d;
+  --label-ink: #dcebfa;
+  --label-halo: rgba(3, 6, 12, 0.92);
+  --edge: #45607f;
+  --moss: #46e2a4;
+  --magenta: #ff7ac6;
+  --amber: #ffb454;
+  --danger: #ff6b7a;
+  --mark: rgba(52, 226, 255, 0.26);
+  --mark-ink: #d9f7ff;
+  --grid: rgba(96, 156, 214, 0.07);
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --void: #eef2f7;
+  --void-2: #e4eaf2;
+  --panel: rgba(255, 255, 255, 0.82);
+  --panel-solid: #ffffff;
+  --panel-raised: rgba(255, 255, 255, 0.95);
+  --sunken: rgba(15, 30, 50, 0.05);
+  --hairline: rgba(20, 50, 82, 0.14);
+  --hairline-strong: rgba(20, 50, 82, 0.28);
+  --ink: #10202e;
+  --ink-dim: #3c5064;
+  --muted: #63788c;
+  --accent: #0086a8;
+  --accent-2: #6b4bd8;
+  --accent-soft: rgba(0, 134, 168, 0.12);
+  --accent-glow: rgba(0, 134, 168, 0.3);
+  --link: #0b6c94;
+  --graph-bg: #e7edf4;
+  --label-ink: #12242f;
+  --label-halo: rgba(255, 255, 255, 0.92);
+  --edge: #8ba2b8;
+  --moss: #1c8a5f;
+  --magenta: #a8367c;
+  --amber: #96601a;
+  --danger: #bf3b48;
+  --mark: rgba(0, 134, 168, 0.2);
+  --mark-ink: #08303c;
+  --grid: rgba(20, 60, 100, 0.06);
+  --shadow: 0 14px 36px rgba(16, 32, 46, 0.14);
+}
+
+* { box-sizing: border-box; }
+html { height: 100%; }
+
+body {
+  background:
+    radial-gradient(120% 90% at 12% -10%, rgba(52, 226, 255, 0.1), transparent 55%),
+    radial-gradient(100% 80% at 100% 0%, rgba(157, 123, 255, 0.1), transparent 60%),
+    linear-gradient(180deg, var(--void-2), var(--void));
+  color: var(--ink);
+  display: grid;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  margin: 0;
+  overflow: hidden;
+}
+
+body::before {
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 46px 46px;
+  content: "";
+  inset: 0;
+  mask-image: radial-gradient(120% 100% at 50% 0%, #000 30%, transparent 78%);
+  pointer-events: none;
+  position: fixed;
+  z-index: 0;
+}
+
+button, input, select { color: var(--ink); font: inherit; }
+
+/* ---------- header ---------- */
+
+.app-header {
+  align-items: center;
+  backdrop-filter: blur(18px);
+  background: var(--panel);
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  gap: 18px;
+  padding: 10px 16px;
+  position: relative;
+  z-index: 5;
+}
+
+.app-header::after {
+  background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
+  bottom: -1px;
+  content: "";
+  height: 1px;
+  left: 0;
+  opacity: 0.7;
+  position: absolute;
+  right: 0;
+}
+
+.identity { align-items: center; display: flex; gap: 11px; min-width: 0; }
+
+.mark-dot {
+  background: radial-gradient(circle at 32% 30%, var(--accent), var(--accent-2));
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--hairline-strong), 0 0 18px var(--accent-glow);
+  flex: 0 0 auto;
+  height: 12px;
+  width: 12px;
+}
+
+.identity-text { min-width: 0; }
+
+.identity strong {
+  display: block;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity span {
+  color: var(--muted);
+  display: block;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.omnibox { flex: 1 1 460px; max-width: 620px; min-width: 0; position: relative; }
+
+.omnibox-field {
+  align-items: center;
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  display: flex;
+  gap: 8px;
+  height: 38px;
+  padding: 0 6px 0 12px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.omnibox-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 22px -6px var(--accent-glow);
+}
+
+.omnibox-field svg { color: var(--muted); flex: 0 0 auto; height: 16px; width: 16px; }
+
+#search {
+  background: transparent;
+  border: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  outline: none;
+  padding: 0;
+}
+
+#search::placeholder { color: var(--muted); }
+#search::-webkit-search-cancel-button { display: none; }
+
+.kbd-hint {
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  color: var(--muted);
+  flex: 0 0 auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 6px;
+}
+
+.header-tools { align-items: center; display: flex; gap: 8px; margin-left: auto; }
+
+.segmented {
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+}
+
+.segmented button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition: background 140ms ease, color 140ms ease;
+  width: 32px;
+}
+
+.segmented button:hover { color: var(--ink); }
+
+.segmented button[aria-pressed="true"] {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--accent);
+}
+
+.segmented svg { height: 15px; width: 15px; }
+
+.icon-button {
+  align-items: center;
+  background: var(--panel-raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--ink-dim);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+  width: 32px;
+}
+
+.icon-button svg { height: 16px; width: 16px; }
+.icon-button:hover { border-color: var(--hairline-strong); color: var(--ink); }
+
+.icon-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 18px -8px var(--accent-glow);
+  color: var(--accent);
+}
+
+[data-tooltip]::after {
+  background: var(--panel-solid);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 6px;
+  bottom: calc(100% + 7px);
+  color: var(--ink);
+  content: attr(data-tooltip);
+  font-size: 11px;
+  left: 50%;
+  line-height: 1.3;
+  opacity: 0;
+  padding: 4px 8px;
+  pointer-events: none;
+  position: absolute;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+  z-index: 9;
+}
+
+[data-tooltip]:hover::after, [data-tooltip]:focus-visible::after { opacity: 1; }
+.graph-tools .icon-button:first-child::after { left: 0; transform: none; }
+.graph-tools .icon-button:last-child::after { left: auto; right: 0; transform: none; }
+.header-tools > *:last-child [data-tooltip]::after,
+.detail-heading-row .icon-button::after,
+.segmented button:last-child::after { left: auto; right: 0; transform: none; }
+
+button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible,
+.graph-panel:focus-visible, li:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- shell ---------- */
+
+main {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr) minmax(340px, 27vw);
+  min-height: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.rail {
+  backdrop-filter: blur(14px);
+  background: var(--panel);
+  border-right: 1px solid var(--hairline);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 12px 24px;
+}
+
+.rail-section { display: grid; gap: 8px; }
+
+.rail-title {
+  align-items: baseline;
+  color: var(--muted);
+  display: flex;
+  font-family: var(--mono);
+  font-size: 10px;
+  gap: 8px;
+  justify-content: space-between;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.rail-title b { color: var(--accent); font-weight: 600; }
+
+.scopes { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.scope-chip {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 3px 10px;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.scope-chip:hover { color: var(--ink); }
+
+.scope-chip[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.control { display: grid; gap: 4px; }
+.control > span { color: var(--muted); font-size: 11px; }
+
+.control select {
+  appearance: none;
+  background:
+    linear-gradient(45deg, transparent 50%, currentColor 50%) calc(100% - 15px) 14px / 5px 5px no-repeat,
+    var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  height: 34px;
+  padding: 6px 28px 6px 10px;
+  width: 100%;
+}
+
+.control select:hover { border-color: var(--hairline-strong); }
+
+.stat-grid { display: grid; gap: 6px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.stat {
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+}
+
+.stat b { display: block; font-family: var(--mono); font-size: 17px; line-height: 1.2; }
+.stat span { color: var(--muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+#results { display: grid; gap: 5px; list-style: none; margin: 0; padding: 0; }
+
+.result {
+  background: var(--sunken);
+  border: 1px solid transparent;
+  border-left: 2px solid var(--result-accent, var(--hairline));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 7px 9px;
+  text-align: left;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+  width: 100%;
+}
+
+.result:hover { background: var(--panel-raised); transform: translateX(2px); }
+
+.result[aria-current="true"] {
+  background: var(--accent-soft);
+  border-color: var(--hairline-strong);
+  border-left-color: var(--accent);
+}
+
+.result-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-meta {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-snippet {
+  color: var(--ink-dim);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+}
+
+.result-where {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+mark {
+  background: var(--mark);
+  border-radius: 2px;
+  color: var(--mark-ink);
+  padding: 0 1px;
+}
+
+.rail-empty { color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+/* ---------- graph ---------- */
+
+.graph-panel {
+  background: var(--graph-bg);
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.graph-panel::after {
+  box-shadow: inset 0 0 140px 20px rgba(0, 0, 0, 0.55);
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+}
+
+:root[data-theme="light"] .graph-panel::after {
+  box-shadow: inset 0 0 120px 10px rgba(30, 60, 90, 0.12);
+}
+
+#graph { inset: 0; position: absolute; touch-action: none; }
+#graph canvas { display: block; outline: none; }
+
+#graph-labels { inset: 0; overflow: hidden; pointer-events: none; position: absolute; z-index: 2; }
+
+.node-label {
+  color: var(--label-ink);
+  font-size: 11px;
+  left: 0;
+  line-height: 1.25;
+  max-width: 176px;
+  overflow: hidden;
+  position: absolute;
+  text-overflow: ellipsis;
+  text-shadow:
+    0 0 6px var(--label-halo),
+    0 1px 0 var(--label-halo),
+    0 -1px 0 var(--label-halo),
+    1px 0 0 var(--label-halo),
+    -1px 0 0 var(--label-halo);
+  top: 0;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.node-label.is-active {
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.graph-overlay {
+  display: flex;
+  gap: 12px;
+  left: 14px;
+  pointer-events: none;
+  position: absolute;
+  right: 14px;
+  z-index: 3;
+}
+
+.graph-overlay > * { pointer-events: auto; }
+.graph-overlay-top { align-items: flex-start; justify-content: space-between; top: 12px; }
+.graph-overlay-bottom { align-items: flex-end; bottom: 14px; justify-content: space-between; }
+
+#graph-count, #viewer-status {
+  backdrop-filter: blur(10px);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  padding: 5px 11px;
+}
+
+#graph-count:empty, #viewer-status:empty { display: none; }
+#viewer-status { border-color: var(--hairline-strong); color: var(--accent); }
+
+.legend { display: flex; flex-wrap: wrap; gap: 5px; max-width: 62%; }
+
+.legend-chip {
+  align-items: center;
+  backdrop-filter: blur(10px);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--ink-dim);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 11px;
+  gap: 6px;
+  line-height: 1.4;
+  max-width: 200px;
+  padding: 4px 10px 4px 7px;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.legend-chip:hover { border-color: var(--hairline-strong); color: var(--ink); }
+
+.legend-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 18px -8px var(--accent-glow);
+  color: var(--ink);
+}
+
+.legend-chip span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.legend-swatch {
+  border-radius: 50%;
+  box-shadow: 0 0 10px -1px currentColor;
+  flex: 0 0 auto;
+  height: 9px;
+  width: 9px;
+}
+
+.graph-tools {
+  backdrop-filter: blur(10px);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+}
+
+.graph-tools .icon-button { background: transparent; border-color: transparent; }
+.graph-tools .icon-button:hover { background: var(--sunken); border-color: var(--hairline); }
+
+#graph-tooltip {
+  backdrop-filter: blur(14px);
+  background: var(--panel-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  display: grid;
+  gap: 3px;
+  left: 0;
+  max-width: 250px;
+  padding: 7px 10px;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  z-index: 6;
+}
+
+#graph-tooltip strong { font-size: 12px; line-height: 1.3; }
+
+#graph-tooltip span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+#graph-tooltip[hidden] { display: none; }
+
+#graph-fallback {
+  color: var(--muted);
+  display: grid;
+  gap: 6px;
+  inset: 0;
+  place-content: center;
+  position: absolute;
+  text-align: center;
+  z-index: 4;
+}
+
+#graph-fallback strong { color: var(--ink); }
+#graph-fallback[hidden] { display: none; }
+
+/* ---------- detail ---------- */
+
+#detail {
+  backdrop-filter: blur(14px);
+  background: var(--panel);
+  border-left: 1px solid var(--hairline);
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 20px 44px;
+}
+
+#detail-empty { color: var(--muted); margin: 52px auto; max-width: 300px; text-align: center; }
+#detail-empty strong { color: var(--ink); display: block; margin-bottom: 6px; }
+#detail-empty p { line-height: 1.55; margin: 0; }
+
+#detail-content { animation: rise 260ms ease both; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.detail-heading { border-bottom: 1px solid var(--hairline); padding-bottom: 14px; }
+
+.detail-heading-row {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-height: 32px;
+}
+
+.detail-heading h1 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.22;
+  margin: 8px 0 4px;
+  overflow-wrap: anywhere;
+}
+
+.detail-heading code, #detail-body code { font-family: var(--mono); }
+.detail-heading code { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+
+.type-chip, .badge, .tag {
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+  padding: 2px 10px;
+}
+
+.type-chip {
+  background: var(--sunken);
+  border: 1px solid currentColor;
+  font-weight: 700;
+  max-width: calc(100% - 44px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin: 13px 0; }
+.badge { background: var(--sunken); border: 1px solid var(--hairline); color: var(--ink-dim); }
+.badge.status-stable, .badge.fresh { border-color: var(--moss); color: var(--moss); }
+.badge.status-draft { border-color: var(--amber); color: var(--amber); }
+.badge.status-deprecated { color: var(--muted); text-decoration: line-through; }
+.badge.trust-machine-confirmed { border-color: var(--accent); color: var(--accent); }
+.badge.trust-human-reviewed { border-color: var(--magenta); color: var(--magenta); }
+.badge.stale { border-color: var(--danger); color: var(--danger); }
+
+.frontmatter { display: grid; gap: 9px 14px; grid-template-columns: 88px minmax(0, 1fr); margin: 0; }
+.frontmatter dt { color: var(--muted); font-size: 11px; letter-spacing: 0.06em; padding-top: 1px; text-transform: uppercase; }
+.frontmatter dd { line-height: 1.45; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.frontmatter a, #detail-body a, .relations-group button { color: var(--link); }
+
+.tag { background: var(--sunken); border: 1px solid var(--hairline); color: var(--ink-dim); margin: 0 4px 4px 0; }
+
+.sources-list, .relations-group ul { list-style: none; margin: 0; padding: 0; }
+.sources-list li, .relations-group li { margin: 4px 0; }
+.relations-group ul { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.fn-ref { font-size: 10px; line-height: 1; margin-left: 1px; }
+.fn-ref a { text-decoration: none; }
+
+.fn-list {
+  border-top: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 12px;
+  margin: 18px 0 0;
+  padding: 12px 0 0 18px;
+}
+
+.fn-list li { margin: 4px 0; overflow-wrap: anywhere; }
+.fn-list li:target { color: var(--accent); }
+
+.body-section { border-top: 1px solid var(--hairline); margin-top: 18px; padding-top: 14px; }
+
+#detail-body { font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+#detail-body h1 { font-size: 17px; margin: 18px 0 7px; }
+#detail-body h2 { font-size: 15px; margin: 16px 0 6px; }
+#detail-body h3 { font-size: 13px; margin: 14px 0 5px; }
+#detail-body p { margin: 8px 0; }
+#detail-body img { height: auto; max-width: 100%; }
+
+#detail-body pre {
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  overflow-x: auto;
+  padding: 11px 13px;
+}
+
+#detail-body :not(pre) > code { background: var(--sunken); border-radius: 4px; padding: 1px 5px; }
+#detail-body table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; }
+#detail-body th, #detail-body td { border: 1px solid var(--hairline); padding: 6px 9px; }
+#detail-body th { background: var(--sunken); }
+
+#detail-body blockquote {
+  border-left: 2px solid var(--accent);
+  color: var(--ink-dim);
+  margin: 10px 0;
+  padding: 2px 0 2px 12px;
+}
+
+#detail-relations { border-top: 1px solid var(--hairline); display: grid; gap: 16px; margin-top: 20px; padding-top: 14px; }
+.relations-group h2 { color: var(--muted); font-size: 10px; letter-spacing: 0.16em; margin: 0 0 8px; text-transform: uppercase; }
+
+.relations-group button {
+  align-items: center;
+  background: var(--sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 7px;
+  padding: 4px 12px;
+  text-align: left;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+
+.relations-group button:hover { border-color: var(--accent); color: var(--accent); }
+.relations-group button::before { content: "\2192"; opacity: 0.55; }
+#detail-backlinks button::before { content: "\2190"; }
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1180px) {
+  main { grid-template-columns: 244px minmax(0, 1fr) minmax(300px, 32vw); }
+}
+
+@media (max-width: 1024px) {
+  body { height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
+  main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; }
+  .rail { border-bottom: 1px solid var(--hairline); border-right: 0; overflow: visible; }
+  .graph-panel { border-bottom: 1px solid var(--hairline); height: clamp(320px, 52dvh, 520px); }
+  #detail { border-left: 0; overflow: visible; padding: 18px 16px 36px; }
+  #results { max-height: 260px; overflow-y: auto; }
+}
+
+@media (max-width: 760px) {
+  .app-header { align-items: stretch; flex-wrap: wrap; gap: 10px; }
+  .omnibox { flex: 1 1 100%; max-width: none; order: 3; }
+  .header-tools { order: 2; }
+  .kbd-hint { display: none; }
+  .legend { display: none; }
+  .frontmatter { gap: 2px; grid-template-columns: minmax(0, 1fr); }
+  .frontmatter dt { margin-top: 8px; }
+  .frontmatter dd { margin-bottom: 6px; }
+}
+
+@media (max-width: 420px) {
+  .detail-heading h1 { font-size: 19px; }
+  .node-label { max-width: 118px; }
+  .stat-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="identity">
+      <span class="mark-dot" aria-hidden="true"></span>
+      <div class="identity-text">
+        <strong id="bundle-name"></strong>
+        <span>OKF knowledge graph</span>
+      </div>
+    </div>
+
+    <div class="omnibox">
+      <div class="omnibox-field">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.6-3.6"></path></svg>
+        <input id="search" type="search" placeholder="Search titles, tags, and concept content" autocomplete="off" spellcheck="false" aria-label="Search the bundle" aria-describedby="search-scope">
+        <kbd class="kbd-hint">/</kbd>
+      </div>
+    </div>
+
+    <div class="header-tools">
+      <button id="toggle-content-search" class="icon-button" type="button" aria-pressed="true" aria-label="Include concept content in search" data-tooltip="Search inside content">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16"></path><path d="M4 12h10"></path><path d="M4 18h7"></path><circle cx="17.5" cy="16.5" r="3.5"></circle><path d="m20.5 19.5 2 2"></path></svg>
+      </button>
+      <div class="segmented" role="group" aria-label="Color theme">
+        <button id="theme-auto" type="button" aria-pressed="true" aria-label="Match system theme" data-tooltip="System theme">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="2" y="3" width="20" height="14" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+        </button>
+        <button id="theme-light" type="button" aria-pressed="false" aria-label="Light theme" data-tooltip="Light">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+        </button>
+        <button id="theme-dark" type="button" aria-pressed="false" aria-label="Dark theme" data-tooltip="Dark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <aside class="rail" aria-label="Search and filters">
+      <div class="rail-section">
+        <div class="rail-title" id="search-scope-label">Search scope</div>
+        <div class="scopes" id="search-scope" role="group" aria-labelledby="search-scope-label">
+          <button class="scope-chip" type="button" data-scope="all" aria-pressed="true">Everything</button>
+          <button class="scope-chip" type="button" data-scope="title" aria-pressed="false">Title</button>
+          <button class="scope-chip" type="button" data-scope="content" aria-pressed="false">Content</button>
+          <button class="scope-chip" type="button" data-scope="tags" aria-pressed="false">Tags</button>
+        </div>
+      </div>
+
+      <div class="rail-section">
+        <label class="control">
+          <span>Type</span>
+          <select id="filter-type">
+            <option value="">All types</option>
+          </select>
+        </label>
+        <label class="control">
+          <span>Concept</span>
+          <select id="concept-picker">
+            <option value="">Select concept</option>
+          </select>
+        </label>
+        <label class="control">
+          <span>Layout</span>
+          <select id="layout">
+            <option value="force">Force field</option>
+            <option value="td">Top-down</option>
+            <option value="lr">Left to right</option>
+            <option value="radialout">Radial</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="rail-section">
+        <div class="rail-title">Bundle</div>
+        <div class="stat-grid">
+          <div class="stat"><b id="stat-concepts">0</b><span>Concepts</span></div>
+          <div class="stat"><b id="stat-edges">0</b><span>Relations</span></div>
+          <div class="stat"><b id="stat-types">0</b><span>Types</span></div>
+          <div class="stat"><b id="stat-stale">0</b><span>Stale</span></div>
+        </div>
+      </div>
+
+      <div class="rail-section">
+        <div class="rail-title"><span id="results-label">Results</span> <b id="results-count"></b></div>
+        <ul id="results"></ul>
+        <p id="results-empty" class="rail-empty">Type to search titles, IDs, tags, descriptions, and concept bodies.</p>
+      </div>
+    </aside>
+
+    <section class="graph-panel" tabindex="0" aria-label="Concept relationship graph">
+      <div id="graph"></div>
+      <div id="graph-labels" aria-hidden="true"></div>
+      <div class="graph-overlay graph-overlay-top">
+        <span id="graph-count"></span>
+        <span id="viewer-status" role="status" aria-live="polite"></span>
+      </div>
+      <div class="graph-overlay graph-overlay-bottom">
+        <div id="graph-legend" class="legend" role="group" aria-label="Filter by concept type"></div>
+        <div class="graph-tools">
+          <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in" data-tooltip="Zoom in">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M11 8v6"></path><path d="M8 11h6"></path></svg>
+          </button>
+          <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out" data-tooltip="Zoom out">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path><path d="M8 11h6"></path></svg>
+          </button>
+          <button id="fit-view" class="icon-button" type="button" aria-label="Fit graph to view" data-tooltip="Fit graph">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>
+          </button>
+          <button id="toggle-labels" class="icon-button" type="button" aria-pressed="true" aria-label="Show concept labels" data-tooltip="Labels">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2"></path><path d="M9 20h6"></path><path d="M12 4v16"></path></svg>
+          </button>
+          <button id="toggle-dim" class="icon-button" type="button" aria-pressed="false" aria-label="Hide concepts that do not match" data-tooltip="Isolate matches">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6h18"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
+          </button>
+          <button id="toggle-spin" class="icon-button" type="button" aria-pressed="false" aria-label="Auto-rotate the scene" data-tooltip="Auto-rotate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"></circle><ellipse cx="12" cy="12" rx="9" ry="4"></ellipse><path d="M12 3v18"></path></svg>
+          </button>
+          <button id="reset" class="icon-button" type="button" aria-label="Clear filters and reset view" data-tooltip="Clear filters">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></svg>
+          </button>
+        </div>
+      </div>
+      <div id="graph-tooltip" role="presentation" hidden></div>
+      <div id="graph-fallback" hidden>
+        <strong>The 3D graph could not start</strong>
+        <span id="graph-fallback-reason"></span>
+      </div>
+      <noscript>This viewer requires JavaScript.</noscript>
+    </section>
+
+    <aside id="detail" aria-label="Selected concept details">
+      <div id="detail-empty">
+        <strong>No concept selected</strong>
+        <p>Pick a graph node, a search result, or a concept from the rail.</p>
+      </div>
+      <article id="detail-content" hidden tabindex="-1">
+        <header class="detail-heading">
+          <div class="detail-heading-row">
+            <span class="type-chip" id="detail-type"></span>
+            <button id="focus-node" class="icon-button" type="button" aria-label="Center this concept in the graph" data-tooltip="Center in graph">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8"></circle><path d="M12 2v3"></path><path d="M12 19v3"></path><path d="M2 12h3"></path><path d="M19 12h3"></path></svg>
+            </button>
+          </div>
+          <h1 id="detail-title"></h1>
+          <code id="detail-id"></code>
+        </header>
+        <div class="badges" id="detail-badges"></div>
+        <dl class="frontmatter">
+          <dt>Description</dt><dd id="detail-description"></dd>
+          <dt>Resource</dt><dd id="detail-resource"></dd>
+          <dt>Tags</dt><dd id="detail-tags"></dd>
+          <dt>Generated</dt><dd id="detail-generated"></dd>
+          <dt>Verified</dt><dd id="detail-verified"></dd>
+          <dt>Sources</dt><dd id="detail-sources"></dd>
+        </dl>
+        <section class="body-section" aria-label="Concept content">
+          <div id="detail-body"></div>
+        </section>
+        <section id="detail-relations" hidden>
+          <div class="relations-group" id="detail-links-group" hidden>
+            <h2>Links to</h2>
+            <ul id="links-list"></ul>
+          </div>
+          <div class="relations-group" id="detail-backlinks" hidden>
+            <h2>Cited by</h2>
+            <ul id="backlinks-list"></ul>
+          </div>
+        </section>
+      </article>
+    </aside>
+  </main>
+
+  <script>
+window.BUNDLE_NAME = "YCoding";
+window.BUNDLE = {"bodies":{"architecture":"## Dependency Direction\n\nDependencies flow from Schema to Core and Protocol, then from Core and Protocol to Server, then to Client, CLI, and TUI. UI provides primitives to TUI. AI and plugin packages are consumed by Core.[^arch-doc]\n\n- **packages/schema** owns browser-safe branded IDs, public domain records, durable event payloads, and shared validation.[^arch-doc]\n- **packages/protocol** owns the public Effect `HttpApi` operation groups, transport schemas, middleware declarations, and OpenAPI assembly inputs.[^arch-doc]\n- **packages/core** owns session execution, instructions, permissions, filesystem, providers, configuration, subagent orchestration, project-artifact storage, and database schema.[^arch-doc]\n- **packages/server** maps Protocol operations to Core services and owns process lifecycle.[^arch-doc]\n- **packages/client** consumes the assembled Protocol implementing generated and handwritten API clients.[^arch-doc]\n- **packages/cli** owns the `ycoding` executable, command parsing, local-service discovery, and TUI startup.[^arch-doc]\n- **packages/tui** owns presentation and interaction, never canonical durable state.[^arch-doc]\n- **packages/ai** implements provider request lowering and response normalization across OpenAI, Anthropic, compatible-provider, and media protocols.[^arch-doc]\n- **packages/plugin** owns Effect and Promise plugin contracts, hooks, tools, and session extensions.[^arch-doc]\n\n## State Scopes\n\nState is scoped to process-global, Location, Session durable, Project durable, Global durable, and UI resident.[^arch-doc] Process-local coordinators optimize execution but cannot become the sole owner of user-visible state.[^readme]\n\n## Runtime Flow\n\nTerminal input flows through Client request, Protocol operation, Server handler, Location resolution, Core service, permission and guardrail mediation, durable admission, process-local execution wake, provider request through AI, durable events and projections, event feed, canonical Client reads, bounded TUI read model, and terminal render.[^arch-doc]\n\n## Workspace Boundary\n\nThe active package set is explicit and enforced by `script/ycoding-workspace.ts`.[^arch-doc] Desktop, browser, console, website, and legacy SDK packages are outside the product boundary and must not be restored.[^contributing]\n\n## Authority Order\n\nWhen sources disagree, the order is: executable behavior and tests, Schema public shapes, Protocol operations, Core runtime behavior, `docs` documentation and `specs/v2` contracts, package AGENTS.md, generated clients, and upstream material last.[^agents]\n\n## Related Concepts\n\n- [Session Execution and Autonomy](./session.md) — sessions are the durable execution unit owned by Core\n- [Session Guardrails](./session-guardrails.md) — guardrails mediate session shell and mutation actions\n- [Durable Background Subagents](./subagents.md) — subagents are durable child sessions orchestrated by Core\n- [Project Artifacts and Customization](./project-artifacts.md) — artifact storage lives in Core\n- [Provider Integration and Cache](./provider-integration.md) — provider request lowering is owned by packages/ai\n- [Coding Conventions](./repository-preference.md) — architecture authority order and package boundaries\n\n[^arch-doc]: repo:///docs/architecture.md\n[^readme]: repo:///README.md\n[^contributing]: repo:///CONTRIBUTING.md\n[^agents]: repo:///AGENTS.md","project-artifacts":"## Supported Kinds\n\nProject artifacts support `skill`, `command`, `agent`, and `plugin` kinds. Scopes are `project` and `global`.[^runtime-doc]\n\n## Lifecycle Stages\n\nValidated lifecycle stages are `trial`, `active`, `degraded`, `disabled`, and `quarantine` with tested transition rules.[^runtime-doc]\n\n## Mutation Rules\n\nArtifact mutations must use the validated store lifecycle, revisions, digests, preview/confirmation tokens, provenance, and version transitions. The system does not write directly into adapter-owned source directories.[^runtime-doc]\n\n## Session Skill Status\n\nSession skill status derives from durable messages and current instruction keys. No second independent skill-status authority is stored. Agent switch and completed compaction deactivate prior skills with explicit reasons. Active conflicts are computed against active skills and instruction declarations.[^runtime-doc]\n\n## Related Concepts\n\n- [Session Execution and Autonomy](./session.md) — session skills derive from durable messages and instruction keys\n- [Package Architecture](./architecture.md) — artifact storage lives in Core\n- [Coding Conventions](./repository-preference.md) — artifact conventions follow repository standards\n\n[^runtime-doc]: repo:///docs/runtime.md","provider-integration":"## Provider Request Lowering\n\n`packages/ai` owns provider request lowering and response normalization across OpenAI, Anthropic, compatible-provider protocols, reasoning, tool calls, media, prompt-cache controls, and normalized usage telemetry. Core chooses policy and context; AI translates into provider wire formats.[^arch-doc]\n\n## Prompt Caching\n\nSeparate provider prompt caching, TUI cache diagnostics, project-artifact reuse, and provider quota reporting. Missing provider cache telemetry means unreported, not zero. Cache optimization must not swallow provider errors, change tool semantics, or trade correctness for hit rate.[^runtime-doc]\n\n### Adaptive Anthropic TTL\n\nThe `adaptive` policy starts every namespace at five minutes. After two provider-reported reusable cache reads or writes for the same stable namespace within five minutes, later requests use the one-hour bucket. Missing cache telemetry, a namespace change, a stale observation, or a model without published extended-TTL support keeps the five-minute bucket. This process-local optimization is bounded to 1024 namespaces and is not required for correctness.[^efficiency-doc]\n\n### OpenAI Prompt Cache\n\nDirect OpenAI Chat and Responses requests on GPT-5.6 and later use explicit breakpoints by default under `openai_mode: \"auto\"`. Older direct OpenAI models remain implicit. OpenAI-compatible gateways and unsupported model families fall back to implicit mode. Extended retention is opt-in via `openai_extended_retention`.[^config-doc]\n\n### Cache Policy and Namespace\n\nThe cache policy revision is part of the prompt-cache namespace. The process-local cache runtime tracks provider-reported read and write usage by stable namespace and is never required to reconstruct a Session.[^efficiency-doc]\n\n## OpenAI Responses Continuation\n\nSame-turn OpenAI Responses continuation is process-local and opt-in. The runtime never enables provider-side storage to obtain continuation. A stored response is reused only when Session execution, route, model, prompt-cache namespace, system digest, tool digest, and semantic request-options digest all match. Continuation state is cleared on execution end, interruption, compaction, deletion, or fingerprint mismatch.[^runtime-doc]\n\n## Usage Reporting\n\nProvider-usage refresh is read-only and best effort. It must never block Session startup or model execution. Unknown quota values are absent and render as unreported; never coerce them to zero. Never expose provider credentials, credential IDs, account emails, arbitrary response headers, or raw usage payloads through Protocol, logs, events, or TUI state.[^runtime-doc]\n\n### Session Diagnostics\n\nSession diagnostics expose a bounded request summary: logical requests, transport attempts, helper calls, continued requests, fallbacks, raw token categories, estimated cost, and the latest cache invalidation reason. Only the first eight characters of the latest prompt-cache namespace are exposed; prompt content, full cache keys, system digests, tool digests, and internal provider-request events remain private. When any request lacks catalog pricing, estimated request cost is absent and the TUI renders `Estimated cost unavailable` instead of `$0.00`.[^runtime-doc]\n\n## Model-Family Wire Fields\n\nGPT-5.6+ uses explicit prompt-cache options and breakpoints; pre-5.6 requests use compatible retention fields. Anthropic cache-control placement is preserved across direct and compatible provider routes.[^runtime-doc]\n\n## Related Concepts\n\n- [Package Architecture](./architecture.md) — provider request lowering is owned by packages/ai\n- [Session Execution and Autonomy](./session.md) — provider requests execute during session steps\n\n[^arch-doc]: repo:///docs/architecture.md\n[^runtime-doc]: repo:///docs/runtime.md\n[^efficiency-doc]: repo:///docs/provider-efficiency.md\n[^config-doc]: repo:///docs/configuration.md","repository-preference":"## TypeScript Conventions\n\n- Avoid `any` type. Rely on type inference. Use explicit annotations for exports and clarity.[^agents]\n- Use Bun APIs when possible, such as `Bun.file()`.[^agents]\n- Prefer functional array methods (`flatMap`, `filter`, `map`) over loops. Use type guards on filters to preserve downstream inference.[^agents]\n- In Effect generators, bind services to named variables before calling methods. Do not use nested service yields such as `yield* (yield* Foo.Service).bar()`.[^agents]\n\n## Imports\n\n- Never alias imports. No `import { foo as bar }`. No star imports (`import * as Foo`). Import module exported namespaces by name when needed.[^agents]\n- Prefer dynamic imports for heavy modules used only in selected paths. Destructure near the top of the narrowest scope. Avoid inline chains or `.then()`.[^agents]\n\n## Variables and Control Flow\n\n- Prefer `const` over `let`. Use ternaries or early returns instead of reassignment. Avoid `else`; use early returns.[^agents]\n\n## Testing\n\n- Use test-driven development for behavior changes: write focused regression test, observe failure, implement smallest fix, rerun targeted suites.[^agents]\n- Avoid mocks as much as possible. Do not use `globalThis.*` unless no realistic alternative exists.[^agents]\n- Test actual implementation behavior; do not duplicate production logic in tests.[^agents]\n\n## Branch Names and Commits\n\n- Use short branch names of at most three words separated by hyphens. No slashes or type prefixes (`feat/`).[^agents]\n- Use conventional commit-style messages: `type(scope): summary`. Valid types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`.[^agents]\n\n## Linting and Patterns\n\n- Enforced by oxlint (`@oxlintrc.json`) and ast-grep rules for: no drizzle column name, no effect die string, no import alias, no JSON parse cast, no nested Effect service yield, no star import.[^ast-grep]\n\n## Related Concepts\n\n- [Package Architecture](./architecture.md) — authority order and package boundaries\n- [Project Artifacts](./project-artifacts.md) — artifact conventions follow repository standards\n\n[^agents]: repo:///AGENTS.md\n[^ast-grep]: repo:///script/ast-grep/sgconfig.yml","session":"## Durable Admission\n\nA prompt is durably admitted before execution is scheduled. The durable pending row represents unconsumed work only. Promotion into the visible transcript occurs at a safe execution boundary.[^runtime-doc]\n\nReusing a Session ID adopts the existing session. Reusing a prompt message ID is accepted only for an exact retry with matching session, content, and delivery mode; conflicting reuse fails.[^runtime-doc]\n\n## Execution Ownership\n\n`SessionExecution` is process-global and keyed by Session ID. It uses a process-local coordinator to serialize drains for the same session, join explicit same-session resumes, coalesce advisory wakes, and allow different sessions to execute concurrently.[^runtime-doc]\n\nA drain discovers the session's Location when execution starts. Clustered execution ownership is not yet implemented.[^runtime-doc]\n\n## Steps and Provider Attempts\n\nOne step is one logical LLM request. Retryable pre-output failures reuse the same logical request ID; each transport start increments its physical-attempt count. A tool-result continuation is a new logical request. Context-overflow recovery completes the old request as a fallback, compacts the context, and rebuilds a new logical request.[^runtime-doc]\n\nThe durable provider-request ledger stores identifiers, model and route identity, stable prompt/cache digests, attempt counts, normalized tokens, cost, continuation mode, and invalidation reason. It does not store prompt, message, tool-result, or response text.[^runtime-doc]\n\nThe runtime reloads projected history before durable continuation. It does not delegate V2 orchestration to a legacy in-memory prompt loop.[^runtime-doc]\n\n## Helper Model Traffic\n\nSession titles and goal text are local by default: local title generation selects one sanitized line from the first user prompt and makes no provider request; local goal synthesis collapses whitespace without changing the request's meaning and makes no provider request. Model-generated title and goal behavior requires explicit `efficiency` modes. Compaction remains model-based.[^runtime-doc]\n\nModel-based helpers resolve the hidden agent's explicit model first, then `efficiency.helper_model`, then the current Session model. Helper provider requests use the same content-free request ledger as normal Session steps.[^runtime-doc]\n\n## Stable Tool Prefix\n\nThe provider sees one fixed `execute` tool definition describing the restricted JavaScript language and the search-first workflow. It does not embed the current MCP or plugin tool catalog. Connecting, disconnecting, or refreshing an MCP server therefore does not change the provider-visible `execute` schema or the prompt-cache tool digest.[^runtime-doc]\n\nMCP server instruction blocks are sorted by server ID, normalized to LF line endings, stripped of trailing whitespace, and limited to 2,048 UTF-8 bytes per server with an explicit truncation marker.[^runtime-doc]\n\n## Provider Prompt Caching\n\nThe cache policy revision is part of the prompt-cache namespace. The process-local cache runtime tracks provider-reported read and write usage by stable namespace. Two reusable observations within five minutes promote later requests for an extended-TTL-capable model to one hour. Missing telemetry, stale observations, namespace rotation, and unsupported model profiles remain at five minutes. The state is bounded, non-durable, and never required to reconstruct a Session.[^runtime-doc]\n\nDirect OpenAI Chat and Responses requests on GPT-5.6 and later use explicit breakpoints by default under `openai_mode: \"auto\"`. Older direct OpenAI models remain implicit, while compatible gateways and unsupported families omit the explicit fields. Model-based title, goal, and compaction calls use the same policy and observation runtime as normal Session steps.[^runtime-doc]\n\n## OpenAI Responses Continuation\n\nSame-turn OpenAI Responses continuation is process-local and opt-in through effective provider storage. The runtime never turns on `store` to obtain continuation.[^runtime-doc]\n\nA stored response can be reused only when the Session execution, route, model, prompt-cache namespace, system digest, tool digest, and semantic request-options digest all match. The next request sends `previous_response_id` plus only the message suffix after the represented response boundary; current system instructions and tools are always sent again.[^runtime-doc]\n\nContinuation state is cleared when the execution ends, is interrupted, compacts, is deleted, or changes fingerprint. Response IDs are not written to Session history, request diagnostics, or the durable provider-request ledger. If a continued request fails before observable output with an invalid-request error, the runtime clears the response state and retries the same logical request once with full history. A second failure follows the normal provider-error path.[^runtime-doc]\n\n## Prompt Delivery\n\n- **Steer** inputs promote at the next safe step boundary and require the active drain to continue.\n- **Queue** inputs remain pending until the session would otherwise become idle.\n- Promoting new user input resets the selected agent's step allowance.[^runtime-doc]\n\n## Autonomy Modes\n\nThree explicit modes are supported: `normal` (standard interactive), `yolo` (autonomous under permission policy), and `goal` (repeated continuation toward a durable goal). Goal state stores the goal text, status, iteration, no-progress count, maximum no-progress count, and last progress digest.[^runtime-doc]\n\nTerminal goal states are `completed`, `stopped`, and `exhausted`. A tool-only turn with no assistant text spends an iteration but does not increment the no-progress counter.[^runtime-doc]\n\n## TUI Transcript History\n\nThe hot transcript window holds the latest 50 completed messages plus every active or incomplete boundary. Archive page requests use `MESSAGE_PAGE_LIMIT` of 1000. Archived messages render through the same typed transcript components when expanded, and collapsed placeholders retain cursor and page metadata but no transcript payload.[^product-dir]\n\n## Related Concepts\n\n- [Package Architecture](./architecture.md) — session execution is owned by Core, part of the package architecture\n- [Session Guardrails](./session-guardrails.md) — guardrails mediate session shell and mutation actions\n- [Durable Background Subagents](./subagents.md) — subagents are durable child sessions\n- [Provider Integration and Cache](./provider-integration.md) — provider requests execute during session steps\n- [Project Artifacts](./project-artifacts.md) — session skills derive from project artifacts\n\n[^runtime-doc]: repo:///docs/runtime.md\n[^product-dir]: repo:///docs/product-direction.md","session-guardrails":"## Independence from Permissions\n\nSession guardrails are a root-Session-family safety boundary independent of agent permissions and autonomy mode. Permission approval does not bypass guardrails, and guardrail approval does not widen an agent permission denial.[^runtime-doc]\n\n## Mediation Scope\n\nGuardrails mediate direct Session shell, tool shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation.[^runtime-doc]\n\n## Review Behavior\n\n- Recognized catastrophic shell commands are denied before process creation.\n- Recognized high-impact shell and mutation actions create a distinct human review.\n- Guardrail reviews remain reviews in `normal`, `yolo`, and `goal` modes and are not affected by TUI permission auto-approve.\n- Running shell, running subagent, and pending review caps are shared by the root Session family and release on settlement or interruption.[^runtime-doc]\n\n## Custom Rules\n\nCustom rules load from the global YCoding config `guardrails` directory. Malformed enabled custom files produce a visible invalid-file count and fail closed with review for mutation actions.[^runtime-doc]\n\n## Rehydration\n\nPending reviews rehydrate through the canonical Session guardrail API and live events, including reviews initiated by child Sessions.[^runtime-doc]\n\n## Location Scope\n\n`SessionGuardrail` is Location-scoped but evaluates by Session ID. It resolves the root Session through `SessionStore`, shares counters across that family, and mediates mutation immediately before side effects.[^arch-doc]\n\n## Related Concepts\n\n- [Session Execution and Autonomy](./session.md) — guardrails mediate session shell and mutation actions\n- [Durable Background Subagents](./subagents.md) — guardrails apply to child session actions\n- [Package Architecture](./architecture.md) — guardrails are Location-scoped\n\n[^runtime-doc]: repo:///docs/runtime.md\n[^arch-doc]: repo:///docs/architecture.md","subagents":"## Durable Child Sessions\n\nSubagents are durable child sessions and always launch in the background. Parent sessions receive lifecycle updates and can inspect child state after reconnect or restart.[^runtime-doc]\n\n## Ownership and Nesting\n\nOrchestration preserves explicit agent selection, bounded nesting, permission ceilings, and parent-child ownership. In-memory task lists are not a substitute for durable orchestration.[^product-dir]\n\n## Rehydration\n\nTUI subagent indicators must rehydrate from durable state after reconnect or restart. Requiring the user to enter each child session to rebuild counts is a defect.[^agents]\n\n## Lifecycle Communication\n\nParent sessions receive lifecycle updates from child subagents. Children report progress back to their parent session while maintaining durable execution state.[^runtime-doc]\n\n## Related Concepts\n\n- [Session Execution and Autonomy](./session.md) — subagents are durable child sessions\n- [Session Guardrails](./session-guardrails.md) — guardrails mediate child session actions\n- [Package Architecture](./architecture.md) — subagent orchestration is owned by Core\n\n[^runtime-doc]: repo:///docs/runtime.md\n[^product-dir]: repo:///docs/product-direction.md\n[^agents]: repo:///AGENTS.md"},"edges":[{"data":{"id":"edge-1","source":"architecture","target":"session"}},{"data":{"id":"edge-2","source":"architecture","target":"session-guardrails"}},{"data":{"id":"edge-3","source":"architecture","target":"subagents"}},{"data":{"id":"edge-4","source":"architecture","target":"project-artifacts"}},{"data":{"id":"edge-5","source":"architecture","target":"provider-integration"}},{"data":{"id":"edge-6","source":"architecture","target":"repository-preference"}},{"data":{"id":"edge-7","source":"project-artifacts","target":"session"}},{"data":{"id":"edge-8","source":"project-artifacts","target":"architecture"}},{"data":{"id":"edge-9","source":"project-artifacts","target":"repository-preference"}},{"data":{"id":"edge-10","source":"provider-integration","target":"architecture"}},{"data":{"id":"edge-11","source":"provider-integration","target":"session"}},{"data":{"id":"edge-12","source":"repository-preference","target":"architecture"}},{"data":{"id":"edge-13","source":"repository-preference","target":"project-artifacts"}},{"data":{"id":"edge-14","source":"session-guardrails","target":"session"}},{"data":{"id":"edge-15","source":"session-guardrails","target":"subagents"}},{"data":{"id":"edge-16","source":"session-guardrails","target":"architecture"}},{"data":{"id":"edge-17","source":"session","target":"architecture"}},{"data":{"id":"edge-18","source":"session","target":"session-guardrails"}},{"data":{"id":"edge-19","source":"session","target":"subagents"}},{"data":{"id":"edge-20","source":"session","target":"provider-integration"}},{"data":{"id":"edge-21","source":"session","target":"project-artifacts"}},{"data":{"id":"edge-22","source":"subagents","target":"session"}},{"data":{"id":"edge-23","source":"subagents","target":"session-guardrails"}},{"data":{"id":"edge-24","source":"subagents","target":"architecture"}}],"nodes":[{"data":{"color":"#087f8c","description":"The YCoding repository enforces explicit package boundaries, directed dependencies, and state scopes driven by a TUI-only product identity.","generated":{},"id":"architecture","label":"Package Architecture and Dependency Direction","resource":"","size":46,"sources":[{"id":"arch-doc","resource":"repo:///docs/architecture.md"},{"id":"readme","resource":"repo:///README.md"},{"id":"contributing","resource":"repo:///CONTRIBUTING.md"},{"id":"agents","resource":"repo:///AGENTS.md"}],"stale":false,"stale_after":"","status":"stable","tags":["packages","dependency","boundaries","state-scope"],"trust_tier":"unverified","type":"Architecture","verified":[]}},{"data":{"color":"#9a5b12","description":"Project artifacts are the managed customization system for skills, commands, agents, and plugin drafts with validated lifecycle, provenance, and rollback.","generated":{},"id":"project-artifacts","label":"Project Artifacts and Customization","resource":"","size":36,"sources":[{"id":"product-dir","resource":"repo:///docs/product-direction.md"},{"id":"runtime-doc","resource":"repo:///docs/runtime.md"},{"id":"spec-v2","resource":"repo:///specs/v2/catalog-config-plugin-lifecycle.md"},{"id":"readme","resource":"repo:///README.md"}],"stale":false,"stale_after":"","status":"stable","tags":["artifacts","customization","lifecycle","skills"],"trust_tier":"unverified","type":"Workflow","verified":[]}},{"data":{"color":"#087f8c","description":"Provider integration optimizes cost and cache reuse without changing semantic behavior, with stable prompt prefixes, cache controls, normalized usage reporting, and session diagnostics.","generated":{},"id":"provider-integration","label":"Provider Integration and Cache","resource":"","size":49,"sources":[{"id":"product-dir","resource":"repo:///docs/product-direction.md"},{"id":"runtime-doc","resource":"repo:///docs/runtime.md"},{"id":"arch-doc","resource":"repo:///docs/architecture.md"},{"id":"efficiency-doc","resource":"repo:///docs/provider-efficiency.md"},{"id":"config-doc","resource":"repo:///docs/configuration.md"}],"stale":false,"stale_after":"","status":"stable","tags":["providers","cache","usage","telemetry","efficiency"],"trust_tier":"unverified","type":"Architecture","verified":[]}},{"data":{"color":"#a23b72","description":"Explicit project-wide conventions for TypeScript, Effect, style, naming, imports, control flow, and testing as established by tracked instructions, linter configuration, and repeated authoritative evidence.","generated":{},"id":"repository-preference","label":"Coding Conventions and Repository Standards","resource":"","size":40,"sources":[{"id":"agents","resource":"repo:///AGENTS.md"},{"id":"contributing","resource":"repo:///CONTRIBUTING.md"},{"id":"oxlint","resource":"repo:///.oxlintrc.json"},{"id":"ast-grep","resource":"repo:///script/ast-grep/sgconfig.yml"}],"stale":false,"stale_after":"","status":"stable","tags":["conventions","style","typescript","testing"],"trust_tier":"unverified","type":"Repository Preference","verified":[]}},{"data":{"color":"#9a5b12","description":"Session guardrails provide a root-Session-family safety boundary independent of agent permissions and autonomy mode, mediating shell and mutation actions through human review.","generated":{},"id":"session-guardrails","label":"Session Guardrails","resource":"","size":39,"sources":[{"id":"runtime-doc","resource":"repo:///docs/runtime.md"},{"id":"spec-v2","resource":"repo:///specs/v2/session-guardrails.md"},{"id":"arch-doc","resource":"repo:///docs/architecture.md"}],"stale":false,"stale_after":"","status":"stable","tags":["guardrails","safety","permissions","review"],"trust_tier":"unverified","type":"Workflow","verified":[]}},{"data":{"color":"#9a5b12","description":"Sessions provide durable prompt admission, process-local execution, explicit autonomy modes, and prompt delivery vocabulary for the coding-agent runtime.","generated":{},"id":"session","label":"Session Execution and Autonomy","resource":"","size":63,"sources":[{"id":"runtime-doc","resource":"repo:///docs/runtime.md"},{"id":"arch-doc","resource":"repo:///docs/architecture.md"},{"id":"product-dir","resource":"repo:///docs/product-direction.md"},{"id":"spec-v2","resource":"repo:///specs/v2/session.md"}],"stale":false,"stale_after":"","status":"stable","tags":["session","execution","autonomy","orchestration"],"trust_tier":"unverified","type":"Workflow","verified":[]}},{"data":{"color":"#9a5b12","description":"Subagents are durable child sessions that run in the background with parent-child ownership, permission ceilings, explicit agent selection, and bounded nesting.","generated":{},"id":"subagents","label":"Durable Background Subagents","resource":"","size":36,"sources":[{"id":"runtime-doc","resource":"repo:///docs/runtime.md"},{"id":"product-dir","resource":"repo:///docs/product-direction.md"},{"id":"agents","resource":"repo:///AGENTS.md"}],"stale":false,"stale_after":"","status":"stable","tags":["subagents","orchestration","durable","background"],"trust_tier":"unverified","type":"Workflow","verified":[]}}],"palette":{"Architecture":"#087f8c","Repository Preference":"#a23b72","Workflow":"#9a5b12"},"types":["Architecture","Repository Preference","Workflow"]};
+  </script>
+  <script>
+(function () {
+  "use strict";
+
+  const bundle = window.BUNDLE;
+  const bundleName = window.BUNDLE_NAME;
+  const root = document.documentElement;
+  const byId = (id) => document.getElementById(id);
+
+  const panel = document.querySelector(".graph-panel");
+  const container = byId("graph");
+  const labelLayer = byId("graph-labels");
+  const tooltip = byId("graph-tooltip");
+  const fallback = byId("graph-fallback");
+  const statusText = byId("viewer-status");
+  const countText = byId("graph-count");
+  const typeSelect = byId("filter-type");
+  const conceptPicker = byId("concept-picker");
+  const layoutSelect = byId("layout");
+  const legend = byId("graph-legend");
+  const search = byId("search");
+  const scopeGroup = byId("search-scope");
+  const contentToggle = byId("toggle-content-search");
+  const resultList = byId("results");
+  const resultsEmpty = byId("results-empty");
+  const resultsCount = byId("results-count");
+  const resultsLabel = byId("results-label");
+
+  const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const THEME_KEY = "okf-viewer-theme";
+  const LABEL_BUDGET = 140;
+  const RESULT_BUDGET = 80;
+  const SEARCH_DEBOUNCE = 90;
+  const MIN_VIEW_DISTANCE = 130;
+
+  const nodes = bundle.nodes.map((entry) => Object.assign({}, entry.data));
+  const links = bundle.edges.map((entry) => ({
+    id: entry.data.id,
+    source: entry.data.source,
+    target: entry.data.target,
+  }));
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const outgoing = new Map();
+  const incoming = new Map();
+  for (const entry of bundle.edges) {
+    const { source, target } = entry.data;
+    if (!outgoing.has(source)) outgoing.set(source, []);
+    if (!incoming.has(target)) incoming.set(target, []);
+    outgoing.get(source).push(target);
+    incoming.get(target).push(source);
+  }
+
+  // One flattened haystack per field keeps ranked search allocation-free per keystroke.
+  const index = new Map();
+  for (const node of nodes) {
+    const body = bundle.bodies[node.id] || "";
+    const flatBody = body.replace(/\s+/g, " ").trim();
+    node.__degree =
+      (outgoing.get(node.id) || []).length + (incoming.get(node.id) || []).length;
+    index.set(node.id, {
+      title: String(node.label || ""),
+      titleLower: String(node.label || "").toLowerCase(),
+      idLower: node.id.toLowerCase(),
+      typeLower: String(node.type || "").toLowerCase(),
+      tagsLower: (node.tags || []).join(" ").toLowerCase(),
+      description: String(node.description || ""),
+      descriptionLower: String(node.description || "").toLowerCase(),
+      body: flatBody,
+      bodyLower: flatBody.toLowerCase(),
+    });
+  }
+
+  const labelElements = new Map();
+  const legendChips = [];
+  const hslCache = new Map();
+  const highlightNodes = new Set();
+  const highlightLinks = new Set();
+  const matched = new Set(nodes.map((node) => node.id));
+
+  let graph = null;
+  let theme = { dark: true, background: "#05070d", edge: "#45607f", accent: "#34e2ff" };
+  let themeMode = "auto";
+  let selectedId = null;
+  let hoveredId = null;
+  let labelsVisible = true;
+  let spinning = false;
+  let isolate = false;
+  let isolatedKey = "";
+  let searchContent = true;
+  let scope = "all";
+  let query = "";
+  let results = [];
+  let activeResult = -1;
+  let fitted = false;
+  let fitTimer = null;
+  let frame = null;
+  let searchTimer = null;
+  let statusTimer = null;
+
+  document.title = `${bundleName} - OKF Viewer`;
+  byId("bundle-name").textContent = bundleName;
+
+  function setStatus(message, transient) {
+    if (statusTimer !== null) {
+      window.clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+    statusText.textContent = message || "";
+    if (message && transient) {
+      statusTimer = window.setTimeout(() => {
+        statusText.textContent = "";
+        statusTimer = null;
+      }, 2600);
+    }
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(Math.max(value, min), max);
+  }
+
+  function hexToHsl(hex) {
+    if (hslCache.has(hex)) return hslCache.get(hex);
+    const match = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+    const rgb = match
+      ? [parseInt(match[1], 16) / 255, parseInt(match[2], 16) / 255, parseInt(match[3], 16) / 255]
+      : [0.5, 0.5, 0.5];
+    const [r, g, b] = rgb;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const lightness = (max + min) / 2;
+    let hue = 0;
+    let saturation = 0;
+    if (max !== min) {
+      const delta = max - min;
+      saturation = delta / (1 - Math.abs(2 * lightness - 1));
+      if (max === r) hue = ((g - b) / delta) % 6;
+      else if (max === g) hue = (b - r) / delta + 2;
+      else hue = (r - g) / delta + 4;
+      hue *= 60;
+      if (hue < 0) hue += 360;
+    }
+    const value = {
+      h: Math.round(hue),
+      s: Math.round(saturation * 100),
+      l: Math.round(lightness * 100),
+    };
+    hslCache.set(hex, value);
+    return value;
+  }
+
+  // The repository palette is tuned for paper; the dark deck lifts it into a luminous band.
+  function themedColor(hex, alpha) {
+    const { h, s, l } = hexToHsl(hex);
+    const lightness = theme.dark ? clamp(l, 56, 74) : l;
+    const saturation = theme.dark ? Math.min(s + 20, 92) : s;
+    return `hsla(${h}, ${saturation}%, ${lightness}%, ${alpha})`;
+  }
+
+  function nodeOf(endpoint) {
+    return typeof endpoint === "object" && endpoint !== null ? endpoint : nodeById.get(endpoint);
+  }
+
+  function nodeColor(node) {
+    if (node.__filtered) return themedColor(node.color, theme.dark ? 0.1 : 0.08);
+    if (node.id === selectedId) return themedColor(node.color, 1);
+    if (highlightNodes.size && !highlightNodes.has(node.id)) return themedColor(node.color, 0.28);
+    return themedColor(node.color, 0.94);
+  }
+
+  function nodeValue(node) {
+    const base = Math.max(1.4, (node.size || 30) / 9) + Math.min(node.__degree || 0, 8) * 0.35;
+    return node.id === selectedId ? base * 2 : base;
+  }
+
+  function linkColor(link) {
+    const source = nodeOf(link.source);
+    const target = nodeOf(link.target);
+    if ((source && source.__filtered) || (target && target.__filtered)) {
+      return themedColor(theme.edge, 0.05);
+    }
+    if (highlightLinks.has(link)) return themedColor(theme.accent, 0.95);
+    if (highlightLinks.size) return themedColor(theme.edge, 0.16);
+    return themedColor(theme.edge, theme.dark ? 0.5 : 0.62);
+  }
+
+  function linkWidth(link) {
+    return highlightLinks.has(link) ? 1.8 : 0.5;
+  }
+
+  function linkParticles(link) {
+    return !motionQuery.matches && highlightLinks.has(link) ? 3 : 0;
+  }
+
+  function refreshStyles() {
+    if (!graph) return;
+    graph
+      .nodeColor(nodeColor)
+      .nodeVal(nodeValue)
+      .linkColor(linkColor)
+      .linkWidth(linkWidth)
+      .linkDirectionalParticles(linkParticles);
+    for (const chip of legendChips) {
+      chip.swatch.style.color = themedColor(bundle.palette[chip.type], 1);
+      chip.swatch.style.backgroundColor = themedColor(bundle.palette[chip.type], 1);
+    }
+    if (selectedId) {
+      const node = nodeById.get(selectedId);
+      if (node) byId("detail-type").style.color = themedColor(node.color, 1);
+    }
+  }
+
+  function readTokens() {
+    const styles = getComputedStyle(root);
+    theme = {
+      dark: root.dataset.theme !== "light",
+      background: styles.getPropertyValue("--graph-bg").trim() || "#05070d",
+      edge: styles.getPropertyValue("--edge").trim() || "#45607f",
+      accent: styles.getPropertyValue("--accent").trim() || "#34e2ff",
+    };
+    hslCache.clear();
+  }
+
+  function applyTheme(mode) {
+    themeMode = mode;
+    root.dataset.theme = mode === "auto" ? (darkQuery.matches ? "dark" : "light") : mode;
+    for (const name of ["auto", "light", "dark"]) {
+      byId(`theme-${name}`).setAttribute("aria-pressed", String(name === mode));
+    }
+    readTokens();
+    if (graph) graph.backgroundColor(theme.background);
+    refreshStyles();
+    renderLabels();
+  }
+
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    if (stored === "light" || stored === "dark" || stored === "auto") themeMode = stored;
+  } catch (error) {
+    themeMode = "auto";
+  }
+
+  for (const name of ["auto", "light", "dark"]) {
+    byId(`theme-${name}`).addEventListener("click", () => {
+      applyTheme(name);
+      try {
+        window.localStorage.setItem(THEME_KEY, name);
+      } catch (error) {
+        setStatus("Theme choice is not persisted in this context", true);
+      }
+    });
+  }
+  darkQuery.addEventListener("change", () => {
+    if (themeMode === "auto") applyTheme("auto");
+  });
+  motionQuery.addEventListener("change", () => {
+    refreshStyles();
+  });
+
+  for (const type of bundle.types) {
+    const option = document.createElement("option");
+    option.value = type;
+    option.textContent = type;
+    typeSelect.appendChild(option);
+
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "legend-chip";
+    chip.setAttribute("aria-pressed", "false");
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    const text = document.createElement("span");
+    text.textContent = type;
+    chip.append(swatch, text);
+    chip.addEventListener("click", () => setTypeFilter(typeSelect.value === type ? "" : type));
+    legend.appendChild(chip);
+    legendChips.push({ type, chip, swatch });
+  }
+
+  for (const node of [...nodes].sort((a, b) => a.label.localeCompare(b.label))) {
+    const option = document.createElement("option");
+    option.value = node.id;
+    option.textContent = node.label;
+    conceptPicker.appendChild(option);
+
+    const label = document.createElement("div");
+    label.className = "node-label";
+    label.textContent = node.label;
+    label.style.display = "none";
+    labelLayer.appendChild(label);
+    labelElements.set(node.id, label);
+  }
+
+  byId("stat-concepts").textContent = String(nodes.length);
+  byId("stat-edges").textContent = String(links.length);
+  byId("stat-types").textContent = String(bundle.types.length);
+  byId("stat-stale").textContent = String(nodes.filter((node) => node.stale).length);
+
+  applyTheme(themeMode);
+
+  if (typeof window.ForceGraph3D !== "function") {
+    byId("graph-fallback-reason").textContent =
+      "Check access to the pinned jsDelivr libraries, then reload.";
+    fallback.hidden = false;
+    setStatus("3D renderer unavailable");
+  } else {
+    graph = window.ForceGraph3D()(container)
+      .width(panel.clientWidth || container.clientWidth)
+      .height(panel.clientHeight || container.clientHeight)
+      .graphData({ nodes, links })
+      .backgroundColor(theme.background)
+      .showNavInfo(false)
+      .nodeRelSize(4)
+      .nodeResolution(20)
+      .nodeOpacity(1)
+      .nodeLabel(() => "")
+      .linkOpacity(1)
+      .linkDirectionalArrowLength(3.4)
+      .linkDirectionalArrowRelPos(1)
+      .linkDirectionalParticleWidth(1.7)
+      .dagLevelDistance(58)
+      .onDagError(() => undefined)
+      .onNodeHover(handleHover)
+      .onNodeClick((node) => {
+        if (node.__filtered) return;
+        selectConcept(node.id, true);
+      })
+      .onBackgroundClick(clearSelection)
+      .onEngineStop(() => {
+        if (fitted) return;
+        fitted = true;
+        fitGraph();
+      });
+    refreshStyles();
+  }
+
+  function handleHover(node) {
+    const active = node && !node.__filtered ? node : null;
+    hoveredId = active ? active.id : null;
+    container.style.cursor = active ? "pointer" : "grab";
+    updateHighlight(active ? active.id : selectedId);
+    if (!active) {
+      tooltip.hidden = true;
+      return;
+    }
+    tooltip.replaceChildren();
+    const title = document.createElement("strong");
+    title.textContent = active.label;
+    const meta = document.createElement("span");
+    const facts = [active.type];
+    if (active.__degree) facts.push(`${active.__degree} links`);
+    if (active.status && active.status !== "stable") facts.push(active.status);
+    if (active.stale) facts.push("stale");
+    meta.textContent = facts.join(" / ");
+    tooltip.append(title, meta);
+    tooltip.hidden = false;
+    positionTooltip(active);
+  }
+
+  function projection(node) {
+    if (!graph || node.x === undefined) return null;
+    const camera = graph.cameraPosition();
+    const controls = graph.controls();
+    const target = controls && controls.target ? controls.target : { x: 0, y: 0, z: 0 };
+    const forward = {
+      x: target.x - camera.x,
+      y: target.y - camera.y,
+      z: target.z - camera.z,
+    };
+    const toNode = { x: node.x - camera.x, y: node.y - camera.y, z: node.z - camera.z };
+    const depth = toNode.x * forward.x + toNode.y * forward.y + toNode.z * forward.z;
+    if (depth <= 0) return null;
+    const screen = graph.graph2ScreenCoords(node.x, node.y, node.z);
+    return { x: screen.x, y: screen.y, distance: Math.hypot(toNode.x, toNode.y, toNode.z) };
+  }
+
+  function positionTooltip(node) {
+    const point = projection(node);
+    if (!point) {
+      tooltip.hidden = true;
+      return;
+    }
+    const width = tooltip.offsetWidth;
+    const height = tooltip.offsetHeight;
+    const left = clamp(point.x - width / 2, 8, Math.max(8, container.clientWidth - width - 8));
+    const top = clamp(point.y - height - 16, 8, Math.max(8, container.clientHeight - height - 8));
+    tooltip.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+  }
+
+  function updateHighlight(id) {
+    highlightNodes.clear();
+    highlightLinks.clear();
+    if (id) {
+      highlightNodes.add(id);
+      for (const link of graph ? graph.graphData().links : links) {
+        const source = nodeOf(link.source);
+        const target = nodeOf(link.target);
+        if (!source || !target) continue;
+        if (source.id === id || target.id === id) {
+          highlightLinks.add(link);
+          highlightNodes.add(source.id);
+          highlightNodes.add(target.id);
+        }
+      }
+    }
+    refreshStyles();
+    renderLabels();
+  }
+
+  function renderLabels() {
+    if (!graph) return;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const visible = graph.graphData().nodes;
+    const budgeted = visible.length <= LABEL_BUDGET;
+
+    for (const node of nodes) {
+      const element = labelElements.get(node.id);
+      if (!element) continue;
+      const active = node.id === selectedId || node.id === hoveredId;
+      const related = highlightNodes.has(node.id);
+      if (!labelsVisible || node.__filtered || !(active || related || budgeted)) {
+        element.style.display = "none";
+        continue;
+      }
+      const point = projection(node);
+      if (
+        !point ||
+        point.x < -60 ||
+        point.y < -40 ||
+        point.x > width + 60 ||
+        point.y > height + 40
+      ) {
+        element.style.display = "none";
+        continue;
+      }
+      element.style.display = "block";
+      element.style.opacity = String(active ? 1 : clamp(1.15 - point.distance / 900, 0.35, 1));
+      element.style.transform =
+        `translate3d(${Math.round(point.x)}px, ${Math.round(point.y)}px, 0) translate(-50%, 12px)`;
+      element.classList.toggle("is-active", active);
+    }
+  }
+
+  function orbitBy(azimuth, elevation) {
+    if (!graph) return;
+    const camera = graph.cameraPosition();
+    const controls = graph.controls();
+    const target = controls && controls.target ? controls.target : { x: 0, y: 0, z: 0 };
+    const dx = camera.x - target.x;
+    const dy = camera.y - target.y;
+    const dz = camera.z - target.z;
+    const radius = Math.hypot(dx, dy, dz) || 1;
+    const angle = Math.atan2(dz, dx) + azimuth;
+    const polar = clamp(Math.acos(clamp(dy / radius, -1, 1)) + elevation, 0.2, Math.PI - 0.2);
+    graph.cameraPosition({
+      x: target.x + radius * Math.sin(polar) * Math.cos(angle),
+      y: target.y + radius * Math.cos(polar),
+      z: target.z + radius * Math.sin(polar) * Math.sin(angle),
+    });
+  }
+
+  function dolly(factor) {
+    if (!graph) return;
+    const camera = graph.cameraPosition();
+    const controls = graph.controls();
+    const target = controls && controls.target ? controls.target : { x: 0, y: 0, z: 0 };
+    const dx = camera.x - target.x;
+    const dy = camera.y - target.y;
+    const dz = camera.z - target.z;
+    const distance = Math.hypot(dx, dy, dz) || 1;
+    const scaled = clamp(distance * factor, 24, 6000) / distance;
+    graph.cameraPosition(
+      { x: target.x + dx * scaled, y: target.y + dy * scaled, z: target.z + dz * scaled },
+      target,
+      motionQuery.matches ? 0 : 180
+    );
+  }
+
+  // zoomToFit collapses onto a tiny or still-expanding layout, which parks the camera
+  // inside a node; the floor pushes it back out once the transition lands.
+  function ensureViewingDistance() {
+    if (!graph) return;
+    const camera = graph.cameraPosition();
+    const controls = graph.controls();
+    const target = controls && controls.target ? controls.target : { x: 0, y: 0, z: 0 };
+    const dx = camera.x - target.x;
+    const dy = camera.y - target.y;
+    const dz = camera.z - target.z;
+    const distance = Math.hypot(dx, dy, dz) || 1;
+    if (distance >= MIN_VIEW_DISTANCE) return;
+    const ratio = MIN_VIEW_DISTANCE / distance;
+    graph.cameraPosition(
+      { x: target.x + dx * ratio, y: target.y + dy * ratio, z: target.z + dz * ratio },
+      target,
+      0
+    );
+  }
+
+  function fitGraph() {
+    if (!graph) return;
+    const duration = motionQuery.matches ? 0 : 420;
+    graph.zoomToFit(duration, 70);
+    if (fitTimer !== null) window.clearTimeout(fitTimer);
+    fitTimer = window.setTimeout(() => {
+      fitTimer = null;
+      ensureViewingDistance();
+    }, duration + 40);
+  }
+
+  // Any deliberate camera move owns the view: a queued auto-fit or distance correction
+  // firing afterwards is what snapped the camera back off a clicked node.
+  function cancelAutoFit() {
+    if (fitTimer !== null) {
+      window.clearTimeout(fitTimer);
+      fitTimer = null;
+    }
+    fitted = true;
+  }
+
+  // Offsetting along the current view direction stays stable for a node sitting at the origin.
+  function focusNode(id) {
+    if (!graph) return;
+    const node = nodeById.get(id);
+    if (!node || node.x === undefined) return;
+    cancelAutoFit();
+    const camera = graph.cameraPosition();
+    const dx = camera.x - node.x;
+    const dy = camera.y - node.y;
+    const dz = camera.z - node.z;
+    const distance = Math.hypot(dx, dy, dz) || 1;
+    const ratio = 150 / distance;
+    graph.cameraPosition(
+      {
+        x: node.x + dx * ratio,
+        y: node.y + dy * ratio,
+        z: node.z + dz * ratio,
+      },
+      node,
+      motionQuery.matches ? 0 : 700
+    );
+  }
+
+  function setTypeFilter(value) {
+    typeSelect.value = value;
+    for (const chip of legendChips) {
+      chip.chip.setAttribute("aria-pressed", String(chip.type === value));
+    }
+    runSearch();
+  }
+
+  /* ---------- search ---------- */
+
+  function scoreNode(node, term) {
+    const entry = index.get(node.id);
+    const wantTitle = scope === "all" || scope === "title";
+    const wantTags = scope === "all" || scope === "tags";
+    const wantContent = scope === "content" || (scope === "all" && searchContent);
+    let score = 0;
+    let where = "";
+
+    if (wantTitle) {
+      const at = entry.titleLower.indexOf(term);
+      if (at === 0) {
+        score += 3200;
+        where = "title";
+      } else if (at > 0) {
+        score += 2000;
+        where = "title";
+      }
+      if (entry.idLower.includes(term)) {
+        score += 1200;
+        where = where || "id";
+      }
+    }
+    if (wantTags && entry.tagsLower.includes(term)) {
+      score += 900;
+      where = where || "tag";
+    }
+    if ((scope === "all" || scope === "content") && entry.descriptionLower.includes(term)) {
+      score += 700;
+      where = where || "description";
+    }
+    if (wantContent && entry.bodyLower.includes(term)) {
+      let hits = 0;
+      let cursor = entry.bodyLower.indexOf(term);
+      while (cursor !== -1 && hits < 50) {
+        hits += 1;
+        cursor = entry.bodyLower.indexOf(term, cursor + term.length);
+      }
+      score += 300 + hits * 25;
+      where = where || "content";
+    }
+    if (scope === "all" && entry.typeLower.includes(term)) {
+      score += 400;
+      where = where || "type";
+    }
+    return { score, where, hits: 0 };
+  }
+
+  function snippetFragment(text, term) {
+    const at = text.toLowerCase().indexOf(term);
+    if (at === -1) return null;
+    const start = Math.max(0, at - 46);
+    const end = Math.min(text.length, at + term.length + 84);
+    const fragment = document.createDocumentFragment();
+    if (start > 0) fragment.append("…");
+    fragment.append(text.slice(start, at));
+    const mark = document.createElement("mark");
+    mark.textContent = text.slice(at, at + term.length);
+    fragment.append(mark, text.slice(at + term.length, end));
+    if (end < text.length) fragment.append("…");
+    return fragment;
+  }
+
+  function runSearch() {
+    const term = query;
+    const type = typeSelect.value;
+    matched.clear();
+    results = [];
+
+    for (const node of nodes) {
+      if (type && node.type !== type) {
+        node.__filtered = true;
+        continue;
+      }
+      if (!term) {
+        node.__filtered = false;
+        matched.add(node.id);
+        continue;
+      }
+      const scored = scoreNode(node, term);
+      node.__filtered = scored.score === 0;
+      if (scored.score > 0) {
+        matched.add(node.id);
+        results.push({ node, score: scored.score, where: scored.where });
+      }
+    }
+
+    results.sort((a, b) => b.score - a.score || a.node.label.localeCompare(b.node.label));
+    renderResults(term);
+    applyIsolation();
+
+    const visible = matched.size;
+    countText.textContent =
+      visible === nodes.length
+        ? `${nodes.length} concepts · ${links.length} relations`
+        : `${visible} of ${nodes.length} concepts`;
+    if (term && visible === 0) setStatus("No concept matches the current search");
+    else setStatus("");
+    refreshStyles();
+    renderLabels();
+  }
+
+  function renderResults(term) {
+    resultList.replaceChildren();
+    activeResult = -1;
+
+    if (!term) {
+      resultsLabel.textContent = "Concepts";
+      resultsCount.textContent = "";
+      resultsEmpty.hidden = false;
+      resultsEmpty.textContent = typeSelect.value
+        ? `Showing every ${typeSelect.value} concept. Type to search titles, tags, and bodies.`
+        : "Type to search titles, IDs, tags, descriptions, and concept bodies.";
+      return;
+    }
+
+    resultsLabel.textContent = "Results";
+    resultsCount.textContent = String(results.length);
+    resultsEmpty.hidden = results.length > 0;
+    resultsEmpty.textContent = "Nothing matched. Try another term or widen the scope.";
+
+    for (const result of results.slice(0, RESULT_BUDGET)) {
+      const entry = index.get(result.node.id);
+      const item = document.createElement("li");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "result";
+      button.style.setProperty("--result-accent", themedColor(result.node.color, 1));
+      button.setAttribute("aria-current", String(result.node.id === selectedId));
+
+      const title = document.createElement("span");
+      title.className = "result-title";
+      const titleMatch = snippetFragment(entry.title, term);
+      if (titleMatch) title.appendChild(titleMatch);
+      else title.textContent = entry.title;
+
+      const meta = document.createElement("span");
+      meta.className = "result-meta";
+      meta.textContent = `${result.node.type} · ${result.node.id}`;
+
+      button.append(title, meta);
+
+      const source = result.where === "content" ? entry.body : entry.description;
+      const snippet = snippetFragment(source, term);
+      if (snippet) {
+        const where = document.createElement("span");
+        where.className = "result-where";
+        where.textContent = result.where === "content" ? "in content" : `in ${result.where}`;
+        const text = document.createElement("span");
+        text.className = "result-snippet";
+        text.appendChild(snippet);
+        button.append(where, text);
+      }
+
+      button.addEventListener("click", () => selectConcept(result.node.id, true));
+      item.appendChild(button);
+      resultList.appendChild(item);
+    }
+
+    if (results.length > RESULT_BUDGET) {
+      const item = document.createElement("li");
+      item.className = "rail-empty";
+      item.textContent = `${results.length - RESULT_BUDGET} more matches not listed.`;
+      resultList.appendChild(item);
+    }
+  }
+
+  function moveActiveResult(step) {
+    const buttons = [...resultList.querySelectorAll(".result")];
+    if (!buttons.length) return;
+    activeResult = clamp(activeResult + step, 0, buttons.length - 1);
+    const button = buttons[activeResult];
+    button.focus();
+    button.scrollIntoView({ block: "nearest" });
+  }
+
+  function markSelectedResult() {
+    for (const button of resultList.querySelectorAll(".result")) {
+      button.setAttribute("aria-current", "false");
+    }
+    const items = [...resultList.querySelectorAll(".result")];
+    const position = results
+      .slice(0, RESULT_BUDGET)
+      .findIndex((result) => result.node.id === selectedId);
+    if (position >= 0 && items[position]) items[position].setAttribute("aria-current", "true");
+  }
+
+  // Isolation swaps the rendered subgraph; dimming keeps every node in the scene.
+  // Re-seeding graphData restarts the simulation, so it only runs on a real change.
+  function applyIsolation() {
+    if (!graph) return;
+    if (!isolate) {
+      if (!isolatedKey) return;
+      isolatedKey = "";
+      graph.graphData({ nodes, links });
+      return;
+    }
+    const kept = nodes.filter((node) => !node.__filtered);
+    const key = `${kept.length}:${kept.map((node) => node.id).join("|")}`;
+    if (key === isolatedKey) return;
+    isolatedKey = key;
+    const keptIds = new Set(kept.map((node) => node.id));
+    const keptLinks = links.filter((link) => {
+      const source = nodeOf(link.source);
+      const target = nodeOf(link.target);
+      return source && target && keptIds.has(source.id) && keptIds.has(target.id);
+    });
+    graph.graphData({ nodes: kept, links: keptLinks });
+  }
+
+  /* ---------- detail ---------- */
+
+  function actorEvent(event) {
+    if (!event || !event.by) return "-";
+    return event.at ? `${event.by} / ${event.at}` : String(event.by);
+  }
+
+  function appendBadge(container_, text, className) {
+    const badge = document.createElement("span");
+    badge.className = `badge ${className}`;
+    badge.textContent = text;
+    container_.appendChild(badge);
+  }
+
+  function setResource(element, value, label) {
+    element.replaceChildren();
+    if (!value) {
+      element.textContent = "-";
+      return;
+    }
+    if (/^https?:\/\//i.test(value)) {
+      const link = document.createElement("a");
+      link.href = value;
+      link.textContent = label || value;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      element.appendChild(link);
+      return;
+    }
+    element.textContent = label ? `${label} (${value})` : value;
+  }
+
+  function normalizeConceptTarget(href, currentId) {
+    if (!href || href.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(href)) return null;
+    const raw = href.split("#", 1)[0].split("?", 1)[0];
+    if (!raw.endsWith(".md")) return null;
+    const base = raw.startsWith("/") ? [] : currentId.split("/").slice(0, -1);
+    for (const part of raw.replace(/^\//, "").split("/")) {
+      if (!part || part === ".") continue;
+      if (part === "..") base.pop();
+      else base.push(part);
+    }
+    const target = base.join("/").replace(/\.md$/, "");
+    return nodeById.has(target) ? target : null;
+  }
+
+  function escapeHtml(value) {
+    return String(value).replace(
+      /[&<>"']/g,
+      (character) =>
+        ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;",
+        })[character],
+    );
+  }
+
+  // marked has no footnote support, so citations are resolved before parsing.
+  function withFootnotes(markdown) {
+    const definitions = new Map();
+    const stripped = markdown.replace(
+      /^\[\^([^\]\s^]+)\]:[ \t]*(.*)$/gm,
+      (match, id, text) => {
+        definitions.set(id, text.trim());
+        return "";
+      },
+    );
+    if (!definitions.size) return markdown;
+    const order = [];
+    const linked = stripped.replace(/\[\^([^\]\s^]+)\]/g, (match, id) => {
+      if (!definitions.has(id)) return match;
+      if (order.indexOf(id) === -1) order.push(id);
+      const anchor = encodeURIComponent(id);
+      return `<sup class="fn-ref"><a href="#fn-${anchor}">${order.indexOf(id) + 1}</a></sup>`;
+    });
+    // Unreferenced definitions still belong in the list; leaving them inline would print raw syntax.
+    for (const id of definitions.keys()) {
+      if (order.indexOf(id) === -1) order.push(id);
+    }
+    const items = order
+      .map(
+        (id) =>
+          `<li id="fn-${encodeURIComponent(id)}">${escapeHtml(definitions.get(id))}</li>`,
+      )
+      .join("");
+    return `${linked.replace(/\n{3,}/g, "\n\n").trim()}\n\n<ol class="fn-list">${items}</ol>\n`;
+  }
+
+  function highlightBody(term) {
+    if (!term) return 0;
+    const element = byId("detail-body");
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    const targets = [];
+    while (walker.nextNode()) {
+      const text = walker.currentNode.nodeValue || "";
+      if (text.toLowerCase().includes(term)) targets.push(walker.currentNode);
+    }
+    let hits = 0;
+    for (const textNode of targets) {
+      const text = textNode.nodeValue;
+      const lower = text.toLowerCase();
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      let at = lower.indexOf(term);
+      while (at !== -1) {
+        fragment.append(text.slice(cursor, at));
+        const mark = document.createElement("mark");
+        mark.textContent = text.slice(at, at + term.length);
+        fragment.appendChild(mark);
+        hits += 1;
+        cursor = at + term.length;
+        at = lower.indexOf(term, cursor);
+      }
+      fragment.append(text.slice(cursor));
+      textNode.parentNode.replaceChild(fragment, textNode);
+    }
+    return hits;
+  }
+
+  function renderBody(conceptId) {
+    const element = byId("detail-body");
+    const markdown = bundle.bodies[conceptId] || "";
+    if (window.marked && window.DOMPurify) {
+      const rendered = window.marked.parse(withFootnotes(markdown), {
+        gfm: true,
+        breaks: false,
+      });
+      element.innerHTML = window.DOMPurify.sanitize(rendered, { USE_PROFILES: { html: true } });
+    } else {
+      element.textContent = markdown;
+      setStatus("Markdown shown as text because a renderer is unavailable");
+    }
+    element.querySelectorAll("a[href]").forEach((link) => {
+      const href = link.getAttribute("href");
+      // In-page anchors (footnotes) must stay in this document.
+      if (href && href.startsWith("#")) return;
+      const target = normalizeConceptTarget(href, conceptId);
+      if (!target) {
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        return;
+      }
+      link.removeAttribute("target");
+      link.removeAttribute("rel");
+      link.href = `#${encodeURIComponent(target)}`;
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        selectConcept(target, true);
+      });
+    });
+    const hits = highlightBody(query);
+    if (hits) setStatus(`${hits} content ${hits === 1 ? "match" : "matches"} highlighted`, true);
+  }
+
+  function renderRelations(conceptId) {
+    const section = byId("detail-relations");
+    const groups = [
+      { group: byId("detail-links-group"), list: byId("links-list"), ids: outgoing.get(conceptId) || [] },
+      { group: byId("detail-backlinks"), list: byId("backlinks-list"), ids: incoming.get(conceptId) || [] },
+    ];
+    let any = false;
+    for (const { group, list, ids } of groups) {
+      list.replaceChildren();
+      const unique = [...new Set(ids)];
+      group.hidden = unique.length === 0;
+      if (unique.length) any = true;
+      for (const id of unique) {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = (nodeById.get(id) || {}).label || id;
+        button.addEventListener("click", () => selectConcept(id, true));
+        item.appendChild(button);
+        list.appendChild(item);
+      }
+    }
+    section.hidden = !any;
+  }
+
+  function selectConcept(conceptId, moveCamera) {
+    const node = nodeById.get(conceptId);
+    if (!node) return;
+    selectedId = conceptId;
+    conceptPicker.value = conceptId;
+    updateHighlight(conceptId);
+    markSelectedResult();
+
+    byId("detail-empty").hidden = true;
+    byId("detail-content").hidden = false;
+    const chip = byId("detail-type");
+    chip.textContent = node.type;
+    chip.style.color = themedColor(node.color, 1);
+    byId("detail-title").textContent = node.label;
+    byId("detail-id").textContent = conceptId;
+    byId("detail-description").textContent = node.description || "-";
+    setResource(byId("detail-resource"), node.resource);
+
+    const tags = byId("detail-tags");
+    tags.replaceChildren();
+    if (node.tags && node.tags.length) {
+      for (const value of node.tags) {
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = value;
+        tags.appendChild(tag);
+      }
+    } else {
+      tags.textContent = "-";
+    }
+
+    const badges = byId("detail-badges");
+    badges.replaceChildren();
+    appendBadge(badges, node.status || "stable", `status-${node.status || "stable"}`);
+    appendBadge(
+      badges,
+      (node.trust_tier || "unverified").replace(/-/g, " "),
+      `trust-${node.trust_tier || "unverified"}`
+    );
+    if (node.stale) {
+      appendBadge(badges, node.stale_after ? `stale since ${node.stale_after}` : "stale", "stale");
+    } else if (node.stale_after) {
+      appendBadge(badges, `stale after ${node.stale_after}`, "fresh");
+    }
+
+    byId("detail-generated").textContent = actorEvent(node.generated);
+    byId("detail-verified").textContent =
+      node.verified && node.verified.length ? node.verified.map(actorEvent).join("; ") : "-";
+
+    const sources = byId("detail-sources");
+    sources.replaceChildren();
+    if (node.sources && node.sources.length) {
+      const list = document.createElement("ul");
+      list.className = "sources-list";
+      for (const source of node.sources) {
+        const item = document.createElement("li");
+        setResource(item, source.resource, source.title || source.id || "Source");
+        list.appendChild(item);
+      }
+      sources.appendChild(list);
+    } else {
+      sources.textContent = "-";
+    }
+
+    renderBody(conceptId);
+    renderRelations(conceptId);
+    byId("detail").scrollTop = 0;
+    if (moveCamera) focusNode(conceptId);
+  }
+
+  function clearSelection() {
+    selectedId = null;
+    conceptPicker.value = "";
+    byId("detail-content").hidden = true;
+    byId("detail-empty").hidden = false;
+    markSelectedResult();
+    updateHighlight(null);
+  }
+
+  /* ---------- wiring ---------- */
+
+  function scheduleSearch() {
+    if (searchTimer !== null) window.clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(() => {
+      searchTimer = null;
+      const next = search.value.trim().toLowerCase();
+      if (next === query) return;
+      query = next;
+      runSearch();
+      if (selectedId) renderBody(selectedId);
+    }, SEARCH_DEBOUNCE);
+  }
+
+  function setScope(value) {
+    scope = value;
+    if (scope === "content" && !searchContent) setContentSearch(true, true);
+    for (const chip of scopeGroup.querySelectorAll(".scope-chip")) {
+      chip.setAttribute("aria-pressed", String(chip.dataset.scope === scope));
+    }
+    runSearch();
+    if (selectedId) renderBody(selectedId);
+  }
+
+  function setContentSearch(value, quiet) {
+    searchContent = value;
+    contentToggle.setAttribute("aria-pressed", String(value));
+    if (!value && scope === "content") {
+      scope = "all";
+      for (const chip of scopeGroup.querySelectorAll(".scope-chip")) {
+        chip.setAttribute("aria-pressed", String(chip.dataset.scope === scope));
+      }
+    }
+    if (!quiet) {
+      runSearch();
+      if (selectedId) renderBody(selectedId);
+    }
+  }
+
+  search.addEventListener("input", scheduleSearch);
+  search.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      search.value = "";
+      query = "";
+      runSearch();
+      if (selectedId) renderBody(selectedId);
+      event.preventDefault();
+    } else if (event.key === "ArrowDown") {
+      moveActiveResult(1);
+      event.preventDefault();
+    } else if (event.key === "Enter" && results.length) {
+      selectConcept(results[0].node.id, true);
+      event.preventDefault();
+    }
+  });
+
+  resultList.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") moveActiveResult(1);
+    else if (event.key === "ArrowUp") {
+      if (activeResult <= 0) {
+        activeResult = -1;
+        search.focus();
+      } else moveActiveResult(-1);
+    } else return;
+    event.preventDefault();
+  });
+
+  for (const chip of scopeGroup.querySelectorAll(".scope-chip")) {
+    chip.addEventListener("click", () => setScope(chip.dataset.scope));
+  }
+  contentToggle.addEventListener("click", () => setContentSearch(!searchContent));
+
+  typeSelect.addEventListener("change", () => setTypeFilter(typeSelect.value));
+  conceptPicker.addEventListener("change", () => {
+    if (conceptPicker.value) selectConcept(conceptPicker.value, true);
+  });
+  layoutSelect.addEventListener("change", () => {
+    if (!graph) return;
+    const mode = layoutSelect.value;
+    graph.dagMode(mode === "force" ? null : mode);
+    graph.d3ReheatSimulation();
+    fitted = false;
+  });
+
+  byId("zoom-in").addEventListener("click", () => {
+    cancelAutoFit();
+    dolly(0.75);
+  });
+  byId("zoom-out").addEventListener("click", () => {
+    cancelAutoFit();
+    dolly(1.33);
+  });
+  container.addEventListener("pointerdown", cancelAutoFit);
+  byId("fit-view").addEventListener("click", () => {
+    fitted = false;
+    fitGraph();
+  });
+  byId("focus-node").addEventListener("click", () => {
+    if (selectedId) focusNode(selectedId);
+  });
+  byId("toggle-labels").addEventListener("click", (event) => {
+    labelsVisible = !labelsVisible;
+    event.currentTarget.setAttribute("aria-pressed", String(labelsVisible));
+    renderLabels();
+  });
+  byId("toggle-dim").addEventListener("click", (event) => {
+    isolate = !isolate;
+    event.currentTarget.setAttribute("aria-pressed", String(isolate));
+    applyIsolation();
+    fitted = false;
+    renderLabels();
+  });
+  byId("toggle-spin").addEventListener("click", (event) => {
+    spinning = !spinning;
+    event.currentTarget.setAttribute("aria-pressed", String(spinning));
+  });
+  byId("reset").addEventListener("click", () => {
+    search.value = "";
+    query = "";
+    if (searchTimer !== null) {
+      window.clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    if (isolate) {
+      isolate = false;
+      byId("toggle-dim").setAttribute("aria-pressed", "false");
+    }
+    setScope("all");
+    setTypeFilter("");
+    clearSelection();
+    fitted = false;
+    fitGraph();
+  });
+
+  panel.addEventListener("keydown", (event) => {
+    if (event.target !== panel) return;
+    const step = 0.12;
+    if (event.key === "ArrowLeft") orbitBy(-step, 0);
+    else if (event.key === "ArrowRight") orbitBy(step, 0);
+    else if (event.key === "ArrowUp") orbitBy(0, -step);
+    else if (event.key === "ArrowDown") orbitBy(0, step);
+    else if (event.key === "+" || event.key === "=") dolly(0.75);
+    else if (event.key === "-") dolly(1.33);
+    else if (event.key === "0") {
+      fitted = false;
+      fitGraph();
+      event.preventDefault();
+      return;
+    } else return;
+    cancelAutoFit();
+    event.preventDefault();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const target = event.target;
+    const typing =
+      target instanceof HTMLElement &&
+      (target.tagName === "INPUT" || target.tagName === "SELECT" || target.isContentEditable);
+    if (typing) return;
+    if (event.key === "/" || ((event.metaKey || event.ctrlKey) && event.key === "k")) {
+      search.focus();
+      search.select();
+      event.preventDefault();
+    }
+  });
+
+  window.addEventListener("hashchange", openFromHash);
+
+  function openFromHash() {
+    const raw = window.location.hash.replace(/^#/, "");
+    if (!raw) return;
+    let id = raw;
+    try {
+      id = decodeURIComponent(raw);
+    } catch (error) {
+      id = raw;
+    }
+    if (nodeById.has(id) && id !== selectedId) selectConcept(id, true);
+  }
+
+  let resizeQueued = false;
+  const observer = new ResizeObserver(() => {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    window.requestAnimationFrame(() => {
+      resizeQueued = false;
+      const width = panel.clientWidth;
+      const height = panel.clientHeight;
+      if (!graph || !width || !height) return;
+      graph.width(width).height(height);
+      renderLabels();
+    });
+  });
+  observer.observe(panel);
+
+  function tick() {
+    if (spinning) orbitBy(0.0024, 0);
+    if (hoveredId) {
+      const node = nodeById.get(hoveredId);
+      if (node) positionTooltip(node);
+    }
+    renderLabels();
+    frame = window.requestAnimationFrame(tick);
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && frame !== null) {
+      window.cancelAnimationFrame(frame);
+      frame = null;
+    } else if (!document.hidden && frame === null && graph) {
+      frame = window.requestAnimationFrame(tick);
+    }
+  });
+
+  runSearch();
+  if (graph) {
+    frame = window.requestAnimationFrame(tick);
+    const entry = [...nodes].sort(
+      (a, b) => (b.__degree || 0) - (a.__degree || 0) || a.label.localeCompare(b.label)
+    )[0];
+    if (entry) selectConcept(entry.id, false);
+    openFromHash();
+  }
+})();
+
+  </script>
+</body>
+</html>

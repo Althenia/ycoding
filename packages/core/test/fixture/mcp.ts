@@ -1,0 +1,31 @@
+import { Effect, Layer } from "effect"
+import { Config } from "@ycoding-ai/core/config"
+import { Location } from "@ycoding-ai/core/location"
+import { MCP } from "@ycoding-ai/core/mcp/index"
+import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { location } from "./location"
+
+export const emptyMcpLayer = Layer.succeed(
+  MCP.Service,
+  MCP.Service.of({
+    servers: () => Effect.succeed([]),
+    add: () => Effect.die("unused mcp.add"),
+    connect: () => Effect.die("unused mcp.connect"),
+    disconnect: () => Effect.die("unused mcp.disconnect"),
+    remove: () => Effect.die("unused mcp.remove"),
+    tools: () => Effect.succeed([]),
+    callTool: () => Effect.die("unused mcp.callTool"),
+    instructions: () => Effect.succeed([]),
+    prompts: () => Effect.succeed([]),
+    prompt: () => Effect.succeed(undefined),
+    resourceCatalog: () => Effect.succeed(MCP.ResourceCatalog.make({ resources: [], templates: [] })),
+    readResource: () => Effect.succeed(undefined),
+  }),
+)
+
+export const emptyConfigLayer = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+
+export const testLocationLayer = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make(process.cwd()) })),
+)

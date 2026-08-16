@@ -1,0 +1,15 @@
+import { Plugin } from "@ycoding-ai/plugin/effect"
+import { Effect } from "effect"
+
+export default Plugin.define({
+  id: "config-effect-plugin",
+  effect: (ctx) =>
+    ctx.agent
+      .transform((agents) => {
+        agents.update("effect-configured", (agent) => {
+          agent.description = ctx.options.description
+          agent.mode = "subagent"
+        })
+      })
+      .pipe(Effect.asVoid),
+})

@@ -1,0 +1,23 @@
+export * as Tools from "./tools"
+
+import { Context, Effect, Scope } from "effect"
+import { Tool } from "./tool"
+
+export type RegisterOptions = Tool.RegisterOptions
+
+export interface Interface {
+  readonly register: (
+    tools: Readonly<Record<string, Tool.AnyTool>>,
+    options?: Tool.RegisterOptions,
+  ) => Effect.Effect<void, Tool.RegistrationError, Scope.Scope>
+  /** Internal atomic registration capability used by plugin transforms. */
+  readonly registerBatch: (
+    registrations: ReadonlyArray<{
+      readonly tools: Readonly<Record<string, Tool.AnyTool>>
+      readonly options?: Tool.RegisterOptions
+    }>,
+  ) => Effect.Effect<void, Tool.RegistrationError, Scope.Scope>
+}
+
+/** Narrow registration-only Location capability. */
+export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Tools") {}

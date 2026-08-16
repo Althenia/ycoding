@@ -1,0 +1,158 @@
+/** @jsxImportSource @opentui/solid */
+import { describe, expect, test } from "bun:test"
+import { testRender } from "@opentui/solid"
+import type { JSX } from "solid-js"
+import { onMount, type ParentProps } from "solid-js"
+import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
+import { ThemeProvider } from "../../../src/context/theme"
+import { ConfigProvider } from "../../../src/config"
+import { DiffViewerFileTree } from "../../../src/feature-plugins/system/diff-viewer-file-tree"
+import { TestTuiContexts } from "../../fixture/tui-environment"
+import {
+  allExpandedFileTreeDirectories,
+  buildFileTree,
+} from "../../../src/feature-plugins/system/diff-viewer-file-tree-utils"
+
+describe("DiffViewerFileTree", () => {
+  test("renders sorted hierarchical file rows", async () => {
+    const lines = visibleLines(
+      await renderFrame(() => (
+        <DiffViewerFileTree
+          width={32}
+          files={[
+            { file: "z-file.ts" },
+            { file: "b/file.ts" },
+            { file: "a/zeta.ts" },
+            { file: "b/alpha.ts" },
+            { file: "a/alpha.ts" },
+          ]}
+          loading={false}
+          error={undefined}
+          focused={true}
+        />
+      )),
+    )
+
+    expect(lines).toEqual([
+      "▾ a",
+      "│  ├─ alpha.ts               ?",
+      "│  └─ zeta.ts                ?",
+      "├─ ▾ b",
+      "│  ├─ alpha.ts               ?",
+      "│  └─ file.ts                ?",
+    ])
+  })
+
+  test("keeps loading and error quiet while rendering an empty settled state", async () => {
+    const loading = await renderFrame(() => (
+      <DiffViewerFileTree width={32} files={[]} loading={true} error={undefined} />
+    ))
+    const failed = await renderFrame(() => (
+      <DiffViewerFileTree width={32} files={[]} loading={false} error={new Error("nope")} />
+    ))
+    const empty = await renderFrame(() => (
+      <DiffViewerFileTree width={32} files={[]} loading={false} error={undefined} />
+    ))
+
+    expect(loading).not.toContain("Loading diff...")
+    expect(loading).not.toContain("No files")
+    expect(failed).not.toContain("Failed to load diff")
+    expect(failed).not.toContain("No files")
+    expect(empty).toContain("No files")
+  })
+
+  test("does not render text markers for highlighted rows", async () => {
+    const files = [{ file: "src/config/tui.ts" }, { file: "README.md" }]
+    const src = buildFileTree(files).nodes.find((node) => node.kind === "directory" && node.name === "src")!
+
+    const focused = visibleLines(
+      await renderFrame(() => (
+        <DiffViewerFileTree
+          width={32}
+          files={files}
+          loading={false}
+          error={undefined}
+          focused
+          highlightedNode={src.id}
+        />
+      )),
+    )
+    const unfocused = visibleLines(
+      await renderFrame(() => <DiffViewerFileTree width={32} files={files} loading={false} error={undefined} />),
+    )
+
+    expect(focused).toContain("▾ src/config")
+    expect(unfocused).toContain("▾ src/config")
+    expect(focused.some((line) => line.includes("*"))).toBe(false)
+    expect(unfocused.some((line) => line.includes("*"))).toBe(false)
+  })
+
+  test("renders collapsed and expanded directory rows", async () => {
+    const files = [{ file: "src/config/tui.ts" }, { file: "README.md" }]
+    const tree = buildFileTree(files)
+    const src = tree.nodes.find((node) => node.kind === "directory" && node.name === "src")!
+    const collapsed = allExpandedFileTreeDirectories(tree)
+    collapsed.delete(src.id)
+
+    expect(
+      visibleLines(
+        await renderFrame(() => (
+          <DiffViewerFileTree width={32} files={files} loading={false} error={undefined} expandedNodes={collapsed} />
+        )),
+      ),
+    ).toEqual(["▸ src/config"])
+
+    expect(
+      visibleLines(
+        await renderFrame(() => (
+          <DiffViewerFileTree
+            files={files}
+            width={32}
+            loading={false}
+            error={undefined}
+            expandedNodes={allExpandedFileTreeDirectories(tree)}
+          />
+        )),
+      ),
+    ).toEqual(["▾ src/config", "│  └─ tui.ts                 ?"])
+  })
+})
+
+async function renderFrame(component: () => JSX.Element) {
+  const mounted = Promise.withResolvers<void>()
+  const app = await testRender(() => withTheme(component, mounted.resolve), { width: 40, height: 10 })
+  try {
+    await mounted.promise
+    await app.renderOnce()
+    await app.renderOnce()
+    return app.captureCharFrame()
+  } finally {
+    app.renderer.destroy()
+  }
+}
+
+function withTheme(component: () => JSX.Element, onReady = () => {}) {
+  return (
+    <TestTuiContexts>
+      <ConfigProvider config={createTuiResolvedConfig()}>
+        <ThemeProvider mode="dark">
+          <Ready onReady={onReady}>{component()}</Ready>
+        </ThemeProvider>
+      </ConfigProvider>
+    </TestTuiContexts>
+  )
+}
+
+function Ready(props: ParentProps<{ onReady: () => void }>) {
+  onMount(props.onReady)
+  return props.children
+}
+
+function visibleLines(frame: string) {
+  return frame
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .map((line) => line.replace(/^ ?│ ?/, "").replace(/[ │]*$/, ""))
+    .map((line) => (line.startsWith(" ") ? line.slice(1) : line))
+    .filter((line) => line.length > 0 && !/^┌|^└|^─+$/.test(line))
+}

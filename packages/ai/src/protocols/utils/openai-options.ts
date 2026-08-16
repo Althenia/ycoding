@@ -1,0 +1,139 @@
+import { Schema } from "effect"
+import type { LLMRequest, TextVerbosity as TextVerbosityValue } from "../../schema"
+import { ReasoningEfforts, TextVerbosity } from "../../schema"
+import { isRecord } from "../shared"
+
+export const OpenAIReasoningEfforts = ReasoningEfforts
+export type OpenAIReasoningEffort = string
+
+// Mirrors OpenAI's `ResponseIncludable` union from the official SDK. Keep this
+// in lockstep with `openai-node/src/resources/responses/responses.ts`.
+export const OpenAIResponseIncludables = [
+  "file_search_call.results",
+  "web_search_call.results",
+  "web_search_call.action.sources",
+  "message.input_image.image_url",
+  "computer_call_output.output.image_url",
+  "code_interpreter_call.outputs",
+  "reasoning.encrypted_content",
+  "message.output_text.logprobs",
+] as const
+export type OpenAIResponseIncludable = (typeof OpenAIResponseIncludables)[number]
+export const OpenAIServiceTiers = ["auto", "default", "flex", "priority"] as const
+export type OpenAIServiceTier = (typeof OpenAIServiceTiers)[number]
+
+// `prompt_cache_retention` — models before the GPT-5.6 family only. Deprecated
+// for GPT-5.6 and later, which reject it with a 400.
+export const OpenAIPromptCacheRetentions = ["in_memory", "24h"] as const
+export type OpenAIPromptCacheRetention = (typeof OpenAIPromptCacheRetentions)[number]
+
+// `prompt_cache_options` — GPT-5.6 and later only. Pre-5.6 models reject this
+// field with a 400. `ttl` currently only accepts "30m".
+export const OpenAIPromptCacheOptionsModes = ["implicit", "explicit"] as const
+export type OpenAIPromptCacheOptionsMode = (typeof OpenAIPromptCacheOptionsModes)[number]
+export interface OpenAIPromptCacheOptions {
+  readonly mode?: OpenAIPromptCacheOptionsMode
+  readonly ttl?: "30m"
+}
+
+const TEXT_VERBOSITY = new Set<string>(["low", "medium", "high"])
+const INCLUDABLES = new Set<string>(OpenAIResponseIncludables)
+const SERVICE_TIERS = new Set<string>(OpenAIServiceTiers)
+const PROMPT_CACHE_RETENTIONS = new Set<string>(OpenAIPromptCacheRetentions)
+const PROMPT_CACHE_OPTIONS_MODES = new Set<string>(OpenAIPromptCacheOptionsModes)
+
+export const OpenAIReasoningEffort = Schema.String
+export const OpenAITextVerbosity = TextVerbosity
+export const OpenAIResponseIncludable = Schema.Literals(OpenAIResponseIncludables)
+export const OpenAIServiceTier = Schema.Literals(OpenAIServiceTiers)
+export const OpenAIPromptCacheRetention = Schema.Literals(OpenAIPromptCacheRetentions)
+// Only "explicit" is a valid `prompt_cache_breakpoint.mode` — marking a block
+// with any other value is a caller error, not a wire option.
+export const OpenAIPromptCacheBreakpoint = Schema.Struct({ mode: Schema.tag("explicit") })
+export type OpenAIPromptCacheBreakpoint = Schema.Schema.Type<typeof OpenAIPromptCacheBreakpoint>
+
+export const isReasoningEffort = (effort: unknown): effort is OpenAIReasoningEffort => typeof effort === "string"
+
+const isTextVerbosity = (value: unknown): value is TextVerbosityValue =>
+  typeof value === "string" && TEXT_VERBOSITY.has(value)
+
+const options = (request: LLMRequest) => request.providerOptions?.openai
+
+export const store = (request: LLMRequest): boolean | undefined => {
+  const value = options(request)?.store
+  return typeof value === "boolean" ? value : undefined
+}
+
+export const reasoningEffort = (request: LLMRequest): string | undefined => {
+  const value = options(request)?.reasoningEffort
+  return typeof value === "string" ? value : undefined
+}
+
+export const reasoningSummary = (request: LLMRequest): "auto" | undefined =>
+  options(request)?.reasoningSummary === "auto" ? "auto" : undefined
+
+// Resolve the OpenAI Responses `include` field. Filters out unknown
+// includable values defensively so a typo in upstream config drops the
+// invalid entry instead of poisoning the wire body. An empty array (either
+// passed directly or produced by filtering) is treated as "no include" and
+// returns undefined so the request body omits the field entirely.
+export const include = (request: LLMRequest): ReadonlyArray<OpenAIResponseIncludable> | undefined => {
+  const value = options(request)?.include
+  if (!Array.isArray(value)) return undefined
+  const filtered = value.filter((entry): entry is OpenAIResponseIncludable => INCLUDABLES.has(entry))
+  return filtered.length > 0 ? filtered : undefined
+}
+
+export const promptCacheKey = (request: LLMRequest) => {
+  const value = options(request)?.promptCacheKey
+  return typeof value === "string" ? value : undefined
+}
+
+export const textVerbosity = (request: LLMRequest) => {
+  const value = options(request)?.textVerbosity
+  return isTextVerbosity(value) ? value : undefined
+}
+
+export const serviceTier = (request: LLMRequest) => {
+  const value = options(request)?.serviceTier
+  return typeof value === "string" && SERVICE_TIERS.has(value) ? (value as OpenAIServiceTier) : undefined
+}
+
+export const instructions = (request: LLMRequest) => {
+  const value = options(request)?.instructions
+  return typeof value === "string" ? value : undefined
+}
+
+export const promptCacheRetention = (request: LLMRequest): OpenAIPromptCacheRetention | undefined => {
+  const value = options(request)?.promptCacheRetention
+  return typeof value === "string" && PROMPT_CACHE_RETENTIONS.has(value) ? (value as OpenAIPromptCacheRetention) : undefined
+}
+
+export const promptCacheOptions = (request: LLMRequest): OpenAIPromptCacheOptions | undefined => {
+  const value = options(request)?.promptCacheOptions
+  if (!isRecord(value)) return undefined
+  const mode =
+    typeof value.mode === "string" && PROMPT_CACHE_OPTIONS_MODES.has(value.mode)
+      ? (value.mode as OpenAIPromptCacheOptionsMode)
+      : undefined
+  const ttl = value.ttl === "30m" ? ("30m" as const) : undefined
+  return mode === undefined && ttl === undefined ? undefined : { mode, ttl }
+}
+
+// GPT version family gate for the two mutually-exclusive retention controls:
+// `prompt_cache_retention` (pre-5.6) vs `prompt_cache_options` /
+// `prompt_cache_breakpoint` (5.6+). Sending either to the wrong family returns
+// a 400, so every caller of these wire fields must gate on this first.
+// Aggregators and gateways prefix the vendor onto the id (`openai/gpt-5.6`),
+// so the family name is matched at the start or immediately after a slash.
+const GPT_VERSION = /(?:^|\/)gpt-(\d+)(?:\.(\d+))?/
+
+export const isGpt56OrLater = (modelID: string): boolean => {
+  const match = GPT_VERSION.exec(modelID.toLowerCase())
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = match[2] ? Number(match[2]) : 0
+  return major > 5 || (major === 5 && minor >= 6)
+}
+
+export * as OpenAIOptions from "./openai-options"

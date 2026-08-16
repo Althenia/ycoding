@@ -1,0 +1,253 @@
+# Provider efficiency
+
+This document describes the implemented YCoding provider-efficiency behavior: request amplification, prompt caching, OpenAI Responses state, diagnostics, privacy boundaries, and reproducible verification. Provider-side Responses compaction, local selective compaction, and prompt caching are separate mechanisms.
+
+## Goals
+
+YCoding reduces provider usage without changing the logical agent result by:
+
+- avoiding model calls for work that can be performed locally;
+- keeping provider-visible tools and system prefixes stable;
+- applying provider-native prompt-cache controls only where the route and model support them;
+- reusing compatible stored OpenAI Responses state through durable, fingerprinted Session continuation;
+- measuring logical requests separately from physical transport attempts;
+- reporting raw provider tokens and estimated cost without treating missing pricing as zero.
+
+Prompt-cache promotion remains a bounded runtime optimization, but a recreated runtime restores recent adaptive Anthropic evidence from the existing durable provider-request ledger. Stored Responses continuation and opaque stateless replay state are durable but are never authoritative Session transcript content.
+
+Terminal-response silence recovery is a bounded correctness path, not an efficiency retry: one valid settled silent response may create one additional logical `step` request. That request sends canonical durable history as a full request with tools disabled and no stored Responses continuation; it can therefore receive an existing tool-prefix or provider-cache invalidation label. It never counts as a physical retry or `fallback`.
+
+## Defaults
+
+The default efficiency policy is:
+
+```jsonc
+{
+  "efficiency": {
+    "title": "local",
+    "goal_synthesis": "local",
+    "prompt_cache": {
+      "anthropic_ttl": "adaptive",
+      "openai_extended_retention": false,
+    },
+    "openai_responses_continuation": "auto",
+    "openai_responses_state": "stored",
+  },
+}
+```
+
+| Setting                                      | Default    | Effect                                                                                                                                                                                                 |
+| -------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `title`                                      | `local`    | Generates deterministic Session titles without a provider request.                                                                                                                                     |
+| `goal_synthesis`                             | `local`    | Normalizes the requested goal without a provider request.                                                                                                                                              |
+| `helper_models.title`, `.goal`               | `session`  | Selects each helper independently; a hidden agent's explicit model still takes precedence.                                                                                                             |
+| `helper_models.compaction.main`, `.subagent` | `session`  | The owner selects the ContextManifest model before creating its helper child; an explicit configured value wins over an agent-pinned model, while `session` uses the owner Session's model precedence. |
+| `prompt_cache.anthropic_ttl`                 | `adaptive` | Starts at five minutes and promotes a stable namespace to one hour after two reusable provider reports within five minutes.                                                                            |
+| `prompt_cache.openai_extended_retention`     | `false`    | Does not request pre-GPT-5.6 `24h` retention unless explicitly enabled.                                                                                                                                |
+| `openai_responses_continuation`              | `auto`     | Allows compatible durable response-ID continuation when direct OpenAI Responses uses `stored` state and effective storage is enabled.                                                                  |
+| `openai_responses_state`                     | `stored`   | Direct OpenAI Responses sends `store: true`; `stateless` sends `store: false` and uses durable opaque replay state instead of response-ID continuation.                                                |
+
+Set `title` or `goal_synthesis` to `model` when model-generated behavior is required. Local selective-compaction manifest generation remains model-assisted and uses the selected compaction helper, but activation is governed by mechanical validation and immutable context revisions rather than summary replacement.
+
+## Stable provider prefix
+
+Non-Codex prompt-cache keys derive from the final provider-visible system parts and tool definitions. Codex uses each durable Session's raw Session ID as its stable cache and provider-session identity; parent and child Sessions therefore have separate keys.
+
+Non-Codex prompt-cache keys are a SHA-256 digest of only the final provider-visible system parts and tool definitions. They do not include Session, project, directory, workspace, provider, catalog model, policy, permissions, context revision, reasoning variant, ordinary message history, or helper scope. Equivalent final system and tool definitions therefore share a key while retaining separate provider-session and continuation identities. Non-Codex prompt-cache keys do not rotate on a timer or in response to a low provider-reported hit ratio. Context-revision, history-tail, or reasoning-variant changes alone do not change the non-Codex key or system/tool digests. Variant identity still fences stored Responses and process-local WebSocket continuation because changed generation semantics must not reuse response state. Restoring the complete provider-visible prefix additionally requires the selected history and volatile message bytes to match. Each compaction job still uses a deterministic taskless child Session, the hidden `compaction` agent, a separate provider identity, and a separate request ledger; its normally distinct checkpoint system content gives it a distinct non-Codex digest.
+
+The compaction helper keeps its invariant checkpoint template in stable system content; the previous checkpoint and changing conversation material stay in the user message. This isolates helper traffic while allowing repeated helper calls with identical namespace inputs to retain their helper key. An activated checkpoint changes the owner request's visible tail without changing its stable namespace or system/tool digests. The next owner row is labeled `compaction-reset`; whether the provider reports zero, partial, or reused cache reads remains provider-controlled. Later requests can extend and reuse the deterministic checkpoint prefix when every preceding provider-visible byte remains identical. When the provider keeps reporting the same cached-token count while eligible input grows, the ratio continues to fall without another local namespace change. YCoding preserves local cache identity but does not guarantee a cache-hit percentage or retention beyond provider-reported behavior.
+
+The runner fences prepared requests with the active context revision. It samples the revision during preparation and again before creating provider-request ledger ownership or incrementing a physical attempt. A mismatch discards the candidate and prepares against the activated revision without recording the stale candidate as a request or attempt.
+
+Catalog model identity remains part of the durable request record, but not the non-Codex sharing key. Cache-family capability, minimum-prefix, retention, and adaptive-TTL decisions use the executable provider API model ID, so a catalog alias receives the policy of the model it actually calls.
+
+CodeMode keeps its single provider-visible `execute` definition fixed. MCP tools and resources remain dynamically discoverable at runtime, but an MCP catalog change does not rewrite the `execute` schema or description and therefore does not invalidate the stable tool prefix.
+
+## Provider capability matrix
+
+| Provider route                         | Placement and identity                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Retention behavior                                                                                                                                                                            | Usage diagnostics                                                                                         |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Anthropic Messages                     | Inline cache controls on tools, system, and two rolling message anchors. Public API-key requests use this direct route without Claude Code request translation.                                                                                                                                                                                                                                                                                                                                                                                                                                          | Adaptive five-minute or one-hour TTL when the model has a published extended-TTL profile.                                                                                                     | Provider cache reads and writes are preserved separately.                                                 |
+| Claude Code OAuth                      | Claude Code translation plus the same eligible Anthropic cache markers. Its billing system prefix samples the first durable canonical Session user text, preserving that prefix across local compaction and runtime recreation; an unavailable durable Session falls back to the visible first-user sample.                                                                                                                                                                                                                                                                                              | Subscription-backend behavior remains provider-controlled beyond emitted Anthropic cache controls.                                                                                            | Reported cache reads and writes remain separate; public API-key behavior is unchanged.                    |
+| Google Vertex Anthropic                | Same Anthropic-compatible placement and TTL policy.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Same capability-gated TTL behavior.                                                                                                                                                           | Provider-reported categories are normalized.                                                              |
+| Amazon Bedrock Converse                | Native `cachePoint` placement on the same stable and rolling boundaries.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | One-hour markers only when selected by a supported policy.                                                                                                                                    | Cache reads and writes remain distinct.                                                                   |
+| OpenRouter                             | Stable `prompt_cache_key` and provider-session identity. The native route uses OpenRouter's top-level automatic `cache_control`; the AI SDK route lowers bounded inline tools, system, and rolling-message markers. Both activate only when the executable model has a published Anthropic cache profile, so non-Anthropic models receive no Anthropic policy.                                                                                                                                                                                                                                           | Adaptive five-minute or one-hour Anthropic TTL on profiled Anthropic models; otherwise provider-controlled.                                                                                   | Reported cache categories and request cost are normalized.                                                |
+| Direct OpenAI Responses before GPT-5.6 | Implicit prefix caching with a stable prompt-cache key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Optional `24h` retention only for the implemented allowlisted model families.                                                                                                                 | Cached input and cache-write tokens are normalized when reported.                                         |
+| Direct OpenAI Responses GPT-5.6+       | Public API-key route with stable `prompt_cache_key`, one combined system-text marker, and the most recent eligible non-volatile user and local tool-result boundaries. Breakpoints are emitted on Responses `input_text`, `input_image`, and `input_file` blocks; assistant replay always uses `output_text` and is never marked. A marked local tool result uses `function_call_output.output` content blocks, retaining images as provider-native images and lowering non-image files to `input_file` with Base64 data and a filename. GPT-5.6+ is explicit-only (up to 50 explicit candidates, `prompt_cache_options:{mode:explicit,ttl:30m}`; latest 4 writable). | `prompt_cache_options.ttl: "30m"` is always `explicit,30m` for GPT-5.6+; it is not a hard expiry and OpenAI has a separate 24-hour maximum. | Cached input and billable cache-write tokens are normalized separately when reported.                     |
+| ChatGPT Codex Responses backend        | Subscription backend with each durable Session's raw Session ID as stable `prompt_cache_key` and `session-id`; parent and child Sessions never share this identity. HTTP SSE is the default transport; `model.settings.transport: "websocket"` explicitly selects the process-local WebSocket path, while `"http"` and `"http-sse"` select SSE. A 120-second interval with no decoded provider frame is an in-flight stall, reset by every decoded provider frame. Cadence, overflow, and pre-output stall recovery call native `/responses/compact`; its opaque output replaces the active provider context without local checkpointing, retained-message tails, cache-key rotation, or provider-session rotation. After any provider output, no stall replay occurs. The HTTP attempt is bounded and never recursively retries. Core enables the Codex-only Responses Lite body: sorted function tools are nested in one `additional_tools` developer item, system text is a developer message, reasoning context is `all_turns`, parallel tool calls are disabled, and top-level tools/instructions are omitted. Clean strict-extension follow-ups may send `previous_response_id` plus only the new suffix over that socket while retaining `store: false`; `previous_response_not_found` and `websocket_connection_limit_reached` recovery are each bounded to one canonical full replay without stale continuation state. Provider `x-codex-turn-state` metadata is reused only within the current process-local execution cycle and is not durable. Every Codex model is key-only: YCoding emits no `prompt_cache_breakpoint`, `prompt_cache_options`, or `prompt_cache_retention`. The `thread-id` and `x-client-request-id` headers use the generated per-YCoding-Session provider identity. Low cache-hit ratios are telemetry only and do not compact or rotate a key. | Backend-controlled. Request-shape tests do not verify live cache reuse. | Reported cached input and cache-write tokens are normalized separately; omitted fields remain unreported. |
+| GitHub Copilot Responses               | Stateless full-history replay with `store: false` and a stable `prompt_cache_key`. Follow-ups replay retained encrypted reasoning and local tool outputs directly without provider-stored item references.                                                                                                                                                                                                                                                                                                                                                                                               | Provider prefix caching may apply, but stored Responses continuation is disabled.                                                                                                             | Provider-reported usage is normalized without treating replay as continuation.                            |
+| OpenAI-compatible gateways             | Stable provider identity where supported; unsupported direct-OpenAI fields are omitted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | No direct OpenAI retention field is assumed.                                                                                                                                                  | Provider-reported usage is normalized without inventing unsupported capabilities.                         |
+| Gemini and Vertex Gemini               | Provider implicit prefix caching; no inline cache markers are injected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Provider-controlled.                                                                                                                                                                          | Cached-content tokens are normalized when reported.                                                       |
+
+The model cache-profile table also records the minimum prefix size for known Anthropic, OpenAI, and Gemini families. A prefix below that minimum is reported as `below-minimum`; it is not treated as a transport or cache-policy failure.
+
+For GPT-5.6 requests, the explicit-marker policy estimates the cumulative static tool, system, and rendered-message prefix using four characters per token; this is an estimate, not an exact provider token count. The first eligible non-volatile message boundary where that estimate reaches the published 1,024-token minimum is emitted alongside the newest eligible boundaries up to the 50-breakpoint read window (explicit-only). When explicit candidates exceed the window, bounded selection retains that stable checkpoint and fills the remaining budget from the newest eligible boundaries; when no estimated checkpoint exists, it uses only the newest eligible boundaries. If the static system marker already reaches the minimum, it is the initial checkpoint. Compatible requests after local compaction retain the same stable `prompt_cache_key`, but provider reuse still requires every byte through the selected breakpoint to match; volatile suffixes receive no marker.
+
+Public-API GPT-5.6+ is explicit-only: at most 50 explicit candidates are emitted (when the system marker exists, up to 49 rolling markers remain). A marked local text result uses an `input_text` block inside `function_call_output.output`; images use `input_image`; non-image user media and tool files use `input_file` with Base64 data and a filename. Tool definitions, tool calls, provider-executed tool results, and volatile messages receive no generated marker. OpenAI can create up to four new explicit writes per request (billed `1.25×` input, reported as `cache_write_tokens`). OpenAI currently bills GPT-5.6+ public-API cache writes at 1.25 times uncached input and reports them as `cache_write_tokens`; YCoding preserves and reports `cached_tokens` and `cache_write_tokens` independently without inferring missing values. For public API GPT-5.6, the reusable prefix through the explicit breakpoint—not the total prompt—must reach 1,024 tokens. Pre-GPT-5.6 diagnostics remain unknown without model-specific published minimum-prefix data. Exact prefix identity and stable keys remain provider prerequisites; OpenAI documents approximately 15 RPM per key as its routing threshold.
+
+The public OpenAI API-key route and the ChatGPT/Codex subscription backend are distinct capabilities. Public GPT-5.6+ Responses can receive the explicit breakpoint and request-wide cache-option fields above. Every Codex model is key-only: YCoding emits none of `prompt_cache_breakpoint`, `prompt_cache_options`, or `prompt_cache_retention`. Each main or child durable Session keeps its own raw Session ID as both `prompt_cache_key` and `session-id`, including after native compaction. Codex cannot mark a 1,024-token boundary, so the public-route minimum does not apply; only provider-reported `cached_tokens` and `cache_write_tokens` establish actual subscriber reuse. Codex remains `store: false`; its `previous_response_id` optimization is scoped to one live process-local Session socket and is discarded on reconnect, restart, identity mismatch, non-terminal closure, non-completed response, `previous_response_not_found`, or provider connection-limit renewal. Those boundaries trigger canonical full-history replay rather than durable stored-Responses continuation; rejection and renewal recovery are each bounded to one replay without the stale ID. A 120-second no-frame interval is a stall and each decoded frame resets it. A pre-output Codex read stall calls native `/responses/compact` before the bounded canonical replay; post-output replay is suppressed. Provider-reported cache-hit ratios are telemetry only and never initiate this boundary. The provider's first non-empty `x-codex-turn-state` value is also process-local: HTTP and WebSocket responses can populate one holder shared by subsequent tool/steer continuations, while queued input starts with an empty holder and no turn-state value is written to durable Session state.
+
+Responses assistant item `phase` values (`commentary` and `final_answer`) are retained in provider metadata and replayed on later direct or Codex Responses requests. OpenAI documents phase replay for GPT-5.3 Codex and later as a performance requirement; dropping it can degrade follow-up behavior and can also change the exact model-visible prefix.
+
+Direct GPT-5.6 Responses requests send `reasoning.context: "all_turns"` and `context_management: [{ type: "compaction", compact_threshold: 200000 }]`. In `stored` state mode, compatible later requests may send `previous_response_id` plus only the new suffix. In `stateless` mode, YCoding sends `store: false`, retains the returned opaque encrypted compaction item outside public messages, replays it only for the same provider model, and omits input before that provider boundary. The native `web_search` tool is provider-executed and its returned call item is replayed on stateless follow-ups. This is OpenAI-hosted search, not Core's provider-independent local Exa/Parallel `websearch` tool. The Codex route additionally calls `/responses/compact` with the active Session model, stores the full canonical output outside public messages, and replays it verbatim on later same-model requests.
+
+## Adaptive Anthropic TTL
+
+The adaptive working set is bounded to 1024 process-local namespaces. Promotion evidence is already present in the durable `session_provider_request` ledger, so a recreated runtime folds that Session and namespace's ordered request history without a schema or second persistence authority. An empty restore is memoized for five minutes in the bounded working set.
+
+A namespace starts with a five-minute TTL. It is promoted for later requests only after two eligible observations for the same namespace within five minutes where the provider reports reusable cache reads or writes. A promotion remains valid for one hour after the latest reusable observation. Missing or zero telemetry neither creates a promotion nor erases an existing unexpired promotion.
+
+The following conditions retain or return to the five-minute bucket:
+
+- a different prompt-cache namespace;
+- initial reusable observations more than five minutes apart;
+- an unknown model profile;
+- expiration one hour after the latest reusable observation.
+
+Process restart and bounded working-set eviction fold ordered promotion evidence from the provider-request ledger on the next policy decision. Ledger rows contain normalized counts and stable identifiers, not prompt or response content.
+
+Explicit `5m` and `1h` settings bypass adaptive promotion, while unsupported models remain on the safe five-minute behavior.
+
+## OpenAI Responses continuation
+
+Stored continuation is a durable Session row fenced by context revision and continuation generation.
+
+A later step sends `previous_response_id` and only the new message suffix when all fingerprint fields still match:
+
+- Session ID, context revision, and continuation generation;
+- direct OpenAI Responses route;
+- selected provider/model/variant;
+- connection identity;
+- prompt-cache namespace;
+- system digest;
+- tool digest;
+- generation and semantic OpenAI options;
+- tool choice, response format, cache policy, and safe HTTP options;
+- effective `store: true` and `openai_responses_state: "stored"`.
+
+Current system instructions and tools are still sent on a continued request. The volatile-context digest is recorded, but a volatile suffix mismatch is tolerated when the stable fingerprint and represented message boundary match; volatile messages are omitted from the incremental request. `openai_responses_continuation` controls reuse but does not override `openai_responses_state`; selecting `stateless` prevents response-ID continuation.
+
+GitHub Copilot Responses does not participate in stored continuation. Discovered Copilot Responses models explicitly set `store: false`, so each follow-up sends full selected history with a stable `prompt_cache_key`. Stateless replay serializes retained encrypted reasoning and local tool outputs directly and emits no `item_reference` for that reasoning metadata. Copilot-specific options take precedence when both generic and Copilot options are configured.
+
+Continuation reuse is invalidated on:
+
+- a new local context revision;
+- Session deletion or an explicit clear path;
+- connection, model, route, namespace, system, tool, option, represented-boundary, or generation mismatch;
+- a step without a clean response ID;
+- provider-state rejection.
+
+When a continued request receives an invalid-request error before observable assistant output, YCoding clears the response ID and retries the same logical request once with full canonical history. The request ledger records one logical request, two physical attempts, and `fallback`. A second failure follows the normal provider error path and is not retried as continuation again.
+
+OpenAI server-side compaction is provider request semantics, not a prompt-cache hit and not a local `session_context_revision`. Local selective compaction can invalidate continuation and change the model-visible history without changing the canonical transcript; provider cache telemetry continues to report only provider-reported cache categories.
+
+## Request diagnostics
+
+The Provider Usage command contains two separate sections:
+
+- external quota or credit windows reported by the active providers;
+- local `YCoding requests` telemetry for the current Session.
+
+The local section reports:
+
+| Field              | Meaning                                                                                                    |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Logical requests   | Distinct model/helper requests owned by YCoding.                                                           |
+| Transport attempts | Physical HTTP or WebSocket attempts, including retry and continuation fallback attempts.                   |
+| Helpers            | Title, goal, and compaction requests.                                                                      |
+| Continued          | Logical requests completed through stored OpenAI Responses state.                                          |
+| Fallbacks          | Continued requests that retried once with full history.                                                    |
+| Raw input          | Non-cached input tokens reported by providers.                                                             |
+| Raw cache read     | Provider-reported cached input tokens.                                                                     |
+| Raw cache write    | Provider-reported cache creation/write tokens.                                                             |
+| Raw output         | Visible output tokens after separating reasoning.                                                          |
+| Raw reasoning      | Provider-reported reasoning tokens.                                                                        |
+| Estimated cost     | Sum calculated from catalog pricing. It is unavailable when any recorded request lacks applicable pricing. |
+| Last invalidation  | Why the latest request did not retain or reuse the preceding prefix/state.                                 |
+| Namespace          | First eight characters of the latest prompt-cache namespace.                                               |
+
+Unknown pricing renders `Estimated cost unavailable`. A real zero-priced catalog model renders `$0.0000`.
+
+The Session rail and subagent economics intentionally omit a prefix-stability label. They retain the measured hit ratio and provider-reported cache read/write tokens because a stable local namespace describes request identity, not a cache-hit guarantee.
+
+OpenAI ChatGPT/Codex and Anthropic Claude Code connections retain the selected model's catalog prices instead of replacing them with zero. Their Session cost is an API-equivalent list-price estimate for comparing model usage; it is not the subscription invoice or remaining plan allowance. Provider quota reporting remains a separate read-only surface. Codex cache usage parsing is field-based: `cached_tokens` and `cache_write_tokens` remain separate categories regardless of model-family detection, and low reported cache-hit ratios do not cause compaction or key rotation. The committed models.dev snapshot supplies release-time OpenAI and Anthropic master data, runtime refreshes may update it, and explicit context tiers take precedence over the legacy `context_over_200k` field so GPT-5.6 long-context pricing starts at its documented 272K boundary.
+
+### Invalidation labels
+
+| Value                    | Interpretation                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------ |
+| `first-request`          | No preceding request exists for comparison.                                    |
+| `compaction-reset`       | This is the owner's first provider request after an ended compaction.          |
+| `model-switched`         | The provider or catalog model changed since the preceding request.             |
+| `model-variant-switched` | The normalized model variant changed since the preceding request.              |
+| `stable-hit`             | The provider reported cached input reuse.                                      |
+| `prefix-changed`         | More than one stable-prefix component changed.                                 |
+| `system-prefix-changed`  | Only the model-visible system prefix changed.                                  |
+| `tool-prefix-changed`    | Only provider-visible tool definitions changed.                                |
+| `below-minimum`          | The cacheable prefix is shorter than the model's published minimum.            |
+| `provider-not-reported`  | The route can cache, but the provider did not report read or write categories. |
+| `cache-disabled`         | The selected route or policy has no active cache mechanism.                    |
+| `retry-fallback`         | A physical retry or stored-continuation fallback occurred.                     |
+
+Historical provider-request records without a variant decode as the `default` variant. Provider-reported reuse, disabled, below-minimum, and unreported-cache conditions take precedence over inferred reset reasons. Otherwise, `compaction-reset` precedes `model-switched`, which precedes `model-variant-switched`.
+
+## Privacy and persistence
+
+The following are durable because they are required for bounded diagnostics:
+
+- request source and selected model identity;
+- logical request ordinal and physical attempt count;
+- normalized raw token categories;
+- optional estimated cost;
+- continuation/full/fallback classification;
+- cache invalidation reason.
+
+The following remain internal and are not exposed by the public Session log or diagnostics endpoint:
+
+- prompt content;
+- complete prompt-cache keys;
+- system and tool digests;
+- OpenAI response IDs;
+- provider response bodies;
+- credentials and authentication material.
+
+The public diagnostics response exposes only an eight-character namespace prefix. Adaptive TTL recovery reads normalized cache counts already stored in the provider-request ledger; it adds no new durable state. Stored-response continuation state is durable but response IDs remain absent from Session history, public diagnostics, logs, and the provider-request ledger.
+
+## Reproducible measurement
+
+Run the deterministic runtime benchmark against a freshly built TUI artifact:
+
+```bash
+bun run build:tui
+bun run smoke:runtime
+```
+
+The benchmark uses local fake providers and a local stdio MCP server. It performs:
+
+1. two ordinary requests with a provider-reported cache write followed by a cache read;
+2. one Session containing two real `read` tool continuations, producing three logical and three physical provider requests;
+3. another Session with the same provider-visible prefix;
+4. an MCP CodeMode catalog replacement and reconnection;
+5. a third equivalent Session whose namespace must remain unchanged;
+6. a native OpenAI Responses tool turn with `store: true`;
+7. one rejected `previous_response_id` attempt and one full-history fallback under the same logical request.
+
+The current fixture pins these accounting results:
+
+```text
+Tool loop:       logical 3, physical 3, input 1500, cache read 1900, cache write 100, output 15, reasoning 15, cost $0.001875
+OpenAI fallback: logical 2, physical 3, fallback 1, input 1200, cache read 900, cache write 100, output 10, reasoning 10, cost $0.001455
+```
+
+The smoke command fails if the namespace changes after the MCP catalog reload, if continued input resends represented history, if the fallback omits canonical history, or if request/token/cost accounting changes.
+
+For provider-backed measurements, compare runs only when provider, model, variant, system, permissions, tools, prompt sequence, and timing window are identical. Record raw read/write/input categories separately; do not infer a cache miss from telemetry the provider did not report.
+
+## Source ownership
+
+- Cache placement and model profiles: `packages/ai/src/cache-policy.ts`, `packages/ai/src/cache-profile.ts`.
+- Provider lowering: `packages/ai/src/protocols`.
+- Namespace, adaptive TTL, continuation, and request ledger: `packages/core/src/session`.
+- Public diagnostics contracts: `packages/schema/src/session-cache-diagnostics.ts` and `packages/protocol/src/groups/session.ts`.
+- Provider Usage presentation: `packages/tui/src/routes/session/provider-usage.tsx`.
+- Deterministic benchmark: `packages/cli/script/runtime-smoke.ts`.

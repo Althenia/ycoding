@@ -1,0 +1,16 @@
+import { Effect } from "effect"
+import { define } from "@ycoding-ai/plugin/effect/plugin"
+
+export const DeepInfraPlugin = define({
+  id: "ycoding.provider.deepinfra",
+  effect: Effect.fn(function* (ctx) {
+    yield* ctx.aisdk.hook(
+      "sdk",
+      Effect.fn(function* (evt) {
+        if (evt.package !== "@ai-sdk/deepinfra") return
+        const mod = yield* Effect.promise(() => import("@ai-sdk/deepinfra"))
+        evt.sdk = mod.createDeepInfra(evt.options)
+      }),
+    )
+  }),
+})

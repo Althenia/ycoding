@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
+  <title>YCoding mark</title>
+  <path d="M40 40h40l48 64-24 32z" fill="#67D7A4"/>
+  <path d="M176 40h40l-64 96-24-32z" fill="#F2F3F5"/>
+  <path d="M104 112h48v104h-48z" fill="#F2F3F5"/>
+  <rect x="116" y="104" width="24" height="24" transform="rotate(45 128 116)" fill="#F0BE62"/>
+</svg>

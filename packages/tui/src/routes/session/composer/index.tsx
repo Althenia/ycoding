@@ -1,0 +1,180 @@
+import { createEffect, createMemo, For, onCleanup, Show, useContext, createContext } from "solid-js"
+import { createStore } from "solid-js/store"
+import { TextAttributes } from "@opentui/core"
+import { useTheme } from "../../../context/theme"
+import { SplitBorder } from "../../../ui/border"
+import { Keymap } from "../../../context/keymap"
+import { SubagentsTab } from "./subagents-tab"
+import { ShellTab } from "./shell-tab"
+
+export interface ComposerHint {
+  label: string
+  shortcut: string
+}
+
+interface Tab {
+  id: string
+  label: string
+  hints?: () => ComposerHint[]
+  onClose?: () => void
+}
+
+const ComposerContext = createContext<{
+  register: (tab: Tab) => () => void
+  active: (id: string) => boolean
+  close: () => void
+}>()
+
+export function useComposerTab() {
+  const ctx = useContext(ComposerContext)
+  if (!ctx) throw new Error("useComposerTab must be used within a Composer")
+  return ctx
+}
+
+export type ComposerProps = {
+  sessionID: string
+  open: boolean
+  defaultTab?: string
+  onClose?: () => void
+}
+
+export function Composer(props: ComposerProps) {
+  const { themeV2 } = useTheme().contextual("elevated")
+
+  const [store, setStore] = createStore({
+    tabs: {} as Record<string, Tab>,
+    active: "",
+  })
+
+  const tabList = createMemo(() => Object.values(store.tabs))
+  const activeTab = createMemo(() => tabList().find((t) => t.id === store.active))
+  const footerHints = createMemo(() => activeTab()?.hints?.() ?? [])
+
+  // Set active tab when opened
+  createEffect(() => {
+    if (!props.open) return
+    const tabs = tabList()
+    if (tabs.length === 0) return
+    const match = props.defaultTab && tabs.find((t) => t.id === props.defaultTab)
+    setStore("active", match ? match.id : tabs[0].id)
+  })
+
+  function close() {
+    const tab = activeTab()
+    tab?.onClose?.()
+    props.onClose?.()
+  }
+
+  const ctx = {
+    register(tab: Tab) {
+      setStore("tabs", tab.id, tab)
+      if (!store.active) setStore("active", tab.id)
+      return () => setStore("tabs", tab.id, undefined!)
+    },
+    active(id: string) {
+      return props.open && store.active === id
+    },
+    close,
+  }
+
+  const keymap = Keymap.use()
+  createEffect(() => {
+    if (!props.open) return
+    const popMode = keymap.mode.push("composer")
+    onCleanup(popMode)
+  })
+
+  const switchTab = (dir: number) => {
+    const tabs = tabList()
+    if (tabs.length <= 1) return
+    const idx = tabs.findIndex((t) => t.id === store.active)
+    setStore("active", tabs[(idx + dir + tabs.length) % tabs.length].id)
+  }
+
+  Keymap.createLayer(() => ({
+    mode: "composer",
+    enabled: () => props.open,
+    commands: [
+      { bind: "left", title: "Previous tab", group: "Composer", run: () => switchTab(-1) },
+      { bind: "right", title: "Next tab", group: "Composer", run: () => switchTab(1) },
+      { bind: "escape", title: "Close composer", group: "Composer", run: close },
+      {
+        bind: "<leader>down",
+        title: "Toggle composer",
+        group: "Composer",
+        run: close,
+      },
+    ],
+  }))
+
+  return (
+    <ComposerContext.Provider value={ctx}>
+      <box flexShrink={0} visible={props.open}>
+        <box
+          {...SplitBorder}
+          border={["left"]}
+          borderColor={themeV2.border.default}
+          backgroundColor={themeV2.background.default}
+          paddingLeft={1}
+          paddingRight={2}
+          paddingTop={1}
+          paddingBottom={1}
+        >
+          <box gap={1}>
+            <box flexDirection="row" justifyContent="space-between" paddingLeft={1}>
+              <Show
+                when={tabList().length > 1}
+                fallback={
+                  <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
+                    {tabList()[0]?.label ?? ""}
+                  </text>
+                }
+              >
+                <box flexDirection="row" gap={2}>
+                  <For each={tabList()}>
+                    {(t) => {
+                      const isActive = createMemo(() => store.active === t.id)
+                      return (
+                        <text
+                          fg={isActive() ? themeV2.text.default : themeV2.text.subdued}
+                          attributes={isActive() ? TextAttributes.BOLD : undefined}
+                        >
+                          {t.label}
+                        </text>
+                      )
+                    }}
+                  </For>
+                </box>
+              </Show>
+              <text fg={themeV2.text.subdued} onMouseUp={close}>
+                esc
+              </text>
+            </box>
+            <SubagentsTab sessionID={props.sessionID} />
+            <ShellTab sessionID={props.sessionID} />
+            <box flexDirection="row" gap={2} paddingLeft={1} flexShrink={0}>
+              <For each={footerHints()}>
+                {(hint) => (
+                  <text>
+                    <span style={{ fg: themeV2.text.default }}>
+                      <b>{hint.label}</b>{" "}
+                    </span>
+                    <span style={{ fg: themeV2.text.subdued }}>{hint.shortcut}</span>
+                  </text>
+                )}
+              </For>
+              <Show when={tabList().length > 1}>
+                <text>
+                  <span style={{ fg: themeV2.text.default }}>
+                    <b>tabs</b>{" "}
+                  </span>
+                  <span style={{ fg: themeV2.text.subdued }}>←/→</span>
+                </text>
+              </Show>
+            </box>
+          </box>
+        </box>
+      </box>
+    </ComposerContext.Provider>
+  )
+}

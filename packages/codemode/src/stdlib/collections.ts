@@ -1,0 +1,70 @@
+export const arrayMethods = new Set([
+  "map",
+  "filter",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "some",
+  "every",
+  "includes",
+  "join",
+  "reduce",
+  "reduceRight",
+  "flatMap",
+  "forEach",
+  "sort",
+  "toSorted",
+  "slice",
+  "concat",
+  "indexOf",
+  "lastIndexOf",
+  "at",
+  "flat",
+  "reverse",
+  "toReversed",
+  "with",
+  "push",
+  "pop",
+  "shift",
+  "unshift",
+  "splice",
+  "toSpliced",
+  "fill",
+  "copyWithin",
+  "keys",
+  "values",
+  "entries",
+])
+
+export const mapMethods = new Set(["get", "set", "has", "delete", "clear", "forEach", "keys", "values", "entries"])
+
+export const mapStatics = new Set(["groupBy"])
+
+export const setMethods = new Set([
+  "add",
+  "has",
+  "delete",
+  "clear",
+  "forEach",
+  "keys",
+  "values",
+  "entries",
+  "union",
+  "intersection",
+  "difference",
+  "symmetricDifference",
+  "isSubsetOf",
+  "isSupersetOf",
+  "isDisjointFrom",
+])
+
+export const spreadItems = (value: unknown): Array<unknown> | undefined => {
+  if (Array.isArray(value)) return value
+  if (typeof value === "string") return Array.from(value)
+  if (value instanceof CodeModeMap) return Array.from(value.map.entries(), ([key, item]) => [key, item])
+  if (value instanceof CodeModeSet) return Array.from(value.set.values())
+  if (value instanceof CodeModeURLSearchParams) return Array.from(value.params.entries(), ([key, item]) => [key, item])
+  return undefined
+}
+import { CodeModeMap, CodeModeSet, CodeModeURLSearchParams } from "../values.js"
