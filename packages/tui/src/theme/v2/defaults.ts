@@ -109,6 +109,9 @@ export const DEFAULT_THEME = {
     text: {
       default: "$hue.neutral.800",
       subdued: "$hue.neutral.600",
+      separator: "$hue.neutral.400",
+      hint: "$hue.neutral.300",
+      label: "$hue.neutral.200",
       action: {
         primary: { default: "$hue.neutral.200", $disabled: "$hue.neutral.500" },
         destructive: { default: "$hue.red.200", $disabled: "$hue.neutral.500" },
@@ -129,6 +132,7 @@ export const DEFAULT_THEME = {
     },
     background: {
       default: "$hue.neutral.200",
+      chrome: "$background.default",
       surface: {
         offset: "$hue.neutral.300",
         overlay: "$hue.neutral.400",
@@ -322,6 +326,9 @@ export const DEFAULT_THEME = {
     text: {
       default: "$hue.neutral.200",
       subdued: "$hue.neutral.400",
+      separator: "$hue.neutral.600",
+      hint: "$hue.neutral.500",
+      label: "$hue.neutral.400",
       action: {
         primary: { default: "$hue.neutral.200", $disabled: "$hue.neutral.500" },
         destructive: { default: "$hue.red.200", $disabled: "$hue.neutral.500" },
@@ -342,6 +349,7 @@ export const DEFAULT_THEME = {
     },
     background: {
       default: "$hue.neutral.800",
+      chrome: "$background.default",
       surface: {
         offset: "$hue.neutral.700",
         overlay: "$hue.neutral.600",

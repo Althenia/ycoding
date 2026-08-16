@@ -1,10 +1,10 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
-import { createMemo, For, Match, Show, Switch, createSignal } from "solid-js"
+import { createMemo, For, Show } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { mcpStatusPresentation, type McpTone } from "../../mcp-presentation"
+import { RailRow, RailSection } from "../../routes/session/rail-section"
 
 function View(props: { context: Plugin.Context; sessionID: string }) {
-  const [open, setOpen] = createSignal(true)
   const { themeV2 } = useTheme()
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
@@ -18,6 +18,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
           item.status.status === "needs_client_registration",
       ).length,
   )
+  const summary = createMemo(() => `${on()} active${bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""}`)
 
   const color = (tone: McpTone) => {
     if (tone === "success") return themeV2.text.feedback.success.default
@@ -28,48 +29,17 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
 
   return (
     <Show when={list().length > 0}>
-      <box>
-        <box flexDirection="row" gap={1} onMouseDown={() => list().length > 2 && setOpen((x) => !x)}>
-          <Show when={list().length > 2}>
-            <text fg={themeV2.text.default}>{open() ? "▼" : "▶"}</text>
-          </Show>
-          <text fg={themeV2.text.default}>
-            <b>MCP</b>
-            <Show when={!open()}>
-              <span style={{ fg: themeV2.text.subdued }}>
-                {" "}
-                ({on()} active{bad() > 0 ? `, ${bad()} error${bad() > 1 ? "s" : ""}` : ""})
-              </span>
-            </Show>
-          </text>
-        </box>
-        <Show when={list().length <= 2 || open()}>
-          <For each={list()}>
-            {(item) => (
-              <box flexDirection="row" gap={1}>
-                <text
-                  flexShrink={0}
-                  style={{
-                    fg: color(mcpStatusPresentation(item.status.status).tone),
-                  }}
-                >
-                  •
-                </text>
-                <text fg={themeV2.text.default} wrapMode="word">
-                  {item.name}{" "}
-                  <span style={{ fg: themeV2.text.subdued }}>
-                    <Switch fallback={mcpStatusPresentation(item.status.status).label}>
-                      <Match when={item.status.status === "failed"}>
-                        <i>{item.status.status === "failed" ? item.status.error : undefined}</i>
-                      </Match>
-                    </Switch>
-                  </span>
-                </text>
-              </box>
-            )}
-          </For>
-        </Show>
-      </box>
+      <RailSection section="mcp" title="MCP" summary={summary()}>
+        <For each={list()}>
+          {(item) => (
+            <RailRow
+              label={item.name}
+              value={item.status.status === "failed" ? item.status.error : mcpStatusPresentation(item.status.status).label}
+              valueColor={color(mcpStatusPresentation(item.status.status).tone)}
+            />
+          )}
+        </For>
+      </RailSection>
     </Show>
   )
 }

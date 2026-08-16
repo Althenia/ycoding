@@ -45,3 +45,5 @@ Library/
 service-*.json
 .verification-tmp/
 
+.aphrodite
+output/

@@ -9,7 +9,7 @@ function run<A, E>(directory: string, effect: Effect.Effect<A, E, Config.Service
   return Effect.runPromise(
     effect.pipe(
       Effect.provide(Config.layer),
-      Effect.provide(Global.layerWith({ config: directory, state: directory })),
+      Effect.provide(Global.layerWith({ data: path.join(directory, "data"), config: directory, state: directory })),
       Effect.provide(NodeFileSystem.layer),
     ),
   )

@@ -66,7 +66,6 @@ Examples:
 
 ```ts
 OpenAI.responses("gpt-4o")
-OpenAI.chat("gpt-4o")
 OpenAI.responsesWebSocket("gpt-4o")
 
 Azure.configure({ resourceName, apiKey }).responses("my-deployment")
@@ -195,10 +194,7 @@ methods, the helper can stay deliberately tiny:
 const configureOpenAI = (input: OpenAIConfig = {}) =>
   Provider.define({
     id: openAIProvider,
-    routes: {
-      responses: openAIResponses.with(openAIConfig(input)),
-      chat: openAIChat.with(openAIConfig(input)),
-    },
+    routes: { responses: openAIResponses.with(openAIConfig(input)) },
     default: "responses",
     configure: configureOpenAI,
   })
@@ -211,7 +207,6 @@ export const OpenAI = configureOpenAI()
 ```ts
 OpenAI.model("gpt-4o")
 OpenAI.responses("gpt-4o")
-OpenAI.chat("gpt-4o")
 OpenAI.configure({ apiKey }).responses("gpt-4o")
 ```
 
@@ -238,18 +233,6 @@ const openAIResponses = Route.make({
   auth: Auth.envBearer("OPENAI_API_KEY"),
 })
 
-const openAIChat = Route.make({
-  id: "openai-chat",
-  provider: openAIProvider,
-  protocol: OpenAIChat.protocol,
-  transport: HttpTransport.sseJson,
-  endpoint: {
-    baseURL: "https://api.openai.com/v1",
-    path: "/chat/completions",
-  },
-  auth: Auth.envBearer("OPENAI_API_KEY"),
-})
-
 const openAIResponsesWebSocket = openAIResponses.with({
   id: "openai-responses-websocket",
   transport: WebSocketTransport.json,
@@ -267,13 +250,10 @@ const openAIConfig = (input: OpenAIConfig) => ({
 const configureOpenAI = (input: OpenAIConfig = {}) => {
   const responses = openAIResponses.with(openAIConfig(input))
   const responsesWebSocket = openAIResponsesWebSocket.with(openAIConfig(input))
-  const chat = openAIChat.with(openAIConfig(input))
-
   return {
     id: openAIProvider,
     responses: responses.model,
     responsesWebSocket: responsesWebSocket.model,
-    chat: chat.model,
     model: responses.model,
     configure: configureOpenAI,
   }
@@ -287,7 +267,7 @@ Specialize it functionally for concrete providers:
 ```ts
 const deepSeekProvider = ProviderID.make("deepseek")
 
-const deepseekChat = openAIChat.with({
+const deepseekChat = OpenAICompatibleChat.route.with({
   id: "deepseek-chat",
   provider: deepSeekProvider,
   endpoint: {
@@ -315,6 +295,8 @@ export const DeepSeek = {
   configure: configureDeepSeek,
 }
 ```
+
+Direct OpenAI exposes only Responses. `OpenAIChat.protocol` remains available through configured third-party Chat routes such as `OpenAICompatibleChat.route`; do not add the removed direct Chat selector.
 
 Provider-specific configuration happens before model selection:
 

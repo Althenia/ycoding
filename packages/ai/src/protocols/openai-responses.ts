@@ -7,6 +7,7 @@ import { Protocol } from "../route/protocol"
 import {
   LLMError,
   LLMEvent,
+  Message,
   Usage,
   type CacheHint,
   type FinishReason,
@@ -23,7 +24,6 @@ import {
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { classifyProviderFailure } from "../provider-error"
 import { OpenAIOptions } from "./utils/openai-options"
-import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
@@ -68,10 +68,26 @@ const OpenAIResponsesReasoningItem = Schema.Struct({
   encrypted_content: optionalNull(Schema.String),
 })
 
+const OpenAIResponsesCompactionItem = Schema.Struct({
+  type: Schema.tag("compaction"),
+  id: Schema.optional(Schema.String),
+  encrypted_content: Schema.String,
+})
+type OpenAIResponsesCompactionItem = Schema.Schema.Type<typeof OpenAIResponsesCompactionItem>
+
 const OpenAIResponsesItemReference = Schema.Struct({
   type: Schema.tag("item_reference"),
   id: Schema.String,
 })
+
+const OpenAIResponsesHostedToolReplay = Schema.StructWithRest(
+  Schema.Struct({
+    type: Schema.Literals(["web_search_call", "web_search_preview_call"]),
+    id: Schema.String,
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+)
+type OpenAIResponsesHostedToolReplay = Schema.Schema.Type<typeof OpenAIResponsesHostedToolReplay>
 
 // `function_call_output.output` accepts either a plain string or an ordered
 // array of content items so tools can return images in addition to text.
@@ -83,15 +99,25 @@ const OpenAIResponsesFunctionCallOutput = Schema.Union([
   Schema.Array(OpenAIResponsesFunctionCallOutputContent),
 ])
 
+const OpenAIResponsesUserInputItem = Schema.Struct({
+  role: Schema.tag("user"),
+  content: Schema.Array(OpenAIResponsesInputContent),
+})
+
 const OpenAIResponsesInputItem = Schema.Union([
   // Plain string content is the default (backward-compatible with every
   // existing cassette); the array-of-blocks form is only produced when a
   // cache breakpoint must be marked (GPT-5.6+ with a `.cache` hint).
   Schema.Struct({ role: Schema.tag("system"), content: Schema.Union([Schema.String, Schema.Array(OpenAIResponsesInputText)]) }),
-  Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputContent) }),
-  Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
+  OpenAIResponsesUserInputItem,
+  Schema.Struct({
+    role: Schema.tag("assistant"),
+    content: Schema.Union([Schema.Array(OpenAIResponsesOutputText), Schema.Array(OpenAIResponsesInputText)]),
+  }),
   OpenAIResponsesReasoningItem,
+  OpenAIResponsesCompactionItem,
   OpenAIResponsesItemReference,
+  OpenAIResponsesHostedToolReplay,
   Schema.Struct({
     type: Schema.tag("function_call"),
     call_id: Schema.String,
@@ -134,13 +160,39 @@ const OpenAIResponsesImageGenerationTool = Schema.Struct({
   quality: Schema.optional(Schema.Literals(["auto", "low", "medium", "high"])),
   size: Schema.optional(OpenAIImage.Size),
 })
-const OpenAIResponsesTools = Schema.Union([OpenAIResponsesTool, OpenAIResponsesImageGenerationTool])
+const OpenAIResponsesWebSearchTool = Schema.Struct({
+  type: Schema.tag("web_search"),
+  filters: Schema.optional(
+    Schema.Struct({
+      allowed_domains: optionalArray(Schema.String),
+      blocked_domains: optionalArray(Schema.String),
+    }),
+  ),
+  search_context_size: Schema.optional(Schema.Literals(["low", "medium", "high"])),
+  user_location: Schema.optional(
+    Schema.Struct({
+      type: Schema.tag("approximate"),
+      city: Schema.optional(Schema.String),
+      country: Schema.optional(Schema.String),
+      region: Schema.optional(Schema.String),
+      timezone: Schema.optional(Schema.String),
+    }),
+  ),
+  external_web_access: Schema.optional(Schema.Boolean),
+  return_token_budget: Schema.optional(Schema.Literals(["default", "unlimited"])),
+})
+const OpenAIResponsesTools = Schema.Union([
+  OpenAIResponsesTool,
+  OpenAIResponsesImageGenerationTool,
+  OpenAIResponsesWebSearchTool,
+])
 type OpenAIResponsesTool = Schema.Schema.Type<typeof OpenAIResponsesTools>
 
 const OpenAIResponsesToolChoice = Schema.Union([
   Schema.Literals(["auto", "none", "required"]),
   Schema.Struct({ type: Schema.tag("function"), name: Schema.String }),
   Schema.Struct({ type: Schema.tag("image_generation") }),
+  Schema.Struct({ type: Schema.tag("web_search") }),
 ])
 
 // Fields shared between the HTTP body and the WebSocket `response.create`
@@ -166,6 +218,7 @@ const OpenAIResponsesCoreFields = {
       ttl: Schema.optional(Schema.Literal("30m")),
     }),
   ),
+  context_management: optionalArray(OpenAIOptions.OpenAIContextManagement),
   include: optionalArray(OpenAIOptions.OpenAIResponseIncludable),
   reasoning: Schema.optional(
     Schema.Struct({
@@ -250,11 +303,19 @@ const OpenAIResponsesErrorPayload = Schema.Struct({
   param: optionalNull(Schema.String),
 })
 
+const OpenAIResponsesAnnotation = Schema.Struct({
+  type: Schema.String,
+  title: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+})
+type OpenAIResponsesAnnotation = Schema.Schema.Type<typeof OpenAIResponsesAnnotation>
+
 const OpenAIResponsesEvent = Schema.Struct({
   type: Schema.String,
   delta: Schema.optional(Schema.String),
   item_id: Schema.optional(Schema.String),
   summary_index: Schema.optional(Schema.Number),
+  annotation: Schema.optional(OpenAIResponsesAnnotation),
   item: Schema.optional(OpenAIResponsesStreamItem),
   response: Schema.optional(
     Schema.StructWithRest(
@@ -308,11 +369,26 @@ const nativeImageTool = (tool: ToolDefinition) => {
   return Schema.is(OpenAIResponsesImageGenerationTool)(native) ? native : undefined
 }
 
+const nativeWebSearchToolInput = (tool: ToolDefinition) => {
+  const native = tool.native?.openai
+  return ProviderShared.isRecord(native) && native.type === "web_search" ? native : undefined
+}
+
+const nativeWebSearchTool = (tool: ToolDefinition) => {
+  const native = nativeWebSearchToolInput(tool)
+  return Schema.is(OpenAIResponsesWebSearchTool)(native) ? native : undefined
+}
+
 const lowerTool = Effect.fn("OpenAIResponses.lowerTool")(function* (tool: ToolDefinition, inputSchema: JsonSchema) {
-  const native = nativeImageToolInput(tool)
-  if (native !== undefined) {
-    if (Schema.is(OpenAIResponsesImageGenerationTool)(native)) return native
+  const image = nativeImageToolInput(tool)
+  if (image !== undefined) {
+    if (Schema.is(OpenAIResponsesImageGenerationTool)(image)) return image
     return yield* invalid("OpenAI Responses image generation tool options are invalid")
+  }
+  const webSearch = nativeWebSearchToolInput(tool)
+  if (webSearch !== undefined) {
+    if (Schema.is(OpenAIResponsesWebSearchTool)(webSearch)) return webSearch
+    return yield* invalid("OpenAI Responses web search tool options are invalid")
   }
   return {
     type: "function" as const,
@@ -329,10 +405,12 @@ const lowerToolChoice = (toolChoice: NonNullable<LLMRequest["toolChoice"]>, tool
     auto: () => "auto" as const,
     none: () => "none" as const,
     required: () => "required" as const,
-    tool: (name) =>
-      tools.some((tool) => tool.name === name && nativeImageTool(tool) !== undefined)
-        ? ({ type: "image_generation" } as const)
-        : { type: "function" as const, name },
+    tool: (name) => {
+      const tool = tools.find((tool) => tool.name === name)
+      if (tool && nativeImageTool(tool) !== undefined) return { type: "image_generation" } as const
+      if (tool && nativeWebSearchTool(tool) !== undefined) return { type: "web_search" } as const
+      return { type: "function" as const, name }
+    },
   })
 
 const lowerToolCall = (part: ToolCallPart): OpenAIResponsesInputItem => ({
@@ -342,10 +420,18 @@ const lowerToolCall = (part: ToolCallPart): OpenAIResponsesInputItem => ({
   arguments: ProviderShared.encodeJson(part.input),
 })
 
-const lowerReasoning = (part: ReasoningPart): OpenAIResponsesReasoningInput | undefined => {
+const lowerReasoning = (
+  part: ReasoningPart,
+): OpenAIResponsesReasoningInput | OpenAIResponsesCompactionItem | undefined => {
   const openai = part.providerMetadata?.openai
-  if (!ProviderShared.isRecord(openai) || typeof openai.itemId !== "string" || openai.itemId.length === 0)
-    return undefined
+  if (!ProviderShared.isRecord(openai)) return undefined
+  if (typeof openai.compactionEncryptedContent === "string")
+    return {
+      type: "compaction",
+      ...(typeof openai.itemId === "string" && openai.itemId.length > 0 ? { id: openai.itemId } : {}),
+      encrypted_content: openai.compactionEncryptedContent,
+    }
+  if (typeof openai.itemId !== "string" || openai.itemId.length === 0) return undefined
   const encryptedContent =
     typeof openai.reasoningEncryptedContent === "string"
       ? openai.reasoningEncryptedContent
@@ -360,6 +446,11 @@ const lowerReasoning = (part: ReasoningPart): OpenAIResponsesReasoningInput | un
   }
 }
 
+const isCompactionReasoning = (part: ReasoningPart) => {
+  const openai = part.providerMetadata?.openai
+  return ProviderShared.isRecord(openai) && typeof openai.compactionEncryptedContent === "string"
+}
+
 const hostedToolItemID = (part: ToolResultPart) => {
   const openai = part.providerMetadata?.openai
   return ProviderShared.isRecord(openai) && typeof openai.itemId === "string" && openai.itemId.length > 0
@@ -367,30 +458,23 @@ const hostedToolItemID = (part: ToolResultPart) => {
     : undefined
 }
 
-// GPT-5.6+ accepts at most 4 explicit `prompt_cache_breakpoint` writes per
-// request; in the default `implicit` mode the latest message consumes one of
-// those slots server-side, leaving 3 for callers. Pre-5.6 models never reach
-// this — `lowerMessages` sizes the cap at 0 for them, so `remaining` is
-// already exhausted and every marker silently drops.
-const cacheBreakpoint = (breakpoints: Cache.Breakpoints, cache: CacheHint | undefined) => {
-  if (!cache) return undefined
-  if (breakpoints.remaining <= 0) {
-    breakpoints.dropped += 1
-    return undefined
-  }
-  breakpoints.remaining -= 1
-  return { mode: "explicit" as const }
+const hostedToolReplay = (part: ToolResultPart): OpenAIResponsesHostedToolReplay | undefined => {
+  if (part.name !== "web_search" && part.name !== "web_search_preview") return undefined
+  if (part.result.type !== "json") return undefined
+  return Schema.is(OpenAIResponsesHostedToolReplay)(part.result.value) ? part.result.value : undefined
 }
+
+const cacheBreakpoint = (cache: CacheHint | undefined) => (cache ? { mode: "explicit" as const } : undefined)
 
 const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function* (
   part: LLMRequest["messages"][number]["content"][number],
-  breakpoints: Cache.Breakpoints,
+  supportsBreakpoints: boolean,
 ) {
   if (part.type === "text")
     return {
       type: "input_text" as const,
       text: part.text,
-      prompt_cache_breakpoint: cacheBreakpoint(breakpoints, part.cache),
+      prompt_cache_breakpoint: supportsBreakpoints ? cacheBreakpoint(part.cache) : undefined,
     }
   if (part.type === "media") {
     const media = yield* ProviderShared.validateMedia(
@@ -426,14 +510,35 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
   return yield* Effect.forEach(content, lowerToolResultContentItem)
 })
 
+export const pruneMessagesForServerCompaction = (request: LLMRequest) => {
+  if (OpenAIOptions.store(request) !== false) return request.messages
+  const boundary = request.messages
+    .flatMap((message, messageIndex) =>
+      message.role !== "assistant"
+        ? []
+        : message.content.flatMap((part, contentIndex) =>
+            part.type === "reasoning" && isCompactionReasoning(part) ? [{ messageIndex, contentIndex }] : [],
+          ),
+    )
+    .at(-1)
+  if (!boundary) return request.messages
+  return request.messages.slice(boundary.messageIndex).map((message, messageIndex) =>
+    messageIndex === 0 && message.role === "assistant"
+      ? Message.make({
+          id: message.id,
+          role: message.role,
+          content: message.content.slice(boundary.contentIndex),
+          volatile: message.volatile,
+          metadata: message.metadata,
+          native: message.native,
+        })
+      : message,
+  )
+}
+
 const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
-  // Explicit `prompt_cache_breakpoint` is GPT-5.6+ only, so pre-5.6 requests
-  // get a zero-capacity budget: `cacheBreakpoint` then silently drops every
-  // hint instead of marking the wire body, and the system block stays a
-  // plain string for full backward compatibility.
-  const isGpt56 = OpenAIOptions.isGpt56OrLater(request.model.id)
-  const cacheMode = OpenAIOptions.promptCacheOptions(request)?.mode ?? "implicit"
-  const breakpoints = Cache.newBreakpoints(isGpt56 ? (cacheMode === "explicit" ? 4 : 3) : 0)
+  const supportsBreakpoints =
+    OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6"
 
   const systemCacheHint = request.system.find((part) => part.cache !== undefined)?.cache
   const system: OpenAIResponsesInputItem[] =
@@ -443,12 +548,12 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
           {
             role: "system",
             content:
-              isGpt56 && systemCacheHint
+              supportsBreakpoints && systemCacheHint
                 ? [
                     {
                       type: "input_text" as const,
                       text: ProviderShared.joinText(request.system),
-                      prompt_cache_breakpoint: cacheBreakpoint(breakpoints, systemCacheHint),
+                      prompt_cache_breakpoint: cacheBreakpoint(systemCacheHint),
                     },
                   ]
                 : ProviderShared.joinText(request.system),
@@ -460,11 +565,11 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
   const continuationInputStart =
     previousResponseId === undefined ? 0 : Math.min(OpenAIOptions.continuationInputStart(request) ?? 0, request.messages.length)
 
-  for (const message of request.messages.slice(continuationInputStart)) {
+  for (const message of pruneMessagesForServerCompaction(request).slice(continuationInputStart)) {
     if (message.role === "system") {
       const part = yield* ProviderShared.wrappedSystemUpdate("OpenAI Responses", message)
       const previous = input.at(-1)
-      if (previous && "role" in previous && previous.role === "user")
+      if (previous && Schema.is(OpenAIResponsesUserInputItem)(previous))
         input[input.length - 1] = {
           role: "user",
           content: [...previous.content, { type: "input_text", text: part.text }],
@@ -476,7 +581,7 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     if (message.role === "user") {
       input.push({
         role: "user",
-        content: yield* Effect.forEach(message.content, (part) => lowerUserContent(part, breakpoints)),
+        content: yield* Effect.forEach(message.content, (part) => lowerUserContent(part, supportsBreakpoints)),
       })
       continue
     }
@@ -485,10 +590,21 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
       const content: TextPart[] = []
       const reasoningItems: Record<string, OpenAIResponsesReasoningReplay> = {}
       const reasoningReferences = new Set<string>()
+      const compactionReferences = new Set<string>()
       const hostedToolReferences = new Set<string>()
       const flushText = () => {
         if (content.length === 0) return
-        input.push({ role: "assistant", content: content.map((part) => ({ type: "output_text", text: part.text })) })
+        input.push({
+          role: "assistant",
+          content:
+            supportsBreakpoints && content.some((part) => part.cache)
+              ? content.map((part) => ({
+                  type: "input_text" as const,
+                  text: part.text,
+                  prompt_cache_breakpoint: cacheBreakpoint(part.cache),
+                }))
+              : content.map((part) => ({ type: "output_text" as const, text: part.text })),
+        })
         content.splice(0, content.length)
       }
       for (const part of message.content) {
@@ -500,6 +616,15 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
           flushText()
           const reasoning = lowerReasoning(part)
           if (!reasoning) continue
+          if (reasoning.type === "compaction") {
+            if (store !== false && reasoning.id) {
+              if (!compactionReferences.has(reasoning.id)) input.push({ type: "item_reference", id: reasoning.id })
+              compactionReferences.add(reasoning.id)
+              continue
+            }
+            input.push(reasoning)
+            continue
+          }
           if (store !== false) {
             if (!reasoningReferences.has(reasoning.id)) input.push({ type: "item_reference", id: reasoning.id })
             reasoningReferences.add(reasoning.id)
@@ -532,6 +657,10 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
           const itemID = hostedToolItemID(part)
           if (store !== false && itemID && !hostedToolReferences.has(itemID))
             input.push({ type: "item_reference", id: itemID })
+          if (store === false) {
+            const replay = hostedToolReplay(part)
+            if (replay) input.push(replay)
+          }
           if (store === false && part.name === "image_generation" && part.result.type === "content") {
             const content: ReadonlyArray<ToolContent> = part.result.value
             input.push({
@@ -584,16 +713,14 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
-  // `prompt_cache_retention` and `prompt_cache_options` are model-gated wire
-  // fields. Unsupported fields return a 400, so 24h retention is restricted to
-  // OpenAI's published allowlist while in-memory retention keeps legacy behavior.
-  const isGpt56 = OpenAIOptions.isGpt56OrLater(request.model.id)
-  const configuredRetention = !isGpt56 ? OpenAIOptions.promptCacheRetention(request) : undefined
+  const cacheCapability = OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id)
+  const configuredRetention = cacheCapability === "legacy" ? OpenAIOptions.promptCacheRetention(request) : undefined
   const retention =
     configuredRetention === "24h" && !OpenAIOptions.supportsExtendedPromptCacheRetention(request.model.id)
       ? undefined
       : configuredRetention
-  const cacheOptions = isGpt56 ? OpenAIOptions.promptCacheOptions(request) : undefined
+  const cacheOptions = cacheCapability === "gpt-5.6" ? OpenAIOptions.promptCacheOptions(request) : undefined
+  const contextManagement = OpenAIOptions.resolvedContextManagement(request)
   return {
     ...(instructions ? { instructions } : {}),
     ...(store !== undefined ? { store } : {}),
@@ -601,6 +728,14 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(retention ? { prompt_cache_retention: retention } : {}),
     ...(cacheOptions ? { prompt_cache_options: cacheOptions } : {}),
+    ...(contextManagement && contextManagement.length > 0
+      ? {
+          context_management: contextManagement.map((entry) => ({
+            type: entry.type,
+            compact_threshold: entry.compactThreshold,
+          })),
+        }
+      : {}),
     ...(include ? { include } : {}),
     ...(effort || summary ? { reasoning: { effort, summary } } : {}),
     ...(verbosity ? { text: { verbosity } } : {}),
@@ -707,6 +842,11 @@ const isReasoningItem = (
 ): item is OpenAIResponsesStreamItem & { type: "reasoning"; id: string } =>
   item.type === "reasoning" && typeof item.id === "string" && item.id.length > 0
 
+const isCompactionItem = (
+  item: OpenAIResponsesStreamItem,
+): item is OpenAIResponsesStreamItem & { type: "compaction"; encrypted_content: string } =>
+  item.type === "compaction" && typeof item.encrypted_content === "string"
+
 // Round-trip the full item as the structured result so consumers can extract
 // outputs / sources / status without re-decoding.
 const hostedToolResult = Effect.fn("OpenAIResponses.hostedToolResult")(function* (item: OpenAIResponsesStreamItem) {
@@ -770,10 +910,25 @@ const onOutputTextDelta = (state: ParserState, event: OpenAIResponsesEvent): Ste
   ]
 }
 
+const onOutputTextAnnotationAdded = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
+  const text = urlCitationText(event.annotation)
+  if (text === undefined) return [state, NO_EVENTS]
+  const events: LLMEvent[] = []
+  return [
+    { ...state, lifecycle: Lifecycle.textDelta(state.lifecycle, events, event.item_id ?? "text-0", text) },
+    events,
+  ]
+}
+
 const onOutputTextDone = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   const events: LLMEvent[] = []
   return [{ ...state, lifecycle: Lifecycle.textEnd(state.lifecycle, events, event.item_id ?? "text-0") }, events]
 }
+
+const urlCitationText = (annotation: OpenAIResponsesAnnotation | undefined) =>
+  annotation?.type === "url_citation" && annotation.title && annotation.url
+    ? `\n\nSource: ${annotation.title}\n${annotation.url}`
+    : undefined
 
 const onReasoningDelta = (state: ParserState, event: OpenAIResponsesEvent): StepResult => {
   if (!event.delta) return [state, NO_EVENTS]
@@ -794,6 +949,12 @@ const onReasoningDone = (state: ParserState, _event: OpenAIResponsesEvent): Step
 
 const reasoningMetadata = (item: OpenAIResponsesStreamItem & { id: string }) =>
   openaiMetadata({ itemId: item.id, reasoningEncryptedContent: item.encrypted_content ?? null })
+
+const compactionMetadata = (item: OpenAIResponsesStreamItem & { encrypted_content: string }) =>
+  openaiMetadata({
+    ...(item.id === undefined ? {} : { itemId: item.id }),
+    compactionEncryptedContent: item.encrypted_content,
+  })
 
 // OpenAI Responses streams reasoning items in a stable order:
 //   `output_item.added` (reasoning) →
@@ -994,6 +1155,17 @@ const onOutputItemDone = Effect.fn("OpenAIResponses.onOutputItemDone")(function*
     ] satisfies StepResult
   }
 
+  if (isCompactionItem(item)) {
+    const events: LLMEvent[] = []
+    const id = item.id ?? "compaction-0"
+    const providerMetadata = compactionMetadata(item)
+    const started = Lifecycle.reasoningStart(state.lifecycle, events, id, providerMetadata)
+    return [
+      { ...state, lifecycle: Lifecycle.reasoningEnd(started, events, id, providerMetadata) },
+      events,
+    ] satisfies StepResult
+  }
+
   if (isHostedToolItem(item)) {
     const events: LLMEvent[] = []
     const lifecycle = Lifecycle.stepStart(state.lifecycle, events)
@@ -1071,6 +1243,8 @@ const providerError = (event: OpenAIResponsesEvent, fallback: string) => {
 
 const step = (state: ParserState, event: OpenAIResponsesEvent) => {
   if (event.type === "response.output_text.delta") return Effect.succeed(onOutputTextDelta(state, event))
+  if (event.type === "response.output_text.annotation.added")
+    return Effect.succeed(onOutputTextAnnotationAdded(state, event))
   if (event.type === "response.output_text.done") return Effect.succeed(onOutputTextDone(state, event))
   if (
     event.type === "response.reasoning_text.delta" ||

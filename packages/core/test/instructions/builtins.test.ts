@@ -30,7 +30,7 @@ const locationLayer = Layer.succeed(
 const it = testEffect(
   AppNodeBuilder.build(InstructionBuiltIns.node, [
     [Location.node, locationLayer],
-    [Global.node, Global.layerWith({ config: "/global" })],
+    [Global.node, Global.layerWith({ data: "/data", config: "/global" })],
   ]),
 )
 

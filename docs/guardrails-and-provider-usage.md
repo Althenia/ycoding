@@ -76,11 +76,11 @@ Permissions decide whether an agent may attempt an action. Guardrails apply inde
 
 Guardrail reviews are not auto-approved by `yolo`, `goal`, or the TUI permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
 
-- `Approve once`
-- `Always`
-- `Reject`
+- `Allow once`
+- `Allow for this session`
+- `Deny`
 
-`Always` is not a durable permission grant. It reuses approval only in the current Location-service/process lifetime for the exact root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. Each action is freshly evaluated first; a deny, a changed match, or a non-review result cannot reuse it. `once` is never reusable, and descendants share the root-family key.
+The durable `always` reply, rendered as `Allow for this session`, is not a durable permission grant. It reuses approval only in the current Location-service/process lifetime for the exact root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. Each action is freshly evaluated first; a deny, a changed match, or a non-review result cannot reuse it. `once` is never reusable, and descendants share the root-family key.
 
 ### Runtime configuration
 

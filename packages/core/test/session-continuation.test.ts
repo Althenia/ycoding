@@ -53,6 +53,21 @@ it.effect("keeps Responses continuation available on the ChatGPT Codex backend",
   }).pipe(Effect.provide(SessionContinuation.layer())),
 )
 
+it.effect("keeps Responses continuation available on the GitHub Copilot backend", () =>
+  Effect.gen(function* () {
+    const continuation = yield* SessionContinuation.Service
+    const copilot = {
+      ...fingerprint,
+      routeID: "github-copilot-responses",
+      responseID: "resp_copilot",
+      representedMessages: 3,
+    }
+    yield* continuation.remember(copilot)
+
+    expect(yield* continuation.select({ ...copilot, mode: "auto", store: true })).toEqual(copilot)
+  }).pipe(Effect.provide(SessionContinuation.layer())),
+)
+
 it.effect("clears state after any request fingerprint mismatch", () =>
   Effect.gen(function* () {
     const continuation = yield* SessionContinuation.Service

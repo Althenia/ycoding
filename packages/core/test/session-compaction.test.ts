@@ -270,7 +270,14 @@ it.effect("manual compaction summarizes short context instead of no-op", () =>
     expect(requests[0]?.system.map((part) => part.text)).toEqual(["Manual constraints"])
     expect(JSON.stringify(requests[0]?.messages)).toContain("Manual compaction should include this short conversation.")
     expect(yield* store.context(sessionID)).toMatchObject([
-      { type: "compaction", reason: "manual", summary: "manual summary", recent: "" },
+      {
+        type: "compaction",
+        reason: "manual",
+        summary: "manual summary",
+        recent: "",
+        messages: 1,
+        tokens: { input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } },
+      },
     ])
     expect(yield* store.get(sessionID)).toMatchObject({
       cost: 0.0000233,

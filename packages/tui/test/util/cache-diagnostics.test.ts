@@ -23,7 +23,7 @@ const diagnostics: SessionCacheDiagnostics = {
 test("formats provider context and prompt cache diagnostics", () => {
   expect(formatCacheDiagnostics(diagnostics)).toEqual({
     model: "openai/model",
-    context: "Context 1.0K/2.0K (52%; includes cached)",
+    context: "Context 1.0k/2.0k (52%; includes cached)",
     cache: "Prompt 90% · 900 read · 0 write · 100 uncached",
   })
 })
@@ -88,9 +88,9 @@ test("formats bounded local provider request diagnostics", () => {
     helpers: "1",
     continued: "3",
     fallback: "1",
-    uncachedInput: "12.0K tokens",
-    cacheRead: "18.2K tokens",
-    cacheWrite: "1.2K tokens",
+    uncachedInput: "12.0k tokens",
+    cacheRead: "18.2k tokens",
+    cacheWrite: "1.2k tokens",
     output: "900 tokens",
     reasoning: "300 tokens",
     estimatedCost: "$0.0421",

@@ -42,7 +42,7 @@ export function CommandPaletteDialog() {
           value: `suggested:${option.value}`,
           category: "Suggested",
         })),
-      ...options(),
+      ...options().filter((option) => !option.suggested),
     ]
   }
 

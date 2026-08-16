@@ -36,6 +36,16 @@ export interface OpenAIPromptCacheOptions {
   readonly ttl?: "30m"
 }
 
+export interface OpenAIContextManagementEntry {
+  readonly type: "compaction"
+  readonly compactThreshold?: number
+}
+
+export const OpenAIContextManagement = Schema.Struct({
+  type: Schema.tag("compaction"),
+  compact_threshold: Schema.optional(Schema.Number),
+})
+
 const TEXT_VERBOSITY = new Set<string>(["low", "medium", "high"])
 const INCLUDABLES = new Set<string>(OpenAIResponseIncludables)
 const SERVICE_TIERS = new Set<string>(OpenAIServiceTiers)
@@ -145,6 +155,18 @@ export const promptCacheOptions = (request: LLMRequest): OpenAIPromptCacheOption
   return mode === undefined && ttl === undefined ? undefined : { mode, ttl }
 }
 
+export const contextManagement = (request: LLMRequest): ReadonlyArray<OpenAIContextManagementEntry> | undefined => {
+  const value = options(request)?.contextManagement
+  if (!Array.isArray(value)) return undefined
+  return value.flatMap((entry): OpenAIContextManagementEntry[] => {
+    if (!isRecord(entry) || entry.type !== "compaction") return []
+    const compactThreshold = entry.compactThreshold
+    if (compactThreshold !== undefined && (typeof compactThreshold !== "number" || !Number.isFinite(compactThreshold)))
+      return []
+    return [{ type: "compaction", compactThreshold }]
+  })
+}
+
 // GPT version family gate for the two mutually-exclusive retention controls:
 // `prompt_cache_retention` (pre-5.6) vs `prompt_cache_options` /
 // `prompt_cache_breakpoint` (5.6+). Sending either to the wrong family returns
@@ -161,9 +183,36 @@ export const isGpt56OrLater = (modelID: string): boolean => {
   return major > 5 || (major === 5 && minor >= 6)
 }
 
+export const DefaultCompactionThreshold = 200_000
+
+const DIRECT_OPENAI_RESPONSE_ROUTES = new Set(["openai-responses", "openai-responses-websocket"])
+
+export const defaultContextManagement = (
+  routeID: string,
+  modelID: string,
+): ReadonlyArray<OpenAIContextManagementEntry> | undefined =>
+  DIRECT_OPENAI_RESPONSE_ROUTES.has(routeID) && isGpt56OrLater(modelID)
+    ? [{ type: "compaction", compactThreshold: DefaultCompactionThreshold }]
+    : undefined
+
+export const resolvedContextManagement = (request: LLMRequest) =>
+  contextManagement(request) ?? defaultContextManagement(request.model.route.id, request.model.id)
+
 export const supportsExtendedPromptCacheRetention = (modelID: string): boolean => {
   const normalized = modelID.toLowerCase().split("/").at(-1)?.replace(MODEL_SNAPSHOT_SUFFIX, "")
   return normalized !== undefined && EXTENDED_PROMPT_CACHE_MODELS.has(normalized)
+}
+
+export type PublicOpenAIPromptCacheCapability = "key-only" | "legacy" | "gpt-5.6"
+
+const PUBLIC_OPENAI_CACHE_ROUTES = new Set(["openai-chat", "openai-responses", "openai-responses-websocket"])
+
+export const publicPromptCacheCapability = (
+  routeID: string,
+  modelID: string,
+): PublicOpenAIPromptCacheCapability => {
+  if (!PUBLIC_OPENAI_CACHE_ROUTES.has(routeID)) return "key-only"
+  return isGpt56OrLater(modelID) ? "gpt-5.6" : "legacy"
 }
 
 export * as OpenAIOptions from "./openai-options"

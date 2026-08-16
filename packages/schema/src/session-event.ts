@@ -273,6 +273,18 @@ export namespace Skill {
     },
   })
   export type Activated = typeof Activated.Type
+
+  export const Deactivated = Event.durable({
+    type: "session.skill.deactivated",
+    ...options,
+    schema: {
+      ...Base,
+      id: SkillSchema.ID,
+      activationMessageID: SessionMessage.ID,
+      reason: Schema.Literal("conflict_resolved"),
+    },
+  })
+  export type Deactivated = typeof Deactivated.Type
 }
 
 export namespace Shell {
@@ -570,6 +582,8 @@ export namespace Compaction {
       reason: Started.data.fields.reason,
       text: Schema.String,
       recent: Schema.String,
+      messages: NonNegativeInt.pipe(optional),
+      tokens: TokenUsage.Info.pipe(optional),
     },
   })
   export type Ended = typeof Ended.Type
@@ -621,6 +635,7 @@ export const Definitions = Event.inventory(
   Task.Updated,
   Synthetic,
   Skill.Activated,
+  Skill.Deactivated,
   Shell.Started,
   Shell.Ended,
   Step.Started,

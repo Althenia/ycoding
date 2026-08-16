@@ -21,6 +21,7 @@ import {
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
+  SkillConflictNotFoundError,
   SkillNotFoundError,
   UnknownError,
   ForbiddenError,
@@ -167,6 +168,11 @@ export const SessionSubagentAnswer = Schema.Struct({
 
 const SessionsQueryCursor = SessionsCursor.annotate({
   description: "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response.",
+})
+
+export const SessionSkillConflictResolve = Schema.Struct({
+  winner: Skill.ID,
+  loser: Skill.ID,
 })
 
 export const SessionsQuery = Schema.Struct({
@@ -559,6 +565,22 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.skills",
             summary: "List session skills",
             description: "Retrieve the active and inactive skills for a session.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.post("session.resolveSkillConflict", "/api/session/:sessionID/skill/resolve", {
+        params: { sessionID: Session.ID },
+        payload: SessionSkillConflictResolve,
+        success: HttpApiSchema.NoContent,
+        error: [SessionNotFoundError, SkillConflictNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.resolveSkillConflict",
+            summary: "Resolve skill conflict",
+            description: "Resolve an active skill conflict by keeping the winner and durably deactivating the loser.",
           }),
         ),
     )

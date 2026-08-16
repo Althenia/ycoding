@@ -103,6 +103,7 @@ type Plan = {
   readonly reason: SessionMessage.Compaction["reason"]
   readonly prompt: string
   readonly recent: string
+  readonly messages: number
   readonly inputID?: SessionMessage.ID
   readonly system: readonly SystemPart[]
 }
@@ -184,7 +185,7 @@ const settings = (documents: readonly Config.Entry[]) => {
 const select = (
   messages: readonly SessionMessage.Info[],
   tokens: number,
-): { readonly head: string; readonly recent: string } | undefined => {
+): { readonly head: string; readonly recent: string; readonly headMessages: number; readonly recentMessages: number } | undefined => {
   const conversation = messages
     .filter((message) => message.type !== "compaction" && message.type !== "system")
     .flatMap((message) => {
@@ -214,6 +215,8 @@ const select = (
       .slice(split)
       .map((item) => item.text)
       .join("\n\n"),
+    headMessages: split,
+    recentMessages: conversation.length - split,
   }
 }
 
@@ -229,10 +232,8 @@ export const buildPrompt = (input: { readonly previousSummary?: string; readonly
 
 const planContent = (messages: readonly SessionMessage.Info[], tokens: number) => {
   const selected = select(messages, tokens)
-  if (!selected) return
-  const previousSummary = messages.findLast(
-    (message) => message.type === "compaction" && message.status === "completed",
-  )
+  if (!selected) return undefined
+  const previousSummary = messages.findLast((message) => message.type === "compaction" && message.status === "completed")
   const previousRecent = previousSummary?.type === "compaction" ? previousSummary.recent : ""
   const summarizeRecent = !previousRecent && !selected.head
   return {
@@ -241,6 +242,7 @@ const planContent = (messages: readonly SessionMessage.Info[], tokens: number) =
       context: summarizeRecent ? [selected.recent] : [previousRecent, selected.head].filter(Boolean),
     }),
     recent: summarizeRecent ? "" : selected.recent,
+    messages: summarizeRecent ? selected.recentMessages : selected.headMessages,
   }
 }
 
@@ -410,6 +412,8 @@ const make = (dependencies: Dependencies) => {
       reason: plan.reason,
       text: summary,
       recent: plan.recent,
+      messages: plan.messages,
+      ...(usage ? { tokens: usage.tokens } : {}),
     })
     return { status: "completed" as const }
   })

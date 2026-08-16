@@ -60,7 +60,7 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
     expected.messages[0].content = [expected.messages[0].content.trimEnd(), ProjectArtifactInstructions.content].join(
       "\n\n",
     )
-    expected.prompt_cache_key = "c0f1b06ddd525f7c8a36427346b542446b5d1288004f9079594f3340b174ba22"
+    expected.prompt_cache_key = "2fff2b3cee2a78e9b0dd8aa9ce55a03db47a341bf5f08c15520447075782f21e"
     expect(incoming.headers).toEqual(recorded.headers)
     expect(JSON.parse(incoming.body)).toEqual(expected)
     return incoming.method === recorded.method && incoming.url === recorded.url

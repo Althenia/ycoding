@@ -35,7 +35,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionContinuation") {}
 
-const RESPONSE_ROUTES = new Set(["openai-responses", "openai-responses-websocket", OpenAICodex.routeID])
+const RESPONSE_ROUTES = new Set(["openai-responses", "openai-responses-websocket", "github-copilot-responses", OpenAICodex.routeID])
 export const isResponsesRoute = (routeID: string) => RESPONSE_ROUTES.has(routeID)
 const DEFAULT_CAPACITY = 1024
 

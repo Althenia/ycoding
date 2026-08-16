@@ -105,6 +105,9 @@ const BackgroundFeedbackDefinition = Schema.Struct({
 const TextDefinition = Schema.Struct({
   default: Schema.optional(ColorValue),
   subdued: Schema.optional(ColorValue),
+  separator: Schema.optional(ColorValue),
+  hint: Schema.optional(ColorValue),
+  label: Schema.optional(ColorValue),
   action: Schema.optional(ActionColorDefinition),
   formfield: Schema.optional(StatefulColorDefinition),
   feedback: Schema.optional(
@@ -120,6 +123,7 @@ export type TextDefinition = Schema.Schema.Type<typeof TextDefinition>
 
 const BackgroundDefinition = Schema.Struct({
   default: Schema.optional(ColorValue),
+  chrome: Schema.optional(ColorValue),
   surface: Schema.optional(
     Schema.Struct({
       offset: Schema.optional(ColorValue),

@@ -31,9 +31,9 @@ export function todayTimeOrDateTime(input: number): string {
 
 export function number(num: number): string {
   if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + "M"
+    return (num / 1000000).toFixed(1) + "m"
   } else if (num >= 1000) {
-    return (num / 1000).toFixed(1) + "K"
+    return (num / 1000).toFixed(1) + "k"
   }
   return num.toString()
 }

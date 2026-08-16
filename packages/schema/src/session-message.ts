@@ -93,6 +93,12 @@ export const System = Schema.Struct({
   text: Schema.String,
 }).annotate({ identifier: "Session.Message.System" })
 
+export interface SkillDeactivation extends Schema.Schema.Type<typeof SkillDeactivation> {}
+export const SkillDeactivation = Schema.Struct({
+  skill: SkillSchema.ID,
+  reason: Schema.Literal("conflict_resolved"),
+}).annotate({ identifier: "Session.Message.SkillDeactivation" })
+
 export interface Skill extends Schema.Schema.Type<typeof Skill> {}
 export const Skill = Schema.Struct({
   ...Base,
@@ -101,6 +107,7 @@ export const Skill = Schema.Struct({
   name: SkillSchema.Name,
   text: Schema.String,
   conflicts: SkillSchema.Conflicts.pipe(optional),
+  skillDeactivations: Schema.Array(SkillDeactivation).pipe(optional),
   artifact: ArtifactProvenance.pipe(optional),
 }).annotate({ identifier: "Session.Message.Skill" })
 
@@ -209,6 +216,7 @@ export const Assistant = Schema.Struct({
   agent: Agent.ID,
   model: Model.Ref,
   content: AssistantContent.pipe(Schema.Array),
+  skillDeactivations: Schema.Array(SkillDeactivation).pipe(optional),
   snapshot: Schema.Struct({
     start: Snapshot.ID.pipe(optional),
     end: Snapshot.ID.pipe(optional),
@@ -247,6 +255,8 @@ export const CompactionCompleted = Schema.Struct({
   reason: Schema.Literals(["auto", "manual"]),
   summary: Schema.String,
   recent: Schema.String,
+  messages: NonNegativeInt.pipe(optional),
+  tokens: TokenUsage.Info.pipe(optional),
 }).annotate({ identifier: "Session.Message.Compaction.Completed" })
 
 export interface CompactionFailed extends Schema.Schema.Type<typeof CompactionFailed> {}

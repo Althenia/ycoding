@@ -2,7 +2,6 @@ import { AuthOptions, type ProviderAuthOption } from "../route/auth-options"
 import type { Route, RouteDefaultsInput } from "../route/client"
 import type { ProviderPackage } from "../provider-package"
 import { HttpOptions, ProviderID, ToolDefinition, mergeHttpOptions, type ModelID } from "../schema"
-import * as OpenAIChat from "../protocols/openai-chat"
 import * as OpenAIResponses from "../protocols/openai-responses"
 import { withOpenAIOptions, type OpenAIProviderOptionsInput } from "./openai-options"
 import { OpenAIImages, type OpenAIImageString } from "../protocols/openai-images"
@@ -12,10 +11,10 @@ export type { OpenAIImageOptions } from "../protocols/openai-images"
 
 export const id = ProviderID.make("openai")
 
-export const routes = [OpenAIResponses.route, OpenAIResponses.webSocketRoute, OpenAIChat.route]
+export const routes = [OpenAIResponses.route, OpenAIResponses.webSocketRoute]
 
-// This provider facade wraps the lower-level Responses and Chat model factories
-// with OpenAI-specific conveniences: typed options, API-key sugar, env fallback,
+// This provider facade wraps the lower-level Responses model factories with
+// OpenAI-specific conveniences: typed options, API-key sugar, env fallback,
 // and default option normalization.
 export type Config = RouteDefaultsInput &
   ProviderAuthOption<"optional"> & {
@@ -57,6 +56,52 @@ export const imageGeneration = (options: ImageGenerationOptions = {}) =>
     },
   })
 
+export interface WebSearchOptions {
+  readonly allowedDomains?: ReadonlyArray<string>
+  readonly blockedDomains?: ReadonlyArray<string>
+  readonly externalWebAccess?: boolean
+  readonly returnTokenBudget?: "default" | "unlimited"
+  readonly searchContextSize?: "low" | "medium" | "high"
+  readonly userLocation?: {
+    readonly city?: string
+    readonly country?: string
+    readonly region?: string
+    readonly timezone?: string
+  }
+}
+
+export const webSearch = (options: WebSearchOptions = {}) =>
+  ToolDefinition.make({
+    name: "web_search",
+    description: "Search the web using OpenAI's hosted web search tool.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    native: {
+      openai: {
+        type: "web_search",
+        filters:
+          options.allowedDomains === undefined && options.blockedDomains === undefined
+            ? undefined
+            : {
+                allowed_domains: options.allowedDomains,
+                blocked_domains: options.blockedDomains,
+              },
+        external_web_access: options.externalWebAccess,
+        return_token_budget: options.returnTokenBudget,
+        search_context_size: options.searchContextSize,
+        user_location:
+          options.userLocation === undefined
+            ? undefined
+            : {
+                type: "approximate",
+                city: options.userLocation.city,
+                country: options.userLocation.country,
+                region: options.userLocation.region,
+                timezone: options.userLocation.timezone,
+              },
+      },
+    },
+  })
+
 export interface Settings extends ProviderPackage.Settings {
   readonly apiKey?: string
   readonly baseURL?: string
@@ -83,13 +128,11 @@ const configuredRoute = <Body, Prepared>(route: Route<Body, Prepared>, input: Co
 export const configure = (input: Config = {}) => {
   const responsesRoute = configuredRoute(OpenAIResponses.route, input)
   const responsesWebSocketRoute = configuredRoute(OpenAIResponses.webSocketRoute, input)
-  const chatRoute = configuredRoute(OpenAIChat.route, input)
   const modelDefaults = defaults(input)
   const responses = (id: string | ModelID) =>
     responsesRoute.with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true })).model({ id })
   const responsesWebSocket = (id: string | ModelID) =>
     responsesWebSocketRoute.with(withOpenAIOptions(id, modelDefaults, { textVerbosity: true })).model({ id })
-  const chat = (id: string | ModelID) => chatRoute.with(withOpenAIOptions(id, modelDefaults)).model({ id })
   const image = (modelID: string | ModelID) =>
     OpenAIImages.model({
       id: modelID,
@@ -107,7 +150,6 @@ export const configure = (input: Config = {}) => {
     model: responses,
     responses,
     responsesWebSocket,
-    chat,
     image,
     configure,
   }
@@ -139,9 +181,6 @@ export const model: ProviderPackage.Definition<Settings>["model"] = (modelID, se
   throw new Error(`Unsupported OpenAI Responses transport: ${String(settings.transport)}`)
 }
 
-export const chatModel: ProviderPackage.Definition<Settings>["model"] = (modelID, settings) =>
-  configure(config(settings)).chat(modelID)
 export const responses = provider.responses
 export const responsesWebSocket = provider.responsesWebSocket
-export const chat = provider.chat
 export const image = provider.image

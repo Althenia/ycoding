@@ -44,7 +44,7 @@ const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
 
 test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
-    "b793bd4470bcce7e98eed50e1c9b4c74d4cfba2d264efef3756a450fa1621c4b",
+    "6e41470c1087dc6e2208831a8e3f954750ca0f56b6152934e3637c7751a10853",
   )
 })
 
@@ -70,7 +70,7 @@ test("canonicalizes object order and preserves JSON array positions", () => {
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {
   expect(namespaceWithSchema({ "10": "ten", "2": "two", "\u{10000}": "astral", "\u{e000}": "bmp" })).toBe(
-    "55cfe6d2499c6c39b7dcb6863b70cce648b667416e819d9c54227b2834acd3e3",
+    "0a99be3cf8b1d65f41acfb4aeeac2c1efbe3287f443f6fd3a7fc57be0303bb3a",
   )
 })
 
@@ -200,7 +200,32 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: automatic.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
-  expect(automatic.cache).toEqual({ tools: true, system: true, messages: "latest-user-message" })
+  expect(automatic.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+
+  const directRoute = SessionRunnerCache.providerOptions({
+    ...base,
+    providerID: "catalog-alias",
+    sessionID: "ses_openai_route_identity",
+    routeID: "openai-chat",
+    openaiMode: "auto",
+  })
+  expect(directRoute.providerOptions.openai).toEqual({
+    promptCacheKey: directRoute.promptCacheKey,
+    promptCacheOptions: { mode: "implicit", ttl: "30m" },
+  })
+  expect(directRoute.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+
+  const webSocket = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_openai_websocket",
+    routeID: "openai-responses-websocket",
+    openaiMode: "explicit",
+  })
+  expect(webSocket.providerOptions.openai).toEqual({
+    promptCacheKey: webSocket.promptCacheKey,
+    promptCacheOptions: { mode: "explicit", ttl: "30m" },
+  })
+  expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
 
   const explicit = SessionRunnerCache.providerOptions({
     ...base,
@@ -212,7 +237,7 @@ test("selects hybrid auto or explicit OpenAI caching only for supported direct G
     promptCacheKey: explicit.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
-  expect(explicit.cache).toEqual({ tools: true, system: true, messages: { tail: 2 } })
+  expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
 
   const legacy = SessionRunnerCache.providerOptions({
     ...base,

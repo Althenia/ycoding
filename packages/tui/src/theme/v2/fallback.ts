@@ -7,12 +7,17 @@ export function fallback(): ThemeTokensDefinition {
   return {
     text: {
         default: red,
+        subdued: red,
+        separator: red,
+        hint: red,
+        label: red,
         action: Object.fromEntries(ActionVariant.literals.map((variant) => [variant, { default: red }])),
         formfield: { default: red },
         feedback: Object.fromEntries(FeedbackKind.literals.map((kind) => [kind, { default: red }])),
     },
     background: {
         default: red,
+        chrome: red,
         surface: { offset: red, overlay: red },
         action: Object.fromEntries(ActionVariant.literals.map((variant) => [variant, { default: red }])),
         formfield: { default: red },

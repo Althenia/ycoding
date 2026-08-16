@@ -45,7 +45,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.integration.oauth)).toEqual(["connect", "status", "complete", "cancel"])
   expect(Object.keys(client.integration.command)).toEqual(["connect", "status", "cancel"])
   expect(Object.keys(client.file)).toEqual(["read", "list", "find"])
-  expect(Object.keys(client.vcs)).toEqual(["status", "diff"])
+  expect(Object.keys(client.vcs)).toEqual(["status", "branch", "diff"])
   expect(Object.keys(client.pty)).toEqual(["list", "create", "get", "update", "remove"])
   expect(Object.keys(client.shell)).toEqual(["list", "create", "get", "timeout", "output", "remove"])
   expect(Object.keys(client.project)).toEqual(["list", "current", "directories"])
@@ -53,6 +53,25 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
   expect(Object.keys(client.providerUsage)).toEqual(["list", "get"])
+})
+
+test("VCS branch uses the public HTTP contract", async () => {
+  let request: Request | undefined
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      request = input instanceof Request ? input : new Request(input, init)
+      return Response.json({
+        location: { directory: "/workspace", project: { id: "global", directory: "/workspace" } },
+        data: { current: "feature", default: "main" },
+      })
+    },
+  })
+
+  expect(await client.vcs.branch()).toEqual(
+    expect.objectContaining({ data: { current: "feature", default: "main" } }),
+  )
+  expect(request && new URL(request.url).pathname).toBe("/api/vcs/branch")
 })
 
 test("provider usage methods use the public HTTP contract", async () => {

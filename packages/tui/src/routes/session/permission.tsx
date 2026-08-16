@@ -1,6 +1,6 @@
 import { createStore } from "solid-js/store"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
-import { Portal, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
+import { useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { TextareaRenderable } from "@opentui/core"
 import { useTheme } from "../../context/theme"
 import type { PermissionV2Request } from "@ycoding-ai/client"
@@ -252,7 +252,6 @@ export function PermissionPrompt(props: { request: PermissionV2Request; director
                   : { once: permissionOptionLabel("once"), reject: permissionOptionLabel("reject") }
               }
               escapeKey="reject"
-              fullscreen
               onSelect={(option) => {
                 if (option === "always") {
                   setStore("stage", "always")
@@ -426,8 +425,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
   header?: JSX.Element
   body: JSX.Element
   options: T
+  defaultOption?: keyof T
   escapeKey?: keyof T
-  fullscreen?: boolean
   onSelect: (option: keyof T) => void
 }) {
   const { themeV2 } = useTheme().contextual("elevated")
@@ -435,11 +434,9 @@ export function Prompt<const T extends Record<string, string>>(props: {
   const kind = props.kind ?? "permission"
   const keys = Object.keys(props.options) as (keyof T)[]
   const [store, setStore] = createStore({
-    selected: keys[0],
-    expanded: false,
+    selected: props.defaultOption ?? keys[0],
   })
   const narrow = createMemo(() => dimensions().width < 80)
-  const shortcuts = Keymap.useShortcuts()
 
   Keymap.createLayer(() => ({
     mode: "base",
@@ -452,16 +449,6 @@ export function Prompt<const T extends Record<string, string>>(props: {
         run() {
           if (!props.escapeKey) return
           props.onSelect(props.escapeKey)
-        },
-      },
-      {
-        id: "permission.prompt.fullscreen",
-        title: "Toggle permission fullscreen",
-        group: "Permission",
-        bind: false,
-        run() {
-          if (!props.fullscreen) return
-          setStore("expanded", (v) => !v)
         },
       },
       {
@@ -521,11 +508,8 @@ export function Prompt<const T extends Record<string, string>>(props: {
           ]
         : []),
     ],
-    bindings: [...(props.escapeKey ? ["app.exit"] : []), ...(props.fullscreen ? ["permission.prompt.fullscreen"] : [])],
+    bindings: props.escapeKey ? ["app.exit"] : [],
   }))
-
-  const hint = createMemo(() => (store.expanded ? "minimize" : "fullscreen"))
-  useRenderer()
 
   const content = () => (
     <box
@@ -534,37 +518,29 @@ export function Prompt<const T extends Record<string, string>>(props: {
         instance: props.instance,
         role: "dialog",
         label: props.semanticLabel ?? props.title,
-        expanded: store.expanded,
       }))}
-      backgroundColor={themeV2.background.default}
-      border={["left"]}
-      borderColor={themeV2.background.action.primary.focused}
-      customBorderChars={SplitBorder.customBorderChars}
-      {...(store.expanded
-        ? { top: dimensions().height * -1 + 1, bottom: 1, left: 2, right: 2, position: "absolute" }
-        : {
-            top: 0,
-            maxHeight: 15,
-            bottom: 0,
-            left: 0,
-            right: 0,
-            position: "relative",
-          })}
+      backgroundColor={themeV2.background.surface.offset}
+      paddingTop={1}
     >
-      <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1} flexGrow={1}>
-        <Show
-          when={props.header}
-          fallback={
-            <box flexDirection="row" gap={1} paddingLeft={1} flexShrink={0}>
-              <text fg={themeV2.text.feedback.warning.default}>{"△"}</text>
-              <text fg={themeV2.text.default}>{props.title}</text>
+      <box paddingLeft={2} paddingRight={2} gap={1} flexGrow={1}>
+        <box flexDirection="row" justifyContent="space-between">
+          <Show
+            when={props.header}
+            fallback={
+              <box flexDirection="row" gap={1} paddingLeft={1} flexShrink={0}>
+                <text fg={themeV2.text.feedback.warning.default}>{"△"}</text>
+                <text fg={themeV2.text.default}>{props.title}</text>
+              </box>
+            }
+          >
+            <box paddingLeft={1} flexShrink={0}>
+              {props.header}
             </box>
-          }
-        >
-          <box paddingLeft={1} flexShrink={0}>
-            {props.header}
-          </box>
-        </Show>
+          </Show>
+          <text fg={themeV2.text.subdued} onMouseUp={() => props.onSelect(props.escapeKey ?? keys[keys.length - 1])}>
+            esc
+          </text>
+        </box>
         {props.body}
       </box>
       <box
@@ -575,7 +551,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
         paddingLeft={2}
         paddingRight={3}
         paddingBottom={1}
-        backgroundColor={themeV2.raise(themeV2.background.default)}
+        backgroundColor={themeV2.raise(themeV2.background.surface.offset)}
         justifyContent={narrow() ? "flex-start" : "space-between"}
         alignItems={narrow() ? "flex-start" : "center"}
       >
@@ -629,11 +605,6 @@ export function Prompt<const T extends Record<string, string>>(props: {
           </For>
         </box>
         <box flexDirection="row" gap={2} flexShrink={0}>
-          <Show when={props.fullscreen}>
-            <text fg={themeV2.text.default}>
-              {shortcuts.get("permission.prompt.fullscreen")} <span style={{ fg: themeV2.text.subdued }}>{hint()}</span>
-            </text>
-          </Show>
           <text fg={themeV2.text.default}>
             {"⇆"} <span style={{ fg: themeV2.text.subdued }}>select</span>
           </text>
@@ -645,9 +616,5 @@ export function Prompt<const T extends Record<string, string>>(props: {
     </box>
   )
 
-  return (
-    <Show when={!store.expanded} fallback={<Portal>{content()}</Portal>}>
-      {content()}
-    </Show>
-  )
+  return content()
 }

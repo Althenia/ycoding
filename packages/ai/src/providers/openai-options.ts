@@ -3,6 +3,7 @@ import { mergeProviderOptions } from "../schema"
 import type {
   OpenAIPromptCacheOptions,
   OpenAIPromptCacheRetention,
+  OpenAIContextManagementEntry,
   OpenAIResponseIncludable,
   OpenAIServiceTier,
 } from "../protocols/utils/openai-options"
@@ -10,6 +11,7 @@ import type {
 export type {
   OpenAIPromptCacheOptions,
   OpenAIPromptCacheRetention,
+  OpenAIContextManagementEntry,
   OpenAIResponseIncludable,
   OpenAIServiceTier,
 } from "../protocols/utils/openai-options"
@@ -26,6 +28,7 @@ export interface OpenAIOptionsInput {
   // GPT-5.6 and later only: request-wide explicit/implicit breakpoint policy.
   // Rejected with a 400 by pre-GPT-5.6 models.
   readonly promptCacheOptions?: OpenAIPromptCacheOptions
+  readonly contextManagement?: ReadonlyArray<OpenAIContextManagementEntry>
   readonly reasoningEffort?: ReasoningEffort
   readonly reasoningSummary?: "auto"
   // OpenAI Responses `include` wire field. Mirrors the official SDK's
@@ -50,6 +53,7 @@ const openAIProviderOptions = (options: OpenAIOptionsInput | undefined): Provide
       previousResponseId: options?.previousResponseId,
       continuationInputStart: options?.continuationInputStart,
       promptCacheKey: options?.promptCacheKey,
+      contextManagement: options?.contextManagement,
       reasoningEffort: options?.reasoningEffort,
       reasoningSummary: options?.reasoningSummary,
       include: options?.include,

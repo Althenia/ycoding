@@ -9,8 +9,10 @@ export type PartRef = {
   partID: string
 }
 
+export type SessionHistoryRow = { type: "history"; placeholders: DataMessageHistoryPlaceholder[] }
+
 export type SessionRow =
-  | { type: "history"; placeholder: DataMessageHistoryPlaceholder }
+  | SessionHistoryRow
   | { type: "message"; messageID: string }
   | { type: "compaction-queued"; inputID: string }
   | { type: "part"; ref: PartRef }
@@ -28,6 +30,22 @@ export type SessionRow =
       completed: boolean
     }
   | { type: "assistant-footer"; messageID: string }
+
+export function groupHistoryRows(placeholders: DataMessageHistoryPlaceholder[]) {
+  return placeholders.reduce<SessionHistoryRow[]>((rows, placeholder) => {
+    const previous = rows.at(-1)
+    if (placeholder.state === "collapsed" && previous?.placeholders.every((item) => item.state === "collapsed")) {
+      previous.placeholders.push(placeholder)
+      return rows
+    }
+    rows.push({ type: "history", placeholders: [placeholder] })
+    return rows
+  }, [])
+}
+
+export function historyTogglePlaceholder(row: SessionHistoryRow) {
+  return row.placeholders.find((placeholder) => placeholder.state !== "loading")
+}
 
 export async function resolveMessageJump(input: {
   resident: () => boolean
@@ -57,9 +75,7 @@ export function createSessionRows(sessionID: Accessor<string>) {
     const inputs = new Set(data.session.input.list(sessionID()))
     const boundary = revertBoundary()
     const rows = [
-      ...data.session.message
-        .history(sessionID())
-        .map((placeholder): SessionRow => ({ type: "history", placeholder })),
+      ...groupHistoryRows(data.session.message.history(sessionID())),
       ...reduceSessionRows(boundary ? messages.filter((message) => message.id < boundary) : messages, inputs),
     ]
     partitionPending(rows, pendingPermissions())

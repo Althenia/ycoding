@@ -7,3 +7,9 @@ test("truncates text from the right by terminal width", () => {
   expect(Locale.truncateWidth("abcdefgh", 1)).toBe("…")
   expect(Locale.truncateWidth("abcdefgh", 0)).toBe("")
 })
+
+test("formats compact numbers with lowercase magnitude suffixes", () => {
+  expect(Locale.number(1_200)).toBe("1.2k")
+  expect(Locale.number(999)).toBe("999")
+  expect(Locale.number(1_000_000)).toBe("1.0m")
+})

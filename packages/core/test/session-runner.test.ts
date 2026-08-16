@@ -943,6 +943,29 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("persists OpenAI URL citation text through the assistant lifecycle", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const citation = "\n\nSource: Effect Documentation\nhttps://effect.website/docs"
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "citation" }),
+        LLMEvent.textDelta({ id: "citation", text: "Read the documentation." }),
+        LLMEvent.textDelta({ id: "citation", text: citation }),
+        LLMEvent.textEnd({ id: "citation" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      yield* admit(session, "Cite the Effect documentation.")
+
+      yield* session.resume(sessionID)
+
+      expect(requireAssistant(yield* session.context(sessionID)).content).toEqual([
+        { type: "text", text: `Read the documentation.${citation}` },
+      ])
+    }),
+  )
+
   it.effect("applies session context hooks without exposing unavailable tools", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -1161,7 +1184,25 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.providerOptions?.openai).toMatchObject({
         promptCacheOptions: { mode: "implicit", ttl: "30m" },
       })
-      expect(requests[0]?.cache).toEqual({ tools: true, system: true, messages: "latest-user-message" })
+      expect(requests[0]?.cache).toEqual({ tools: false, system: true, messages: "latest-user-message" })
+    }),
+  )
+
+  it.effect("uses three raw message boundaries for direct GPT-5.6 OpenAI explicit caching", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = openAI56Model
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({ openai_mode: "explicit" }),
+      })
+      response = reply.stop()
+      yield* admit(session, "Use explicit OpenAI caching")
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.providerOptions?.openai).toMatchObject({
+        promptCacheOptions: { mode: "explicit", ttl: "30m" },
+      })
+      expect(requests[0]?.cache).toEqual({ tools: false, system: true, messages: { tail: 3 } })
     }),
   )
 

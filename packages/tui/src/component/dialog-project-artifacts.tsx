@@ -1,9 +1,8 @@
 import { TextAttributes } from "@opentui/core"
-import { createEffect, createMemo, createResource, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
+import { createMemo, createResource, createSignal, For, Match, onMount, Show, Switch } from "solid-js"
 import type {
   LocationRef,
   ProjectArtifactArtifactDetails,
-  ProjectArtifactArtifactSummary,
   ProjectArtifactApiConfirmationPreview,
   ProjectArtifactApiListItem,
   ProjectArtifactApiTrashSummary,
@@ -19,9 +18,8 @@ import { useToast } from "../ui/toast"
 import { errorMessage } from "../util/error"
 import {
   artifactActions,
-  artifactCategory,
-  artifactDescription,
   artifactKindLabel,
+  artifactLoadStatus,
   definitionContent,
   filterArtifacts,
   promotionPreviewLines,
@@ -49,7 +47,6 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
   const dialog = useDialog()
   const { themeV2 } = useTheme()
   const [scope, setScope] = createSignal<ArtifactScope>("project")
-  const [kind, setKind] = createSignal<ArtifactKind | "all">("all")
   const [stage, setStage] = createSignal<ArtifactStage | "all">("all")
   const [selected, setSelected] = createSignal<ArtifactListItem>()
   const [loadError, setLoadError] = createSignal<unknown>()
@@ -57,15 +54,14 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
 
   const [artifacts, { refetch }] = createResource<
     ArtifactListItem[],
-    { scope: ArtifactScope; kind: ArtifactKind | "all"; stage: ArtifactStage | "all" }
+    { scope: ArtifactScope; stage: ArtifactStage | "all" }
   >(
-    () => ({ scope: scope(), kind: kind(), stage: stage() }),
+    () => ({ scope: scope(), stage: stage() }),
     async (filter, info) => {
       try {
         const data = await client.api.projectArtifact.artifact.list({
           location: props.location,
           scope: filter.scope,
-          kind: filter.kind === "all" ? undefined : filter.kind,
           stage: filter.scope === "trash" || filter.stage === "all" ? undefined : filter.stage,
         })
         setLoadError(undefined)
@@ -77,33 +73,34 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
     },
   )
 
-  const kinds = createMemo<ReadonlyArray<ArtifactKind | "all">>(() => {
-    const plugins = (artifacts() ?? []).some((artifact) => artifact.kind === "plugin")
-    return ["all", "skill", "command", "agent", ...(plugins ? (["plugin"] as const) : [])]
-  })
-  createEffect(() => {
-    if (kind() === "plugin" && !kinds().includes("plugin")) setKind("all")
-  })
   const visible = createMemo(() =>
-    filterArtifacts(artifacts() ?? [], { scope: scope(), kind: kind(), stage: stage() }),
+    filterArtifacts(artifacts() ?? [], { scope: scope(), kind: "all", stage: stage() }),
   )
   const options = createMemo<DialogSelectOption<ArtifactListItem>[]>(() =>
-    visible().map((artifact) => ({
-      title: artifact.name,
-      description: isTrashArtifact(artifact)
-        ? `Trash · ${title(artifact.priorStage)} · ${artifact.description}`
-        : artifactDescription(artifact),
-      category: artifactCategory(artifact),
-      value: artifact,
-      details: artifact.kind === "plugin" ? ["Unsupported; quarantine only"] : undefined,
-      onSelect: () => {
-        setSelected(artifact)
-      },
-    })),
+    visible().map((artifact) => {
+      const status = isTrashArtifact(artifact) ? undefined : artifactLoadStatus(artifact.stage)
+      return {
+        title: artifact.name,
+        titleView: status?.loaded === false ? <span style={{ fg: themeV2.text.subdued }}>{artifact.name}</span> : undefined,
+        description: artifact.description,
+        footer:
+          status === undefined ? undefined : status.loaded ? (
+            <span style={{ fg: themeV2.text.action.primary.focused }}>{status.label}</span>
+          ) : (
+            <span style={{ fg: themeV2.text.subdued }}>{status.label}</span>
+          ),
+        state: status === undefined ? undefined : status.loaded ? "connected" : "disabled",
+        category: isTrashArtifact(artifact) ? "Trash" : artifact.kind === "plugin" ? "Plugins" : artifactKindLabel(artifact.kind),
+        value: artifact,
+        details: undefined,
+        onSelect: () => {
+          setSelected(artifact)
+        },
+      }
+    }),
   )
   const labels = createMemo(() => ({
     scope: scope() === "trash" ? "Trash" : title(scope()),
-    kind: kind() === "all" ? "All" : artifactKindLabel(kind() as ArtifactKind),
     stage: stage() === "all" ? "All" : title(stage()),
   }))
 
@@ -111,10 +108,6 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
     const scopes: ArtifactScope[] = ["project", "global", "trash"]
     const current = scopes.indexOf(scope())
     setScope(scopes[(current + direction + scopes.length) % scopes.length])
-  }
-  const changeKind = () => {
-    const values = kinds()
-    setKind(values[(values.indexOf(kind()) + 1) % values.length])
   }
   const changeStage = () => {
     if (scope() === "trash") return
@@ -128,23 +121,6 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
       fallback={
         <DialogSelect
           title="Project artifacts"
-          titleView={
-            <box flexDirection="row" gap={1}>
-              <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>
-                Project artifacts
-              </text>
-              <For each={["project", "global", "trash"] as const}>
-                {(value) => (
-                  <text
-                    fg={scope() === value ? themeV2.text.action.primary.focused : themeV2.text.subdued}
-                    onMouseUp={() => setScope(value)}
-                  >
-                    {title(value)}
-                  </text>
-                )}
-              </For>
-            </box>
-          }
           options={options()}
           renderFilter={!artifacts.loading && !loadError()}
           locked={artifacts.loading || Boolean(loadError())}
@@ -160,12 +136,6 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
               title: "Previous artifact scope",
               group: "Dialog",
               run: () => changeScope(-1),
-            },
-            {
-              bind: "k",
-              title: "Change artifact kind filter",
-              group: "Dialog",
-              run: changeKind,
             },
             {
               bind: "s",
@@ -184,7 +154,7 @@ export function DialogProjectArtifacts(props: DialogProjectArtifactsProps) {
           ]}
           footer={
             <text fg={themeV2.text.subdued}>
-              {labels().scope} · {labels().kind}
+              {labels().scope}
               <Show when={scope() !== "trash"}> · {labels().stage}</Show>
             </text>
           }
@@ -256,7 +226,6 @@ function DialogProjectArtifactTrash(props: {
 }) {
   const client = useClient()
   const toast = useToast()
-  const { themeV2 } = useTheme()
   const [working, setWorking] = createSignal(false)
   const [confirming, setConfirming] = createSignal(false)
   const trash = () => props.artifact

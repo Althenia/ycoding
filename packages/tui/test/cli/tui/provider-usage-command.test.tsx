@@ -208,7 +208,7 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
     expect(frame).toContain("Continued")
     expect(frame).toContain("Fallbacks")
     expect(frame).toContain("Raw cache read")
-    expect(frame).toContain("18.2K tokens")
+    expect(frame).toContain("18.2k tokens")
     expect(frame).toContain("Estimated cost")
     expect(frame).toContain("$0.0421")
     expect(frame).toContain("Last invalidation")

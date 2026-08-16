@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@opentui/core": ["../../vendor/opentui/packages/core/dist/index.d.ts"],
+      "@opentui/core/*": ["../../vendor/opentui/packages/core/dist/*"],
+      "@opentui/keymap": ["../../vendor/opentui/packages/keymap/dist/index.d.ts"],
+      "@opentui/keymap/*": ["../../vendor/opentui/packages/keymap/dist/*"],
+      "@opentui/solid": ["../../vendor/opentui/packages/solid/dist/index.d.ts"],
+      "@opentui/solid/*": ["../../vendor/opentui/packages/solid/dist/*"]
+    }
+  }
+}

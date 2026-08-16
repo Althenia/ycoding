@@ -138,6 +138,8 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/dummy/pending") return json({ data: [] })
     if (url.pathname === "/api/session/dummy/permission") return json({ data: [] })
+    if (url.pathname === "/api/vcs/branch") return json({ location: { directory }, data: {} })
+    return undefined
   }, events)
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
   const originalWrite = process.stdout.write.bind(process.stdout)
@@ -202,6 +204,20 @@ test("explicit session bootstrap restores its location-scoped model without an i
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
     time: { created: 0, updated: 0 },
   }
+  const citation = {
+    id: "msg_citation",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "openrouter", id: "deepseek-v4-flash" },
+    content: [
+      {
+        type: "text",
+        text: "Read the documentation.\n\nSource: Effect Documentation\nhttps://effect.website/docs",
+      },
+    ],
+    finish: "stop",
+    time: { created: 0, completed: 1 },
+  }
   const model = {
     id: "deepseek-v4-flash",
     modelID: "deepseek/deepseek-v4-flash",
@@ -234,9 +250,27 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/ses_resume") return json({ data: session })
-    if (url.pathname === "/api/session/ses_resume/message") return json({ data: [], cursor: {} })
+    if (url.pathname === "/api/session/ses_resume/message") return json({ data: [citation], cursor: {} })
     if (url.pathname === "/api/session/ses_resume/pending") return json({ data: [] })
     if (url.pathname === "/api/session/ses_resume/permission") return json({ data: [] })
+    if (url.pathname === "/api/vcs/branch") return json({ location, data: {} })
+    // The rail docks from 120 columns, so this 120-column session also loads its rail sections.
+    if (url.pathname === "/api/session/ses_resume/todo") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/subagent") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/skills") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/guardrail/request") return json({ data: [] })
+    if (url.pathname === "/api/session/ses_resume/guardrail")
+      return json({
+        data: {
+          rootSessionID: "ses_resume",
+          profile: "standard",
+          customRules: 0,
+          approvals: 0,
+          blocked: 0,
+          counters: [],
+          invalidFiles: [],
+        },
+      })
     if (url.pathname === "/api/model") {
       modelDirectories.push(requestedDirectory)
       return json({ location, data: requestedDirectory === sessionDirectory ? [model] : [] })
@@ -251,6 +285,7 @@ test("explicit session bootstrap restores its location-scoped model without an i
     if (url.pathname === "/api/shell") return json({ location, data: [] })
     if (url.pathname === "/api/permission/request") return json({ location, data: [] })
     if (url.pathname === "/api/form/request") return json({ location, data: [] })
+    return undefined
   }, events)
   const server = Bun.serve({ port: 0, fetch: (request) => calls.fetch(request) })
 
@@ -279,9 +314,12 @@ test("explicit session bootstrap restores its location-scoped model without an i
     await titleReady
     await Bun.sleep(100)
     const frame = setup.captureCharFrame()
-    expect(frame).toContain(sessionDirectory)
+    expect(frame).toContain("session-workspace")
+    expect(frame).not.toContain("/tmp/ycodin...n-workspace")
+    expect(frame).toContain("Build · DeepSeek V4 Flash")
     expect(frame).toContain("DeepSeek V4 Flash")
-    expect(frame).toContain("OpenRouter")
+    expect(frame).toContain("Source: Effect Documentation")
+    expect(frame).toContain("https://effect.website/docs")
     expect(frame).not.toContain("Model openrouter/deepseek-v4-flash is not valid")
     expect(modelDirectories).toContain(sessionDirectory)
     expect(modelDirectories).not.toContain(defaultDirectory)

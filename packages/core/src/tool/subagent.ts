@@ -22,8 +22,10 @@ export const name = "subagent"
 
 const NO_TEXT = "Subagent completed without a text response."
 export const progressPrompt = "Report current status, blockers, and ETA."
+const backgroundCompletionGuidance =
+  "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands."
 const backgroundStarted = (sessionID: SessionSchema.ID) =>
-  `Subagent launched (id: ${sessionID}). No polling is required. Do not mention the launch or any running, completed, failed, or total status unless the user explicitly asks for subagent status.`
+  `Subagent launched (id: ${sessionID}). ${backgroundCompletionGuidance} Do not mention the launch or any running, completed, failed, or total status unless the user explicitly asks for subagent status.`
 
 export const repeatProgress = <E, R>(send: Effect.Effect<unknown, E, R>) =>
   Effect.sleep("10 minutes").pipe(Effect.andThen(send), Effect.repeat(Schedule.forever))
@@ -48,7 +50,7 @@ export const Output = Schema.Struct({
 
 export const description = [
   "Spawn a subagent: a child session running a configured agent with fresh context.",
-  "Subagents launch as durable background children and return immediately; no polling is required.",
+  `Subagents launch as durable background children and return immediately. ${backgroundCompletionGuidance}`,
   "Do not mention subagent status unless the user explicitly asks. Keep launch, running, completed, failed, and total bookkeeping internal.",
   "If a child failure prevents the requested outcome, report the blocker without routine status counts.",
 ].join("\n")

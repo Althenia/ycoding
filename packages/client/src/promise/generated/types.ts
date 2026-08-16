@@ -101,6 +101,8 @@ export type SessionMessageSystem = {
   text: string
 }
 
+export type SessionMessageSkillDeactivation = { skill: string; reason: "conflict_resolved" }
+
 export type SessionMessageShell = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -131,17 +133,6 @@ export type SessionMessageCompactionRunning = {
   metadata?: { [x: string]: JsonValue }
   time: { created: number }
   status: "running"
-  reason: "auto" | "manual"
-  summary: string
-  recent: string
-}
-
-export type SessionMessageCompactionCompleted = {
-  type: "compaction"
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  status: "completed"
   reason: "auto" | "manual"
   summary: string
   recent: string
@@ -409,6 +400,8 @@ export type VcsFileStatus = {
   status: "added" | "deleted" | "modified"
 }
 
+export type VcsBranch = { current?: string; default?: string }
+
 export type ProjectArtifactProjectScope = { type: "project"; id: string; projectID: string; storageID: string }
 
 export type ProjectArtifactGlobalScope = { type: "global"; id: string; storageID: string }
@@ -497,6 +490,19 @@ export type ProviderRequestSummary = {
     | "cache-disabled"
     | "retry-fallback"
   latestNamespace?: string
+}
+
+export type SessionMessageCompactionCompleted = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  status: "completed"
+  reason: "auto" | "manual"
+  summary: string
+  recent: string
+  messages?: number
+  tokens?: TokenUsageInfo
 }
 
 export type SessionModelSelected = {
@@ -619,6 +625,16 @@ export type SessionSynthetic = {
   data: { sessionID: string; text: string; description?: string; metadata?: { [x: string]: any } }
 }
 
+export type SessionSkillDeactivated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  type: "session.skill.deactivated"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; id: string; activationMessageID: string; reason: "conflict_resolved" }
+}
+
 export type SessionStepStarted = {
   id: string
   created: number
@@ -696,7 +712,14 @@ export type SessionCompactionEnded = {
   type: "session.compaction.ended"
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
-  data: { sessionID: string; reason: "auto" | "manual"; text: string; recent: string }
+  data: {
+    sessionID: string
+    reason: "auto" | "manual"
+    text: string
+    recent: string
+    messages?: number
+    tokens?: TokenUsageInfo
+  }
 }
 
 export type SessionRevertCleared = {
@@ -1167,6 +1190,7 @@ export type SessionMessageSkill = {
   name: string
   text: string
   conflicts?: SkillConflicts
+  skillDeactivations?: Array<SessionMessageSkillDeactivation>
   artifact?: SessionMessageArtifactProvenance
 }
 
@@ -2186,6 +2210,7 @@ export type SessionMessageAssistant = {
   agent: string
   model: ModelRef
   content: Array<SessionMessageAssistantText | SessionMessageAssistantReasoning | SessionMessageAssistantTool>
+  skillDeactivations?: Array<SessionMessageSkillDeactivation>
   snapshot?: { start?: string; end?: string; files?: Array<string> }
   finish?: "stop" | "length" | "tool-calls" | "content-filter" | "error" | "unknown"
   cost?: MoneyUSD
@@ -2279,6 +2304,7 @@ export type SessionEventPublicDurable =
   | SessionTaskUpdated
   | SessionSynthetic
   | SessionSkillActivated
+  | SessionSkillDeactivated
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted
@@ -2333,6 +2359,7 @@ export type V2Event =
   | SessionTaskUpdated
   | SessionSynthetic
   | SessionSkillActivated
+  | SessionSkillDeactivated
   | SessionShellStarted
   | SessionShellEnded
   | SessionStepStarted
@@ -2495,6 +2522,10 @@ export type SkillNotFoundError = {
 }
 export const isSkillNotFoundError = (value: unknown): value is SkillNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SkillNotFoundError"
+
+export type SkillConflictNotFoundError = { readonly _tag: "SkillConflictNotFoundError"; readonly message: string }
+export const isSkillConflictNotFoundError = (value: unknown): value is SkillConflictNotFoundError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "SkillConflictNotFoundError"
 
 export type SessionBusyError = {
   readonly _tag: "SessionBusyError"
@@ -3365,10 +3396,18 @@ export type SessionSkillsOutput = {
         conflicts: Array<{ type: "skill" | "instruction"; id: string; name: string }>
         declarations: SkillConflicts
         state: "inactive"
-        inactiveReason: "agent_switched" | "compacted"
+        inactiveReason: "agent_switched" | "compacted" | "conflict_resolved"
       }
   >
 }["data"]
+
+export type SessionResolveSkillConflictInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly winner: { readonly winner: string; readonly loser: string }["winner"]
+  readonly loser: { readonly winner: string; readonly loser: string }["loser"]
+}
+
+export type SessionResolveSkillConflictOutput = void
 
 export type SessionSyntheticInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
@@ -5308,6 +5347,17 @@ export type VcsStatusInput = {
 export type VcsStatusOutput = {
   location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
   data: Array<VcsFileStatus>
+}
+
+export type VcsBranchInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type VcsBranchOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: VcsBranch
 }
 
 export type VcsDiffInput = {

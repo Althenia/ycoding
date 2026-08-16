@@ -47,6 +47,20 @@ async function commitAll(directory: string, message: string) {
 }
 
 describeHg("Vcs mercurial", () => {
+  it.live("reports current and default branches", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          await hg(directory, "init")
+          await fs.writeFile(path.join(directory, "file.txt"), "one\n")
+          await commitAll(directory, "initial")
+        })
+        const vcs = yield* Vcs.Service
+        expect(yield* vcs.branch()).toEqual({ current: "default", default: "default" })
+      }).pipe(provide(directory)),
+    ),
+  )
+
   it.live("reports modified, missing, and untracked files", () =>
     withTmp((directory) =>
       Effect.gen(function* () {

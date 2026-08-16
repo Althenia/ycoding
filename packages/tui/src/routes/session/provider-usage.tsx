@@ -6,6 +6,7 @@ import { Keymap, type KeymapCommand } from "../../context/keymap"
 import { useRouteData } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { useDialog } from "../../ui/dialog"
+import type { RGBA } from "@opentui/core"
 import {
   formatReset,
   formatWindowValue,
@@ -163,6 +164,10 @@ export function ProviderUsageDialog(props: {
   const [snapshots, setSnapshots] = createSignal(visibleProviderSnapshots(props.initialSnapshots))
   const [refreshing, setRefreshing] = createSignal(true)
   const diagnostics = createMemo(() => data.session.diagnostics.get(props.sessionID))
+  const sessionFamily = createMemo(() => {
+    const ids = data.session.family(props.sessionID)
+    return ids.length > 0 ? ids : [props.sessionID]
+  })
 
   onMount(() => {
     void data.session.diagnostics.sync(props.sessionID).catch(() => undefined)
@@ -188,6 +193,10 @@ export function ProviderUsageDialog(props: {
       diagnostics={diagnostics}
       refreshing={refreshing}
       onClose={() => dialog.clear()}
+      sessionFamily={sessionFamily()}
+      sessionID={props.sessionID}
+      getSession={(sessionID) => data.session.get(sessionID)}
+      getStatus={(sessionID) => data.session.status(sessionID)}
     />
   )
 }
@@ -198,10 +207,20 @@ export function ProviderUsageDialogContent(props: {
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
   onClose?: () => void
+  sessionFamily?: readonly string[]
+  sessionID?: string
+  getSession?: (sessionID: string) => Pick<SessionInfo, "model"> | undefined
+  getStatus?: (sessionID: string) => string
 }) {
   const { themeV2 } = useTheme().contextual("elevated")
   const now = createMemo(() => props.now?.() ?? Date.now())
-  const snapshots = createMemo(() => visibleProviderSnapshots(props.snapshots()))
+  const [filter, setFilter] = createSignal("")
+  const rawSnapshots = createMemo(() => visibleProviderSnapshots(props.snapshots()))
+  const filteredSnapshots = createMemo(() => {
+    const needle = filter().toLowerCase()
+    if (!needle) return rawSnapshots()
+    return rawSnapshots().filter((s) => s.label.toLowerCase().includes(needle) || s.providerID.toLowerCase().includes(needle))
+  })
   const local = createMemo(() => {
     const requests = providerRequestDiagnostics(props.diagnostics?.())
     return requests ? formatProviderRequestDiagnostics(requests) : undefined
@@ -220,6 +239,25 @@ export function ProviderUsageDialogContent(props: {
     return themeV2.text.default
   }
 
+  const sessionProviderIDs = createMemo(() => {
+    if (!props.sessionID || !props.getSession) return undefined
+    const ids = runningProviderIDs(
+      [props.sessionID],
+      (sid) => props.getSession!(sid),
+      (sid) => props.getStatus?.(sid) ?? "",
+    )
+    return ids.length > 0 ? new Set(ids) : undefined
+  })
+
+  const subagentProviderIDs = createMemo(() => {
+    if (!props.sessionFamily || !props.sessionID || !props.getSession) return undefined
+    const subagentIDs = props.sessionFamily.filter((id) => id !== props.sessionID)
+    if (subagentIDs.length === 0) return undefined
+    const ids = runningProviderIDs(subagentIDs, (sid) => props.getSession!(sid), (sid) => props.getStatus?.(sid) ?? "")
+    return ids.length > 0 ? new Set(ids) : undefined
+  })
+  const hasSessionGroups = createMemo(() => !!sessionProviderIDs() || !!subagentProviderIDs())
+
   return (
     <box paddingLeft={2} paddingRight={2} paddingBottom={1} gap={0}>
       <box flexDirection="row" justifyContent="space-between">
@@ -234,6 +272,16 @@ export function ProviderUsageDialogContent(props: {
         <text fg={themeV2.text.subdued} onMouseUp={() => props.onClose?.()}>
           esc
         </text>
+      </box>
+      <box paddingTop={1}>
+        <input
+          onInput={(e) => setFilter(e)}
+          focusedBackgroundColor={themeV2.background.surface.overlay}
+          cursorColor={themeV2.text.feedback.info.default}
+          focusedTextColor={themeV2.text.default}
+          placeholder="Search providers"
+          placeholderColor={themeV2.text.subdued}
+        />
       </box>
       <Show when={local()}>
         {(value) => (
@@ -269,55 +317,99 @@ export function ProviderUsageDialogContent(props: {
           </box>
         )}
       </Show>
-      <For each={snapshots()}>
-        {(snapshot) => (
-          <box marginTop={1} gap={0}>
-            <box flexDirection="row" gap={1}>
+      <Show when={hasSessionGroups()}>
+        <Show when={sessionProviderIDs()}>
+          {(ids) => (
+            <box marginTop={1} gap={0}>
               <text fg={themeV2.text.default}>
-                <b>{snapshot.label}</b>
+                <b>This session</b>
               </text>
-              <Show when={snapshot.status === "available" || snapshot.status === "stale"}>
-                <text fg={statusColor(snapshot.status)}>{freshnessLabel(snapshot, now())}</text>
-                <Show when={stabilityLabel(snapshot)}>
-                  {(label) => <text fg={themeV2.text.subdued}>{label()}</text>}
-                </Show>
-              </Show>
+              <For each={filteredSnapshots().filter((s) => ids().has(s.providerID))}>
+                {(snapshot) => (
+                  <ProviderUsageRow snapshot={snapshot} now={now} statusColor={statusColor} percentColor={percentColor} />
+                )}
+              </For>
             </box>
-            <Show
-              when={snapshot.status === "unauthorized" || snapshot.status === "error"}
-              fallback={
-                <For each={snapshot.windows}>
-                  {(window) => {
-                    const bar = createMemo(() => (window.unit === "percent" ? progressBar(window.used) : undefined))
-                    const reset = createMemo(() => formatReset(window.resetAt, now()))
-                    return (
-                      <box gap={0}>
-                        <box flexDirection="row" gap={1}>
-                          <text width={14} flexShrink={0} fg={themeV2.text.subdued}>
-                            {window.label}
-                          </text>
-                          <Show when={bar()}>
-                            {(value) => <text fg={percentColor(window.used)}>{value()}</text>}
-                          </Show>
-                          <text fg={percentColor(window.unit === "percent" ? window.used : undefined)}>
-                            {formatWindowValue(window)}
-                          </text>
-                        </box>
-                        <Show when={reset()}>{(value) => <text fg={themeV2.text.subdued}>{value()}</text>}</Show>
-                      </box>
-                    )
-                  }}
-                </For>
-              }
-            >
-              <text fg={statusColor(snapshot.status)}>Usage unavailable</text>
-            </Show>
-            <Show when={snapshot.message && snapshot.status !== "unauthorized" && snapshot.status !== "error"}>
-              {(message) => <text fg={statusColor(snapshot.status)}>{message()}</text>}
-            </Show>
-          </box>
-        )}
-      </For>
+          )}
+        </Show>
+        <Show when={subagentProviderIDs()}>
+          {(ids) => (
+            <box marginTop={1} gap={0}>
+              <text fg={themeV2.text.default}>
+                <b>Subagents</b>
+              </text>
+              <For each={filteredSnapshots().filter((s) => ids().has(s.providerID))}>
+                {(snapshot) => (
+                  <ProviderUsageRow snapshot={snapshot} now={now} statusColor={statusColor} percentColor={percentColor} />
+                )}
+              </For>
+            </box>
+          )}
+        </Show>
+      </Show>
+      <Show when={!hasSessionGroups()}>
+        <For each={filteredSnapshots()}>
+          {(snapshot) => (
+            <ProviderUsageRow snapshot={snapshot} now={now} statusColor={statusColor} percentColor={percentColor} />
+          )}
+        </For>
+      </Show>
+    </box>
+  )
+}
+
+function ProviderUsageRow(props: {
+  snapshot: ProviderUsageSnapshot
+  now: Accessor<number>
+  statusColor: (status: ProviderUsageSnapshot["status"]) => string | RGBA
+  percentColor: (used: number | undefined) => string | RGBA
+}) {
+  const { themeV2 } = useTheme().contextual("elevated")
+  return (
+    <box marginTop={1} gap={0}>
+      <box flexDirection="row" gap={1}>
+        <text fg={themeV2.text.default}>
+          <b>{props.snapshot.label}</b>
+        </text>
+        <Show when={props.snapshot.status === "available" || props.snapshot.status === "stale"}>
+          <text fg={props.statusColor(props.snapshot.status)}>{freshnessLabel(props.snapshot, props.now())}</text>
+          <Show when={stabilityLabel(props.snapshot)}>
+            {(label) => <text fg={themeV2.text.subdued}>{label()}</text>}
+          </Show>
+        </Show>
+      </box>
+      <Show
+        when={props.snapshot.status === "unauthorized" || props.snapshot.status === "error"}
+        fallback={
+          <For each={props.snapshot.windows}>
+            {(window) => {
+              const bar = createMemo(() => (window.unit === "percent" ? progressBar(window.used) : undefined))
+              const reset = createMemo(() => formatReset(window.resetAt, props.now()))
+              return (
+                <box gap={0}>
+                  <box flexDirection="row" gap={1}>
+                    <text width={14} flexShrink={0} fg={themeV2.text.subdued}>
+                      {window.label}
+                    </text>
+                    <Show when={bar()}>
+                      {(value) => <text fg={props.percentColor(window.used)}>{value()}</text>}
+                    </Show>
+                    <text fg={props.percentColor(window.unit === "percent" ? window.used : undefined)}>
+                      {formatWindowValue(window)}
+                    </text>
+                  </box>
+                  <Show when={reset()}>{(value) => <text fg={themeV2.text.subdued}>{value()}</text>}</Show>
+                </box>
+              )
+            }}
+          </For>
+        }
+      >
+        <text fg={props.statusColor(props.snapshot.status)}>Usage unavailable</text>
+      </Show>
+      <Show when={props.snapshot.message && props.snapshot.status !== "unauthorized" && props.snapshot.status !== "error"}>
+        {(message) => <text fg={props.statusColor(props.snapshot.status)}>{message()}</text>}
+      </Show>
     </box>
   )
 }

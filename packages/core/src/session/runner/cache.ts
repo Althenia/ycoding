@@ -112,7 +112,6 @@ export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
   readonly openaiExtendedRetention?: boolean
 }
 
-const PUBLIC_OPENAI_CACHE_ROUTES = new Set(["openai-chat", "openai-responses"])
 const ANTHROPIC_CACHE_ROUTES = new Set([
   "anthropic-messages",
   "google-vertex-messages",
@@ -133,10 +132,9 @@ export const providerOptions = (input: ProviderOptionsInput) => {
     input.routeID === "ai-sdk:@openrouter/ai-sdk-provider"
       ? { prompt_cache_key: promptCacheKey, session_id: providerSessionID }
       : { promptCacheKey, sessionID: providerSessionID }
-  const directOpenAI = input.providerID === "openai" && PUBLIC_OPENAI_CACHE_ROUTES.has(input.routeID)
-  const gpt56 = directOpenAI && OpenAIOptions.isGpt56OrLater(input.modelID)
+  const openaiCacheCapability = OpenAIOptions.publicPromptCacheCapability(input.routeID, input.modelID)
   const controlledOpenAI =
-    gpt56 &&
+    openaiCacheCapability === "gpt-5.6" &&
     input.openaiMode !== undefined &&
     input.openaiMode !== "implicit" &&
     (input.openaiMode === "auto" || input.openaiMode === "explicit")
@@ -149,8 +147,7 @@ export const providerOptions = (input: ProviderOptionsInput) => {
             ttl: "30m" as const,
           },
         }
-      : directOpenAI &&
-          !gpt56 &&
+      : openaiCacheCapability === "legacy" &&
           input.openaiExtendedRetention === true &&
           OpenAIOptions.supportsExtendedPromptCacheRetention(input.modelID)
         ? { promptCacheRetention: "24h" as const }
@@ -158,9 +155,9 @@ export const providerOptions = (input: ProviderOptionsInput) => {
   }
   const cache: CachePolicy | undefined = controlledOpenAI
     ? {
-        tools: true,
+        tools: false,
         system: true,
-        messages: input.openaiMode === "auto" ? "latest-user-message" : { tail: 2 },
+        messages: input.openaiMode === "auto" ? "latest-user-message" : { tail: 3 },
       }
     : input.anthropicTtlSeconds !== undefined && ANTHROPIC_CACHE_ROUTES.has(input.routeID)
       ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }

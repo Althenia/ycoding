@@ -184,12 +184,12 @@ export const Plugin = define({
           ...PermissionV2.merge(
             defaults,
             [
-              { action: "*", resource: "*", effect: "deny" },
               { action: "grep", resource: "*", effect: "allow" },
               { action: "glob", resource: "*", effect: "allow" },
               { action: "webfetch", resource: "*", effect: "allow" },
               { action: "websearch", resource: "*", effect: "allow" },
               { action: "read", resource: "*", effect: "allow" },
+              { action: "edit", resource: "*", effect: "deny" },
               { action: "subagent", resource: "*", effect: "deny" },
             ],
             readonlyExternalDirectory,
@@ -206,7 +206,6 @@ export const Plugin = define({
           ...PermissionV2.merge(
             defaults,
             [
-              { action: "*", resource: "*", effect: "deny" },
               { action: "read", resource: "*", effect: "allow" },
               { action: "grep", resource: "*", effect: "allow" },
               { action: "glob", resource: "*", effect: "allow" },

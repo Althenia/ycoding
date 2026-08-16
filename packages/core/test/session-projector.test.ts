@@ -478,10 +478,13 @@ describe("SessionProjector", () => {
         output: { output: "/project", truncated: false },
         time: { completed: DateTime.makeUnsafe(0) },
       })
-      expect(messages.find((message) => message.type === "compaction")).toMatchObject({
+      const compaction = messages.find((message) => message.type === "compaction")
+      expect(compaction).toMatchObject({
         summary: "summary",
         recent: "recent context",
       })
+      expect(compaction && "messages" in compaction).toBeFalse()
+      expect(compaction && "tokens" in compaction).toBeFalse()
       expect(
         yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie),
       ).toMatchObject({

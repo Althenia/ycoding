@@ -210,6 +210,9 @@ describe("SubagentTool", () => {
         }),
       ).toThrow()
       expect(SubagentTool.description).toContain("Do not mention subagent status unless the user explicitly asks")
+      expect(SubagentTool.description).toContain(
+        "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands.",
+      )
       expect(SubagentTool.description).not.toContain("you will be notified when they finish")
     }),
   )
@@ -406,6 +409,12 @@ describe("SubagentTool", () => {
           })
 
           expect(settled.output?.structured).toMatchObject({ status: "running" })
+          expect(settled.output?.content[0]).toMatchObject({
+            type: "text",
+            text: expect.stringContaining(
+              "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands.",
+            ),
+          })
           const child = yield* sessions.get(outputSessionID(settled.output?.structured))
           expect(progress[0]?.structured).toEqual({ sessionID: child.id, status: "running" })
           expect(child).toMatchObject({

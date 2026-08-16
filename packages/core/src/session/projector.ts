@@ -334,6 +334,19 @@ function run(db: DatabaseService, event: MessageEvent) {
           return message.type === "assistant" ? message : undefined
         })
       },
+      getSkillActivation(messageID) {
+        return Effect.gen(function* () {
+          const row = yield* db
+            .select()
+            .from(SessionMessageTable)
+            .where(and(eq(SessionMessageTable.id, messageID), eq(SessionMessageTable.session_id, event.data.sessionID)))
+            .get()
+            .pipe(Effect.orDie)
+          if (!row) return undefined
+          const message = decodeRow(row)
+          return message.type === "skill" || message.type === "assistant" ? message : undefined
+        })
+      },
       getShell(shellID) {
         return Effect.gen(function* () {
           const row = yield* db
@@ -377,6 +390,7 @@ function run(db: DatabaseService, event: MessageEvent) {
         })
       },
       updateAssistant: updateMessage,
+      updateSkillActivation: updateMessage,
       updateShell: updateMessage,
       updateCompaction: updateMessage,
       appendMessage,
@@ -764,6 +778,7 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Task.Updated, (event) => projectTask(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Activated, (event) => run(db, event))
+    yield* events.project(SessionEvent.Skill.Deactivated, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Shell.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Step.Started, (event) =>

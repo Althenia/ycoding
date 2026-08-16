@@ -61,14 +61,14 @@ describe("public exports", () => {
         apiKey: "fixture",
         endpoint: "responses",
       }).model("mai-code-1-flash-picker").route.id,
-    ).toBe("openai-responses")
+    ).toBe("github-copilot-responses")
     expect(
       GitHubCopilot.configure({
         baseURL: "https://api.githubcopilot.test",
         apiKey: "fixture",
         endpoint: "chat",
       }).model("gpt-5").route.id,
-    ).toBe("openai-chat")
+    ).toBe("github-copilot-chat")
   })
 
   test("protocol barrels expose supported low-level routes", () => {

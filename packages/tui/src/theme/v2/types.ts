@@ -29,12 +29,16 @@ export type ResolvedThemeView = {
   readonly text: {
     readonly default: RGBA
     readonly subdued: RGBA
+    readonly separator: RGBA
+    readonly hint: RGBA
+    readonly label: RGBA
     readonly action: Readonly<Record<ActionVariant, StatefulColor>>
     readonly formfield: FormfieldColor
     readonly feedback: Readonly<Record<FeedbackKind, { readonly default: RGBA; readonly subdued: RGBA }>>
   }
   readonly background: {
     readonly default: RGBA
+    readonly chrome: RGBA
     readonly surface: {
       readonly offset: RGBA
       readonly overlay: RGBA

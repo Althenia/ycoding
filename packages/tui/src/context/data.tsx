@@ -49,6 +49,7 @@ export type DataMessageHistoryPlaceholder = {
   oldestID?: string
   newestID?: string
   count?: number
+  pages?: { start: number; end: number }
   state: "collapsed" | "loading" | "error" | "expanded"
 }
 
@@ -81,6 +82,17 @@ type MessageHistory = {
 type MessagePage = {
   cursor: string
   messages: SessionMessageInfo[]
+}
+
+export function messageHistoryPlaceholders(placeholders: readonly DataMessageHistoryPlaceholder[]) {
+  return placeholders.map((placeholder, index) => {
+    const tracked = placeholders.slice(0, index + 1).every((item) =>
+      item.oldestID !== undefined && item.newestID !== undefined && item.count !== undefined,
+    )
+    if (!tracked) return placeholder
+    const page = index + 1
+    return { ...placeholder, pages: { start: page, end: page } }
+  })
 }
 
 const messageIDFromEvent = (eventID: string) => eventID.replace(/^evt_/, "msg_")
@@ -1762,10 +1774,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           },
           history(sessionID: string): DataMessageHistoryPlaceholder[] {
             const expanded = store.session.messagePage[sessionID]?.cursor
-            return (store.session.messageHistory[sessionID]?.placeholders ?? []).map((item) => ({
-              ...item,
-              state: expanded !== undefined && item.cursor === expanded ? "expanded" : item.state,
-            }))
+            return messageHistoryPlaceholders(
+              (store.session.messageHistory[sessionID]?.placeholders ?? []).map((item) => ({
+                ...item,
+                state: expanded !== undefined && item.cursor === expanded ? "expanded" : item.state,
+              })),
+            )
           },
           memory(sessionID: string) {
             const memory = process.memoryUsage()

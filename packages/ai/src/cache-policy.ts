@@ -19,7 +19,7 @@ import { CacheHint, type CachePolicy, type CachePolicyObject } from "./schema/op
 import { LLMRequest, Message, ToolDefinition, type ContentPart } from "./schema/messages"
 import { OpenAIOptions } from "./protocols/utils/openai-options"
 
-export const CACHE_POLICY_REVISION = "provider-native/v4"
+export const CACHE_POLICY_REVISION = "provider-native/v5"
 
 const AUTO: CachePolicyObject = {
   tools: true,
@@ -56,13 +56,10 @@ const INLINE_HINT_ROUTES = new Set([
 const INLINE_HINT_CAP = 4
 const EXTENDED_TTL_SECONDS = 3600
 
-const OPENAI_CACHE_PROTOCOLS = new Set(["openai-chat", "openai-responses"])
-
 const respectsInlineHints = (request: LLMRequest) =>
   RESPECTS_INLINE_HINTS.has(request.model.route.protocol) ||
   INLINE_HINT_ROUTES.has(request.model.route.id) ||
-  (OPENAI_CACHE_PROTOCOLS.has(request.model.route.protocol) &&
-    OpenAIOptions.isGpt56OrLater(request.model.id) &&
+  (OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6" &&
     OpenAIOptions.promptCacheOptions(request) !== undefined)
 
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
@@ -115,6 +112,8 @@ const manualHints = (request: LLMRequest): ReadonlyArray<ManualHint> => [
 ]
 
 const coordinateAutoHints = (request: LLMRequest) => {
+  if (OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6")
+    return () => true
   const manual = manualHints(request)
   const state = { remaining: Math.max(0, INLINE_HINT_CAP - manual.length) }
   return (position: HintPosition, hint: CacheHint) => {
@@ -155,6 +154,10 @@ const lastIndexOfRole = (messages: ReadonlyArray<Message>, role: Message["role"]
 const isMarkablePart = (part: ContentPart) =>
   (part.type === "text" && part.text.trim().length > 0) || part.type === "tool-result"
 
+const isGpt56MarkablePart = (part: ContentPart) => part.type === "text" && part.text.trim().length > 0
+
+type Gpt56MarkerRoles = ReadonlyArray<"user" | "assistant"> | undefined
+
 // Anthropic and Bedrock check at most 20 block positions per breakpoint when
 // hunting for a prior cache entry. A single trailing anchor therefore finds
 // nothing whenever one agent turn appends more than that — a parallel tool-call
@@ -166,10 +169,19 @@ const isMarkablePart = (part: ContentPart) =>
 // per breakpoint, so an extra marker inside the same span adds no write cost.
 const AUTO_MESSAGE_ANCHORS = 2
 
-const lastMarkableMessages = (messages: ReadonlyArray<Message>, count: number) => {
+const lastMarkableMessages = (
+  messages: ReadonlyArray<Message>,
+  count: number,
+  gpt56Roles: Gpt56MarkerRoles = undefined,
+) => {
   const found: number[] = []
   for (let index = messages.length - 1; index >= 0 && found.length < count; index--)
-    if (messages[index]!.volatile !== true && messages[index]!.content.some(isMarkablePart)) found.push(index)
+    if (
+      messages[index]!.volatile !== true &&
+      (gpt56Roles === undefined || gpt56Roles.includes(messages[index]!.role as "user" | "assistant")) &&
+      messages[index]!.content.some(gpt56Roles === undefined ? isMarkablePart : isGpt56MarkablePart)
+    )
+      found.push(index)
   return found.reverse()
 }
 
@@ -181,13 +193,15 @@ const markMessageAt = (
   index: number,
   hint: CacheHint,
   reserve: (position: HintPosition, hint: CacheHint) => boolean,
+  gpt56Roles: Gpt56MarkerRoles = undefined,
 ): ReadonlyArray<Message> => {
   if (index < 0 || index >= messages.length) return messages
   const target = messages[index]!
   // Volatile messages are regenerated per request; a breakpoint on one would be
   // invalidated on the next request and would void the prefix behind it.
   if (target.volatile || target.content.length === 0) return messages
-  const markAt = target.content.findLastIndex(isMarkablePart)
+  if (gpt56Roles !== undefined && !gpt56Roles.includes(target.role as "user" | "assistant")) return messages
+  const markAt = target.content.findLastIndex(gpt56Roles === undefined ? isMarkablePart : isGpt56MarkablePart)
   if (markAt < 0) return messages
   const existing = target.content[markAt]!
   if (("cache" in existing && existing.cache) || !reserve([2, index, markAt], hint)) return messages
@@ -206,11 +220,13 @@ const markAutoMessages = (
   anchors: number,
   hint: CacheHint,
   reserve: (position: HintPosition, hint: CacheHint) => boolean,
+  gpt56Roles: Gpt56MarkerRoles = undefined,
 ): ReadonlyArray<Message> => {
   let next = messages
   // Ascending so the budget is spent in wire order: when manual hints leave
   // fewer slots than requested, the older anchor survives and the tail is shed.
-  for (const index of lastMarkableMessages(messages, anchors)) next = markMessageAt(next, index, hint, reserve)
+  for (const index of lastMarkableMessages(messages, anchors, gpt56Roles))
+    next = markMessageAt(next, index, hint, reserve, gpt56Roles)
   return next
 }
 
@@ -219,15 +235,16 @@ const markMessages = (
   strategy: NonNullable<CachePolicyObject["messages"]>,
   hint: CacheHint,
   reserve: (position: HintPosition, hint: CacheHint) => boolean,
+  gpt56Roles: Gpt56MarkerRoles = undefined,
 ): ReadonlyArray<Message> => {
   if (messages.length === 0) return messages
   if (strategy === "latest-user-message")
-    return markMessageAt(messages, lastIndexOfRole(messages, "user"), hint, reserve)
+    return markMessageAt(messages, lastIndexOfRole(messages, "user"), hint, reserve, gpt56Roles)
   if (strategy === "latest-assistant")
-    return markMessageAt(messages, lastIndexOfRole(messages, "assistant"), hint, reserve)
+    return markMessageAt(messages, lastIndexOfRole(messages, "assistant"), hint, reserve, gpt56Roles)
   const start = Math.max(0, messages.length - strategy.tail)
   let next = messages
-  for (let i = start; i < messages.length; i++) next = markMessageAt(next, i, hint, reserve)
+  for (let i = start; i < messages.length; i++) next = markMessageAt(next, i, hint, reserve, gpt56Roles)
   return next
 }
 
@@ -242,13 +259,15 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   const tailHint = makeHint(policy.ttlSeconds)
   const prefixHint = auto && cacheProfile(request.model.id)?.extendedTtl ? makeHint(EXTENDED_TTL_SECONDS) : tailHint
   const reserve = coordinateAutoHints(request)
-  const tools = policy.tools ? markLastTool(request.tools, prefixHint, reserve) : request.tools
+  const gpt56 = OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6"
+  const gpt56Roles: Gpt56MarkerRoles = gpt56 ? ["user", "assistant"] : undefined
+  const tools = policy.tools && !gpt56 ? markLastTool(request.tools, prefixHint, reserve) : request.tools
   const system = policy.system ? markLastSystem(request.system, prefixHint, reserve) : request.system
   const messages = !policy.messages
     ? request.messages
     : auto
-      ? markAutoMessages(request.messages, AUTO_MESSAGE_ANCHORS, tailHint, reserve)
-      : markMessages(request.messages, policy.messages, tailHint, reserve)
+      ? markAutoMessages(request.messages, AUTO_MESSAGE_ANCHORS, tailHint, reserve, gpt56Roles)
+      : markMessages(request.messages, policy.messages, tailHint, reserve, gpt56Roles)
 
   if (tools === request.tools && system === request.system && messages === request.messages) return request
   return LLMRequest.update(request, { tools, system, messages })

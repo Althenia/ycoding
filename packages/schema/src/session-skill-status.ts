@@ -8,7 +8,7 @@ export const State = Schema.Union([
   Schema.Struct({ state: Schema.Literal("active") }),
   Schema.Struct({
     state: Schema.Literal("inactive"),
-    inactiveReason: Schema.Literals(["agent_switched", "compacted"]),
+    inactiveReason: Schema.Literals(["agent_switched", "compacted", "conflict_resolved"]),
   }),
 ])
 export type State = typeof State.Type
@@ -35,7 +35,7 @@ export const Info = Schema.Union([
   Schema.Struct({
     ...Fields,
     state: Schema.Literal("inactive"),
-    inactiveReason: Schema.Literals(["agent_switched", "compacted"]),
+    inactiveReason: Schema.Literals(["agent_switched", "compacted", "conflict_resolved"]),
   }),
 ])
 export type Info = typeof Info.Type

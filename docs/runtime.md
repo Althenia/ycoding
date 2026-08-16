@@ -43,6 +43,8 @@ Session titles and goal text are local by default:
 
 Model-based helpers resolve the hidden agent's explicit model first, then `efficiency.helper_model`, then the current Session model. Helper provider requests use the same content-free request ledger as normal Session steps.
 
+Completed compaction messages implement optional backend metrics for the messages folded by that operation and the normalized provider-reported token usage that produced its summary. Token usage retains input, output, reasoning, cache-read, and cache-write components; clients format any aggregate. If the provider reports no usage, the token metric is absent rather than zero. Older completed-compaction events also project both metrics as absent.
+
 ### Stable tool prefix
 
 The provider sees one fixed `execute` tool definition. Its description explains the restricted JavaScript language and the search-first workflow, but it does not embed the current MCP or plugin tool catalog. Connecting, disconnecting, or refreshing an MCP server therefore does not change the provider-visible `execute` schema or the prompt-cache tool digest.
@@ -53,11 +55,15 @@ MCP server instruction blocks are sorted by server ID, normalized to LF line end
 
 ### Provider prompt caching
 
-The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v4`, so requests created under older placement rules do not silently share the same namespace.
+The cache policy revision is part of the prompt-cache namespace. The current policy uses `provider-native/v5`, so requests created under older placement rules do not silently share the same namespace.
 
 Anthropic-compatible requests start with a concrete five-minute policy. The process-local cache runtime tracks provider-reported read and write usage by stable namespace. Two reusable observations within five minutes promote later requests for an extended-TTL-capable model to one hour. Missing telemetry, stale observations, namespace rotation, and unsupported model profiles remain at five minutes. The state is bounded, non-durable, and never required to reconstruct a Session.
 
-Public OpenAI Chat and Responses requests on GPT-5.6 and later use a stable prompt-cache key, explicit breakpoints after stable tools, system, and latest-user prefixes, and request-wide `{ mode: "implicit", ttl: "30m" }` by default under `openai_mode: "auto"`. Reserving one of the four write slots preserves OpenAI's managed latest-message breakpoint so growing tool-result tails remain eligible for rolling reuse. `openai_mode: "explicit"` disables the managed breakpoint and can use four YCoding-managed markers. Older public OpenAI models remain implicit and use opt-in `24h` retention only on supported families. The ChatGPT Codex backend has its own `openai-codex-responses` capability identity and receives the supported stable `prompt_cache_key`, but not public-API `prompt_cache_options`, `prompt_cache_breakpoint`, or `prompt_cache_retention` fields. Compatible gateways and unsupported families also omit GPT-5.6-only fields. Model-based title, goal, and compaction calls use the same policy and observation runtime as normal Session steps.
+Direct OpenAI Responses requests on GPT-5.6 and later use a stable prompt-cache key. YCoding generates one combined system-text breakpoint and selected user/assistant text breakpoints inside the configured raw message window. Responses uses `input_text` EasyInput blocks for a marked assistant message and otherwise preserves its `output_text` replay shape. Tools and tool results remain cacheable inside a later prefix but receive no generated explicit markers. `openai_mode: "auto"` sends request-wide `{ mode: "implicit", ttl: "30m" }`, so OpenAI retains its managed latest-message breakpoint and selects its current latest three explicit write candidates; `openai_mode: "explicit"` disables that managed breakpoint and lets OpenAI select its current latest four explicit write candidates. Earlier explicit markers remain provider read candidates. YCoding does not impose a client read-lookback or write-slot cap. `30m` is a minimum reuse lifetime, not a hard expiry; OpenAI may retain state longer up to its separate 24-hour maximum. Older public OpenAI models remain implicit and use opt-in `24h` retention only on supported families. The ChatGPT Codex backend has its own `openai-codex-responses` capability identity and receives the supported stable `prompt_cache_key`, but not public-API `prompt_cache_options`, `prompt_cache_breakpoint`, or `prompt_cache_retention` fields. Compatible gateways and unsupported families also omit GPT-5.6-only fields. Model-based title, goal, and compaction calls use the same policy and observation runtime as normal Session steps.
+
+Direct GPT-5.6 Responses requests enable server-side context management with a `200000`-token compaction threshold. When OpenAI returns an encrypted compaction item on a stateless request, YCoding retains the opaque state for the same model, includes it in the next input, and omits the earlier input items from that request. Stored-response continuation remains separate and still requires explicit provider storage.
+
+OpenAI-hosted web search URL citations enter the normal assistant text lifecycle as a `Source: <title>` line followed by the URL. The same text is returned by the native AI call, stored in durable Session history, and rendered by the TUI transcript.
 
 ### Prompt delivery
 
@@ -120,6 +126,7 @@ Current behavior:
 - The tool returns the child Session ID immediately.
 - The child runs a configured non-primary agent with fresh context.
 - The parent receives lifecycle state and completion or failure notification.
+- Completion notifications are delivered automatically; parent guidance prohibits polling and sleep or no-op waiting, and directs the model to continue useful work or finish its response until notification arrives.
 - Parent TeamView context is injected as a volatile message after durable history so changing child state does not destabilize the provider-cache prefix.
 - TeamView is model-facing coordination data, not user-facing narration. The parent keeps launch, running, completed, failed, and total bookkeeping silent unless the user explicitly asks for subagent status.
 - A child failure may still be reported when it blocks the requested outcome, but not as routine orchestration bookkeeping.
@@ -141,8 +148,13 @@ Session skill status derives from the durable transcript and instruction state:
 - an activated skill is `active`;
 - an agent switch marks prior active skills inactive with `agent_switched`;
 - completed compaction marks prior active skills inactive with `compacted`;
+- resolving an active skill-to-skill conflict marks only the chosen loser inactive with `conflict_resolved`;
 - conflicts are computed between active skills and against declared instruction keys;
 - already-active tool loads are not duplicated as new active entries.
+
+Implemented: `SessionV2.resolveSkillConflict({ sessionID, winner, loser })` verifies the current derived conflict and records `session.skill.deactivated.1`. Its projection annotates the losing skill's existing activation message, so status remains derived from durable messages and current instruction keys. A missing or inactive pair, or a pair without a current skill conflict, fails without changing Session history. Resolution does not resume model execution or change the remaining skill's instruction snapshot.
+
+Implemented: clients invoke the durable operation with `POST /api/session/:sessionID/skill/resolve` and JSON payload `{ winner, loser }`. Success returns no content. A missing active conflict returns the stable public `SkillConflictNotFoundError` response without exposing the internal Core error or either skill identifier.
 
 The TUI provides a session-skills dialog, expandable skill content, conflict details, and transcript rows for loaded skills. A completed skill's `Loaded` badge uses the skill accent color; inactive or unavailable state remains visually subdued.
 
@@ -240,7 +252,7 @@ Caching is split into distinct concerns:
 
 ### OpenAI
 
-For GPT-5.6 and later, public OpenAI Chat and Responses lowering supports `prompt_cache_options` and explicit `prompt_cache_breakpoint` fields. Auto mode combines explicit stable-prefix markers with OpenAI's implicit latest-message marker; explicit mode disables the managed marker. Pre-5.6 public models use the compatible retention field. The ChatGPT Codex backend uses key-only implicit caching because it rejects `prompt_cache_options`. Model family and route capability are both gated because sending the wrong cache fields can be rejected by the provider.
+For GPT-5.6 and later, direct public OpenAI Responses lowering supports `prompt_cache_options` and explicit `prompt_cache_breakpoint` fields. Auto mode combines explicit stable-prefix markers with OpenAI's implicit latest-message marker; explicit mode disables the managed marker. Pre-5.6 public models use the compatible retention field. The ChatGPT Codex backend uses key-only implicit caching because it rejects `prompt_cache_options`. Direct OpenAI is Responses-only; OpenAI-compatible Chat remains available only for configured third-party deployments. Model family and route capability are both gated because sending the wrong cache fields can be rejected by the provider.
 
 ### OpenAI Responses continuation
 
@@ -278,20 +290,136 @@ Provider usage is a read-only Location service separate from Session-local token
 
 The Session command palette exposes a **Provider Usage** dialog. It keeps external quota windows separate from the local **YCoding requests** section, shows active provider windows with freshness and stability, separates Spark and other named lanes, and uses stable ten-character ASCII progress bars for reported percentages. Missing windows and account tiers remain unreported rather than becoming zero or being inferred. The command remains available when local request diagnostics exist even if no external quota provider is currently running.
 
+## Shell output
+
+A dedicated shell-output route provides full-width shell inspection separate from the session transcript.
+
+### Entry
+
+The shell tab in the composer lists running shells grouped by owning session (Main chat, Subagent, or Unknown session). Each entry shows the command, working directory, PID, elapsed time, and status. Selecting a shell entry and pressing return navigates to that shell's dedicated output view.
+
+### Dedicated output view
+
+The `shell-output` route renders a full-width view with:
+
+- **Header** — command, owner label, PID, and status, color-coded by status.
+- **Stream** — a scrollable output area that loads the shell's captured output incrementally. Output is fetched from the server with a cursor-based paginator and accumulated in the view. Running shells poll for new output every second.
+- **Metadata** — Owner, Status, Started, and Capture.
+- **Footer** — shell ID, PID, owner, and action labels with bound shortcuts.
+
+### Actions
+
+- **Back** — the configurable `shell-output.back` binding returns to the parent session transcript. Its default is escape.
+- **Kill** — the configurable `shell-output.kill` binding sends a server-side shell removal request for a running shell. Its default is ctrl+d, and the footer shows the kill binding only while the shell is running.
+
+### Keybindings
+
+| Default key | Command             | Action                           |
+| ----------- | ------------------- | -------------------------------- |
+| escape      | `shell-output.back` | Navigate back to session         |
+| ctrl+d      | `shell-output.kill` | Kill the running shell command   |
+
+## Subagent sibling navigation and economics
+
+The TUI provides sibling-subagent navigation within a parent Session's child family.
+
+### Sibling switcher
+
+A `SubagentSiblingSwitcher` renders at the top of a child session's content area when its parent has child tasks. Each child is a row with:
+
+- a clickable agent label (title-cased);
+- the agent model;
+- inline economics (cost and token count) when available;
+- a warning bullet indicator when the subagent is waiting with a question.
+
+The parent session is shown as an ↑-prefixed clickable row above the siblings. The active child is highlighted with the primary action background color. A blocked task (state `waiting` with a question) renders the row with a warning background and a `●` marker.
+
+### Child-session economics and durable state
+
+The session route does not mount `SubagentFooter`. For a child session, it mounts `SubagentEconomicsSurface` below the composer and `SubagentDurableChip` after it. The economics surface renders the available detailed strip: context, reported or unreported cache telemetry, cost, and parent rollup. The durable chip displays `durable`.
+
+### Economics computation
+
+`subagentEconomics` computes a summary string and a detailed strip from session info and cache diagnostics. The mounted `SubagentEconomicsSurface` uses the detailed strip, which includes context, reported or unreported cache telemetry, cost, and parent rollup. Tokens are formatted with `Intl.NumberFormat` and cost with `Intl.NumberFormat` currency formatting. Diagnostics are derived from the same `SessionCacheDiagnostics` type used by the main session.
+
+### Blocked subagent answer presentation
+
+A subagent is considered blocked when its orchestration task state is `waiting` and a `question` is present. The TUI surfaces blocked state in:
+
+- **Sibling switcher** — warning-colored background, ● marker, and ? prefix on the agent label.
+- **Child session** — `SubagentBlockedSurface` appears above the transcript, and `SubagentAnswerComposer` replaces the normal composer only while the child is waiting with a question. The mounted economics strip uses warning text while the child has a question.
+- **Sidebar rail** — an `awaitingInput` glyph, warning-colored value text showing the question text, and the `attention` prop on the rail section header.
+- **Composer subagent tab** — an `awaitingInput` glyph rendered in warning color, the question text shown as detail.
+
+## Rail priority and expanded-state behavior
+
+The rail sidebar uses a priority system to keep the number of simultaneously expanded sections bounded.
+
+### Section keys
+
+The rail supports these section keys: `session`, `context`, `todo`, `goal`, `autonomy`, `subagents`, `shells`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`.
+
+### Default expanded sections
+
+The initial expansion order is `session`, `context`, optional `goal`, optional `autonomy`, then `todo`; the rail retains the four most recently listed entries. Thus `todo` is always initially expanded, and `session` is omitted when both optional sections are present. Sections that carry a summary on their header row (`subagents`, `shells`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) are collapsed by default to conserve vertical space.
+
+### Expansion cap
+
+Expansion is capped at `MAX_EXPANDED = 4` sections. When the cap is reached, expanding a new section collapses the least recently expanded section. This prevents the rail from becoming a scroll wall where every section is half visible.
+
+### Attention-driven expansion
+
+The `RailSection` component accepts an `attention` boolean prop. An attention transition opens the section. When the attention clears, the implementation collapses that section; it does not preserve a manual expansion made while attention was active.
+
+Attention-triggered expansion respects the cap: if the cap is already reached, the least recently expanded default section is collapsed to make room.
+
+### Attention triggers
+
+The `subagents` section enters attention mode when any subagent has a pending question. The `shells` section enters attention mode when orphaned shells (shells whose owning session is no longer known) are present. The `autonomy` section enters attention mode when YOLO mode is active.
+
+### Shells section
+
+The sidebar shells section (`SHELLS`) summarizes running shells grouped by owner (Main chat, Subagent, Unknown session). The summary shows counts of running, terminal, and orphaned shells. Orphaned shells trigger the attention state. Each group row shows the owner label and count.
+
+### Subagents section
+
+The sidebar subagents section (`SUBAGENTS`) lists subagent tasks ordered by creation time. Each row shows the agent description with a glyph, the elapsed time or question text, and a warning color when awaiting input. The section summary shows the count of awaiting-input subagents, or total subagent count. An attention state highlights when any subagent is waiting for input.
+
+### Goal section
+
+The goal section (`GOAL`) appears when the session has an active goal. It shows the goal text, no-progress count, maximum no-progress, and status. The summary shows `noProgress / maxNoProgress`.
+
+### Autonomy section
+
+The autonomy section (`AUTONOMY`) shows the current mode label as summary, with attention when YOLO mode is active. Expanded content shows the approval mode (auto for YOLO, manual for normal).
+
+### Rail placement
+
+Rail placement follows terminal width:
+
+- Below 100 columns: hidden.
+- 100–119 columns: overlay (floating over the main pane).
+- 120 columns and above: docked (fixed sidebar).
+
+Rail width is 32 columns at 120-129 columns, then grows by one column per 10 terminal columns to 36 columns at 160 columns and above.
+
 ## Terminal release behavior
 
 The TUI is the only release surface and currently includes:
 
 - session transcript and timeline;
 - normal, yolo, and goal mode controls;
-- subagent tabs, status, notifications, and navigation;
+- subagent tabs, status, notifications, navigation, and sibling switcher;
+- child-session sibling switcher, economics surface, durable chip, and blocked-answer composer;
 - session skills and project artifacts;
 - distinct guardrail, permission, and form prompts;
 - MCP and provider connection flows;
 - prompt file, agent, command, skill, and reference autocomplete;
 - cache, context, memory, cost, provider quota, and guardrail diagnostics;
 - theme and keymap customization;
-- bounded archived transcript expansion.
+- bounded archived transcript expansion;
+- dedicated shell output view with kill/back actions;
+- rail sidebar with priority-based expanded-state management.
 
 TUI-visible state must rehydrate from durable or canonical API state after process restart. A feature that appears only after visiting a child session or reopening a dialog is a defect unless the interaction itself is the explicit trigger.
 

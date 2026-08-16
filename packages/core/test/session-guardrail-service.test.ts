@@ -3,15 +3,28 @@ import { describe, expect } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Session } from "@ycoding-ai/schema/session"
+import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigGuardrail } from "@ycoding-ai/core/config/guardrail"
+import { Database } from "@ycoding-ai/core/database/database"
+import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
+import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
+import { Location } from "@ycoding-ai/core/location"
+import { PermissionV2 } from "@ycoding-ai/core/permission"
+import { PermissionSaved } from "@ycoding-ai/core/permission/saved"
+import { Project } from "@ycoding-ai/core/project"
+import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { SessionV2 } from "@ycoding-ai/core/session"
+import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { Effect, Exit, Fiber, Layer } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
 const parentID = Session.ID.descending("ses_guardrail_service_parent")
@@ -67,7 +80,7 @@ function harness(input?: {
   const dependencies = Layer.mergeAll(
     Layer.mock(Config.Service, { entries: () => Effect.succeed([...(input?.entries ?? [])]) }),
     filesystem,
-    Global.layerWith({ config: "/global" }),
+    Global.layerWith({ data: "/data", config: "/global" }),
     Layer.mock(EventV2.Service, {
       publish: (definition, data) => {
         const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
@@ -133,6 +146,99 @@ function reject(service: SessionGuardrail.Interface, input: SessionGuardrail.Eva
     if (Exit.isFailure(exit)) expect(exit.cause.toString()).toContain("Guardrail.DeclinedError")
   })
 }
+
+const autonomousSessionID = SessionV2.ID.make("ses_guardrail_service_autonomous")
+const autonomousLocation = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+)
+const autonomousRuntime = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      SessionStore.node,
+      SessionAutonomy.node,
+      PermissionSaved.node,
+      AgentV2.node,
+      PermissionV2.node,
+      SessionGuardrail.node,
+    ]),
+    [[Location.node, autonomousLocation]],
+  ),
+)
+
+autonomousRuntime.effect("requires an explicit guardrail reply while permissions auto-approve in yolo and goal modes", () =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: autonomousSessionID,
+        project_id: Project.ID.global,
+        directory: "/project",
+        title: "Guardrail autonomy invariant",
+        agent: "guardrail-autonomy-test",
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    const agents = yield* AgentV2.Service
+    yield* agents.transform((editor) =>
+      editor.update(AgentV2.ID.make("guardrail-autonomy-test"), (agent) => {
+        agent.permissions = []
+      }),
+    )
+    const autonomy = yield* SessionAutonomy.Service
+    const events = yield* EventV2.Service
+    const permission = yield* PermissionV2.Service
+    const guardrail = yield* SessionGuardrail.Service
+
+    for (const mode of ["yolo", "goal"] as const) {
+      yield* mode === "goal"
+        ? autonomy.setGoal({ sessionID: autonomousSessionID, text: "Finish safely" })
+        : autonomy.setMode({ sessionID: autonomousSessionID, mode })
+      expect(yield* autonomy.get(autonomousSessionID)).toMatchObject({ mode })
+      expect(
+        yield* permission.ask({
+          sessionID: autonomousSessionID,
+          action: "read",
+          resources: ["src/index.ts"],
+        }),
+      ).toMatchObject({ effect: "allow" })
+      expect(yield* permission.forSession(autonomousSessionID)).toEqual([])
+
+      const asked = yield* Deferred.make<void>()
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === Guardrail.Event.Asked.type
+          ? Deferred.succeed(asked, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      const fiber = yield* guardrail.assert({
+        ...destructive,
+        sessionID: autonomousSessionID,
+      }).pipe(Effect.forkScoped)
+      yield* Deferred.await(asked).pipe(Effect.timeout("1 second"))
+      const request = (yield* guardrail.forSession(autonomousSessionID))[0]
+      if (!request) yield* Effect.die("guardrail request was not retained")
+      expect(yield* guardrail.forSession(autonomousSessionID)).toContainEqual(request)
+      yield* guardrail.reply({
+        sessionID: autonomousSessionID,
+        requestID: request.id,
+        reply: "once",
+      })
+      const reservation = yield* Fiber.join(fiber)
+      yield* reservation.release
+    }
+  }),
+)
 
 describe("SessionGuardrail reusable approvals", () => {
   exact.it.effect("reuses always only for the exact action, ordered rules, resources, and metadata in one family", () =>

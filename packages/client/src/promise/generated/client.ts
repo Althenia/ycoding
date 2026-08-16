@@ -58,6 +58,8 @@ import type {
   SessionSkillOutput,
   SessionSkillsInput,
   SessionSkillsOutput,
+  SessionResolveSkillConflictInput,
+  SessionResolveSkillConflictOutput,
   SessionSyntheticInput,
   SessionSyntheticOutput,
   SessionShellInput,
@@ -236,6 +238,8 @@ import type {
   ProjectCopyRefreshOutput,
   VcsStatusInput,
   VcsStatusOutput,
+  VcsBranchInput,
+  VcsBranchOutput,
   VcsDiffInput,
   VcsDiffOutput,
   ProjectArtifactArtifactListInput,
@@ -823,6 +827,18 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      resolveSkillConflict: (input: SessionResolveSkillConflictInput, requestOptions?: RequestOptions) =>
+        request<SessionResolveSkillConflictOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/skill/resolve`,
+            body: { winner: input["winner"], loser: input["loser"] },
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       synthetic: (input: SessionSyntheticInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: SessionSyntheticOutput }>(
           {
@@ -1974,6 +1990,18 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/vcs/status`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      branch: (input?: VcsBranchInput, requestOptions?: RequestOptions) =>
+        request<VcsBranchOutput>(
+          {
+            method: "GET",
+            path: `/api/vcs/branch`,
             query: { location: input?.["location"] },
             successStatus: 200,
             declaredStatuses: [401, 400],

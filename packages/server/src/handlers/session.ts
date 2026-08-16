@@ -14,6 +14,7 @@ import {
   ServiceUnavailableError,
   SessionBusyError,
   SessionNotFoundError,
+  SkillConflictNotFoundError,
   SkillNotFoundError,
   UnknownError,
   ForbiddenError,
@@ -543,6 +544,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.resolveSkillConflict",
+        Effect.fn(function* (ctx) {
+          yield* resolveSkillConflict(session, {
+            sessionID: ctx.params.sessionID,
+            winner: ctx.payload.winner,
+            loser: ctx.payload.loser,
+          })
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "session.synthetic",
         Effect.fn(function* (ctx) {
           const data = yield* session
@@ -908,6 +920,21 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
 
 const mapSessionNotFound = (error: SessionV2.NotFoundError) =>
   new SessionNotFoundError({ sessionID: error.sessionID, message: `Session not found: ${error.sessionID}` })
+
+export const resolveSkillConflict = (
+  session: SessionV2.Interface,
+  input: Parameters<SessionV2.Interface["resolveSkillConflict"]>[0],
+) =>
+  session.resolveSkillConflict(input).pipe(
+    Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error))),
+    Effect.catchTag("Session.SkillConflictNotFoundError", () =>
+      Effect.fail(new SkillConflictNotFoundError({ message: "Skill conflict not found" })),
+    ),
+    Effect.catchTags({
+      "Session.AgentNotFoundError": Effect.die,
+      "Session.MessageDecodeError": Effect.die,
+    }),
+  )
 
 function mapOwnershipError(error: SessionOrchestration.OwnershipError) {
   if (error._tag === "Session.NotFoundError") return mapSessionNotFound(error)

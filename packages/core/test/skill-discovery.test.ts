@@ -38,7 +38,7 @@ async function pull(skills: unknown[], files: Record<string, string> = {}, fixtu
   const tmp = fixture?.tmp ?? (await tmpdir())
   const base = fixture?.base ?? new URL("/catalog/", server.url).href
   const skillDiscoveryLayer = AppNodeBuilder.build(SkillDiscovery.node, [
-    [Global.node, Global.layerWith({ cache: tmp.path })],
+    [Global.node, Global.layerWith({ data: path.join(tmp.path, "data"), cache: tmp.path })],
   ])
   const directories = await Effect.runPromise(
     Effect.gen(function* () {

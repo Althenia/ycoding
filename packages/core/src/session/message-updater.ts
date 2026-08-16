@@ -13,11 +13,17 @@ export interface Adapter {
   readonly getAssistant: (
     messageID: SessionMessage.ID,
   ) => Effect.Effect<SessionMessage.Assistant | undefined, never, never>
+  readonly getSkillActivation: (
+    messageID: SessionMessage.ID,
+  ) => Effect.Effect<SessionMessage.Skill | SessionMessage.Assistant | undefined, never, never>
   readonly getShell: (
     shellID: SessionMessage.Shell["shellID"],
   ) => Effect.Effect<SessionMessage.Shell | undefined, never, never>
   readonly getCompaction: () => Effect.Effect<SessionMessage.Compaction | undefined, never, never>
   readonly updateAssistant: (assistant: SessionMessage.Assistant) => Effect.Effect<void, never, never>
+  readonly updateSkillActivation: (
+    message: SessionMessage.Skill | SessionMessage.Assistant,
+  ) => Effect.Effect<void, never, never>
   readonly updateShell: (shell: SessionMessage.Shell) => Effect.Effect<void, never, never>
   readonly updateCompaction: (compaction: SessionMessage.Compaction) => Effect.Effect<void, never, never>
   readonly appendMessage: (message: SessionMessage.Info) => Effect.Effect<void, never, never>
@@ -59,6 +65,12 @@ export function memory(state: MemoryState): Adapter {
         return assistant?.type === "assistant" ? assistant : undefined
       })
     },
+    getSkillActivation(messageID) {
+      return Effect.sync(() => {
+        const message = state.messages.findLast((item) => item.id === messageID)
+        return message?.type === "skill" || message?.type === "assistant" ? message : undefined
+      })
+    },
     getShell(shellID) {
       return Effect.sync(() => {
         return state.messages.find((message): message is SessionMessage.Shell => {
@@ -80,6 +92,15 @@ export function memory(state: MemoryState): Adapter {
         const current = state.messages[index]
         if (current?.type !== "assistant") return
         state.messages[index] = assistant
+      })
+    },
+    updateSkillActivation(message) {
+      return Effect.sync(() => {
+        const index = state.messages.findLastIndex((item) => item.id === message.id)
+        if (index < 0) return
+        const current = state.messages[index]
+        if (current?.type !== "skill" && current?.type !== "assistant") return
+        state.messages[index] = message
       })
     },
     updateShell(shell) {
@@ -225,6 +246,19 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             time: { created: event.created },
           }),
         )
+      },
+      "session.skill.deactivated": (event) => {
+        return Effect.gen(function* () {
+          const activation = yield* adapter.getSkillActivation(event.data.activationMessageID)
+          if (!activation) return
+          yield* adapter.updateSkillActivation({
+            ...activation,
+            skillDeactivations: [
+              ...(activation.skillDeactivations ?? []),
+              SessionMessage.SkillDeactivation.make({ skill: event.data.id, reason: event.data.reason }),
+            ],
+          })
+        })
       },
       "session.shell.started": (event) => {
         return adapter.appendMessage(
@@ -518,6 +552,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               reason: event.data.reason,
               summary: event.data.text,
               recent: event.data.recent,
+              ...(event.data.messages === undefined ? {} : { messages: event.data.messages }),
+              ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
             })
             return
           }
@@ -530,6 +566,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
               reason: event.data.reason,
               summary: event.data.text,
               recent: event.data.recent,
+              ...(event.data.messages === undefined ? {} : { messages: event.data.messages }),
+              ...(event.data.tokens === undefined ? {} : { tokens: event.data.tokens }),
               time: { created: event.created },
             }),
           )

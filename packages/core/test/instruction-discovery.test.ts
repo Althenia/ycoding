@@ -45,7 +45,7 @@ const instructionLayer = (input: {
         }),
       ),
     ],
-    [Global.node, Global.layerWith({ config: input.config })],
+    [Global.node, Global.layerWith({ data: path.join(input.config, "data"), config: input.config })],
     [Location.node, input.locationServiceLayer],
     ...(input.filesystemLayer ? [[FSUtil.node, input.filesystemLayer] as const] : []),
   ])

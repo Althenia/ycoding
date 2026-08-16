@@ -1,9 +1,9 @@
 import { createContext, useContext, type ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
-import { useTerminalDimensions } from "@opentui/solid"
-import { SplitBorder } from "./border"
 import { TextAttributes } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
+import { railPlacement, railWidth } from "../routes/session/rail"
 import { errorMessage } from "../util/error"
 export type ToastOptions = {
   title?: string
@@ -17,6 +17,22 @@ export function Toast() {
   const toast = useToast()
   const { themeV2 } = useTheme().contextual("overlay")
   const dimensions = useTerminalDimensions()
+  const right = () => (railPlacement(dimensions().width) === "docked" ? railWidth(dimensions().width) + 2 : 2)
+  const width = () => Math.max(1, Math.min(92, dimensions().width - right()))
+  const label = () => {
+    const variant = toast.currentToast?.variant
+    if (variant === "success") return "Success"
+    if (variant === "warning") return "Warning"
+    if (variant === "error") return "Error"
+    return "Info"
+  }
+  const glyph = () => {
+    const variant = toast.currentToast?.variant
+    if (variant === "success") return "✓"
+    if (variant === "warning") return "!"
+    if (variant === "error") return "✗"
+    return "⋯"
+  }
 
   return (
     <Show when={toast.currentToast}>
@@ -26,23 +42,23 @@ export function Toast() {
           justifyContent="center"
           alignItems="flex-start"
           top={1}
-          right={2}
-          maxWidth={Math.min(60, dimensions().width - 6)}
+          right={right()}
+          width={width()}
+          border={["left", "right"]}
+          borderColor={themeV2.text.feedback[current().variant].default}
           paddingLeft={2}
           paddingRight={2}
-          paddingTop={1}
-          paddingBottom={1}
-          backgroundColor={themeV2.background.default}
-          borderColor={themeV2.text.feedback[current().variant].default}
-          border={["left", "right"]}
-          customBorderChars={SplitBorder.customBorderChars}
+          paddingTop={2}
+          paddingBottom={2}
+          backgroundColor={themeV2.background.surface.overlay}
+          flexDirection="column"
+          gap={1}
         >
-          <Show when={current().title}>
-            <text attributes={TextAttributes.BOLD} marginBottom={1} fg={themeV2.text.default}>
-              {current().title}
-            </text>
-          </Show>
-          <text fg={themeV2.text.default} wrapMode="word" width="100%">
+          <text attributes={TextAttributes.BOLD} fg={themeV2.text.feedback[current().variant].default}>
+            {glyph()} {label()}
+            <Show when={current().title}> · {current().title}</Show>
+          </text>
+          <text fg={themeV2.text.default} wrapMode="word">
             {current().message}
           </text>
         </box>

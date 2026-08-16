@@ -6,6 +6,7 @@ import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
 import { mcpSummary } from "../../mcp-presentation"
+import { FilledWarningChip } from "../../component/prompt/mode-chips"
 
 export function Footer() {
   const { themeV2 } = useTheme()
@@ -15,6 +16,10 @@ export function Footer() {
   const permissions = createMemo(() => {
     if (route.data.type !== "session") return []
     return data.session.permission.list(route.data.sessionID) ?? []
+  })
+  const awaiting = createMemo(() => {
+    if (route.data.type !== "session") return 0
+    return data.session.subagent.list(route.data.sessionID).filter((task) => task.state === "waiting").length
   })
   const directory = useDirectory()
   const connected = useConnected()
@@ -52,6 +57,9 @@ export function Footer() {
     <box flexDirection="row" justifyContent="space-between" gap={1} flexShrink={0}>
       <text fg={themeV2.text.subdued}>{directory()}</text>
       <box gap={2} flexDirection="row" flexShrink={0}>
+        <Show when={awaiting() > 0}>
+          <FilledWarningChip label={`${awaiting()} awaiting`} />
+        </Show>
         <Switch>
           <Match when={store.welcome}>
             <text fg={themeV2.text.default}>

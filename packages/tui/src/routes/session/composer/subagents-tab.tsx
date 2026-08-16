@@ -1,7 +1,8 @@
-import type { SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
-import { createMemo, For, Show, createEffect, onMount, onCleanup } from "solid-js"
+import type { SessionCacheDiagnostics, SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import { createMemo, For, Show, createEffect, createSignal, onMount, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useRoute, useRouteData } from "../../../context/route"
 import { useData } from "../../../context/data"
 import { useClient } from "../../../context/client"
@@ -11,6 +12,7 @@ import { Keymap } from "../../../context/keymap"
 import { formatDiagnosticsModel } from "../../../util/cache-diagnostics"
 import { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
 import { useComposerTab } from "./index"
+import { getGlyph } from "../../../ui/glyph"
 
 export { activeSubagentSessionIDs, isActiveSubagent } from "../../../util/subagent"
 
@@ -19,8 +21,10 @@ interface SubagentEntry {
   agent: string
   title: string
   detail?: string
+  awaitingInput: boolean
   status: SessionOrchestrationTask["state"]
   model?: string
+  startedAt?: number
   current: boolean
 }
 
@@ -36,6 +40,19 @@ type CancelClient = {
 
 export function formatSubagentModel(model: { providerID: string; id: string; variant?: string } | undefined) {
   return formatDiagnosticsModel(model)
+}
+
+export function formatSubagentCacheHit(diagnostics: SessionCacheDiagnostics | null | undefined) {
+  return diagnostics?.cache.hitRatio === undefined ? undefined : `${Math.round(diagnostics.cache.hitRatio * 100)}% hit`
+}
+
+export function formatSubagentElapsed(startedAt: number | undefined, now: number) {
+  if (startedAt === undefined) return undefined
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1_000))
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  if (hours > 0) return `${hours}h${String(minutes % 60).padStart(2, "0")}m`
+  return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`
 }
 
 export function entriesFromTasks(
@@ -55,8 +72,10 @@ export function entriesFromTasks(
       agent: Locale.titlecase(task.agent),
       title: task.description,
       detail: task.question?.text ?? task.progress?.text,
+      awaitingInput: Boolean(task.question?.text),
       status: task.state,
       model: formatSubagentModel(task.model),
+      startedAt: task.time.created,
       current: task.sessionID === currentSessionID,
     }))
 }
@@ -75,7 +94,9 @@ export function entriesFromBtwSessions(sessions: ReadonlyArray<SessionInfo>, cur
       title: session.title,
       status: "completed",
       model: formatSubagentModel(session.model),
+      startedAt: session.time.created,
       current: session.id === currentSessionID,
+      awaitingInput: false,
     }))
 }
 
@@ -83,14 +104,15 @@ export function subagentSections(entries: ReadonlyArray<SubagentEntry>) {
   const active = entries.filter((entry) => isActiveSubagent(entry.status))
   const inactive = entries.filter((entry) => !isActiveSubagent(entry.status))
   return [
-    ...(active.length > 0 ? [{ label: "Active", entries: active }] : []),
-    ...(inactive.length > 0 ? [{ label: "Inactive", entries: inactive }] : []),
+    ...(active.length > 0 ? [{ label: "ACTIVE", entries: active }] : []),
+    ...(inactive.length > 0 ? [{ label: "INACTIVE", entries: inactive }] : []),
   ]
 }
 
 export function subagentScrollIndex(entries: ReadonlyArray<SubagentEntry>, index: number) {
   const active = entries.filter((entry) => isActiveSubagent(entry.status)).length
-  return index + Number(active > 0) + Number(index >= active && entries.length > active)
+  const questionRowsBefore = entries.slice(0, index).filter((entry) => entry.awaitingInput).length
+  return index + Number(active > 0) + Number(index >= active && entries.length > active) + questionRowsBefore
 }
 
 export function taskStatusLabel(state: SessionOrchestrationTask["state"]) {
@@ -114,9 +136,16 @@ export function cancelManagedSubagent(client: CancelClient, parentID: string, ch
   return client.api.session.subagent.cancel({ parentID, childID })
 }
 
-export function SubagentMetadata(props: { model?: string; status?: string; active: boolean }) {
+export function SubagentMetadata(props: {
+  model?: string
+  cacheHit?: string
+  elapsed?: string
+  status?: string
+  active: boolean
+}) {
   const { themeV2 } = useTheme()
   const color = () => (props.active ? themeV2.text.action.primary.focused : themeV2.text.subdued)
+  const telemetry = () => [props.cacheHit, props.elapsed].filter((value): value is string => Boolean(value))
 
   return (
     <box flexDirection="row" minWidth={0} gap={1}>
@@ -127,11 +156,25 @@ export function SubagentMetadata(props: { model?: string; status?: string; activ
           </text>
         </box>
       </Show>
-      <Show when={props.model && props.status}>
+      <Show when={props.model && (telemetry().length > 0 || props.status)}>
         <text fg={color()} flexShrink={0}>
           ·
         </text>
       </Show>
+      <For each={telemetry()}>
+        {(item, index) => (
+          <>
+            <text fg={color()} wrapMode="none" flexShrink={0}>
+              {item}
+            </text>
+            <Show when={index() < telemetry().length - 1 || props.status}>
+              <text fg={color()} flexShrink={0}>
+                ·
+              </text>
+            </Show>
+          </>
+        )}
+      </For>
       <Show when={props.status}>
         <text fg={color()} wrapMode="none" flexShrink={0}>
           {props.status}
@@ -146,9 +189,11 @@ export function SubagentsTab(props: { sessionID: string }) {
   const data = useData()
   const client = useClient()
   const { themeV2 } = useTheme()
-  const navigate = useRoute().navigate
+  const navigation = useRoute()
+  const navigate = (input: Parameters<typeof navigation.navigate>[0]) => navigation.navigate(input)
   const composer = useComposerTab()
   const shortcuts = Keymap.useShortcuts()
+  const dimensions = useTerminalDimensions()
 
   const session = createMemo(() => data.session.get(props.sessionID))
   const parentID = createMemo(() => session()?.parentID ?? props.sessionID)
@@ -167,11 +212,21 @@ export function SubagentsTab(props: { sessionID: string }) {
     ]
   })
   const sections = createMemo(() => subagentSections(entries()))
+  const [now, setNow] = createSignal(Date.now())
 
   createEffect(() => {
     if (!composer.active("subagents")) return
     const id = parentID()
     void data.session.subagent.sync(id).catch((error) => console.error("Failed to load durable subagent tasks", error))
+  })
+  createEffect(() => {
+    if (!composer.active("subagents")) return
+    entries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
+  })
+  createEffect(() => {
+    if (dimensions().width < 100 || !composer.active("subagents") || !entries().some((entry) => entry.status === "running")) return
+    const interval = setInterval(() => setNow(Date.now()), 1_000)
+    onCleanup(() => clearInterval(interval))
   })
 
   const [store, setStore] = createStore({ selected: 0 })
@@ -306,7 +361,7 @@ export function SubagentsTab(props: { sessionID: string }) {
     <Show when={composer.active("subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
-        maxHeight={5}
+        maxHeight={8}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
         <Show when={entries().length > 0} fallback={<text fg={themeV2.text.subdued}> No subagents</text>}>
@@ -320,9 +375,10 @@ export function SubagentsTab(props: { sessionID: string }) {
                   {(entry) => {
                     const entryIndex = createMemo(() => entries().indexOf(entry))
                     const active = createMemo(() => entryIndex() === selected())
+                    const awaitingInput = createMemo(() => entry.awaitingInput)
                     return (
                       <box
-                        flexDirection="row"
+                        flexDirection="column"
                         paddingLeft={1}
                         paddingRight={1}
                         backgroundColor={
@@ -341,7 +397,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                           })
                         }}
                       >
-                        <box flexGrow={1} minWidth={0} flexDirection="row">
+                        <box flexDirection="row" minWidth={0} flexGrow={1}>
                           <text
                             fg={
                               active()
@@ -353,15 +409,35 @@ export function SubagentsTab(props: { sessionID: string }) {
                             attributes={active() ? TextAttributes.BOLD : undefined}
                             wrapMode="none"
                           >
+                            <span
+                              style={{
+                                fg: awaitingInput()
+                                  ? themeV2.text.feedback.warning.default
+                                  : themeV2.text.feedback.info.default,
+                              }}
+                            >
+                              {getGlyph(awaitingInput() ? "awaitingInput" : "subagent").rendered}
+                            </span>
                             {entry.agent}: {entry.title}
-                            <Show when={entry.detail}> — {entry.detail}</Show>
                           </text>
+                          <box flexGrow={1} />
+                          <SubagentMetadata
+                            model={entry.model}
+                            cacheHit={dimensions().width >= 100 ? formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID)) : undefined}
+                            elapsed={
+                              dimensions().width >= 100 && entry.status === "running"
+                                ? formatSubagentElapsed(entry.startedAt, now())
+                                : undefined
+                            }
+                            status={taskStatusLabel(entry.status)}
+                            active={active()}
+                          />
                         </box>
-                        <SubagentMetadata
-                          model={entry.model}
-                          status={taskStatusLabel(entry.status)}
-                          active={active()}
-                        />
+                        <Show when={entry.awaitingInput && entry.detail}>
+                          <text fg={themeV2.text.subdued} paddingLeft={2} wrapMode="none">
+                            └ {entry.detail}
+                          </text>
+                        </Show>
                       </box>
                     )
                   }}

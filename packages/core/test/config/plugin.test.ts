@@ -32,7 +32,14 @@ const globalDirectory = mkdtempSync(path.join(os.tmpdir(), "ycoding-plugin-test-
 
 const it = testEffect(
   AppNodeBuilder.build(LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node]), [
-    [Global.node, Global.layerWith({ config: globalDirectory, home: path.join(globalDirectory, "home") })],
+    [
+      Global.node,
+      Global.layerWith({
+        data: path.join(globalDirectory, "data"),
+        config: globalDirectory,
+        home: path.join(globalDirectory, "home"),
+      }),
+    ],
   ]),
 )
 

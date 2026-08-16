@@ -46,6 +46,31 @@ export interface ProviderRequestDiagnostics {
   readonly latestNamespace?: string
 }
 
+export function cachePrefixLabel(value: ProviderRequestDiagnostics["latestInvalidation"]) {
+  switch (value) {
+    case "stable-hit":
+      return "stable"
+    case "first-request":
+      return "first"
+    case "prefix-changed":
+      return "changed"
+    case "system-prefix-changed":
+      return "system changed"
+    case "tool-prefix-changed":
+      return "tools changed"
+    case "below-minimum":
+      return "below minimum"
+    case "provider-not-reported":
+      return "unreported"
+    case "cache-disabled":
+      return "disabled"
+    case "retry-fallback":
+      return "retry"
+    default:
+      return undefined
+  }
+}
+
 const invalidationLabel = (value: ProviderRequestDiagnostics["latestInvalidation"]) => {
   switch (value) {
     case "first-request":

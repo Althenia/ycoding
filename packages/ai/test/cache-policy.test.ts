@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
-import { CacheHint, LLM, Message, ToolCallPart, ToolResultPart } from "../src"
+import { CacheHint, LLM, Message, Model, ToolCallPart, ToolResultPart } from "../src"
 import { Auth, LLMClient } from "../src/route"
 import { AmazonBedrock, GoogleVertexMessages, OpenRouter } from "../src/providers"
 import * as AnthropicMessages from "../src/protocols/anthropic-messages"
@@ -53,7 +53,7 @@ const geminiModel = Gemini.route
 const openrouterModel = OpenRouter.configure({ apiKey: "test" }).model("anthropic/claude-sonnet-4.5")
 
 test("pins the provider-native cache policy revision", () => {
-  expect(CACHE_POLICY_REVISION).toBe("provider-native/v4")
+  expect(CACHE_POLICY_REVISION).toBe("provider-native/v5")
 })
 
 const unknownAnthropicModel = AnthropicMessages.route
@@ -308,6 +308,118 @@ describe("applyCachePolicy", () => {
       expect(JSON.stringify(unsupported.body)).not.toContain("prompt_cache_breakpoint")
     }),
   )
+
+  test("does not apply GPT-5.6 inline cache policy to OpenAI-compatible routes", () => {
+    const compatibleModel = Model.update(openai56Model, {
+      route: openai56Model.route.with({ id: "openai-compatible-chat" }),
+    })
+    const request = LLM.request({
+      model: compatibleModel,
+      system: "Stable system",
+      prompt: "hi",
+      cache: "auto",
+      providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+    })
+
+    expect(applyCachePolicy(request)).toBe(request)
+  })
+
+  it.effect("preserves every GPT-5.6 marker selected by an explicit tail policy", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: openai56Model,
+          messages: [Message.user("a"), Message.user("b"), Message.user("c"), Message.user("d"), Message.user("e")],
+          cache: { messages: { tail: 5 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+        }),
+      )
+
+      const body = prepared.body as {
+        messages: ReadonlyArray<{
+          content: string | ReadonlyArray<{ text: string; prompt_cache_breakpoint?: unknown }>
+        }>
+      }
+      expect(
+        body.messages.flatMap((message) =>
+          (Array.isArray(message.content) ? message.content : [])
+            .filter((part) => part.prompt_cache_breakpoint !== undefined)
+            .map((part) => part.text),
+        ),
+      ).toEqual(["a", "b", "c", "d", "e"])
+    }),
+  )
+
+  test("does not inject GPT-5.6 cache hints into tool definitions", () => {
+    const request = LLM.request({
+      model: openai56Model,
+      system: "Stable system",
+      tools: [{ name: "search", description: "Search", inputSchema: { type: "object", properties: {} } }],
+      prompt: "hi",
+      cache: { tools: true, system: true, messages: { tail: 1 } },
+      providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+    })
+
+    const applied = applyCachePolicy(request)
+    expect(applied.tools[0]?.cache).toBeUndefined()
+    expect(applied.system[0]?.cache).toBeDefined()
+    expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+  })
+
+  test("keeps GPT-5.6 system and message markers despite mixed manual TTLs", () => {
+    const request = LLM.request({
+      model: openai56Model,
+      system: { type: "text", text: "Stable system", cache: new CacheHint({ type: "ephemeral" }) },
+      prompt: "hi",
+      cache: { system: true, messages: { tail: 1 }, ttlSeconds: 3600 },
+      providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+    })
+
+    const applied = applyCachePolicy(request)
+    expect(applied.system[0]?.cache).toEqual(new CacheHint({ type: "ephemeral" }))
+    expect(applied.messages[0]?.content[0]).toMatchObject({ cache: { type: "ephemeral", ttlSeconds: 3600 } })
+  })
+
+  test("marks GPT-5.6 Responses user and assistant text inside the raw tail window", () => {
+    const request = LLM.request({
+      model: Model.update(openai56Model, {
+        route: openai56Model.route.with({ id: "openai-responses" }),
+      }),
+      messages: [
+        Message.user("older user"),
+        Message.assistant("first assistant"),
+        Message.tool({ id: "call_1", name: "lookup", result: "tool result" }),
+        Message.user("latest user"),
+        Message.assistant("tail assistant"),
+      ],
+      cache: { messages: { tail: 2 } },
+      providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+    })
+
+    const applied = applyCachePolicy(request)
+    expect(applied.messages[3]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect((applied.messages[1]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
+    expect((applied.messages[2]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
+    expect(applied.messages[4]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+  })
+
+  test("marks GPT-5.6 Chat user and assistant text inside the raw tail window", () => {
+    const request = LLM.request({
+      model: openai56Model,
+      messages: [
+        Message.tool({ id: "call_1", name: "lookup", result: "tool result" }),
+        Message.user("latest user"),
+        Message.assistant("tail assistant"),
+      ],
+      cache: { messages: { tail: 2 } },
+      providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+    })
+
+    const applied = applyCachePolicy(request)
+    expect(applied.messages[1]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect(applied.messages[2]?.content[0]).toMatchObject({ cache: { type: "ephemeral" } })
+    expect((applied.messages[0]?.content[0] as { cache?: unknown } | undefined)?.cache).toBeUndefined()
+  })
 
   it.effect("'auto' is a no-op on OpenAI (implicit caching protocol)", () =>
     Effect.gen(function* () {

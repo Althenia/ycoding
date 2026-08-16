@@ -167,6 +167,13 @@ export class BusyError extends Schema.TaggedErrorClass<BusyError>()("Session.Bus
 export class SkillNotFoundError extends Schema.TaggedErrorClass<SkillNotFoundError>()("Session.SkillNotFoundError", {
   skill: SkillV2.ID,
 }) {}
+export class SkillConflictNotFoundError extends Schema.TaggedErrorClass<SkillConflictNotFoundError>()(
+  "Session.SkillConflictNotFoundError",
+  {
+    winner: SkillV2.ID,
+    loser: SkillV2.ID,
+  },
+) {}
 
 export class DestinationNotFoundError extends Schema.TaggedErrorClass<DestinationNotFoundError>()(
   "Session.DestinationNotFoundError",
@@ -191,6 +198,7 @@ export type Error =
   | CompactionConflictError
   | BusyError
   | SkillNotFoundError
+  | SkillConflictNotFoundError
   | DestinationNotFoundError
   | DestinationNotDirectoryError
   | CommandV2.NotFoundError
@@ -308,6 +316,11 @@ export interface Interface {
     skill: SkillV2.ID
     resume?: boolean
   }) => Effect.Effect<void, NotFoundError | SkillNotFoundError>
+  readonly resolveSkillConflict: (input: {
+    sessionID: SessionSchema.ID
+    winner: SkillV2.ID
+    loser: SkillV2.ID
+  }) => Effect.Effect<void, NotFoundError | AgentNotFoundError | MessageDecodeError | SkillConflictNotFoundError>
   readonly compact: (
     input: CompactInput,
   ) => Effect.Effect<SessionPending.Compaction, NotFoundError | CompactionConflictError>
@@ -861,6 +874,23 @@ const layer = Layer.effect(
           yield* execution
             .resume(input.sessionID)
             .pipe(Effect.ignore, Effect.forkIn(scope, { startImmediately: true }), Effect.asVoid)
+      }),
+      resolveSkillConflict: Effect.fn("V2Session.resolveSkillConflict")(function* (input) {
+        const statuses = yield* result.skills(input.sessionID)
+        const winner = statuses.find((status) => status.id === input.winner && status.state === "active")
+        const loser = statuses.find((status) => status.id === input.loser && status.state === "active")
+        if (
+          !winner ||
+          !loser ||
+          !loser.conflicts.some((conflict) => conflict.type === "skill" && conflict.id === winner.id)
+        )
+          return yield* new SkillConflictNotFoundError({ winner: input.winner, loser: input.loser })
+        yield* events.publish(SessionEvent.Skill.Deactivated, {
+          sessionID: input.sessionID,
+          id: loser.id,
+          activationMessageID: loser.activationMessageID,
+          reason: "conflict_resolved",
+        })
       }),
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
         const session = yield* result.get(input.sessionID)

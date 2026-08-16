@@ -50,7 +50,7 @@ export function DialogAlert(props: DialogAlertProps) {
             dialog.clear()
           }}
         >
-          <text fg={themeV2.text.action.primary.focused}>ok</text>
+          <text fg={themeV2.text.action.primary.focused}>Dismiss</text>
         </box>
       </box>
     </box>

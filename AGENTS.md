@@ -233,7 +233,7 @@ const table = sqliteTable("session", {
 - Subagents are durable child Sessions and always launch in the background. Do not add a synchronous result path disguised by the deprecated `background` input.
 - Preserve parent-child ownership, permission ceilings, explicit agent selection, and the configured nesting bound.
 - Session guardrails apply to the root Session family independently from tool permissions. `yolo`, `goal`, and permission auto-approval must never auto-answer guardrail reviews.
-- Guardrail reviews expose one-time approval or rejection only. Do not add a persistent bypass for standard or custom guardrail matches.
+- Guardrail reviews expose one-time approval, session-scoped Always approval for exact matching asks and metadata within the root Session family and current Location process, or rejection.
 - TeamView is volatile context appended after stable history. It must not receive a cache breakpoint or destabilize the provider-cache prefix.
 - TUI subagent indicators must rehydrate from durable state after reconnect or restart. Requiring the user to enter each child session to rebuild counts is a defect.
 

@@ -33,7 +33,9 @@ test("local channel stores service config with the local service filename", asyn
   try {
     await Effect.runPromise(
       ServiceConfig.set("hostname", "127.0.0.2").pipe(
-        Effect.provide(Global.layerWith({ config: path.join(root, "config"), state: path.join(root, "state") })),
+        Effect.provide(
+          Global.layerWith({ data: path.join(root, "data"), config: path.join(root, "config"), state: path.join(root, "state") }),
+        ),
         Effect.provide(NodeFileSystem.layer),
       ),
     )

@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import { BoxRenderable, Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { GuardrailStatusOutput } from "@ycoding-ai/client"
 import { ClientProvider } from "../../../src/context/client"
@@ -13,6 +14,7 @@ import { createApi, createFetch } from "../../fixture/tui-client"
 
 const module = await import("../../../src/feature-plugins/sidebar/guardrails")
 const prompt = await import("../../../src/routes/session/guardrail")
+const permission = await import("../../../src/routes/session/permission")
 
 const status: GuardrailStatusOutput = {
   rootSessionID: "ses_root",
@@ -51,22 +53,29 @@ test("attributes child reviews to their root family and exposes explicit guardra
     standard: true,
   }
   expect(prompt.guardrailPresentation(request)).toEqual({
-    title: "Session guardrail review",
+    title: "Guardrail blocked",
     actor: "Subagent ses_child in ses_root",
     action: "shell",
     reason: "Destructive Git operation",
     resources: ["git reset --hard"],
-    rules: ["standard.review.git-destructive"],
   })
   const source = await Bun.file(new URL("../../../src/routes/session/guardrail.tsx", import.meta.url)).text()
   expect(source).toContain('kind="guardrail"')
-  expect(source).toContain('options={{ once: "Approve once", always: "Always", reject: "Reject" }}')
+  expect(source).toContain('options={{ once: "Allow once", always: "Allow for this session", reject: "Deny" }}')
   expect(source).toContain('const reply = (value: "once" | "always" | "reject") => {')
-  expect(source).not.toContain("Always allow")
+  expect(source).toContain("reply: value")
+  expect(source).toContain('defaultOption="reject"')
 })
 
-test("renders the exact guardrail choices", async () => {
-  const transport = createFetch()
+test("renders a warning-framed guardrail approval", async () => {
+  const replyReceived = Promise.withResolvers<unknown>()
+  const transport = createFetch(async (url, request) => {
+    if (/^\/api\/session\/[^/]+\/guardrail\/request\/[^/]+\/reply$/.test(url.pathname)) {
+      replyReceived.resolve(await request.json())
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  })
   const request = {
     id: "grq_review",
     rootSessionID: "ses_root",
@@ -96,16 +105,84 @@ test("renders the exact guardrail choices", async () => {
     { width: 96, height: 18, kittyKeyboard: true },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Session guardrail review"))
+  await app.waitForFrame((frame) => frame.includes("Guardrail blocked"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Approve once")
-    expect(frame).toContain("Always")
-    expect(frame).toContain("Reject")
+    expect(frame).toContain("!!")
+    expect(frame).toContain("guardrail · Destructive Git operation needs approval")
+    expect(frame).toContain("Guardrails apply even in YOLO mode.")
+    expect(frame).toContain("Action: shell")
+    expect(frame).toContain("Resource: git reset --hard")
+    expect(frame).toContain("git reset --hard")
+    expect(frame).toContain("Allow once")
+    expect(frame).toContain("Deny")
+    expect(frame).toContain("Allow for this session")
+    expect(frame).not.toContain("standard.review.git-destructive")
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressEnter()
+    expect(await replyReceived.promise).toEqual({ reply: "always" })
   } finally {
     app.renderer.destroy()
   }
+})
+
+test("defaults guardrails to deny and ordinary permissions to allow once", async () => {
+  const selectedBackground = async (kind: "guardrail" | "permission", defaultOption: "once" | "reject") => {
+    const app = await testRender(
+      () => (
+        <TestTuiContexts>
+          <ConfigProvider config={createTuiResolvedConfig()}>
+            <Keymap.Provider>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <permission.Prompt
+                  kind={kind}
+                  title={`${kind} choice`}
+                  instance={`${kind}-choice`}
+                  body={<text>Choice body</text>}
+                  options={{ once: "Allow once", reject: "Deny" }}
+                  defaultOption={defaultOption}
+                  onSelect={() => {}}
+                />
+              </ThemeProvider>
+            </Keymap.Provider>
+          </ConfigProvider>
+        </TestTuiContexts>
+      ),
+      { width: 96, height: 18, kittyKeyboard: true },
+    )
+    app.renderer.start()
+    await app.waitForFrame((frame) => frame.includes(`${kind} choice`))
+
+    try {
+      const selected = descendants(app.renderer.root).find(
+        (item): item is BoxRenderable => item instanceof BoxRenderable && item.id === `session.${kind}.action.${defaultOption}`,
+      )
+      const unselected = descendants(app.renderer.root).find(
+        (item): item is BoxRenderable =>
+          item instanceof BoxRenderable && item.id === `session.${kind}.action.${defaultOption === "once" ? "reject" : "once"}`,
+      )
+      expect(selected).toBeDefined()
+      expect(unselected).toBeDefined()
+      const selectedBox = requireBoxRenderable(selected, `session.${kind}.action.${defaultOption}`)
+      const unselectedBox = requireBoxRenderable(
+        unselected,
+        `session.${kind}.action.${defaultOption === "once" ? "reject" : "once"}`,
+      )
+      expect(selectedBox.backgroundColor.toInts()).not.toEqual(unselectedBox.backgroundColor.toInts())
+      return {
+        selected: selectedBox.backgroundColor.toInts(),
+        unselected: unselectedBox.backgroundColor.toInts(),
+      }
+    } finally {
+      app.renderer.destroy()
+    }
+  }
+
+  const guardrail = await selectedBackground("guardrail", "reject")
+  const permissionSelection = await selectedBackground("permission", "once")
+  expect(guardrail.selected).toEqual(permissionSelection.selected)
+  expect(guardrail.unselected).toEqual(permissionSelection.unselected)
 })
 
 test("renders guardrail status without raw rules or command resources", async () => {
@@ -126,11 +203,12 @@ test("renders guardrail status without raw rules or command resources", async ()
     { width: 48, height: 14 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Guardrails"))
+  await app.waitForFrame((frame) => frame.includes("GUARDRAILS"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("Guardrails")
+    // Rail sections render their name in the design's uppercase section style.
+    expect(frame).toContain("GUARDRAILS")
     expect(frame).toContain("Standard + 2 custom")
     expect(frame).toContain("3 approvals · 1 blocked")
     expect(frame).toContain("Shells 2 / 8")
@@ -142,3 +220,15 @@ test("renders guardrail status without raw rules or command resources", async ()
     app.renderer.destroy()
   }
 })
+
+function descendants(root: Renderable): BoxRenderable[] {
+  return root.getChildren().flatMap((child) => {
+    if (!(child instanceof BoxRenderable)) return []
+    return [child, ...descendants(child)]
+  })
+}
+
+function requireBoxRenderable(renderable: BoxRenderable | undefined, id: string): BoxRenderable {
+  if (renderable) return renderable
+  throw new Error(`expected a BoxRenderable with id ${id}`)
+}

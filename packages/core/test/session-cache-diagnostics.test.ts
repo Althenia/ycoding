@@ -130,7 +130,10 @@ test("derives provider cache mechanisms from native (non-AI-SDK) route ids", () 
     "azure-openai-responses": "openai-prefix-cache",
     "openai-compatible-chat": "openai-prefix-cache",
     "openai-compatible-responses": "openai-prefix-cache",
+    "openai-responses-websocket": "openai-prefix-cache",
     "openai-codex-responses": "openai-prefix-cache",
+    "github-copilot-chat": "openai-prefix-cache",
+    "github-copilot-responses": "openai-prefix-cache",
   } as const
   for (const [routeID, expected] of Object.entries(cases))
     expect([routeID, SessionCacheDiagnostics.mechanism(routeID, model("anthropic"), tokens)]).toEqual([

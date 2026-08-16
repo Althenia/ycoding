@@ -1,6 +1,8 @@
 // Pure ordering/merging helpers for the prompt autocomplete menu.
 // Kept out of the component so they can be tested without a terminal renderer.
 
+import { displaySlice, promptOffsetWidth } from "./display"
+
 export type MentionEntry = { path: string; type: "file" | "directory" }
 
 /** Number of non-file options (agents, references, MCP resources) shown above file results. */
@@ -57,4 +59,17 @@ export function expandDirectoryQuery(display: string) {
   const text = display.trim()
   const base = text.startsWith("@") ? text.slice(1) : text
   return base.replace(/[\\/]*$/, "") + "/"
+}
+
+export function resourceTriggerIndex(value: string, offset: number) {
+  const text = displaySlice(value, 0, offset)
+  const index = text.lastIndexOf("#")
+  if (index === -1) return undefined
+
+  const before = index === 0 ? undefined : text[index - 1]
+  const query = text.slice(index)
+  if (/\s/.test(query)) return undefined
+  if (before !== undefined && !/\s/.test(before) && !"([{<\"'`,;:=|".includes(before)) return undefined
+
+  return promptOffsetWidth(text.slice(0, index))
 }

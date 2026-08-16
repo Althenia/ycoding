@@ -1,6 +1,7 @@
 import { createEffect, createMemo, For, onCleanup, Show, useContext, createContext } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
 import { useTheme } from "../../../context/theme"
 import { SplitBorder } from "../../../ui/border"
 import { Keymap } from "../../../context/keymap"
@@ -40,6 +41,7 @@ export type ComposerProps = {
 
 export function Composer(props: ComposerProps) {
   const { themeV2 } = useTheme().contextual("elevated")
+  const dimensions = useTerminalDimensions()
 
   const [store, setStore] = createStore({
     tabs: {} as Record<string, Tab>,
@@ -109,7 +111,7 @@ export function Composer(props: ComposerProps) {
 
   return (
     <ComposerContext.Provider value={ctx}>
-      <box flexShrink={0} visible={props.open}>
+      <box flexShrink={0} visible={props.open} minHeight={Math.ceil(dimensions().height / 2)}>
         <box
           {...SplitBorder}
           border={["left"]}
@@ -138,6 +140,7 @@ export function Composer(props: ComposerProps) {
                         <text
                           fg={isActive() ? themeV2.text.default : themeV2.text.subdued}
                           attributes={isActive() ? TextAttributes.BOLD : undefined}
+                          onMouseUp={() => setStore("active", t.id)}
                         >
                           {t.label}
                         </text>

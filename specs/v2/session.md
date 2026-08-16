@@ -67,11 +67,23 @@ At each Safe Step Boundary the runner reads every source concurrently exactly on
 
 An instruction epoch spans completed compactions. `session.compaction.ended` moves the epoch start to its exact sequence, making current values initial, without reading sources or authoring an instruction event. Session movement and committed revert clear the fold. Forks record an authoritative parent sequence and derive values from the parent's ancestry through that cutoff. Model selection affects request assembly but is not itself an instruction source. See the [instruction sync design](./instruction-sync-proposal.md).
 
+## Session Skill Conflict Resolution
+
+Implemented: `SessionV2.resolveSkillConflict({ sessionID, winner, loser })` accepts two currently active skills only when the derived status reports a skill conflict between them. It appends `session.skill.deactivated.1` with the losing skill ID, its activation message ID, and reason `conflict_resolved`. The projector adds that deactivation fact to the existing activation message; it does not create a second skill-status store.
+
+`SessionSkillStatus` folds activation messages, tool activations, agent switches, completed compactions, and projected conflict resolutions in order. A resolved loser is inactive with `conflict_resolved`, has no reported conflicts, and can become active again only through a later ordinary activation. The winner remains active with its original instruction content. A conflict-free Session rejects resolution without a durable event or projection change, and resolution never resumes Session execution.
+
+Implemented HTTP contract: `POST /api/session/:sessionID/skill/resolve` uses the standard Session location middleware, accepts `{ winner: Skill.ID, loser: Skill.ID }`, and returns `204 No Content`. An unknown Session returns `SessionNotFoundError`. A missing, inactive, or conflict-free pair returns `SkillConflictNotFoundError` with the fixed message `Skill conflict not found`; the response omits the Core error tag and both skill identifiers.
+
+Compatibility: durable projectors dispatch by exact `<type>.<version>`, and aggregate reads skip event types absent from an older manifest while advancing across their sequence. Conflict resolution therefore uses the new `session.skill.deactivated.1` type instead of changing or bumping `session.skill.activated.1`; bumping activation would leave existing `.1` records without the current activation projector. The projected `skillDeactivations` field is optional on existing skill and assistant messages, so new readers decode historical messages that omit it. The new closed-enum value is isolated to the new event and optional projection fact; it is not written into an existing versioned event payload.
+
 ## Compaction Rebuilds Active History
 
 Before each Step, the runner estimates the complete model-visible request against the selected model's context window and reserved output headroom. When compaction is enabled, model limits are known, and enough older Session History is available, the runner may store a structured rolling summary plus bounded recent context instead of sending an over-budget request.
 
 The full transcript remains durable. Active model history after the compaction boundary contains the summary and retained recent context; provider-native continuation state does not cross that boundary.
+
+Implemented: a completed `session.compaction.ended.1` event and its completed compaction projection may carry `messages`, the count folded into that summary operation, and structured `tokens` containing normalized provider-reported input, output, reasoning, cache-read, and cache-write usage. Both fields are optional for compatibility with persisted events and unreported provider usage. A missing token value is absent, not zero.
 
 If the provider reports context overflow before durable assistant output or tool execution, the runner may perform one overflow-triggered compaction and rebuild the same logical Step. A second overflow or any overflow after durable output is terminal.
 

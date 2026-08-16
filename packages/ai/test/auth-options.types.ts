@@ -103,17 +103,6 @@ OpenAI.configure({ providerOptions: { openai: { store: "false" } } })
 // @ts-expect-error auth is an override, so OpenAI rejects apiKey with auth.
 OpenAI.configure({ apiKey: "sk-test", auth: Auth.bearer("oauth-token") })
 
-OpenAI.chat("gpt-4.1-mini")
-OpenAI.configure({ apiKey: "sk-test" }).chat("gpt-4.1-mini")
-OpenAI.configure({ apiKey: configApiKey }).chat("gpt-4.1-mini")
-OpenAI.configure({ auth: Auth.bearer("oauth-token") }).chat("gpt-4.1-mini")
-
-// @ts-expect-error OpenAI chat selectors only accept model ids.
-OpenAI.configure({ apiKey: "sk-test" }).chat("gpt-4.1-mini", {})
-
-// @ts-expect-error auth is an override, so OpenAI Chat rejects apiKey with auth.
-OpenAI.configure({ apiKey: "sk-test", auth: Auth.bearer("oauth-token") })
-
 // @ts-expect-error Azure requires at least one of `resourceName` or `baseURL`.
 Azure.configure()
 Azure.configure({ apiKey: "azure-key", resourceName: "resource" }).responses("deployment")

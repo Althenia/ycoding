@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect } from "bun:test"
+import { afterAll, beforeEach, describe, expect } from "bun:test"
+import { mkdtempSync, rmSync } from "fs"
+import os from "os"
 import path from "path"
 import { Effect, Exit, Layer, PlatformError } from "effect"
 import { Config } from "@ycoding-ai/core/config"
@@ -40,6 +42,7 @@ const readToolNode = makeLocationNode({
 })
 
 const assertions: PermissionV2.AssertInput[] = []
+const data = mkdtempSync(path.join(os.tmpdir(), "ycoding-tool-read-"))
 const missingPath = "__missing_read_target__.txt"
 const missingAbsolutePath = path.join(process.cwd(), missingPath)
 const readCalls: {
@@ -168,7 +171,7 @@ const readLayer = (imageLayer: Layer.Layer<Image.Service>) =>
     [LocationMutation.node, mutation],
     [FSUtil.node, testFileSystem],
     [Location.node, locationLayer],
-    [Global.node, Global.layerWith({ data: Global.Path.data })],
+    [Global.node, Global.layerWith({ data })],
     [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   ])
 const it = testEffect(readLayer(imageLayer))
@@ -176,6 +179,8 @@ const itWithoutResizer = testEffect(readLayer(unavailableImage))
 const sessionID = SessionV2.ID.make("ses_read_tool_test")
 
 describe("ReadTool", () => {
+  afterAll(() => rmSync(data, { recursive: true, force: true }))
+
   beforeEach(() => {
     assertions.length = 0
     readCalls.length = 0

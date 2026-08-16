@@ -1,9 +1,9 @@
-import type { BoxRenderable, TextareaRenderable, ScrollBoxRenderable } from "@opentui/core"
+import type { BoxRenderable, RGBA, TextareaRenderable, ScrollBoxRenderable } from "@opentui/core"
 import { pathToFileURL } from "node:url"
 import fuzzysort from "fuzzysort"
 import path from "path"
 import { firstBy } from "remeda"
-import { createMemo, createResource, createEffect, onMount, onCleanup, Index, Show, createSignal } from "solid-js"
+import { createMemo, createResource, createEffect, onMount, onCleanup, For, Show, createSignal } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useEditorContext } from "../../context/editor"
 import { useClient } from "../../context/client"
@@ -12,7 +12,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiPaths } from "../../context/runtime"
 import { useConfig } from "../../config"
 import { useLocation } from "../../context/location"
-import { useTheme, selectedForeground } from "../../context/theme"
+import { useTheme } from "../../context/theme"
 import { SplitBorder } from "../../ui/border"
 import { useTerminalDimensions } from "@opentui/solid"
 import { Locale } from "../../util/locale"
@@ -28,14 +28,16 @@ import {
   expandDirectoryQuery,
   mergeAutocompleteOptions,
   mergeFileSearchEntries,
+  resourceTriggerIndex,
 } from "../../prompt/autocomplete"
 import type { FileSystemEntry } from "@ycoding-ai/client"
 import { stringWidth } from "../../util/string-width"
 import { parseFileLineRange, stripFileLineRange } from "../../prompt/parse"
+import type { ComponentTheme } from "../../theme/v2/component"
 
 export type AutocompleteRef = {
   onInput: (value: string) => void
-  visible: false | "@" | "/" | "$"
+  visible: false | "@" | "/" | "$" | "#"
 }
 
 export type AutocompleteOption = {
@@ -44,9 +46,22 @@ export type AutocompleteOption = {
   aliases?: string[]
   disabled?: boolean
   description?: string
+  marker?: string
+  matches?: readonly number[]
+  resourceDisplay?: string
+  resourceValue?: string
   isDirectory?: boolean
   onSelect?: () => void
   path?: string
+}
+
+const COMMAND_DESCRIPTION_COLUMN = `${(244 / 992) * 100}%`
+
+export function autocompleteSelectionColors(theme: Pick<ComponentTheme, "background" | "text">) {
+  return {
+    fill: theme.background.action.primary.focused,
+    foreground: theme.text.action.primary.focused,
+  }
 }
 
 export function Autocomplete(props: {
@@ -67,7 +82,8 @@ export function Autocomplete(props: {
   const data = useData()
   const keymap = Keymap.use()
   const keymapCommands = Keymap.useCommands()
-  const { theme } = useTheme()
+  const { theme, themeV2 } = useTheme()
+  const selection = autocompleteSelectionColors(themeV2)
   const dimensions = useTerminalDimensions()
   const frecency = useFrecency()
   const config = useConfig().data
@@ -79,6 +95,7 @@ export function Autocomplete(props: {
     visible: false as AutocompleteRef["visible"],
     input: "keyboard" as "keyboard" | "mouse",
   })
+  const chromeHeight = createMemo(() => (store.visible === "/" ? 4 : 0))
 
   const [positionTick, setPositionTick] = createSignal(0)
 
@@ -393,6 +410,8 @@ export function Autocomplete(props: {
       .map(
         (agent): AutocompleteOption => ({
           display: "@" + agent.id,
+          resourceDisplay: agent.name,
+          resourceValue: agent.name,
           onSelect: () => {
             insertPart(agent.id, {
               type: "agent",
@@ -410,7 +429,7 @@ export function Autocomplete(props: {
   // server never announces skills deleted there. Refetch whenever the menu opens
   // instead of trusting the cached list.
   createEffect(() => {
-    if (store.visible !== "$") return
+    if (store.visible !== "$" && store.visible !== "#") return
     const target = location.current
     data.location.skill.invalidate(target)
     void data.location.skill.sync(target).catch(() => undefined)
@@ -422,6 +441,9 @@ export function Autocomplete(props: {
         display: "$" + skill.id,
         value: `${skill.id} ${skill.name} ${skill.description ?? ""}`,
         description: skill.description ?? skill.name,
+        marker: skill.conflicts && (skill.conflicts.skills.length > 0 || skill.conflicts.instructions.length > 0) ? "conflict" : undefined,
+        resourceDisplay: skill.name,
+        resourceValue: skill.name,
         onSelect: () => {
           insertPart(skill.id, {
             type: "skill",
@@ -531,10 +553,18 @@ export function Autocomplete(props: {
         ? [...referenceAliasesValue, ...agentsValue, ...mcpResources()]
         : store.visible === "$"
           ? skillsValue
-          : [...commandsValue]
+          : store.visible === "#"
+            ? [...skillsValue, ...agentsValue].map((item) => ({
+                ...item,
+                display: item.resourceDisplay ?? item.display,
+                value: item.resourceValue ?? item.value,
+                description: undefined,
+              }))
+            : [...commandsValue]
 
     if (!searchValue) {
-      return mergeAutocompleteOptions(nonFileOptions, fileOptions)
+      const merged = mergeAutocompleteOptions(nonFileOptions, fileOptions)
+      return store.visible === "#" ? merged.slice(0, 8) : merged
     }
 
     const fuzziedNonFiles = fuzzysort
@@ -546,7 +576,7 @@ export function Autocomplete(props: {
           (obj) => obj.aliases?.join(" ") ?? "",
         ],
         threshold: store.visible === "@" ? 0.5 : 0,
-        limit: 10,
+        limit: store.visible === "#" ? 8 : 10,
         scoreFn: (objResults) => {
           const displayResult = objResults[0]
           let score = objResults.score
@@ -557,7 +587,7 @@ export function Autocomplete(props: {
           return score * (1 + frecencyScore)
         },
       })
-      .map((arr) => arr.obj)
+      .map((arr) => ({ ...arr.obj, matches: store.visible === "#" ? arr[0]?.indexes : undefined }))
 
     return mergeAutocompleteOptions(fuzziedNonFiles, fileOptions)
   })
@@ -676,7 +706,7 @@ export function Autocomplete(props: {
     ],
   }))
 
-  function show(mode: "@" | "/" | "$") {
+  function show(mode: "@" | "/" | "$" | "#") {
     setStore({
       visible: mode,
       index: props.input().cursorOffset,
@@ -713,7 +743,9 @@ export function Autocomplete(props: {
         if (store.visible) {
           const outsideToken =
             store.visible !== "/" &&
-            autocompleteTriggerIndex(value, props.input().cursorOffset, store.visible) !== store.index
+            (store.visible === "#"
+              ? resourceTriggerIndex(value, props.input().cursorOffset)
+              : autocompleteTriggerIndex(value, props.input().cursorOffset, store.visible)) !== store.index
           if (
             // Typed text before the trigger
             props.input().cursorOffset <= store.index ||
@@ -751,6 +783,13 @@ export function Autocomplete(props: {
         if (skill !== undefined) {
           show("$")
           setStore("index", skill)
+          return
+        }
+
+        const resource = resourceTriggerIndex(value, offset)
+        if (resource !== undefined) {
+          show("#")
+          setStore("index", resource)
         }
       },
     })
@@ -760,7 +799,7 @@ export function Autocomplete(props: {
     const count = options().length || 1
     if (!store.visible) return Math.min(10, count)
     positionTick()
-    return Math.min(10, count, Math.max(1, props.anchor().y))
+    return Math.min(10, count, Math.max(1, props.anchor().y - chromeHeight()))
   })
 
   let scroll: ScrollBoxRenderable
@@ -768,6 +807,7 @@ export function Autocomplete(props: {
   const emptyMessage = createMemo(() => {
     if (store.visible === "/") return "No matching commands"
     if (store.visible === "$") return "No matching skills"
+    if (store.visible === "#") return "No matching skills or agents"
     if (files.loading) return "Searching…"
     if (files().failed) return "Could not search files. Keep typing to try again."
     return "No matching files, agents, or references"
@@ -778,21 +818,32 @@ export function Autocomplete(props: {
     <box
       visible={store.visible !== false}
       position="absolute"
-      top={position().y - height()}
+      top={position().y - height() - chromeHeight()}
       left={position().x}
       width={position().width}
       zIndex={100}
       {...SplitBorder}
-      borderColor={theme.border}
+      backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : undefined}
+      borderColor={store.visible === "/" ? themeV2.border.default : theme.border}
+      flexDirection="column"
     >
+      <Show when={store.visible === "/"}>
+        <>
+          <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1} height={1}>
+            <text fg={themeV2.text.label}>/ COMMANDS</text>
+            <text fg={themeV2.text.label} flexShrink={0}>{`${options().length} of ${commands().length}`}</text>
+          </box>
+          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, position().width - 2))}</text>
+        </>
+      </Show>
       <scrollbox
         ref={(r: ScrollBoxRenderable) => (scroll = r)}
-        backgroundColor={theme.backgroundMenu}
+        backgroundColor={store.visible === "/" ? themeV2.background.surface.offset : theme.backgroundMenu}
         height={height()}
         scrollbarOptions={{ visible: false }}
         scrollAcceleration={scrollAcceleration()}
       >
-        <Index
+        <For
           each={options()}
           fallback={
             <box paddingLeft={1} paddingRight={1}>
@@ -804,33 +855,99 @@ export function Autocomplete(props: {
             <box
               paddingLeft={1}
               paddingRight={1}
-              backgroundColor={index === store.selected ? theme.primary : undefined}
+              backgroundColor={index() === store.selected ? selection.fill : undefined}
               flexDirection="row"
               onMouseMove={() => {
                 setStore("input", "mouse")
               }}
               onMouseOver={() => {
                 if (store.input !== "mouse") return
-                moveTo(index)
+                moveTo(index())
               }}
               onMouseDown={() => {
                 setStore("input", "mouse")
-                moveTo(index)
+                moveTo(index())
               }}
               onMouseUp={() => select()}
             >
-              <text fg={index === store.selected ? selectedForeground(theme) : theme.text} flexShrink={0}>
-                {option().display}
-              </text>
-              <Show when={option().description}>
-                <text fg={index === store.selected ? selectedForeground(theme) : theme.textMuted} wrapMode="none">
-                  {" " + option().description?.trimStart()}
+              <box width={store.visible === "/" ? COMMAND_DESCRIPTION_COLUMN : undefined} flexShrink={0} overflow="hidden">
+                <text fg={index() === store.selected ? selection.foreground : themeV2.text.default} flexShrink={0}>
+                  <AutocompleteOptionText
+                    text={option.display}
+                    matches={
+                      store.visible === "/" && option.display.toLowerCase().startsWith(`/${search().toLowerCase()}`)
+                        ? Array.from({ length: search().length + 1 }, (_, match) => match)
+                        : option.matches
+                    }
+                    selected={index() === store.selected}
+                    foreground={index() === store.selected ? selection.foreground : themeV2.text.default}
+                    background={index() === store.selected ? selection.fill : undefined}
+                    accent={themeV2.text.feedback.success.default}
+                  />
+                </text>
+              </box>
+              <Show when={option.marker}>
+                <text fg={index() === store.selected ? selection.foreground : themeV2.text.feedback.warning.default} flexShrink={0}>
+                  {" · " + option.marker}
+                </text>
+              </Show>
+              <Show when={option.description}>
+                <text
+                  fg={index() === store.selected ? selection.foreground : themeV2.text.subdued}
+                  wrapMode="none"
+                >
+                  <span
+                    style={{
+                      fg: index() === store.selected ? selection.foreground : themeV2.text.subdued,
+                      bg: index() === store.selected ? selection.fill : undefined,
+                    }}
+                  >
+                    {" " + option.description?.trimStart()}
+                  </span>
                 </text>
               </Show>
             </box>
           )}
-        </Index>
+        </For>
       </scrollbox>
+      <Show when={store.visible === "/"}>
+        <>
+          <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, position().width - 2))}</text>
+          <box paddingLeft={1} paddingRight={1} height={1}>
+            <text fg={themeV2.text.subdued}>↑↓ move    Enter accept    Tab complete    Esc close</text>
+          </box>
+        </>
+      </Show>
     </box>
+  )
+}
+
+function AutocompleteOptionText(props: {
+  text: string
+  matches?: readonly number[]
+  selected: boolean
+  foreground: RGBA
+  background?: RGBA
+  accent: RGBA
+}) {
+  const matches = new Set(props.matches)
+  const runs = Array.from(props.text).reduce<Array<{ text: string; matched: boolean }>>((result, character, index) => {
+    const matched = matches.has(index)
+    const previous = result.at(-1)
+    if (previous?.matched === matched) {
+      previous.text += character
+      return result
+    }
+    result.push({ text: character, matched })
+    return result
+  }, [])
+  return (
+    <>
+      {runs.map((run) => (
+        <span style={{ fg: props.selected || !run.matched ? props.foreground : props.accent, bg: props.background, bold: run.matched }}>
+          {run.text}
+        </span>
+      ))}
+    </>
   )
 }

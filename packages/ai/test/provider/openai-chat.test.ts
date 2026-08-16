@@ -3,7 +3,6 @@ import { Effect, Schema, Stream } from "effect"
 import { HttpClientRequest } from "effect/unstable/http"
 import { CacheHint, LLM, LLMError, LLMEvent, Message, Model, ToolCallPart, Usage } from "../../src"
 import * as Azure from "../../src/providers/azure"
-import * as OpenAI from "../../src/providers/openai"
 import * as OpenAIChat from "../../src/protocols/openai-chat"
 import { ProviderShared } from "../../src/protocols/shared"
 import { Auth, LLMClient } from "../../src/route"
@@ -19,6 +18,14 @@ const decodeJson = Schema.decodeUnknownSync(TargetJson)
 const model = OpenAIChat.route
   .with({ endpoint: { baseURL: "https://api.openai.test/v1/" }, auth: Auth.bearer("test") })
   .model({ id: "gpt-4o-mini" })
+
+const chatModel = (id: string) =>
+  OpenAIChat.route
+    .with({
+      endpoint: { baseURL: "https://api.openai.test/v1/" },
+      auth: Auth.bearer("test"),
+    })
+    .model({ id })
 
 const request = LLM.request({
   id: "req_1",
@@ -96,13 +103,12 @@ describe("OpenAI Chat route", () => {
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-4o-mini"),
+          model: chatModel("gpt-4o-mini"),
           prompt: "think",
           providerOptions: { openai: { promptCacheKey: "session_123", reasoningEffort: "max" } },
         }),
       )
 
-      expect(prepared.body.store).toBe(false)
       expect(prepared.body.prompt_cache_key).toBe("session_123")
       expect(prepared.body.reasoning_effort).toBe("max")
     }),
@@ -130,7 +136,7 @@ describe("OpenAI Chat route", () => {
         Effect.gen(function* () {
           const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
             LLM.request({
-              model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat(row.id),
+              model: chatModel(row.id),
               prompt: "hi",
               providerOptions: {
                 openai: {
@@ -150,12 +156,52 @@ describe("OpenAI Chat route", () => {
     }
   })
 
+  it.effect("keeps compatible GPT-5.6 routes key-only when route defaults contain public cache controls", () =>
+    Effect.gen(function* () {
+      const publicModel = chatModel("gpt-5.6")
+      const compatibleModel = Model.update(publicModel, {
+        route: publicModel.route.with({
+          id: "openai-compatible-chat",
+          defaults: {
+            providerOptions: {
+              openai: {
+                promptCacheKey: "route-key",
+                promptCacheRetention: "24h",
+                promptCacheOptions: { mode: "explicit", ttl: "30m" },
+              },
+            },
+          },
+        }),
+      })
+      const cache = new CacheHint({ type: "ephemeral" })
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model: compatibleModel,
+          system: { type: "text", text: "stable", cache },
+          messages: [Message.user([{ type: "text", text: "hi", cache }])],
+          providerOptions: {
+            openai: {
+              promptCacheKey: "request-key",
+              promptCacheRetention: "24h",
+              promptCacheOptions: { mode: "explicit", ttl: "30m" },
+            },
+          },
+        }),
+      )
+
+      expect(prepared.body.prompt_cache_key).toBe("request-key")
+      expect(prepared.body.prompt_cache_retention).toBeUndefined()
+      expect(prepared.body.prompt_cache_options).toBeUndefined()
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
+    }),
+  )
+
   it.effect("marks an explicit prompt_cache_breakpoint on cached system/user content for gpt-5.6+ only", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const preparedLegacy = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-5.5"),
+          model: chatModel("gpt-5.5"),
           system: { type: "text", text: "static prefix", cache },
           messages: [Message.user([{ type: "text", text: "hi", cache }])],
         }),
@@ -165,7 +211,7 @@ describe("OpenAI Chat route", () => {
 
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-5.6"),
+          model: chatModel("gpt-5.6"),
           system: { type: "text", text: "static prefix", cache },
           messages: [Message.user([{ type: "text", text: "hi", cache }])],
         }),
@@ -182,12 +228,44 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
-  it.effect("caps explicit prompt_cache_breakpoint markers at 3 in implicit mode", () =>
+  it.effect("marks cached assistant text only on GPT-5.6 OpenAI Chat protocol routes", () =>
+    Effect.gen(function* () {
+      const cache = new CacheHint({ type: "ephemeral" })
+      const direct = chatModel("gpt-5.6")
+      const compatible = Model.update(direct, { route: direct.route.with({ id: "openai-compatible-chat" }) })
+      const models = [
+        { model: direct, marked: true },
+        { model: chatModel("gpt-5.5"), marked: false },
+        { model: compatible, marked: false },
+      ] as const
+
+      for (const entry of models) {
+        const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+          LLM.request({
+            model: entry.model,
+            messages: [Message.assistant({ type: "text", text: "cached assistant", cache })],
+          }),
+        )
+        const message = prepared.body.messages[0]
+        if (entry.marked) {
+          expect(message).toEqual({
+            role: "assistant",
+            content: [{ type: "text", text: "cached assistant", prompt_cache_breakpoint: { mode: "explicit" } }],
+          })
+          continue
+        }
+        expect(message).toEqual({ role: "assistant", content: "cached assistant" })
+        expect(JSON.stringify(message)).not.toContain("prompt_cache_breakpoint")
+      }
+    }),
+  )
+
+  it.effect("preserves every explicit prompt_cache_breakpoint beyond OpenAI's implicit write capacity", () =>
     Effect.gen(function* () {
       const cache = new CacheHint({ type: "ephemeral" })
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
         LLM.request({
-          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).chat("gpt-5.6"),
+          model: chatModel("gpt-5.6"),
           system: { type: "text", text: "s", cache },
           messages: [
             Message.user([{ type: "text", text: "a", cache }]),
@@ -195,6 +273,8 @@ describe("OpenAI Chat route", () => {
             Message.user([{ type: "text", text: "b", cache }]),
             Message.assistant({ type: "text", text: "ok" }),
             Message.user([{ type: "text", text: "c", cache }]),
+            Message.assistant({ type: "text", text: "ok" }),
+            Message.user([{ type: "text", text: "d", cache }]),
           ],
         }),
       )
@@ -207,7 +287,7 @@ describe("OpenAI Chat route", () => {
             )
           : [],
       )
-      expect(marked).toHaveLength(3)
+      expect(marked.map((part) => part.text)).toEqual(["s", "a", "b", "c", "d"])
     }),
   )
 

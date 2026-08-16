@@ -20,7 +20,6 @@ import {
 } from "../schema"
 import { isRecord, JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { OpenAIOptions } from "./utils/openai-options"
-import * as Cache from "./utils/cache"
 import { Lifecycle } from "./utils/lifecycle"
 import { ToolSchemaProjection } from "./utils/tool-schema"
 import { ToolStream } from "./utils/tool-stream"
@@ -79,6 +78,12 @@ const OpenAIChatSystemText = Schema.Struct({
   prompt_cache_breakpoint: Schema.optional(OpenAIOptions.OpenAIPromptCacheBreakpoint),
 })
 
+const OpenAIChatAssistantText = Schema.Struct({
+  type: Schema.Literal("text"),
+  text: Schema.String,
+  prompt_cache_breakpoint: Schema.optional(OpenAIOptions.OpenAIPromptCacheBreakpoint),
+})
+
 const OpenAIChatMessage = Schema.Union([
   // Plain string content is the default (backward-compatible with every
   // existing cassette); the array-of-blocks form is only produced when a
@@ -93,7 +98,7 @@ const OpenAIChatMessage = Schema.Union([
   }),
   Schema.Struct({
     role: Schema.Literal("assistant"),
-    content: Schema.NullOr(Schema.String),
+    content: Schema.NullOr(Schema.Union([Schema.String, Schema.Array(OpenAIChatAssistantText)])),
     tool_calls: optionalArray(OpenAIChatAssistantToolCall),
     reasoning_content: Schema.optional(Schema.String),
     reasoning: Schema.optional(Schema.String),
@@ -276,24 +281,11 @@ const reasoningDetails = (parts: ReadonlyArray<ReasoningPart>, native: unknown) 
   if (isRecord(native) && Array.isArray(native.reasoning_details)) return native.reasoning_details
 }
 
-// GPT-5.6+ accepts at most 4 explicit `prompt_cache_breakpoint` writes per
-// request; in the default `implicit` mode the latest message consumes one of
-// those slots server-side, leaving 3 for callers. Pre-5.6 models never reach
-// this — `lowerMessages` sizes the cap at 0 for them, so `remaining` is
-// already exhausted and every marker silently drops.
-const cacheBreakpoint = (breakpoints: Cache.Breakpoints, cache: CacheHint | undefined) => {
-  if (!cache) return undefined
-  if (breakpoints.remaining <= 0) {
-    breakpoints.dropped += 1
-    return undefined
-  }
-  breakpoints.remaining -= 1
-  return { mode: "explicit" as const }
-}
+const cacheBreakpoint = (cache: CacheHint | undefined) => (cache ? { mode: "explicit" as const } : undefined)
 
 const lowerUserMessage = Effect.fn("OpenAIChat.lowerUserMessage")(function* (
   message: OpenAIChatRequestMessage,
-  breakpoints: Cache.Breakpoints,
+  supportsBreakpoints: boolean,
 ) {
   const content: Array<Schema.Schema.Type<typeof OpenAIChatUserContent>> = []
   for (const part of message.content) {
@@ -301,7 +293,7 @@ const lowerUserMessage = Effect.fn("OpenAIChat.lowerUserMessage")(function* (
       content.push({
         type: "text",
         text: part.text,
-        prompt_cache_breakpoint: cacheBreakpoint(breakpoints, part.cache),
+        prompt_cache_breakpoint: supportsBreakpoints ? cacheBreakpoint(part.cache) : undefined,
       })
       continue
     }
@@ -323,6 +315,7 @@ const lowerUserMessage = Effect.fn("OpenAIChat.lowerUserMessage")(function* (
 
 const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(function* (
   message: OpenAIChatRequestMessage,
+  supportsBreakpoints: boolean,
 ) {
   const content: TextPart[] = []
   const reasoning: ReasoningPart[] = []
@@ -358,9 +351,19 @@ const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(func
     if (reasoning.length === 0) return nativeReasoning
     if (field === "reasoning_content") return text
   })()
+  const assistantContent =
+    content.length === 0
+      ? null
+      : supportsBreakpoints && content.some((part) => part.cache)
+        ? content.map((part) => ({
+            type: "text" as const,
+            text: part.text,
+            prompt_cache_breakpoint: cacheBreakpoint(part.cache),
+          }))
+        : ProviderShared.joinText(content)
   return {
     role: "assistant" as const,
-    content: content.length === 0 ? null : ProviderShared.joinText(content),
+    content: assistantContent,
     tool_calls: toolCalls.length === 0 ? undefined : toolCalls,
     reasoning_content: reasoningContent,
     reasoning: reasoning.length > 0 && field === "reasoning" ? text : undefined,
@@ -394,21 +397,16 @@ const lowerToolMessages = Effect.fn("OpenAIChat.lowerToolMessages")(function* (m
 
 const lowerMessage = Effect.fn("OpenAIChat.lowerMessage")(function* (
   message: OpenAIChatRequestMessage,
-  breakpoints: Cache.Breakpoints,
+  supportsBreakpoints: boolean,
 ) {
-  if (message.role === "user") return [yield* lowerUserMessage(message, breakpoints)]
-  if (message.role === "assistant") return [yield* lowerAssistantMessage(message)]
+  if (message.role === "user") return [yield* lowerUserMessage(message, supportsBreakpoints)]
+  if (message.role === "assistant") return [yield* lowerAssistantMessage(message, supportsBreakpoints)]
   return (yield* lowerToolMessages(message)).messages
 })
 
 const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: LLMRequest) {
-  // Explicit `prompt_cache_breakpoint` is GPT-5.6+ only, so pre-5.6 requests
-  // get a zero-capacity budget: `cacheBreakpoint` then silently drops every
-  // hint instead of marking the wire body, and the system block stays a
-  // plain string for full backward compatibility.
-  const isGpt56 = OpenAIOptions.isGpt56OrLater(request.model.id)
-  const cacheMode = OpenAIOptions.promptCacheOptions(request)?.mode ?? "implicit"
-  const breakpoints = Cache.newBreakpoints(isGpt56 ? (cacheMode === "explicit" ? 4 : 3) : 0)
+  const supportsBreakpoints =
+    OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id) === "gpt-5.6"
 
   const systemCacheHint = request.system.find((part) => part.cache !== undefined)?.cache
   const system: OpenAIChatMessage[] =
@@ -418,12 +416,12 @@ const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: 
           {
             role: "system",
             content:
-              isGpt56 && systemCacheHint
+              supportsBreakpoints && systemCacheHint
                 ? [
                     {
                       type: "text" as const,
                       text: ProviderShared.joinText(request.system),
-                      prompt_cache_breakpoint: cacheBreakpoint(breakpoints, systemCacheHint),
+                      prompt_cache_breakpoint: cacheBreakpoint(systemCacheHint),
                     },
                   ]
                 : ProviderShared.joinText(request.system),
@@ -460,7 +458,7 @@ const lowerMessages = Effect.fn("OpenAIChat.lowerMessages")(function* (request: 
       continue
     }
     flushImages()
-    messages.push(...(yield* lowerMessage(message, breakpoints)))
+    messages.push(...(yield* lowerMessage(message, supportsBreakpoints)))
   }
   flushImages()
   return messages
@@ -470,16 +468,13 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
   const store = OpenAIOptions.store(request)
   const promptCacheKey = OpenAIOptions.promptCacheKey(request)
   const reasoningEffort = OpenAIOptions.reasoningEffort(request)
-  // `prompt_cache_retention` and `prompt_cache_options` are model-gated wire
-  // fields. Unsupported fields return a 400, so 24h retention is restricted to
-  // OpenAI's published allowlist while in-memory retention keeps legacy behavior.
-  const isGpt56 = OpenAIOptions.isGpt56OrLater(request.model.id)
-  const configuredRetention = !isGpt56 ? OpenAIOptions.promptCacheRetention(request) : undefined
+  const cacheCapability = OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id)
+  const configuredRetention = cacheCapability === "legacy" ? OpenAIOptions.promptCacheRetention(request) : undefined
   const retention =
     configuredRetention === "24h" && !OpenAIOptions.supportsExtendedPromptCacheRetention(request.model.id)
       ? undefined
       : configuredRetention
-  const cacheOptions = isGpt56 ? OpenAIOptions.promptCacheOptions(request) : undefined
+  const cacheOptions = cacheCapability === "gpt-5.6" ? OpenAIOptions.promptCacheOptions(request) : undefined
   return {
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),

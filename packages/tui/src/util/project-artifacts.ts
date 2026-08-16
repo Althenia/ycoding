@@ -46,6 +46,11 @@ export function artifactDescription(item: ArtifactListItem & { stage: ArtifactSt
   return `${item.scope.type === "project" ? "Project" : "Global"} · ${title(item.stage)} · r${item.revision} · ${item.description}`
 }
 
+export function artifactLoadStatus(stage: ArtifactStage | undefined) {
+  if (!stage) return undefined
+  return stage === "active" ? { loaded: true, label: "Loaded" } : { loaded: false, label: "Not loaded" }
+}
+
 export function artifactActions(input: {
   scope: ArtifactScope
   kind: ArtifactKind

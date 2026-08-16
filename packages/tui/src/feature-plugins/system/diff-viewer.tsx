@@ -1068,12 +1068,14 @@ function Commands(props: { context: Plugin.Context }) {
               ? { type: "home" }
               : route.type === "session"
                 ? { type: "session", sessionID: route.sessionID }
-                : {
-                    type: "plugin",
-                    id: route.id,
-                    name: route.name,
-                    ...(route.data ? { data: { ...route.data } } : {}),
-                  }
+                : route.type === "shell-output"
+                  ? { type: "session", sessionID: route.sessionID }
+                  : {
+                      type: "plugin",
+                      id: route.id,
+                      name: route.name,
+                      ...(route.data ? { data: { ...route.data } } : {}),
+                    }
           props.context.ui.router.navigate({
             type: "plugin",
             name: ROUTE,

@@ -5,6 +5,8 @@ import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 const encoder = new TextEncoder()
 const idPattern = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 const windowsReserved = /^(?:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])(?:\..*)?$/i
+const absolutePath = /(?:^|[\s=("'`:])(\/(?!\/)[^\s)]+)/gm
+const jsxImportSourcePragma = /^`\/\*\*[ \t]+@jsxImportSource[ \t]+(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*[ \t]+\*\/`/
 const unsafe = [
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
   /(?:^|[^A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|auth(?:orization)?|password|passwd|credential|secret)\s*[:=]/i,
@@ -18,7 +20,6 @@ const unsafe = [
   /(?:https?|file):/i,
   /(?:^|[\s=("'`:])\\\\[^\s]+/m,
   /(?:^|[\s=("'`:])[A-Za-z]:[\\/][^\s]+/m,
-  /(?:^|[\s=("'`:])\/(?!\/)[^\s)]+/m,
   /(?:^|[\s=("'`:])~(?:[\\/]|\b)/m,
   /(?:^|[\s=:("'`\\/])\.\.(?:[\\/]|$)/m,
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
@@ -72,7 +73,9 @@ export function validateID(id: unknown, existingIDs: ReadonlyArray<string> = [])
 export function validateText(value: unknown, field: string, maximumBytes: number) {
   if (typeof value !== "string" || value.length === 0) return [error("InvalidArtifact", field)]
   if (encoder.encode(value).byteLength > maximumBytes) return [error("ContentTooLarge", field)]
-  if (hasInvalidCharacters(value) || unsafe.some((pattern) => pattern.test(value))) return [error("UnsafeContent", field)]
+  if (hasInvalidCharacters(value) || hasAbsolutePath(value) || unsafe.some((pattern) => pattern.test(value))) {
+    return [error("UnsafeContent", field)]
+  }
   return []
 }
 
@@ -139,6 +142,15 @@ function hasInvalidCharacters(value: string) {
       return true
   }
   return false
+}
+
+function hasAbsolutePath(value: string) {
+  return [...value.matchAll(absolutePath)].some((match) => {
+    const path = match[1] ?? ""
+    const start = (match.index ?? 0) + match[0].lastIndexOf(path)
+    // Exempt only the complete safe pragma, not every /* opener: skipping all openers lets /*/Users/... bypass this scan.
+    return start === 0 || !jsxImportSourcePragma.test(value.slice(start - 1))
+  })
 }
 
 function error(code: ProjectArtifact.ErrorCode, field: string): ProjectArtifact.ValidationError {

@@ -1,6 +1,5 @@
 import { Prompt, type PromptRef } from "../component/prompt"
-import { createEffect, createMemo, createSignal, onMount, Show } from "solid-js"
-import { Logo } from "../component/logo"
+import { createEffect, createMemo, createSignal, onMount, Show, type JSX } from "solid-js"
 import { useArgs } from "../context/args"
 import { useRouteData } from "../context/route"
 import { usePromptRef } from "../context/prompt"
@@ -11,11 +10,81 @@ import { useData } from "../context/data"
 import { useLocation } from "../context/location"
 import { FormPrompt } from "./session/form"
 import { PluginSlot } from "../plugin/context"
+import { Keymap } from "../context/keymap"
+import { useTheme } from "../context/theme"
+import { useDialog } from "../ui/dialog"
+import { ModeChips } from "../component/prompt/mode-chips"
+import { Header } from "./session/header"
+import { useClient } from "../context/client"
 
 let once = false
-const placeholder = {
-  normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
-  shell: ["ls -la", "git status", "pwd"],
+export const landingPlaceholder = { normal: ["Message YCoding…"] }
+
+export function LandingHero() {
+  const { themeV2 } = useTheme()
+  const shortcut = Keymap.useShortcut("command.palette.show")
+  const description = createMemo(() => {
+    const value = shortcut()
+    if (!value) return "Describe a goal, paste an error."
+    return `Describe a goal, paste an error, or press ${value.replaceAll("ctrl+", "⌃")} for commands.`
+  })
+
+  return (
+    <box alignItems="center" flexShrink={0}>
+      <box flexDirection="column" alignItems="center" gap={2}>
+        <text fg={themeV2.text.feedback.success.default} selectable={false}>
+          y. ycoding
+        </text>
+        <text fg={themeV2.text.default} selectable={false}>
+          What should we build?
+        </text>
+        <text fg={themeV2.text.subdued} selectable={false}>
+          {description()}
+        </text>
+      </box>
+    </box>
+  )
+}
+
+export function LandingComposer(props: { children: JSX.Element }) {
+  const { themeV2 } = useTheme()
+  return (
+    <box width="100%" paddingBottom={3} border={["top"]} borderColor={themeV2.text.feedback.success.default}>
+      {props.children}
+    </box>
+  )
+}
+
+export function LandingMark(props: { overlay: boolean; children: JSX.Element }) {
+  return <Show when={!props.overlay}>{props.children}</Show>
+}
+
+export function LandingFooter() {
+  const { themeV2 } = useTheme()
+  const shortcut = Keymap.useShortcut("command.palette.show")
+
+  return (
+    <box
+      width="100%"
+      flexShrink={0}
+      flexDirection="row"
+      justifyContent="space-between"
+      paddingLeft={3}
+      paddingRight={3}
+      height={3}
+      alignItems="center"
+      backgroundColor={themeV2.background.chrome}
+    >
+      <box flexDirection="row" gap={3}>
+        <text fg={themeV2.text.subdued}>main</text>
+        <ModeChips />
+        <text fg={themeV2.text.subdued}>subagents 0</text>
+      </box>
+      <Show when={shortcut()}>
+        {(value) => <text fg={themeV2.text.feedback.info.default}>{value().replaceAll("ctrl+", "⌃")} commands</text>}
+      </Show>
+    </box>
+  )
 }
 
 export function Home() {
@@ -28,11 +97,29 @@ export function Home() {
   const editor = useEditorContext()
   const data = useData()
   const location = useLocation()
+  const dialog = useDialog()
+  const client = useClient()
+  const [promptOverlay, setPromptOverlay] = createSignal(false)
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
+  const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
+  const homeLocation = createMemo(() => data.location.default())
+  const [branch, setBranch] = createSignal<string>()
   let sent = false
 
   createEffect(() => location.set(data.location.default()))
+
+  createEffect(() => {
+    const target = homeLocation()
+    if (client.connection.status() !== "connected") return
+    void client.api.vcs.branch({ location: target }).then(
+      (response) => {
+        if (homeLocation() !== target) return
+        setBranch(response.data.current)
+      },
+      () => undefined,
+    )
+  })
 
   onMount(() => {
     editor.clearSelection()
@@ -66,31 +153,40 @@ export function Home() {
 
   return (
     <>
-      <box flexGrow={1} alignItems="center" paddingLeft={2} paddingRight={2}>
+      <Header
+        path={homeLocation().directory}
+        branch={branch()}
+        agent={local.agent.current()?.name}
+        model={local.model.parsed().model}
+        variant={local.model.variant.current()}
+        state={{ type: "ready" }}
+      />
+      <box flexGrow={1} flexDirection="column">
+        {/* Penpot board 01 Landing leaves 262px above the hero and 279px below it, so the lower
+            spacer carries 279/262 of the upper one. A ratio rather than a row count keeps the
+            reference proportion at any terminal height. */}
         <box flexGrow={1} minHeight={0} />
-        <box height={4} minHeight={0} flexShrink={1} />
-        <box flexShrink={0}>
+        <LandingMark overlay={overlay()}>
           <pluginRuntime.Slot name="home_logo" mode="replace">
-            <Logo />
+            <LandingHero />
           </pluginRuntime.Slot>
-        </box>
-        <box height={1} minHeight={0} flexShrink={1} />
-        <box width="100%" maxWidth={75} zIndex={1000} paddingTop={1} flexShrink={0}>
+        </LandingMark>
+        <box flexGrow={279 / 262} minHeight={0} />
+        <LandingComposer>
           <pluginRuntime.Slot name="home_prompt" mode="replace" ref={bind}>
             <Prompt
               ref={bind}
               right={<pluginRuntime.Slot name="home_prompt_right" />}
-              placeholders={placeholder}
+              placeholders={landingPlaceholder}
+              landing
+              onOverlayChange={setPromptOverlay}
               disabled={forms().length > 0}
             />
           </pluginRuntime.Slot>
-        </box>
+        </LandingComposer>
         <PluginSlot name="home.bottom" />
-        <box flexGrow={1} minHeight={0} />
       </box>
-      <box width="100%" flexShrink={0}>
-        <PluginSlot name="home.footer" />
-      </box>
+      <LandingFooter />
       <Show when={forms()[0]?.id} keyed>
         {(_) => {
           const form = forms()[0]

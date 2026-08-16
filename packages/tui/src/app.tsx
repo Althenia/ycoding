@@ -65,6 +65,7 @@ import { DialogSessionList } from "./component/dialog-session-list"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session } from "./routes/session"
+import { ShellOutput } from "./routes/shell-output"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -1087,6 +1088,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                       <PluginRouteMissing id={id} name={name} onHome={() => route.navigate({ type: "home" })} />
                     )}
                   />
+                </Match>
+                <Match when={route.data.type === "shell-output"}>
+                  <ShellOutput />
                 </Match>
               </Switch>
             </box>

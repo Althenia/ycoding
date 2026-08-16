@@ -3,6 +3,7 @@ import { expect, test } from "bun:test"
 import { BoxRenderable, type Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import { createEffect } from "solid-js"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider } from "../../../src/context/data"
 import { Keymap } from "../../../src/context/keymap"
@@ -199,13 +200,13 @@ test("sections active tasks before inactive tasks and sorts each section determi
     }),
   ])
   expect(module.subagentSections(entries)).toEqual([
-    { label: "Active", entries: entries.slice(0, 3) },
-    { label: "Inactive", entries: entries.slice(3) },
+    { label: "ACTIVE", entries: entries.slice(0, 3) },
+    { label: "INACTIVE", entries: entries.slice(3) },
   ])
-  expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "Active", entries: entries.slice(0, 3) }])
-  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "Inactive", entries: entries.slice(3) }])
+  expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "ACTIVE", entries: entries.slice(0, 3) }])
+  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "INACTIVE", entries: entries.slice(3) }])
   expect(module.subagentScrollIndex(entries, 0)).toBe(1)
-  expect(module.subagentScrollIndex(entries, 3)).toBe(5)
+  expect(module.subagentScrollIndex(entries, 3)).toBe(6)
   expect(module.subagentScrollIndex(entries.slice(3), 0)).toBe(1)
   expect(module.taskStatusLabel("waiting")).toBe("Waiting")
   expect(module.taskStatusLabel("failed")).toBe("Failed")
@@ -397,10 +398,14 @@ test("renders section headings while keyboard navigation selects only task rows 
     import("../../../src/context/theme"),
   ])
   const config = createTuiResolvedConfig()
+  let routeSessionID: string | undefined
 
   function RouteProbe() {
     const route = useRoute().data
-    return <text>Route:{route.type === "session" ? route.sessionID : "home"}</text>
+    createEffect(() => {
+      routeSessionID = route.type === "session" ? route.sessionID : undefined
+    })
+    return null
   }
 
   const app = await testRender(
@@ -434,12 +439,12 @@ test("renders section headings while keyboard navigation selects only task rows 
   app.renderer.start()
 
   try {
-    await app.waitForFrame((frame) => frame.includes("Active") && frame.includes("Inactive"))
+    await app.waitForFrame((frame) => frame.includes("ACTIVE") && frame.includes("INACTIVE"))
     const initial = app.captureCharFrame()
-    expect(initial).toContain("Active")
-    expect(initial).toContain("Inactive")
+    expect(initial).toContain("ACTIVE")
+    expect(initial).toContain("INACTIVE")
     expect(initial).toContain("Reviewer: Review implementation")
-    expect(initial).not.toContain("General: Archive results")
+    expect(initial).toContain("General: Archive results")
     const sectionRoots = findScrollBox(app.renderer.root)?.getChildren() ?? []
     expect(sectionRoots).toHaveLength(2)
     expect(sectionRoots.every((child) => child instanceof BoxRenderable)).toBe(true)
@@ -450,7 +455,8 @@ test("renders section headings while keyboard navigation selects only task rows 
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("General: Archive results")
     app.mockInput.pressEnter()
-    await app.waitForFrame((frame) => frame.includes("Route:ses_inactive_second"))
+    await app.renderOnce()
+    expect(routeSessionID).toBe("ses_inactive_second")
   } finally {
     app.renderer.destroy()
   }

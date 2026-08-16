@@ -3,13 +3,14 @@ import { createSignal, For, Show } from "solid-js"
 import { useClient } from "../../context/client"
 import { useTheme } from "../../context/theme"
 import { useToast } from "../../ui/toast"
+import { GLYPHS } from "../../ui/glyph"
 import { Prompt } from "./permission"
 
 export type GuardrailRequest = GuardrailRequestListOutput[number]
 
 export function guardrailPresentation(request: GuardrailRequest) {
   return {
-    title: "Session guardrail review",
+    title: "Guardrail blocked",
     actor:
       request.sessionID === request.rootSessionID
         ? `Session ${request.sessionID}`
@@ -17,7 +18,6 @@ export function guardrailPresentation(request: GuardrailRequest) {
     action: request.action,
     reason: request.reason,
     resources: request.resources,
-    rules: request.ruleIDs,
   }
 }
 
@@ -45,29 +45,35 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
     <Prompt
       kind="guardrail"
       title={presentation().title}
-      semanticLabel={`${presentation().title}: ${presentation().action}`}
+      semanticLabel={`guardrail · ${presentation().reason}`}
       instance={props.request.id}
       escapeKey="reject"
-      options={{ once: "Approve once", always: "Always", reject: "Reject" }}
+      defaultOption="reject"
+      options={{ once: "Allow once", always: "Allow for this session", reject: "Deny" }}
       onSelect={(option) => reply(option)}
+      header={
+        <box flexDirection="row" gap={1}>
+          <text fg={themeV2.text.feedback.warning.default}>{GLYPHS.guardrailBlocked.glyph}</text>
+          <text fg={themeV2.text.default}>{presentation().title}</text>
+        </box>
+      }
       body={
         <box paddingLeft={1} gap={1}>
-          <text fg={themeV2.text.default}>{presentation().reason}</text>
+          <text fg={themeV2.text.default}>
+            guardrail · {presentation().reason} <span style={{ fg: themeV2.text.feedback.warning.default }}>needs approval</span>
+          </text>
+          <text fg={themeV2.text.feedback.warning.default}>Guardrails apply even in YOLO mode.</text>
           <text fg={themeV2.text.subdued}>Actor: {presentation().actor}</text>
           <text fg={themeV2.text.subdued}>Action: {presentation().action}</text>
           <Show when={presentation().resources.length > 0}>
-            <box>
-              <text fg={themeV2.text.subdued}>Resources</text>
+            <box flexDirection="column">
               <For each={presentation().resources.slice(0, 8)}>
-                {(resource) => <text fg={themeV2.text.default}>{resource}</text>}
+                {(resource) => <text fg={themeV2.text.default}>Resource: {resource}</text>}
               </For>
               <Show when={presentation().resources.length > 8}>
                 <text fg={themeV2.text.subdued}>+{presentation().resources.length - 8} more</text>
               </Show>
             </box>
-          </Show>
-          <Show when={presentation().rules.length > 0}>
-            <text fg={themeV2.text.subdued}>Matched: {presentation().rules.join(", ")}</text>
           </Show>
         </box>
       }

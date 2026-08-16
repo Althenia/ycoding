@@ -23,7 +23,11 @@ test("resolution groups Effect-native lifecycle operations only for the managed 
     },
   })
   const registration = path.join(root, "state", ServiceConfig.filename())
-  const layer = Global.layerWith({ config: path.join(root, "config"), state: path.join(root, "state") })
+  const layer = Global.layerWith({
+    data: path.join(root, "data"),
+    config: path.join(root, "config"),
+    state: path.join(root, "state"),
+  })
   const runPromise = <A, E>(effect: Effect.Effect<A, E, Global.Service | FileSystem.FileSystem | Scope.Scope>) =>
     Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.provide(NodeFileSystem.layer), Effect.scoped))
 
