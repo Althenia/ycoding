@@ -169,9 +169,14 @@ const ANTHROPIC_CACHE_ROUTES = new Set([
   "ai-sdk:@ai-sdk/amazon-bedrock",
   "bedrock-converse",
   "openrouter",
+  "openrouter-responses",
   "ai-sdk:@openrouter/ai-sdk-provider",
 ])
-const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set(["openrouter", "ai-sdk:@openrouter/ai-sdk-provider"])
+const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set([
+  "openrouter",
+  "openrouter-responses",
+  "ai-sdk:@openrouter/ai-sdk-provider",
+])
 
 export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) => {
   const baselineKey = promptCacheNamespace(input, now)

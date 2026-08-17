@@ -10,6 +10,7 @@ import * as OpenAIResponses from "../protocols/openai-responses"
 import { isRecord } from "../protocols/shared"
 import { ProviderShared } from "../protocols/shared"
 import { OpenAIOptions } from "../protocols/utils/openai-options"
+import { autoPlacementHint } from "../cache-policy"
 
 export const profile = OpenAICompatibleProfiles.profiles.openrouter
 export const id = ProviderID.make(profile.provider)
@@ -56,6 +57,7 @@ const OpenRouterResponsesBodyBase = Schema.Struct({
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
   usage: Schema.optional(Schema.Any),
+  cache_control: Schema.optional(Schema.Any),
   stream: Schema.Literal(true),
 })
 
@@ -154,6 +156,7 @@ export const protocol: any = Protocol.make({
         })
         const body = (yield* OpenAIResponses.protocol.body.from(sanitized)) as unknown as Record<string, unknown>
         const extras = bodyOptions(request.providerOptions?.openrouter)
+        const cacheControl = autoPlacementHint(request)
         const promptExtra = promptCacheKey && !body.prompt_cache_key ? { prompt_cache_key: promptCacheKey } : {}
         const sessionExtra = sessionID && !(body as Record<string, unknown>).session_id ? { session_id: sessionID } : {}
         const { store: _store, previous_response_id: _prev, ...rest } = body
@@ -162,6 +165,14 @@ export const protocol: any = Protocol.make({
           ...promptExtra,
           ...sessionExtra,
           ...extras,
+          ...(cacheControl
+            ? {
+                cache_control: {
+                  type: "ephemeral",
+                  ...(cacheControl.ttlSeconds !== undefined && cacheControl.ttlSeconds >= 3_600 ? { ttl: "1h" } : {}),
+                },
+              }
+            : {}),
           store: undefined,
           previous_response_id: undefined,
         } as unknown as OpenRouterBody

@@ -11,6 +11,7 @@ export const OpenRouterPlugin = define({
         if (!ProviderV2.isAISDK(item.provider.package)) continue
         if (ProviderV2.packageName(item.provider.package) !== "@openrouter/ai-sdk-provider") continue
         evt.provider.update(item.provider.id, (provider) => {
+          provider.package = "@ycoding-ai/ai/providers/openrouter"
           // App attribution for OpenRouter rankings. User-supplied values win;
           // defaults fill in only when the user did not configure the header.
           provider.headers = {

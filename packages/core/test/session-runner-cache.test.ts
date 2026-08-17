@@ -415,8 +415,8 @@ test("keeps safe five-minute markers for an unknown future direct Anthropic mode
   expect(result.cache).toEqual({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 })
 })
 
-test("maps one-hour Anthropic TTL through native and AI SDK OpenRouter routes", () => {
-  for (const routeID of ["openrouter", "ai-sdk:@openrouter/ai-sdk-provider"]) {
+test("maps one-hour Anthropic TTL through Responses and AI SDK OpenRouter routes", () => {
+  for (const routeID of ["openrouter-responses", "ai-sdk:@openrouter/ai-sdk-provider"]) {
     const result = SessionRunnerCache.providerOptions({
       ...base,
       providerID: "openrouter",

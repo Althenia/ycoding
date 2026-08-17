@@ -56,6 +56,23 @@ describe("OpenRouter", () => {
     }),
   )
 
+  it.effect("enables OpenRouter's automatic Anthropic prompt cache on Responses", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: OpenRouter.configure({ apiKey: "test-key" }).model("anthropic/claude-sonnet-4.6"),
+          cache: { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 3600 },
+          system: "Stable instructions.",
+          prompt: "Continue.",
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      })
+    }),
+  )
+
   it.effect("preserves manually supplied reasoning details", () =>
     Effect.gen(function* () {
       const details = [
