@@ -16,6 +16,7 @@ export interface WebSocketConnection {
   readonly sendText: (message: string) => Effect.Effect<void, LLMError>
   readonly messages: Stream.Stream<string | Uint8Array, LLMError>
   readonly close: Effect.Effect<void, never>
+  readonly isOpen?: () => boolean
 }
 
 export interface Interface {
@@ -221,6 +222,7 @@ export const fromWebSocket = (
           }),
         ),
       ),
+      isOpen: () => ws.readyState === globalThis.WebSocket.OPEN,
     }
   })
 
@@ -356,6 +358,7 @@ export const json = <Body, Message extends Record<string, unknown>>(
     if (!existing) return
     if (existing.idleTimer) clearTimeout(existing.idleTimer)
     if (existing.fallbackTimer) clearTimeout(existing.fallbackTimer)
+    if (existing.connection) Effect.runFork(existing.connection.close)
     sessions.delete(key)
   }
 
@@ -495,6 +498,15 @@ export const json = <Body, Message extends Record<string, unknown>>(
             if (metadata.fullReplay) state.previous = undefined
             if (state.fallback) return httpFrames(prepared, request, runtime)
 
+            // Only a liveness-reporting connection carried over from an earlier request may be
+            // transparently replaced by HTTP mid-request. Connections without `isOpen` keep the
+            // older behavior: fail this request and route the next one through HTTP.
+            const reused = state.connection?.isOpen !== undefined
+            if (state.connection?.isOpen && !state.connection.isOpen()) {
+              yield* state.connection.close
+              state.connection = undefined
+            }
+
             const webSocket = runtime.webSocket ?? { open }
             const connection =
               state.connection ??
@@ -531,6 +543,7 @@ export const json = <Body, Message extends Record<string, unknown>>(
 
             const decoder = new TextDecoder()
             const output: unknown[] = []
+            let emitted = false
             let completedResponseID: string | undefined
             let terminal = false
             let rejected = false
@@ -559,6 +572,9 @@ export const json = <Body, Message extends Record<string, unknown>>(
                   return message
                 }),
               ),
+              Stream.tap(() => Effect.sync(() => {
+                emitted = true
+              })),
               Stream.mapError((error) => {
                 state.previous = undefined
                 if (isContinuationError(error)) return error
@@ -593,6 +609,11 @@ export const json = <Body, Message extends Record<string, unknown>>(
                   touch(metadata.key, state)
                 }),
               ),
+            ).pipe(
+              Stream.catch((error) => {
+                if (!reused || emitted || isContinuationError(error)) return Stream.fail(error)
+                return httpFrames(prepared, request, runtime)
+              }),
             )
           }),
         ).pipe(Stream.ensuring(state.permit.release(1))),

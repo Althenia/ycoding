@@ -371,6 +371,7 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
+  let addingAttachment = false
 
   function releaseTemporaryAttachment(uri: string) {
     const temporary = temporaryAttachments.get(uri)
@@ -869,6 +870,11 @@ export function Prompt(props: PromptProps) {
   }
 
   function syncExtmarksWithPromptParts() {
+    // `TextareaRenderable.insertText` synchronously emits onContentChange. During
+    // clipboard attachment insertion the extmark is created before the prompt
+    // part is registered, so reconciling here would treat the new attachment as
+    // removed and clean up its backing file.
+    if (addingAttachment) return
     const allExtmarks = input.extmarks
       .getAllForTypeId(promptPartTypeId)
       .slice()
@@ -934,6 +940,64 @@ export function Prompt(props: PromptProps) {
     for (const uri of temporaryAttachments.keys()) {
       if (!retained.has(uri)) releaseTemporaryAttachment(uri)
     }
+  }
+
+  async function discardMissingTemporaryAttachments() {
+    const missing = new Set(
+      await Promise.all(
+        [...temporaryAttachments].map(async ([uri, temporary]) =>
+          (await Bun.file(temporary.path).exists()) ? undefined : uri,
+        ),
+      ).then((uris) => uris.filter((uri): uri is string => uri !== undefined)),
+    )
+    if (missing.size === 0) return false
+
+    const removed = new Set(missing)
+    const staleRanges = input.extmarks
+      .getAllForTypeId(promptPartTypeId)
+      .flatMap((mark) => {
+        const ref = store.extmarkToPart.get(mark.id)
+        if (ref?.type !== "file" || !removed.has(store.prompt.files?.[ref.index]?.uri ?? "")) return []
+        input.extmarks.delete(mark.id)
+        return [{ start: mark.start, end: mark.end + (input.plainText[mark.end] === " " ? 1 : 0) }]
+      })
+      .sort((left, right) => right.start - left.start)
+    if (staleRanges.length > 0) {
+      addingAttachment = true
+      try {
+        let text = input.plainText
+        for (const range of staleRanges) text = text.slice(0, range.start) + text.slice(range.end)
+        input.setText(text)
+      } finally {
+        addingAttachment = false
+      }
+    }
+    setStore(
+      produce((draft) => {
+        const oldFiles = draft.prompt.files ?? []
+        const files = oldFiles.filter((file) => !removed.has(file.uri))
+        const fileIndexes = new Map(files.map((file, index) => [file.uri, index]))
+        draft.prompt.files = files
+        draft.extmarkToPart = new Map(
+          [...draft.extmarkToPart].flatMap(([id, ref]) => {
+            if (ref.type !== "file") return [[id, ref] as const]
+            const uri = oldFiles[ref.index]?.uri
+            const index = uri === undefined ? undefined : fileIndexes.get(uri)
+            return index === undefined ? [] : [[id, { type: "file", index }] as const]
+          }),
+        )
+      }),
+    )
+    for (const uri of missing) releaseTemporaryAttachment(uri)
+    setRetry(undefined)
+    setRetryRestored(false)
+    toast.show({
+      title: "Clipboard attachment unavailable",
+      message: "Removed the unavailable image; your text was kept.",
+      variant: "error",
+      duration: 5000,
+    })
+    return true
   }
 
   const stashCommands = createMemo(() =>
@@ -1219,6 +1283,7 @@ export function Prompt(props: PromptProps) {
     if (move.creating()) return false
     if (auto()?.visible) return false
     if (!store.prompt.text) return false
+    await discardMissingTemporaryAttachments()
     const trimmed = store.prompt.text.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
@@ -1472,7 +1537,6 @@ export function Prompt(props: PromptProps) {
       const files = projectedPromptInput(result.admitted.data as never).files
       submission.payload.files = files
       submission.payload.history.files = files
-      releaseTemporaryAttachments()
     } else if (
       submission.payload.inputText.startsWith("/") &&
       (data.location.skill.list(currentLocation.current) ?? []).some(
@@ -1581,7 +1645,6 @@ export function Prompt(props: PromptProps) {
       const files = projectedPromptInput(result.admitted.data as never).files
       submission.payload.files = files
       submission.payload.history.files = files
-      releaseTemporaryAttachments()
       if (pendingEditorSelection) editor.markSelectionSent()
     }
     if (temporaryAttachments.size > 0) {
@@ -1599,6 +1662,7 @@ export function Prompt(props: PromptProps) {
     input.extmarks.clear()
     setStore("prompt", emptyPrompt())
     setStore("extmarkToPart", new Map())
+    releaseTemporaryAttachments()
     props.onSubmit?.()
 
     // temporary hack to make sure the message is sent
@@ -1695,34 +1759,40 @@ export function Prompt(props: PromptProps) {
     const extmarkEnd = extmarkStart + virtualText.length
     const textToInsert = virtualText + " "
 
-    input.insertText(textToInsert)
+    addingAttachment = true
+    try {
+      input.insertText(textToInsert)
 
-    const extmarkId = input.extmarks.create({
-      start: extmarkStart,
-      end: extmarkEnd,
-      virtual: true,
-      styleId: pasteStyleId,
-      typeId: promptPartTypeId,
-    })
-
-    const part: NonNullable<PromptInfo["files"]>[number] = {
-      uri: file.uri,
-      name: file.filename,
-      mention: {
+      const extmarkId = input.extmarks.create({
         start: extmarkStart,
         end: extmarkEnd,
-        text: virtualText,
-      },
+        virtual: true,
+        styleId: pasteStyleId,
+        typeId: promptPartTypeId,
+      })
+
+      const part: NonNullable<PromptInfo["files"]>[number] = {
+        uri: file.uri,
+        name: file.filename,
+        mention: {
+          start: extmarkStart,
+          end: extmarkEnd,
+          text: virtualText,
+        },
+      }
+      setStore(
+        produce((draft) => {
+          const files = (draft.prompt.files ??= [])
+          const index = files.length
+          files.push(part)
+          draft.extmarkToPart.set(extmarkId, { type: "file", index })
+        }),
+      )
+      if (file.temporary) temporaryAttachments.set(file.uri, file.temporary)
+    } finally {
+      addingAttachment = false
     }
-    setStore(
-      produce((draft) => {
-        const files = (draft.prompt.files ??= [])
-        const index = files.length
-        files.push(part)
-        draft.extmarkToPart.set(extmarkId, { type: "file", index })
-      }),
-    )
-    if (file.temporary) temporaryAttachments.set(file.uri, file.temporary)
+    syncExtmarksWithPromptParts()
     return
   }
 

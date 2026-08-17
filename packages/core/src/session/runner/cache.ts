@@ -64,6 +64,8 @@ const PROMPT_CACHE_KEY_ROUTES = new Set([
   "openai-codex-responses",
   "openai-compatible-chat",
   "openai-compatible-responses",
+  "github-copilot-chat",
+  "github-copilot-responses",
   "ai-sdk:@openrouter/ai-sdk-provider",
   "openrouter",
   "openrouter-responses",
