@@ -1,6 +1,6 @@
 import { Config, Effect, Redacted } from "effect"
 import { Headers } from "effect/unstable/http"
-import { AuthenticationReason, InvalidRequestReason, LLMError, type HttpOptions } from "../schema"
+import { AuthenticationReason, LLMError, type HttpOptions } from "../schema"
 
 export class MissingCredentialError extends Error {
   readonly _tag = "MissingCredentialError"
@@ -76,9 +76,10 @@ const secretEffect = (secret: string | Redacted.Redacted, source: string) => {
 const credentialFromSecret = (secret: Secret, source: string) => {
   if (typeof secret === "string" || Redacted.isRedacted(secret)) return credential(secretEffect(secret, source))
   return credential(
-    Effect.gen(function* () {
-      return yield* secretEffect(yield* secret, source)
-    }),
+    (secret as Effect.Effect<string | Redacted.Redacted, Config.ConfigError>).pipe(
+      Effect.flatMap((value) => secretEffect(value, source)),
+      Effect.catch(() => Effect.fail(new MissingCredentialError(source))),
+    ) as Effect.Effect<Redacted.Redacted, CredentialError>,
   )
 }
 
@@ -139,10 +140,10 @@ const toLLMError = (error: AuthError): LLMError => {
     return new LLMError({
       module: "Auth",
       method: "apply",
-      reason:
-        error instanceof MissingCredentialError
-          ? new AuthenticationReason({ message: error.message, kind: "missing" })
-          : new InvalidRequestReason({ message: `Failed to resolve auth config: ${error.message}` }),
+      reason: new AuthenticationReason({
+        message: error instanceof MissingCredentialError ? error.message : `Missing auth credential: ${error.message}`,
+        kind: "missing",
+      }),
     })
   }
   return error
