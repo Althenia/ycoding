@@ -6,6 +6,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Global } from "@ycoding-ai/core/global"
 import { createEventStream, createFetch, type FetchHandler } from "../fixture/tui-client"
 import type { TuiPluginStatus } from "../../src/plugin/host-api"
+import type { ClipboardService } from "../../src/context/clipboard"
 
 /**
  * Boots the REAL application against a deterministic fixture server and returns
@@ -23,6 +24,7 @@ export async function renderScreen(input: {
   route?: FetchHandler
   args?: { sessionID?: string }
   pluginStatus?: ReadonlyArray<TuiPluginStatus>
+  clipboard?: ClipboardService
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
   settle: string
 }) {
@@ -36,6 +38,12 @@ export async function renderScreen(input: {
   const pluginRuntime = runtime.createPluginRuntime()
   pluginRuntime.update({ status: input.pluginStatus ?? [] })
   mock.module("../../src/plugin/runtime", () => ({ ...runtime, createPluginRuntime: () => pluginRuntime }))
+  if (input.clipboard) {
+    mock.module("../../src/context/clipboard", () => ({
+      ClipboardProvider: (props: { children: unknown }) => props.children,
+      useClipboard: () => input.clipboard,
+    }))
+  }
 
   const events = createEventStream()
   const calls = createFetch(input.route, events)

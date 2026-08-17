@@ -1,6 +1,7 @@
 export * as SessionExecution from "./execution"
 
-import { Cause, Context, Effect, Exit, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option } from "effect"
+import { LLMError } from "@ycoding-ai/ai"
 import { EventV2 } from "../event"
 import { LocationServiceMap } from "../location-service-map"
 import { makeGlobalNode } from "../effect/app-node"
@@ -10,7 +11,7 @@ import { SessionRunner } from "./runner/index"
 import { SessionSchema } from "./schema"
 import { SessionStore } from "./store"
 import { toSessionError } from "./to-session-error"
-import { UserInterruptedError } from "./error"
+import { StepFailedError, UserInterruptedError } from "./error"
 import { Database } from "../database/database"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
@@ -186,11 +187,29 @@ export const layer = Layer.effect(
         return yield* SessionRunner.Service.use((runner) => runner.drain({ sessionID, force })).pipe(
           Effect.provide(locations.get(session.location)),
           SessionCompactionExecution.bind(compactionExecution),
-          Effect.tapCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.void
-              : Effect.logError("Failed to drain Session", cause).pipe(Effect.annotateLogs({ sessionID })),
-          ),
+          Effect.tapCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.void
+            const maybeError = Option.getOrUndefined(Cause.findErrorOption(cause))
+            const failure = (maybeError ?? Cause.squash(cause)) as unknown
+            const sessionError = (() => {
+              try {
+                return toSessionError(failure)
+              } catch {
+                return undefined
+              }
+            })()
+            const isExpectedAuth =
+              failure instanceof StepFailedError
+                ? failure.error.type === "provider.auth"
+                : failure instanceof LLMError
+                  ? failure.reason._tag === "Authentication"
+                  : sessionError?.type === "provider.auth"
+            if (isExpectedAuth)
+              return Effect.logWarning("Session drain ended with expected auth error", cause).pipe(
+                Effect.annotateLogs({ sessionID }),
+              )
+            return Effect.logError("Failed to drain Session", cause).pipe(Effect.annotateLogs({ sessionID }))
+          }),
         )
       }),
       // One terminal observation per busy period, covering every coalesced drain.

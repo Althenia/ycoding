@@ -69,38 +69,62 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
   if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
 
   const reader = res.body.getReader()
+
   const body = new ReadableStream<Uint8Array>({
     async pull(ctrl) {
-      const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
-        const id = setTimeout(() => {
-          const err = new Error("SSE read timed out")
-          ctl.abort(err)
-          void reader.cancel(err)
-          reject(err)
-        }, ms)
-
-        reader.read().then(
-          (part) => {
-            clearTimeout(id)
-            resolve(part)
-          },
-          (err) => {
-            clearTimeout(id)
-            reject(err)
-          },
-        )
-      })
-
-      if (part.done) {
-        ctrl.close()
-        return
+      let id: ReturnType<typeof setTimeout> | undefined
+      const clear = () => {
+        if (id !== undefined) {
+          clearTimeout(id)
+          id = undefined
+        }
       }
+      try {
+        const part = await new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
+          id = setTimeout(() => {
+            const err = new Error("SSE read timed out")
+            try {
+              ctl.abort(err)
+            } catch {}
+            void reader.cancel(err).finally(clear)
+            reject(err)
+          }, ms)
 
-      ctrl.enqueue(part.value)
+          reader.read().then(
+            (part) => {
+              clear()
+              resolve(part)
+            },
+            (err) => {
+              clear()
+              reject(err)
+            },
+          )
+        })
+
+        if (part.done) {
+          clear()
+          ctrl.close()
+          return
+        }
+
+        ctrl.enqueue(part.value)
+      } catch (error) {
+        clear()
+        const reason = error instanceof Error ? error : new Error(String(error))
+        try {
+          await reader.cancel(reason)
+        } catch {}
+        throw error
+      }
     },
     async cancel(reason) {
-      ctl.abort(reason)
-      await reader.cancel(reason)
+      try {
+        ctl.abort(reason)
+      } catch {}
+      try {
+        await reader.cancel(reason)
+      } catch {}
     },
   })
 

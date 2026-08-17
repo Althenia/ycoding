@@ -180,15 +180,32 @@ async function waitForFrame(frame: () => string, text: string) {
   throw new Error(`screen did not settle on ${text}`)
 }
 
-test("shows one collapsed terminal summary for captured parent and completed child changes", async () => {
-  const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(aggregateTranscript), settle: "src/parent.ts" })
+test("collapses the captured changes summary until the header is expanded", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(aggregateTranscript),
+    settle: "Captured changes 2 files",
+  })
   try {
     await waitForFrame(screen.frame, "Captured changes 2 files")
     expect(screen.frame()).toContain("Captured changes 2 files")
-    expect(screen.frame()).toContain("src/parent.ts")
+    // A captured-changes block can list hundreds of files, so it stays collapsed until asked for.
+    // The per-tool "Edited" block keeps listing src/parent.ts, so src/child.ts is what distinguishes
+    // the captured block, and src/parent.ts must appear once instead of twice.
+    expect(screen.frame()).not.toContain("src/child.ts")
+    expect(screen.lines().filter((line) => line.includes("src/parent.ts"))).toHaveLength(1)
+
+    const headerRows = screen
+      .lines()
+      .flatMap((line, index) => (line.includes("Captured changes 2 files") ? [index] : []))
+    await screen.mouse.click(12, headerRows.at(-1)!)
+    await waitForFrame(screen.frame, "src/child.ts")
     expect(screen.frame()).toContain("src/child.ts")
+    expect(screen.lines().filter((line) => line.includes("src/parent.ts"))).toHaveLength(2)
     expect(screen.frame()).not.toContain("export const value = 'new'")
     expect(screen.frame()).not.toContain("export const child = true")
+
     const parentRows = screen.lines().flatMap((line, index) => (line.includes("src/parent.ts") ? [index] : []))
     await screen.mouse.click(12, parentRows.at(-1)!)
     await waitForFrame(screen.frame, "export const value = 'new'")

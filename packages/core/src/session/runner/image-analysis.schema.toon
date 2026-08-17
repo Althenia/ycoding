@@ -1,0 +1,25 @@
+version: "1"
+image:
+  name: photo.png
+  mime: image/png
+  digest: abc123def456abc123def456abc123def456abc123def456abc123def456abc123ab
+  bytes: 12345
+scene:
+  overview: A cozy living room with a cat on a couch
+objects[2]{type,count,description}:
+  cat,1,orange tabby sitting on couch center
+  pillow,2,white cushions behind cat
+text_ocr[1]{content,location}:
+  Hello,top-center sign
+layout:
+  arrangement: "cat centered in foreground, wall in background"
+  spatial: "pillow behind cat, couch under cat"
+  composition: "eye-level, rule of thirds"
+colors:
+  palette[3]: warm beige,orange,white
+  style: "natural lighting, photorealistic"
+  mood: cozy
+details[2]: whiskers fine and sharp,soft shadows on wall
+confidence:
+  level: high
+  uncertainties[1]: blurry background text partially occluded

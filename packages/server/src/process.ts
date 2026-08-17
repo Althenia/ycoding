@@ -132,6 +132,8 @@ function bind(hostname: string, port: number) {
     const parentScope = yield* Scope.Scope
     const serverScope = yield* Scope.fork(parentScope)
     const server = createServer()
+    server.keepAliveTimeout = 65000
+    server.headersTimeout = 66000
     return yield* Effect.gen(function* () {
       const http = yield* NodeHttpServer.make(() => server, { port, host: hostname })
       yield* Effect.addFinalizer(() => Effect.sync(() => server.closeAllConnections()))

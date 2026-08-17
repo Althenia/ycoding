@@ -1688,7 +1688,7 @@ export function SessionRowView(props: {
                   <Show when={message().type === "assistant"}>
                     <AssistantFooter message={message() as SessionMessageAssistant} />
                     <Show when={props.capturedChanges?.length}>
-                      <FileChangeBlock files={props.capturedChanges!} label="Captured changes" />
+                      <FileChangeBlock files={props.capturedChanges!} label="Captured changes" collapsed />
                     </Show>
                   </Show>
                 )}
@@ -2973,19 +2973,63 @@ function ToolPart(props: { part: SessionMessageAssistantTool; nested?: boolean }
  * reader can scan — one header plus one row per file — and only opens into the full diff on the
  * transcript's usual expand interaction.
  */
-function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string }) {
+function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string; collapsed?: boolean }) {
   const { themeV2 } = useTheme()
+  const renderer = useRenderer()
   const files = createMemo(() => inlineDiffGroups(props.files))
   const summary = createMemo(
     () => `${props.label ?? "Edited"} ${files().length} ${files().length === 1 ? "file" : "files"}`,
   )
+  const [expanded, setExpanded] = createSignal(!props.collapsed)
+  const counts = createMemo(() => {
+    let created = 0
+    let modified = 0
+    let deleted = 0
+    for (const file of files()) {
+      if (file.status === "created") created++
+      else if (file.status === "deleted") deleted++
+      else modified++
+    }
+    return { created, modified, deleted }
+  })
+  const breakdown = createMemo(() => {
+    const c = counts()
+    const parts: string[] = []
+    if (c.created) parts.push(`${c.created} created`)
+    if (c.modified) parts.push(`${c.modified} modified`)
+    if (c.deleted) parts.push(`${c.deleted} deleted`)
+    return parts.join(" · ")
+  })
 
   return (
     <box flexDirection="column">
-      <InlineToolRow icon="+" color={themeV2.text.subdued} complete={true} pending={summary()}>
-        {summary()}
-      </InlineToolRow>
-      <For each={files()}>{(file) => <FileChangeRow file={file} />}</For>
+      <box
+        width="100%"
+        flexDirection="row"
+        paddingLeft={1}
+        onMouseUp={() => {
+          if (renderer.getSelection()?.getSelectedText()) return
+          setExpanded((value) => !value)
+        }}
+      >
+        <text width={2} flexShrink={0} fg={themeV2.text.subdued}>
+          {expanded() ? "-" : "+"}
+        </text>
+        <text flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.subdued}>
+          {summary()}
+        </text>
+        <box flexGrow={1} />
+        <Show when={breakdown()}>
+          {(value) => (
+            <text flexShrink={0} fg={themeV2.text.subdued} wrapMode="none" truncate={true}>
+              {value()}
+            </text>
+          )}
+        </Show>
+      </box>
+      <Show when={expanded()}>
+        <For each={files()}>{(file) => <FileChangeRow file={file} />}</For>
+      </Show>
     </box>
   )
 }
@@ -3112,6 +3156,7 @@ export function transcriptToolPresentation(input: {
             path: stringValue(file?.file),
             additions: finiteNumber(file?.additions),
             deletions: finiteNumber(file?.deletions),
+            status: stringValue(file?.status),
           },
         ]
       })
@@ -3223,7 +3268,14 @@ function safeToolDetailText(value: string) {
     )
   )
     return "Sensitive response detail omitted."
-  if (/^[\[{]/.test(text)) return "Structured response omitted."
+  if (/^[\[{]/.test(text)) {
+    try {
+      const parsed = JSON.parse(text)
+      const lines = safeToolDetailLines(parsed)
+      if (lines.length > 0) return lines.slice(0, 20).join("\n")
+    } catch {}
+    return text.slice(0, 2000)
+  }
   return text
 }
 

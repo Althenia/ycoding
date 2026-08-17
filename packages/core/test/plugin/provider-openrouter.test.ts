@@ -50,6 +50,9 @@ describe("OpenRouterPlugin", () => {
         "X-OpenRouter-Categories": "cli-agent",
         "X-Title": "YCoding",
       })
+      expect((yield* catalog.provider.get(ProviderV2.ID.openrouter))?.package).toBe(
+        "@ycoding-ai/ai/providers/openrouter",
+      )
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia")))?.headers).toBeUndefined()
     }),
   )

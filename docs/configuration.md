@@ -149,6 +149,7 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
 | `providers`             | record                                | Provider and model overrides.                                                               |
 | `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
+| `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                               |
 | `experimental`          | object                                | Subagent depth and resource policies.                                                       |
 
 ### Shell memory limits
@@ -190,6 +191,7 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `providers`                                       | record of `Config.Provider`                                                    | unset           | Provider/model overrides.                                                                        |
 | `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                          |
 | `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                    |
+| `image_analyzer`                                  | `Config.ImageAnalyzer`                                                         | unset           | Vision fallback for text-only models: provider/model, prompt, and thresholds.                  |
 | `experimental`                                    | `Config.Experimental`                                                          | unset           | Experimental runtime policy.                                                                     |
 
 | Nested field path                                                                       | Exact type or closed values                                                                                     | Default                         | Operational remark                                                                                                                                 |
@@ -332,6 +334,73 @@ The optional `efficiency` block controls provider-request amplification and prom
 | `openai_responses_state`                 | `stored`, `stateless`          | `stored`   | Select provider-stored response-ID continuation or stateless opaque replay for direct OpenAI Responses.          |
 
 `prompt_cache.anthropic_ttl: "adaptive"` starts every namespace at five minutes. After two provider-reported reusable cache reads or writes for the same stable namespace within five minutes, later requests use the one-hour bucket. Missing cache telemetry, a namespace change, a stale observation, or a model without published extended-TTL support keeps the five-minute bucket. This process-local optimization is bounded and is not required for correctness.
+
+## Image analysis fallback
+
+Text-only models cannot natively receive `image/*` media. When `image_analyzer` is configured, YCoding replaces provider images with a deterministic text description so any agent gets consistent understanding.
+
+Multimodal models (those whose `capabilities.input` contains `image/*` or `vision`) bypass the fallback and receive media natively.
+
+Configuration:
+
+```jsonc
+{
+  // Preferred selector string (provider/model#variant)
+  "image_analyzer": {
+    "enabled": true,
+    "model": "anthropic/claude-sonnet-4",
+    "prompt": "Custom prompt (optional)",
+    "max_images": 4,
+    "max_bytes": 5242880
+  }
+  // Legacy separate fields also accepted:
+  // "image_analyzer": { "enabled": true, "provider": "anthropic", "model": "claude-sonnet-4", "variant": "high" }
+}
+```
+
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `enabled` | boolean | `true` when `model` is resolvable, otherwise disabled | Enable/disable fallback. `false` forces passthrough to managed-attachment metadata. |
+| `model` | model selector string | unset | Vision model used to analyze images (e.g. `"anthropic/claude-sonnet-4"` or `"openai/gpt-4o"`). Required when `enabled` is true. |
+| `provider` | string | unset | Legacy alternative to `model` selector when `model` is a plain id without `/`. |
+| `variant` | string | unset | Variant id when using `provider`/`model` separate fields. Ignored if `model` already contains `#variant`. |
+| `prompt` / `template` | string | standard pattern | Custom prompt that replaces the built-in comprehensive pattern. `template` is an alias for `prompt`. |
+| `max_images` | positive integer | unset | Maximum images analyzed per request; excess images become failure notes. |
+| `max_bytes` | positive integer | unset | Maximum bytes per image; oversized images become failure notes. |
+
+Standard pattern prompt (used when `prompt` is omitted) is deterministic across agents and instructs the vision model to emit ONLY valid TOON matching the structured schema. Schema is defined in `packages/core/src/session/runner/image-analysis.schema.toon` and exported as `IMAGE_ANALYSIS_TOON_EXAMPLE` from `packages/core/src/session/runner/image-analyzer.ts` (version `1`). It preserves the 7 comprehensive sections as structured fields but in token-efficient tabular form per Chad Vision TOON 4.1 (2-space indent, explicit `[N]` and `{fields}`, tabular for uniform arrays, list-form for non-uniform):
+
+- `version`, `image{name,mime,digest,bytes,description?}`, `scene{overview}`, `objects[N]{type,count,description}`, `text_ocr[N]{content,location}`, `layout{arrangement,spatial,composition}`, `colors{palette[],style,mood}`, `details[]`, `confidence{level,uncertainties[]}`
+
+Prompt embeds the TOON header template as a concrete ` ```toon` example and instructs: “Output ONLY valid TOON matching schema below, 2-space indent, explicit `[N]` and `{fields}`, no JSON, no markdown wrapper except optional ` ```toon` block, tabular for uniform arrays, list-form for non-uniform”. Example header: `objects[2]{type,count,description}:` followed by CSV rows. Token-efficient vs prior free-text 7-heading prose; agent extracts the ` ```toon` block verbatim without re-parsing prose. Measured/visible vs inferred separation via `confidence.uncertainties` aligns with Chad Vision practices.
+
+Fallback replaces each `media` part with a single text block preserving TOON verbatim:
+
+```
+[Image Analysis: <filename> (<mime>) via <provider/model>]
+
+```toon
+version: "1"
+image:
+  name: photo.png
+  ...
+scene:
+  overview: ...
+objects[2]{type,count,description}:
+  cat,1,...
+...
+```
+
+Original description: ... (if present)
+SHA-256: ...
+Bytes: ...
+```
+
+TOON is validated via `@toon-format/toon` decode when available (`stripToonFences` + `isValidToon`), with metadata (SHA-256, Bytes) kept outside the block for efficient extraction.
+
+Graceful degradation: if the configured vision model is unavailable, the provider is not configured, the request fails, or thresholds are exceeded, the image is not dropped. A failure note with the same header prefix and preserved SHA-256/bytes/description is inserted instead of media, so the agent still sees that an image was present.
+
+Caching and TeamView: the vision analysis is a separate provider request and does not change the stable system/tool prompt-cache prefix of the main request. TeamView and tool semantics are unchanged.
 
 `prompt_cache.openai_mode: "auto"` uses hybrid caching for direct OpenAI Responses requests on GPT-5.6 and later. It sends request-wide implicit mode, keeps OpenAI's managed implicit breakpoint, and reserves that breakpoint one of OpenAI's latest 50 read candidates. YCoding emits at most 49 explicit `input_text` candidates: one combined system-text marker when system text exists, then the newest eligible non-volatile user and local tool-result text boundaries. `"explicit"` disables the managed breakpoint and uses at most 50 explicit candidates. OpenAI can write the latest three explicit candidates plus the managed breakpoint in implicit mode, or the latest four explicit candidates in explicit mode. Assistant replay remains unmarked `output_text`; marked local tool results use `input_text` inside `function_call_output.output` while structured media remains unchanged. Tool definitions, tool calls, provider-executed tool results, and volatile messages receive no generated marker. Older public OpenAI models remain implicit. ChatGPT Codex requests are key-only for every model: YCoding emits none of `prompt_cache_breakpoint`, `prompt_cache_options`, or `prompt_cache_retention`. Request-shape tests do not verify live Codex cache reuse, which remains provider-controlled without a hit-rate guarantee. OpenAI-compatible gateways and unsupported model families omit GPT-5.6-only fields. `"implicit"` disables YCoding's generated explicit markers.
 

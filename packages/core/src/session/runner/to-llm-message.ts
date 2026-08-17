@@ -17,6 +17,7 @@ const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"
 export interface AttachmentMaterialization {
   readonly absolutePath: (file: FileAttachment) => string
   readonly images: ReadonlyMap<string, Uint8Array>
+  readonly fallbackDescriptions?: ReadonlyMap<string, string>
 }
 
 export const isProviderImage = (file: FileAttachment) => imageMimes.has(file.mime)
@@ -50,8 +51,15 @@ const managedAttachment = (file: FileAttachment, absolutePath: string): ContentP
   },
 })
 
+const fallbackAttachment = (file: FileAttachment, description: string): ContentPart => ({
+  type: "text",
+  text: `\n\n${description}`,
+})
+
 const attachmentContent = (file: FileAttachment, attachments?: AttachmentMaterialization): ContentPart[] => {
   if (!isProviderImage(file)) return [managedAttachment(file, attachments?.absolutePath(file) ?? file.content.path)]
+  const fallback = attachments?.fallbackDescriptions?.get(file.content.digest)
+  if (fallback !== undefined) return [fallbackAttachment(file, fallback)]
   const data = attachments?.images.get(file.content.digest)
   if (data === undefined) throw new TypeError(`Provider image was not materialized: ${file.content.digest}`)
   return [media(file, data)]

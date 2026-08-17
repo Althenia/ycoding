@@ -74,7 +74,7 @@ const makeHint = (ttlSeconds: number | undefined): CacheHint =>
 // spends most of its tokens on. Marking only the system turn would pin the
 // static prefix and leave the growing tool-result tail uncached on every step,
 // so we hand placement to OpenRouter's own top-level switch instead.
-const AUTO_PLACEMENT_ROUTES = new Set(["openrouter"])
+const AUTO_PLACEMENT_ROUTES = new Set(["openrouter", "openrouter-responses"])
 
 /**
  * Resolve the cache hint a provider-placed route should advertise, or

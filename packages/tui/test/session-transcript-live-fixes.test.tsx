@@ -787,6 +787,7 @@ test("restores main-session tail and non-tail view across repeated subagent navi
       id: "evt_compaction_restore",
       created: 3,
       type: "session.compaction.ended",
+      durable: { aggregateID: restorationParentID, seq: 3, version: 2 },
       data: {
         sessionID: restorationParentID,
         jobID: "cmp_restore",

@@ -39,13 +39,31 @@ export type InlineDiffFile = {
   diff: string
   additions?: number
   deletions?: number
+  status?: string
 }
+
+export type InlineDiffFileStatus = "created" | "deleted" | "modified"
 
 export type InlineDiffGroup = {
   path: string
   additions: number
   deletions: number
   files: InlineDiffFile[]
+  status?: InlineDiffFileStatus
+}
+
+export function inlineDiffFileStatus(file: InlineDiffFile): InlineDiffFileStatus {
+  const raw = typeof file.status === "string" ? file.status.toLowerCase() : undefined
+  if (raw === "created" || raw === "added" || raw === "create") return "created"
+  if (raw === "deleted" || raw === "removed" || raw === "delete") return "deleted"
+  if (raw === "modified" || raw === "updated" || raw === "changed") return "modified"
+  const parsed = parseInlineDiff(file.diff)
+  const patch = parsed?.patch
+  if (patch) {
+    if (patch.oldFileName === "/dev/null" && patch.newFileName !== "/dev/null") return "created"
+    if (patch.newFileName === "/dev/null" && patch.oldFileName !== "/dev/null") return "deleted"
+  }
+  return "modified"
 }
 
 /**
@@ -65,6 +83,7 @@ export function inlineDiffSummary(file: InlineDiffFile) {
       "unknown",
     additions: file.additions ?? lines.filter((line) => line.kind === "added").length,
     deletions: file.deletions ?? lines.filter((line) => line.kind === "removed").length,
+    status: inlineDiffFileStatus(file),
     lines,
   }
 }
@@ -78,9 +97,16 @@ export function inlineDiffGroups(files: InlineDiffFile[]): InlineDiffGroup[] {
       group.additions += summary.additions
       group.deletions += summary.deletions
       group.files.push(file)
+      if (group.status !== summary.status) group.status = "modified"
       return []
     }
-    const next = { path: summary.path, additions: summary.additions, deletions: summary.deletions, files: [file] }
+    const next: InlineDiffGroup = {
+      path: summary.path,
+      additions: summary.additions,
+      deletions: summary.deletions,
+      status: summary.status,
+      files: [file],
+    }
     groups.set(next.path, next)
     return [next]
   })
@@ -92,56 +118,98 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
   const hunkLines = createMemo(() => props.files.flatMap((file) => inlineDiffSummary(file).lines))
 
   return (
-    <box flexDirection="column" paddingLeft={1} paddingTop={2} paddingBottom={3} gap={1} flexShrink={0}>
-      <Show when={props.heading !== false}>
-        <box width="100%" flexDirection="row">
-          <text width={55} flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.default}>
-            {props.path}
-          </text>
-          <Show when={props.additions > 0}>
-            <text flexShrink={0} fg={themeV2.diff.text.added} attributes={TextAttributes.BOLD}>
-              +{props.additions}
-            </text>
-          </Show>
-          <box width={3} flexShrink={0} />
-          <Show when={props.deletions > 0}>
-            <text flexShrink={0} fg={themeV2.diff.text.removed} attributes={TextAttributes.BOLD}>
-              −{props.deletions}
-            </text>
-          </Show>
-        </box>
-      </Show>
-      <For each={hunkLines()}>
-        {(item) => (
-          <text
-            wrapMode={props.wrapMode ?? "none"}
-            fg={
-              item.kind === "added"
-                ? themeV2.diff.text.added
-                : item.kind === "removed"
-                  ? themeV2.diff.text.removed
-                  : themeV2.diff.text.context
-            }
+    <box flexDirection="column" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1} flexShrink={0}>
+      <box flexDirection="column" border={["left", "right", "top", "bottom"]} borderColor={themeV2.border.default}>
+        <Show when={props.heading !== false}>
+          <box
+            width="100%"
+            flexDirection="row"
+            paddingLeft={1}
+            paddingRight={1}
+            paddingTop={1}
+            paddingBottom={1}
+            backgroundColor={themeV2.background.surface.offset}
           >
-            {"  "}
-            <span
-              style={{
-                fg: themeV2.diff.lineNumber.text,
-                bg:
-                  item.kind === "added"
-                    ? themeV2.diff.lineNumber.background.added
-                    : item.kind === "removed"
-                      ? themeV2.diff.lineNumber.background.removed
-                      : themeV2.diff.background.context,
-              }}
+            <Show
+              when={props.status === "created" || props.status === "deleted"}
+              fallback={
+                <text flexShrink={1} wrapMode="none" truncate={true} fg={themeV2.text.default}>
+                  {props.path}
+                </text>
+              }
             >
-              {item.lineNum.slice(0, 6)}
-            </span>
-            {"  "}
-            {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
-          </text>
-        )}
-      </For>
+              <text
+                flexShrink={1}
+                wrapMode="none"
+                truncate={true}
+                fg={props.status === "created" ? themeV2.diff.text.added : themeV2.diff.text.removed}
+              >
+                {props.status === "created" ? `+ ${props.path}` : `− ${props.path}`}
+              </text>
+            </Show>
+            <box flexGrow={1} flexShrink={0} />
+            <Show when={props.additions > 0}>
+              <text flexShrink={0} fg={themeV2.diff.text.added} attributes={TextAttributes.BOLD}>
+                +{props.additions}
+              </text>
+            </Show>
+            <Show when={props.additions > 0 && props.deletions > 0}>
+              <box width={1} flexShrink={0} />
+            </Show>
+            <Show when={props.deletions > 0}>
+              <text flexShrink={0} fg={themeV2.diff.text.removed} attributes={TextAttributes.BOLD}>
+                −{props.deletions}
+              </text>
+            </Show>
+          </box>
+          <box height={1} flexShrink={0} border={["top"]} borderColor={themeV2.border.default} />
+        </Show>
+        <box flexDirection="column" paddingTop={1} paddingBottom={1} flexShrink={0}>
+          <For each={hunkLines()}>
+            {(item) => {
+              const rowBg =
+                item.kind === "added"
+                  ? themeV2.diff.background.added
+                  : item.kind === "removed"
+                    ? themeV2.diff.background.removed
+                    : undefined
+              const gutterBg =
+                item.kind === "added"
+                  ? themeV2.diff.lineNumber.background.added
+                  : item.kind === "removed"
+                    ? themeV2.diff.lineNumber.background.removed
+                    : themeV2.diff.background.context
+              return (
+                <box flexShrink={0} backgroundColor={rowBg}>
+                  <text
+                    wrapMode={props.wrapMode ?? "none"}
+                    truncate={props.wrapMode !== "word"}
+                    fg={
+                      item.kind === "added"
+                        ? themeV2.diff.text.added
+                        : item.kind === "removed"
+                          ? themeV2.diff.text.removed
+                          : themeV2.diff.text.context
+                    }
+                  >
+                    {" "}
+                    <span
+                      style={{
+                        fg: themeV2.diff.lineNumber.text,
+                        bg: gutterBg,
+                      }}
+                    >
+                      {item.lineNum.slice(0, 6)}
+                    </span>
+                    {"  "}
+                    {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "−"} ${item.line.trimStart()}`}
+                  </text>
+                </box>
+              )
+            }}
+          </For>
+        </box>
+      </box>
     </box>
   )
 }

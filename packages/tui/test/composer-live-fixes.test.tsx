@@ -1,7 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
+import { mkdtemp } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { json } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
+import { materializeClipboardImage } from "../src/clipboard"
 
 const sessionID = "ses_composer_live_fixes"
 const directory = "/tmp/ycoding/composer-live-fixes"
@@ -39,6 +43,7 @@ const permission = {
   metadata: {},
 }
 let submittedPrompt: string | undefined
+let failNextPrompt = false
 
 function submittedText(): string | undefined {
   return submittedPrompt
@@ -64,6 +69,10 @@ async function route(url: URL, request: Request) {
   if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
     const body: unknown = await request.json()
     if (!isPromptBody(body)) return json({ error: "invalid prompt" }, { status: 400 })
+    if (failNextPrompt) {
+      failNextPrompt = false
+      return json({ error: "simulated admission failure" }, { status: 500 })
+    }
     submittedPrompt = body.text
     return json({
       data: {
@@ -282,6 +291,44 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     await Bun.sleep(50)
   } finally {
     await screen.dispose()
+  }
+})
+
+test("drops a dead clipboard image after a failed send and keeps the typed text sendable", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-clipboard-regression-"))
+  const image = await materializeClipboardImage(root, async (file) => {
+    await Bun.write(file, "png")
+  })
+  failNextPrompt = true
+  submittedPrompt = undefined
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => image },
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText("")
+    await waitForFrameText(screen, "[Image 1]")
+    await screen.input.pasteBracketedText("keep this text")
+    await waitForFrameText(screen, "keep this text")
+
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Failed to send prompt or activate skill")
+    await Bun.file(image.temporary.path).delete()
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+    const submitted = submittedPrompt
+    if (submitted === undefined) throw new Error("typed text was not submitted")
+    if (submitted !== "keep this text") throw new Error(`unexpected submitted text: ${submitted}`)
+    expect(screen.frame()).toContain("Clipboard attachment unavailable")
+  } finally {
+    await screen.dispose()
+    await image.temporary.cleanup()
   }
 })
 

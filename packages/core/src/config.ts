@@ -25,6 +25,7 @@ import { ConfigEfficiency } from "./config/efficiency"
 import { ConfigExperimental } from "./config/experimental"
 import { ConfigFormatter } from "./config/formatter"
 import { ConfigGuardrail } from "./config/guardrail"
+import { ConfigImageAnalyzer } from "./config/image-analyzer"
 import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
@@ -136,6 +137,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   efficiency: ConfigEfficiency.Info.pipe(Schema.optional).annotate({
     description: "Provider request, helper-model, prompt-cache, and continuation efficiency policy",
+  }),
+  image_analyzer: ConfigImageAnalyzer.Info.pipe(Schema.optional).annotate({
+    description: "Image analysis fallback for text-only models: vision provider/model, prompt, and thresholds",
   }),
   experimental: ConfigExperimental.Info.pipe(Schema.optional),
 }) {}

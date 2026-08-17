@@ -720,7 +720,17 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     if (detailDelta !== undefined) appendReasoningDetails(state.reasoningDetails, detailDelta)
     const reasoningDetailsObserved = state.reasoningDetailsObserved || detailDelta !== undefined
     const deltaMetadata = reasoningMetadata(reasoningField)
-    const text = detailDelta?.length ? (detailText(detailDelta) ?? reasoning?.text) : reasoning?.text
+    const detail = detailDelta?.length ? detailText(detailDelta) : undefined
+    const scalar = reasoning?.text
+    const text = (() => {
+      if (detail && scalar) {
+        if (detail === scalar) return detail
+        // Avoid duplicating when one contains the other; keep the longer variant.
+        if (detail.includes(scalar) || scalar.includes(detail)) return detail.length >= scalar.length ? detail : scalar
+        return `${detail}\n\n${scalar}`
+      }
+      return detail ?? scalar
+    })()
     if (!state.lifecycle.text.has("text-0") && text !== undefined)
       lifecycle = Lifecycle.reasoningDelta(lifecycle, events, "reasoning-0", text, deltaMetadata)
     else if (

@@ -64,6 +64,8 @@ const PROMPT_CACHE_KEY_ROUTES = new Set([
   "openai-codex-responses",
   "openai-compatible-chat",
   "openai-compatible-responses",
+  "github-copilot-chat",
+  "github-copilot-responses",
   "ai-sdk:@openrouter/ai-sdk-provider",
   "openrouter",
   "openrouter-responses",
@@ -169,9 +171,14 @@ const ANTHROPIC_CACHE_ROUTES = new Set([
   "ai-sdk:@ai-sdk/amazon-bedrock",
   "bedrock-converse",
   "openrouter",
+  "openrouter-responses",
   "ai-sdk:@openrouter/ai-sdk-provider",
 ])
-const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set(["openrouter", "ai-sdk:@openrouter/ai-sdk-provider"])
+const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set([
+  "openrouter",
+  "openrouter-responses",
+  "ai-sdk:@openrouter/ai-sdk-provider",
+])
 
 export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) => {
   const baselineKey = promptCacheNamespace(input, now)

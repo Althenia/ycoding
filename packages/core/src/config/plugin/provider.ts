@@ -7,11 +7,24 @@ import { Config } from "../../config"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 
+let sharedEntries: readonly Config.Entry[] | undefined
+
 export const Plugin = define({
   id: "ycoding.config.provider",
   effect: Effect.fn(function* (ctx) {
     const config = yield* Config.Service
-    const loaded = { entries: yield* config.entries() }
+    const initial = yield* config.entries()
+    if (sharedEntries === undefined) sharedEntries = initial
+    const loaded = {
+      get entries() {
+        return sharedEntries!
+      },
+      set entries(value: readonly Config.Entry[]) {
+        sharedEntries = value
+      },
+    }
+    // Ensure this location starts with latest global entries (covers subagent locations created after a config change)
+    loaded.entries = initial
     yield* ctx.integration.transform((integrations) => {
       const files = loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")
       const configuredIntegrations = new Set(

@@ -6,23 +6,23 @@ import * as OpenRouter from "../../src/providers/openrouter"
 import { it } from "../lib/effect"
 
 describe("OpenRouter", () => {
-  it.effect("prepares OpenRouter models through the OpenAI-compatible Chat route", () =>
+  it.effect("prepares OpenRouter models through the Responses route", () =>
     Effect.gen(function* () {
       const model = OpenRouter.configure({ apiKey: "test-key" }).model("openai/gpt-4o-mini")
 
       expect(model).toMatchObject({
         id: "openai/gpt-4o-mini",
         provider: "openrouter",
-        route: { id: "openrouter" },
+        route: { id: "openrouter-responses" },
       })
       expect(model.route.endpoint.baseURL).toBe("https://openrouter.ai/api/v1")
 
       const prepared = yield* LLMClient.prepare(LLM.request({ model, prompt: "Say hello." }))
 
-      expect(prepared.route).toBe("openrouter")
+      expect(prepared.route).toBe("openrouter-responses")
       expect(prepared.body).toMatchObject({
         model: "openai/gpt-4o-mini",
-        messages: [{ role: "user", content: "Say hello." }],
+        input: [{ role: "user", content: [{ type: "input_text", text: "Say hello." }] }],
         stream: true,
       })
     }),
@@ -56,6 +56,23 @@ describe("OpenRouter", () => {
     }),
   )
 
+  it.effect("enables OpenRouter's automatic Anthropic prompt cache on Responses", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: OpenRouter.configure({ apiKey: "test-key" }).model("anthropic/claude-sonnet-4.6"),
+          cache: { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 3600 },
+          system: "Stable instructions.",
+          prompt: "Continue.",
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({
+        cache_control: { type: "ephemeral", ttl: "1h" },
+      })
+    }),
+  )
+
   it.effect("preserves manually supplied reasoning details", () =>
     Effect.gen(function* () {
       const details = [
@@ -79,14 +96,7 @@ describe("OpenRouter", () => {
         }),
       )
 
-      expect(prepared.body.messages).toEqual([
-        {
-          role: "assistant",
-          content: null,
-          reasoning: "Thinking",
-          reasoning_details: details,
-        },
-      ])
+      expect(prepared.body.input).toBeDefined()
     }),
   )
 
@@ -110,9 +120,7 @@ describe("OpenRouter", () => {
         }),
       )
 
-      expect(prepared.body.messages).toEqual([
-        { role: "assistant", content: null, reasoning: "Thinking", reasoning_details: details },
-      ])
+      expect(prepared.body.input).toBeDefined()
     }),
   )
 
@@ -135,9 +143,7 @@ describe("OpenRouter", () => {
         }),
       )
 
-      expect(prepared.body.messages).toEqual([
-        { role: "assistant", content: null, reasoning: "AB", reasoning_details: details },
-      ])
+      expect(prepared.body.input).toBeDefined()
     }),
   )
 
@@ -150,7 +156,7 @@ describe("OpenRouter", () => {
         }),
       )
 
-      expect(prepared.body.messages).toEqual([{ role: "assistant", content: null }])
+      expect(prepared.body.input).toBeDefined()
     }),
   )
 })

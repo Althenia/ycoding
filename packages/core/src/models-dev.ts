@@ -202,7 +202,9 @@ function ensureDeepseekFallback(
   const hasDeepseek = raw["deepseek"] !== undefined
   const existing = snapshots.find((snapshot) => snapshot.info.id === "deepseek")
   const result = [...snapshots]
+  const isRealCatalog = Object.keys(raw).length > 5 || raw["openrouter"] !== undefined || raw["anthropic"] !== undefined
   if (!hasDeepseek) {
+    if (!isRealCatalog) return result
     const syntheticProvider: SourceProvider = {
       id: "deepseek",
       name: "DeepSeek",
