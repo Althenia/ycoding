@@ -20,7 +20,7 @@ import zeusContent from "./agent/zeus.md" with { type: "text" }
 // Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
 // Whitelisted so agents can read a command's full captured output without an external-directory prompt.
 const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
-const builtIns = [
+const builtIns = () => [
   {
     id: "TLDR",
     description:
@@ -28,7 +28,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.1,
     color: "#95a5a6",
-    system: sourceSystem(tldrContent),
+    system: sourceSystem(tldrContent, "primary"),
   },
   {
     id: "architech",
@@ -37,7 +37,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.3,
     color: "#3498db",
-    system: sourceSystem(architechContent),
+    system: sourceSystem(architechContent, "primary"),
   },
   {
     id: "god",
@@ -46,7 +46,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.2,
     color: "#f1c40f",
-    system: sourceSystem(godContent),
+    system: sourceSystem(godContent, "primary"),
   },
   {
     id: "yangi",
@@ -55,7 +55,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.1,
     color: "#2ecc71",
-    system: sourceSystem(yangiContent),
+    system: sourceSystem(yangiContent, "primary"),
   },
   {
     id: "occam",
@@ -63,7 +63,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.1,
     color: "#2ecc71",
-    system: sourceSystem(occamContent),
+    system: sourceSystem(occamContent, "subagent"),
   },
   {
     id: "omoikane",
@@ -71,7 +71,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.3,
     color: "#3498db",
-    system: sourceSystem(omoikaneContent),
+    system: sourceSystem(omoikaneContent, "subagent"),
   },
   {
     id: "wittgenstein",
@@ -79,7 +79,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.1,
     color: "#95a5a6",
-    system: sourceSystem(wittgensteinContent),
+    system: sourceSystem(wittgensteinContent, "subagent"),
   },
   {
     id: "zeus",
@@ -88,7 +88,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.2,
     color: "#f1c40f",
-    system: sourceSystem(zeusContent),
+    system: sourceSystem(zeusContent, "subagent"),
   },
 ] as const
 
@@ -169,8 +169,20 @@ Rules:
 - If the conversation ends with an unanswered question to the user, preserve that exact question
 - If the conversation ends with an imperative statement or request to the user (e.g. "Now please run the command and paste the console output"), always include that exact request in the summary`
 
-function sourceSystem(content: string) {
-  return content.slice(content.indexOf("\n---\n\n") + "\n---\n\n".length)
+// ── Standardized YCoding project prompt (empirical, shared by primary + subagent) ──
+const YCODING_PROJECT_PROMPT =
+  "YCoding is the TUI-only V2 runtime (Schema → Core/Protocol → Server, durable SessionV2 events, Location-scoped runner). Follow the user's prompt or inquiry strictly. Do not perform work the user did not request or introduce ideas the user did not ask for. Do not state details without concrete evidence. Keep prompts cache-stable (per-model namespace) and preserve provider quota/usage reporting (Meta Llama reasoning as `reasoning`)."
+const SUBAGENT_NOTICE = "Subagents run in the background and will notify back when subagents finished — don't need to keep polling."
+// Goal: dual-state reconciliation – durable system goal (autonomy.goal) vs agent goal (inferred from prompt/steer). User enables, agent synthesizes/owns text.
+const MAINCHAT_CAPABILITIES =
+  "Mainchat responsibilities and capabilities:\n- You are the primary session controller. Goals are enabled by the user only (via /goal command or UI) but goal text is owned by the agent. After user enables goal, agent synthesizes goal from user prompt/history via SessionGoal and via `goal` tool: `get` to inspect, `update` to change text or status (reconcile system goal to agent goal when misaligned from latest prompt/steer), `complete` to mark done, `stop`/`clear` to remove. Do not use `set` to create a goal; it will be rejected. Agent maintains and adapts goal based on prompt/steer. When a goal is stopped or completed it disappears from the sidebar.\n- Keep autonomy explicit: yolo 0 manual, 1 auto-answers questions/forms, 2 also auto-approves permissions, 3 also auto-approves guardrail reviews. Goal active auto-answers questions/permissions at yolo 0; yolo changes are via /yolo or the YOLO toggle.\n- Prefer durable subagents for isolated work; they run in the background and notify when done — don't poll. Before spawning one, choose the model variant that matches the task difficulty; use stronger variants only when the task requires them.\n- Keep early cache prefixes stable per OpenAI model via the per-model namespace; never invent provider cache semantics.\n- For Meta Llama models (maverick/scout/behemoth) ensure reasoning/thought is preserved as `reasoning` parts so the TUI shows Thought/Thinking correctly; provider quota now reports current billing via the Meta usage adapter."
+const SUBAGENT_CAPABILITIES =
+  "Subagent responsibilities and capabilities:\n- You are a durable child Session with a bounded task. Complete precisely and report essential evidence.\n- Goals (if active in root family) are owned by the mainchat agent; do not create goals via `set`. You may `get`/`update`/`complete` via the goal tool if your task requires it.\n- Prefer self-contained evidence; keep cache prefixes stable."
+
+function sourceSystem(content: string, mode: "primary" | "subagent") {
+  const base = content.slice(content.indexOf("\n---\n\n") + "\n---\n\n".length).trim()
+  const capabilities = mode === "primary" ? [SUBAGENT_NOTICE, MAINCHAT_CAPABILITIES] : [SUBAGENT_CAPABILITIES]
+  return [YCODING_PROJECT_PROMPT, base, ...capabilities].join("\n\n")
 }
 
 export const Plugin = define({
@@ -196,19 +208,14 @@ export const Plugin = define({
     ]
 
     yield* ctx.agent.transform((draft) => {
-      for (const definition of builtIns) {
+      for (const definition of builtIns()) {
         draft.update(AgentV2.ID.make(definition.id), (item) => {
           item.name = AgentV2.Name.make(definition.id)
           item.description = definition.description
           item.mode = definition.mode
           item.request.body = { temperature: definition.temperature }
           item.color = definition.color
-          const mainchatCapabilities =
-            "\n\nMainchat responsibilities and capabilities:\n- You are the primary session controller. Goals are started by the user only (via /goal command or UI). Use the `goal` tool to manage the active goal: `get` to inspect, `update` to change text or status, `complete` to mark done, `stop`/`clear` to remove. Do not use `set` to create a goal; it will be rejected. When a goal is stopped or completed it disappears from the sidebar.\n- Keep autonomy explicit: yolo 0 manual, 1 auto-answers questions/forms, 2 also auto-approves permissions, 3 also auto-approves guardrail reviews. Goal active auto-answers questions/permissions at yolo 0; yolo changes are via /yolo or the YOLO toggle (no arrow keys).\n- Prefer durable subagents for isolated work; they run in the background and notify when done — don't poll.\n- Keep early cache prefixes stable per OpenAI model via the per-model namespace; never invent provider cache semantics.\n- For Meta Llama models (maverick/scout/behemoth) ensure reasoning/thought is preserved as `reasoning` parts so the TUI shows Thought/Thinking correctly; provider quota now reports current billing via the Meta usage adapter."
-          item.system =
-            definition.mode === "primary"
-              ? `${definition.system}\n\nSubagents run in the background and will notify back when subagents finished — don't need to keep polling.${mainchatCapabilities}`
-              : definition.system
+          item.system = definition.system
           item.permissions.splice(
             0,
             item.permissions.length,

@@ -6,6 +6,7 @@ import {
   InvalidProviderOutputReason,
   InvalidRequestReason,
   LLMError,
+  TransportReason,
   type ContentPart,
   type LLMRequest,
   type MediaPart,
@@ -298,6 +299,16 @@ export const errorText = (error: unknown): string => {
     } catch {}
   }
   return "Unknown stream error"
+}
+
+export const streamReadError = (route: string, error: unknown) => {
+  if (error instanceof LLMError) return error
+  const message = `Failed to read ${route} stream: ${errorText(error)}`
+  return new LLMError({
+    module: "ProviderShared",
+    method: "stream",
+    reason: new TransportReason({ message, kind: "read" }),
+  })
 }
 
 /**

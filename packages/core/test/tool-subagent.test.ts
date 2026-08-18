@@ -210,6 +210,7 @@ describe("SubagentTool", () => {
         }),
       ).toThrow()
       expect(SubagentTool.description).toContain("Do not mention subagent status unless the user explicitly asks")
+      expect(SubagentTool.description).toContain("Choose the model variant that matches the task difficulty")
       expect(SubagentTool.description).toContain(
         "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands.",
       )

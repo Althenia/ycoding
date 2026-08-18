@@ -50,6 +50,7 @@ export const Output = Schema.Struct({
 
 export const description = [
   "Spawn a subagent: a child session running a configured agent with fresh context.",
+  "Choose the model variant that matches the task difficulty; use stronger variants only when the task requires them.",
   `Subagents launch as durable background children and return immediately. ${backgroundCompletionGuidance}`,
   "Do not mention subagent status unless the user explicitly asks. Keep launch, running, completed, failed, and total bookkeeping internal.",
   "If a child failure prevents the requested outcome, report the blocker without routine status counts.",

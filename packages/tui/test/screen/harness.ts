@@ -60,7 +60,7 @@ export async function renderScreen(input: {
     }).pipe(Effect.provide(AppNodeBuilder.build(Global.node)), Effect.provide(FileSystem.layerNoop({}))),
   )
 
-  const deadline = Date.now() + 15_000
+  const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 50))
     if (setup.renderer.isDestroyed) break

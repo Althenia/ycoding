@@ -114,8 +114,8 @@ async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
     const footerRow = lines.findIndex((line) => line.includes("goal off") && line.includes("YOLO off"))
     // A resting chat composer occupies only its rule and input row.
     // Its surrounding surface is six rows tall, matching the landing composer before the shared footer row.
-    expect(ruleRow).toBe(60)
-    expect(footerRow - ruleRow).toBe(7)
+    expect(ruleRow).toBe(58)
+    expect(footerRow - ruleRow).toBe(9)
     expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(61)
     expect(lines[61]?.indexOf("Message YCoding…")).toBe(3)
     expect(lines.some((line) => line.includes("Enter send"))).toBe(false)
@@ -124,7 +124,7 @@ async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
     expect(lines[67]).toContain("subagents 0")
     expect(lines.slice(68).join("\n")).not.toContain(directory)
     const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
-    expect(header).toContain("Build · Claude Opus 5 · max")
+    expect(header).toContain("Build · claude-opus-5 · max")
     expect(header?.indexOf("ready")).toBe(viewport.width - 3 - "ready".length)
   } finally {
     await screen.dispose()
@@ -137,8 +137,8 @@ async function expectComposerSurface(viewport: typeof DESIGN_VIEWPORT) {
     const lines = screen.lines()
     const mainWidth = viewport.width - railWidth(viewport.width)
     const spans = screen.spans().lines
-    const rule = [...(lines[60] ?? "")].flatMap((character, column) => (character === "─" ? [column] : []))
-    const ruleBackground = spans[60]?.spans.find((span) => span.text.includes("─"))?.bg.toInts()
+    const rule = [...(lines[58] ?? "")].flatMap((character, column) => (character === "─" ? [column] : []))
+    const ruleBackground = spans[58]?.spans.find((span) => span.text.includes("─"))?.bg.toInts()
     const promptBackground = spans[61]?.spans.find((span) => span.text.includes("Message YCoding…"))?.bg.toInts()
 
     expect([rule[0], rule.at(-1)]).toEqual([0, mainWidth - 1])

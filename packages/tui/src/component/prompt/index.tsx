@@ -373,18 +373,20 @@ export function Prompt(props: PromptProps) {
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
   let addingAttachment = false
 
-  function releaseTemporaryAttachment(uri: string) {
+  async function releaseTemporaryAttachment(uri: string) {
     const temporary = temporaryAttachments.get(uri)
     if (!temporary) return
     temporaryAttachments.delete(uri)
-    void temporary.cleanup()
+    await temporary.cleanup().catch(() => {})
   }
 
-  function releaseTemporaryAttachments() {
-    for (const uri of temporaryAttachments.keys()) releaseTemporaryAttachment(uri)
+  async function releaseTemporaryAttachments() {
+    for (const uri of [...temporaryAttachments.keys()]) await releaseTemporaryAttachment(uri)
   }
 
-  onCleanup(releaseTemporaryAttachments)
+  onCleanup(() => {
+    void releaseTemporaryAttachments()
+  })
 
   createEffect(
     on(
@@ -869,12 +871,18 @@ export function Prompt(props: PromptProps) {
     })
   }
 
-  function syncExtmarksWithPromptParts() {
+  async function syncExtmarksWithPromptParts() {
     // `TextareaRenderable.insertText` synchronously emits onContentChange. During
     // clipboard attachment insertion the extmark is created before the prompt
     // part is registered, so reconciling here would treat the new attachment as
     // removed and clean up its backing file.
     if (addingAttachment) return
+    const beforeFiles = new Map(
+      (store.prompt.files ?? [])
+        .filter((file) => temporaryAttachments.has(file.uri) && file.mention?.text)
+        .map((file) => [file.uri, file.mention!.text] as const),
+    )
+    const beforeUris = new Set(beforeFiles.keys())
     const allExtmarks = input.extmarks
       .getAllForTypeId(promptPartTypeId)
       .slice()
@@ -937,19 +945,25 @@ export function Prompt(props: PromptProps) {
       }),
     )
     const retained = new Set(store.prompt.files?.map((file) => file.uri))
-    for (const uri of temporaryAttachments.keys()) {
-      if (!retained.has(uri)) releaseTemporaryAttachment(uri)
+    for (const uri of [...beforeUris]) {
+      if (retained.has(uri)) continue
+      const mentionText = beforeFiles.get(uri)
+      if (mentionText && input.plainText.includes(mentionText)) continue
+      await releaseTemporaryAttachment(uri)
     }
   }
 
   async function discardMissingTemporaryAttachments() {
-    const missing = new Set(
-      await Promise.all(
-        [...temporaryAttachments].map(async ([uri, temporary]) =>
-          (await Bun.file(temporary.path).exists()) ? undefined : uri,
-        ),
-      ).then((uris) => uris.filter((uri): uri is string => uri !== undefined)),
-    )
+    const missing = new Set<string>()
+    for (const [uri, temporary] of [...temporaryAttachments]) {
+      try {
+        const { stat } = await import("node:fs/promises")
+        await stat(temporary.path)
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException)?.code
+        if (code === "ENOENT") missing.add(uri)
+      }
+    }
     if (missing.size === 0) return false
 
     const removed = new Set(missing)
@@ -988,7 +1002,7 @@ export function Prompt(props: PromptProps) {
         )
       }),
     )
-    for (const uri of missing) releaseTemporaryAttachment(uri)
+    for (const uri of missing) await releaseTemporaryAttachment(uri)
     setRetry(undefined)
     setRetryRestored(false)
     toast.show({
@@ -1321,33 +1335,25 @@ export function Prompt(props: PromptProps) {
       if (sessionID) {
         try {
           const candidate = normalized.slice(5).trim()
-          const newGoal = isActive ? null : candidate || props.autonomy?.goal?.text || "Autonomous goal"
+          // Agent owns goal text: candidate is hint for SessionGoal synthesis, not verbatim final text.
+          // Do not echo hint into composer (bug fix) – clearPrompt already called.
+          const hint = candidate || props.autonomy?.goal?.text || "Autonomous goal"
+          const newGoal = isActive ? null : hint
           const result = await client.api.session.autonomy.set({ sessionID, payload: { goal: newGoal } })
           const state = (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
           props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
           toast.show({ message: isActive ? "Goal deactivated" : "Goal activated", variant: "success", duration: 3000 })
-          if (!isActive && newGoal) {
-            try { input?.setText?.(newGoal) } catch {}
-            setStore("prompt", "text", newGoal)
-          } else if (isActive && store.prompt.text === props.autonomy?.goal?.text) {
-            try { input?.setText?.("") } catch {}
-            setStore("prompt", "text", "")
-          }
         } catch (error) {
           toast.show({ title: "Failed to toggle goal", message: errorMessage(error), variant: "error" })
         }
       } else {
         if (isActive) {
-          if (store.prompt.text === props.autonomy?.goal?.text) {
-            try { input?.setText?.("") } catch {}
-            setStore("prompt", "text", "")
-          }
           props.onLandingGoalToggle?.(null)
           toast.show({ message: "Goal deactivated (landing)", variant: "success", duration: 2000 })
         } else {
           const text = normalized.slice(5).trim() || props.autonomy?.goal?.text || "Autonomous goal"
-          try { input?.setText?.(text) } catch {}
-          setStore("prompt", "text", text)
+          // Landing has no session; keep hint for next session creation but do not pollute composer.
+          // Store hint via onLandingGoalToggle only; composer stays cleared (bug fix).
           props.onLandingGoalToggle?.(text)
           toast.show({ message: "Goal activated (landing)", variant: "success", duration: 2000 })
         }
@@ -1607,33 +1613,57 @@ export function Prompt(props: PromptProps) {
           return false
         }
       }
-      const prompt = (resume: boolean, admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>) => {
-        const files = admitted ? projectedPromptInput(admitted.data as never).files : submission.payload.files
-        return client.api.session.prompt({
-          id: submission.promptID,
-          sessionID,
-          text: submission.payload.inputText,
-          files,
-          agents: submission.payload.agents,
-          metadata: submission.payload.metadata,
-          resume,
+      const runPromptWithSkills = (promptID: string, skillIDs: string[]) => {
+        const promptFn = (resume: boolean, admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>) => {
+          const files = admitted ? projectedPromptInput(admitted.data as never).files : submission.payload.files
+          return client.api.session.prompt({
+            id: promptID,
+            sessionID,
+            text: submission.payload.inputText,
+            files,
+            agents: submission.payload.agents,
+            metadata: submission.payload.metadata,
+            resume,
+          })
+        }
+        return submitPromptWithSkills({
+          prompt: promptFn,
+          skills: (submission.payload.metadata?.skills ?? []).map(
+            (skill, index) => () =>
+              client.api.session.skill({
+                id: skillIDs[index],
+                sessionID,
+                skill: skill.id,
+                resume: false,
+              }),
+          ),
         })
       }
-      const result = await submitPromptWithSkills({
-        prompt,
-        skills: (submission.payload.metadata?.skills ?? []).map(
-          (skill, index) => () =>
-            client.api.session.skill({
-              id: submission.skillIDs[index],
-              sessionID,
-              skill: skill.id,
-              resume: false,
-            }),
-        ),
-      }).then(
-        (admitted) => ({ admitted }),
-        (error) => ({ error }),
+      let result = await runPromptWithSkills(submission.promptID, submission.skillIDs).then(
+        (admitted) => ({ admitted }) as const,
+        (error) => ({ error }) as const,
       )
+      if ("error" in result && errorMessage(result.error).includes("conflicts with an existing durable")) {
+        // The retained promptID collided with an existing durable record (same ID, different content).
+        // This happens when a previous admission was promoted and the retained submission is retried
+        // with slightly different content, or after a fork-copied message. Recover by generating
+        // fresh durable IDs and retrying once instead of surfacing a confusing conflict to the user.
+        const freshPromptID = `msg_${crypto.randomUUID()}`
+        const freshSkillIDs = Array.from(
+          { length: submission.payload.metadata?.skills.length ?? 0 },
+          () => `msg_${crypto.randomUUID()}`,
+        )
+        submission.promptID = freshPromptID
+        submission.skillIDs = freshSkillIDs
+        submission.syntheticID = `msg_${crypto.randomUUID()}`
+        // Re-key the retained submission so the next retry check doesn't immediately block it.
+        // Keep the same session but allow the new IDs to be used.
+        setRetry({ ...submission })
+        result = await runPromptWithSkills(freshPromptID, freshSkillIDs).then(
+          (admitted) => ({ admitted }) as const,
+          (error) => ({ error }) as const,
+        )
+      }
       if ("error" in result) {
         toast.show({
           title: "Failed to send prompt or activate skill",
@@ -1651,7 +1681,7 @@ export function Prompt(props: PromptProps) {
       submission.payload.history.files = submission.payload.history.files?.filter(
         (file) => !temporaryAttachments.has(file.uri),
       )
-      releaseTemporaryAttachments()
+      await releaseTemporaryAttachments()
     }
     history.append({
       ...submission.payload.history,
@@ -1662,7 +1692,7 @@ export function Prompt(props: PromptProps) {
     input.extmarks.clear()
     setStore("prompt", emptyPrompt())
     setStore("extmarkToPart", new Map())
-    releaseTemporaryAttachments()
+    await releaseTemporaryAttachments()
     props.onSubmit?.()
 
     // temporary hack to make sure the message is sent

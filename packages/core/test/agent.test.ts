@@ -65,6 +65,21 @@ describe("AgentV2", () => {
     }),
   )
 
+  it.effect("lists the effective configured default agent first", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      const god = AgentV2.ID.make("god")
+      const reviewer = AgentV2.ID.make("reviewer")
+      yield* agent.transform((editor) => {
+        editor.update(god, () => {})
+        editor.update(reviewer, () => {})
+        editor.default(reviewer)
+      })
+
+      expect((yield* agent.list()).map((info) => info.id)).toEqual([reviewer, god])
+    }),
+  )
+
   it.effect("rebuilds state when a transform is replaced", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
@@ -144,6 +159,7 @@ describe("AgentV2", () => {
       )
 
       const agents = yield* agent.list()
+      expect(agents[0]?.id).toBe(AgentV2.ID.make("god"))
       expect(agents.map((item) => String(item.id)).sort()).toEqual([
         "TLDR",
         "architech",
@@ -207,9 +223,14 @@ describe("AgentV2", () => {
 
       const god = yield* agent.get(AgentV2.ID.make("god"))
       const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
-      if (!god || !zeus) throw new Error("expected built-in agents")
+      if (!god?.system || !zeus?.system) throw new Error("expected built-in agents with system prompts")
 
-      expect(god.system).toContain("You are God, an elite autonomous software builder.")
+      expect(god.system.startsWith("YCoding is the TUI-only V2 runtime")).toBe(true)
+      expect(zeus.system.startsWith("YCoding is the TUI-only V2 runtime")).toBe(true)
+      expect(god.system).toContain("Follow the user's prompt or inquiry strictly")
+      expect(zeus.system).toContain("Do not perform work the user did not request")
+      expect(god.system).toContain("concrete evidence")
+      expect(god.system).toContain("You are God, an autonomous production software builder.")
       expect(god.system).toContain("## Delivery")
       expect(god).toMatchObject({
         description: "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
@@ -233,7 +254,7 @@ describe("AgentV2", () => {
         { action: "plan_enter", resource: "*", effect: "allow" },
         { action: "shell", resource: "*", effect: "allow" },
       ])
-      expect(zeus.system).toContain("You are Zeus, an elite autonomous software implementer.")
+      expect(zeus.system).toContain("You are Zeus, an autonomous software implementer.")
       expect(zeus.system).toContain("## Execution")
       expect(zeus).toMatchObject({
         description: "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",

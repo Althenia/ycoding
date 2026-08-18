@@ -144,12 +144,7 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         Effect.map((response) => {
           const route = `${request.model.provider}/${request.model.route.id}`
           return prepared.framing.frame(
-            response.stream.pipe(
-              Stream.mapError((error) => {
-                const causeText = ProviderShared.errorText(error)
-                return ProviderShared.eventError(route, `Failed to read ${route} stream: ${causeText}`, causeText)
-              }),
-            ),
+            response.stream.pipe(Stream.mapError((error) => ProviderShared.streamReadError(route, error))),
           )
         }),
       ),

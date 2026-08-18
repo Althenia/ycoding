@@ -469,6 +469,8 @@ The current working directory can therefore add narrower instructions than an an
 
 Each instruction source is rendered with its source path. `instruction_max_bytes` controls per-file truncation.
 
+The Location-scoped instruction discovery reads the global file when assembling Session context before each model step. The initial value becomes durable instruction state; later file changes are observed at a subsequent step boundary and rendered as an instruction update rather than silently rewriting earlier history.
+
 The JSON `instructions` array is currently accepted by Schema but is not read by runtime instruction discovery. Use `AGENTS.md`, skills, MCP instructions, or explicit session instruction injection.
 
 ## References
