@@ -141,19 +141,17 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         },
         runtime.http.execute(prepared.request),
       ).pipe(
-        Effect.map((response) =>
-          prepared.framing.frame(
+        Effect.map((response) => {
+          const route = `${request.model.provider}/${request.model.route.id}`
+          return prepared.framing.frame(
             response.stream.pipe(
-              Stream.mapError((error) =>
-                ProviderShared.eventError(
-                  `${request.model.provider}/${request.model.route.id}`,
-                  `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
-                  ProviderShared.errorText(error),
-                ),
-              ),
+              Stream.mapError((error) => {
+                const causeText = ProviderShared.errorText(error)
+                return ProviderShared.eventError(route, `Failed to read ${route} stream: ${causeText}`, causeText)
+              }),
             ),
-          ),
-        ),
+          )
+        }),
       ),
     ),
 })

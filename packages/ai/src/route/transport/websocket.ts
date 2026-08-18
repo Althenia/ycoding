@@ -409,19 +409,17 @@ export const json = <Body, Message extends Record<string, unknown>>(
         },
         runtime.http.execute(prepared.http.request),
       ).pipe(
-        Effect.map((response) =>
-          prepared.http.framing.frame(
+        Effect.map((response) => {
+          const route = `${request.model.provider}/${request.model.route.id}`
+          return prepared.http.framing.frame(
             response.stream.pipe(
-              Stream.mapError((error) =>
-                ProviderShared.eventError(
-                  `${request.model.provider}/${request.model.route.id}`,
-                  `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
-                  ProviderShared.errorText(error),
-                ),
-              ),
+              Stream.mapError((error) => {
+                const causeText = ProviderShared.errorText(error)
+                return ProviderShared.eventError(route, `Failed to read ${route} stream: ${causeText}`, causeText)
+              }),
             ),
-          ),
-        ),
+          )
+        }),
       ),
     )
 
@@ -539,6 +537,18 @@ export const json = <Body, Message extends Record<string, unknown>>(
                 resetFallback(state)
                 return fallbackError("sendText", error.message, prepared.url)
               }),
+              Effect.onError(() =>
+                Effect.gen(function* () {
+                  if (state.connection === connection) {
+                    state.connection = undefined
+                    if (!state.fallback) {
+                      state.fallback = true
+                      resetFallback(state)
+                    }
+                    yield* connection.close.pipe(Effect.catch(() => Effect.void))
+                  }
+                }),
+              ),
             )
 
             const decoder = new TextDecoder()
@@ -600,11 +610,15 @@ export const json = <Body, Message extends Record<string, unknown>>(
                           output,
                           messageBoundary: metadata.messageBoundary,
                         }
-                  if (terminal || rejected) {
+                  if (terminal && !rejected) {
                     touch(metadata.key, state)
                     return
                   }
                   state.connection = undefined
+                  if (rejected) {
+                    state.fallback = true
+                    resetFallback(state)
+                  }
                   yield* connection.close
                   touch(metadata.key, state)
                 }),

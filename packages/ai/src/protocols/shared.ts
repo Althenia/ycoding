@@ -276,12 +276,27 @@ export const toolResultText = (part: ToolResultPart) => {
   return encodeJson(part.result.value)
 }
 
-export const errorText = (error: unknown) => {
-  if (error instanceof Error) return error.message
+export const errorText = (error: unknown): string => {
+  if (error instanceof Error) {
+    const cause = (error as Error & { cause?: unknown }).cause
+    if (cause !== undefined) {
+      const causeText = errorText(cause)
+      if (causeText !== "Unknown stream error" && causeText.length > 0) return `${error.message}: ${causeText}`
+    }
+    return error.message
+  }
   if (typeof error === "string") return error
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") return String(error)
   if (error === null) return "null"
   if (error === undefined) return "undefined"
+  if (isRecord(error)) {
+    if (typeof error.message === "string" && error.message.length > 0) return error.message
+    if (typeof error.error === "string" && error.error.length > 0) return error.error
+    try {
+      const json = JSON.stringify(error)
+      if (json.length < 500 && json !== "{}") return json
+    } catch {}
+  }
   return "Unknown stream error"
 }
 

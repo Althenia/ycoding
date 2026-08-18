@@ -403,7 +403,7 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   // output_text. Chat uses text blocks for both directions and can mark either.
   const gpt56Roles: Gpt56MarkerRoles = !gpt56
     ? undefined
-    : request.model.route.id === "openai-chat"
+    : request.model.route.id === "openai-chat" || request.model.route.id === "github-copilot-chat"
       ? ["user", "assistant", "tool"]
       : ["user", "tool"]
   const tools = policy.tools && !gpt56 ? markLastTool(request.tools, prefixHint, reserve) : request.tools

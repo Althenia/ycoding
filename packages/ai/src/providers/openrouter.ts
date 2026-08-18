@@ -5,6 +5,7 @@ import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import { AuthOptions, type ProviderAuthOption } from "../route/auth-options"
 import { LLMRequest, ProviderID, type ModelID, type ProviderOptions } from "../schema"
+import type { ProviderPackage } from "../provider-package"
 import * as OpenAICompatibleProfiles from "./openai-compatible-profile"
 import * as OpenAIResponses from "../protocols/openai-responses"
 import { isRecord } from "../protocols/shared"
@@ -200,6 +201,12 @@ const configuredRoute = (input: ModelOptions) => {
   })
 }
 
+export interface Settings extends ProviderPackage.Settings {
+  readonly apiKey?: string
+  readonly baseURL?: string
+  readonly providerOptions?: OpenRouterProviderOptionsInput
+}
+
 export const configure = (input: ModelOptions = {}) => {
   const route = configuredRoute(input)
   return {
@@ -210,4 +217,13 @@ export const configure = (input: ModelOptions = {}) => {
 }
 
 export const provider = configure()
-export const model = provider.model
+export const model: ProviderPackage.Definition<Settings>["model"] = (modelID, settings) =>
+  configure({
+    apiKey: settings.apiKey,
+    baseURL: settings.baseURL,
+    headers: settings.headers === undefined ? undefined : { ...settings.headers },
+    http: settings.body === undefined ? undefined : { body: { ...settings.body } },
+    limits: settings.limits,
+    providerOptions: settings.providerOptions,
+  }).model(modelID)
+export const responses = model

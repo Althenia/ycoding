@@ -22,6 +22,11 @@ export const OpenRouterPlugin = define({
             "X-Title": "YCoding",
           }
         })
+        for (const model of item.models.values()) {
+          evt.model.update(item.provider.id, model.id, (draft) => {
+            draft.package = "@ycoding-ai/ai/providers/openrouter"
+          })
+        }
         for (const modelID of [ModelV2.ID.make("gpt-5-chat-latest"), ModelV2.ID.make("openai/gpt-5-chat")]) {
           if (!item.models.has(modelID)) continue
           evt.model.update(item.provider.id, modelID, (model) => {

@@ -540,14 +540,25 @@ function anthropicMessages(request: LLMRequest): LanguageModelV3Message[] {
 function message(request: LLMRequest, input: LLMRequest["messages"][number]): LanguageModelV3Message[] {
   switch (input.role) {
     case "system": {
+      if (isAnthropicMessagesRoute(request)) {
+        const options = AISDKCache.options(request.model.route.id, latestTextCache(input.content))
+        return [
+          {
+            role: "system",
+            content: input.content.flatMap(text).join("\n\n"),
+            ...(options === undefined ? {} : { providerOptions: options }),
+          },
+        ]
+      }
       const options = AISDKCache.options(request.model.route.id, latestTextCache(input.content))
-      return [
-        {
-          role: "system",
-          content: input.content.flatMap(text).join("\n\n"),
-          ...(options === undefined ? {} : { providerOptions: options }),
-        },
-      ]
+      const block = {
+        type: "text" as const,
+        text: ProviderShared.wrapSystemUpdate(
+          input.content.flatMap((part) => (part.type === "text" ? [{ text: part.text }] : [])),
+        ),
+        ...(options === undefined ? {} : { providerOptions: options }),
+      }
+      return [{ role: "user", content: [block] }]
     }
     case "user":
       return [{ role: "user", content: input.content.flatMap((part) => userPart(request, part)) }]
