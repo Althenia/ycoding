@@ -266,6 +266,90 @@ describe("AgentV2", () => {
     }),
   )
 
+  it.effect("gives execution agents explicit action boundaries and keeps the title prompt lean", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: agentHost(agent),
+        }),
+      ).pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+        ),
+      )
+
+      for (const id of ["TLDR", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
+        const item = yield* agent.get(AgentV2.ID.make(id))
+        if (!item?.system) throw new Error(`expected built-in agent ${id} with a system prompt`)
+        expect(item.system).toContain(
+          "For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report.",
+        )
+        expect(item.system).toContain("Do not make changes unless the request also asks for them.")
+        expect(item.system).toContain(
+          "For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.",
+        )
+        expect(item.system).toContain(
+          "Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.",
+        )
+        expect(item.system).toContain(
+          "If your permission ceiling prevents asking for confirmation, do not act; report the blocker.",
+        )
+        expect(item.system.split("For requests to change, build, or fix")).toHaveLength(2)
+      }
+
+      const god = yield* agent.get(AgentV2.ID.make("god"))
+      if (!god?.system) throw new Error("expected god agent with a system prompt")
+      expect(god.system).toContain("Explicit permission denies remain denied.")
+      expect(god.system).toContain("Only effective YOLO 3 auto-approves guardrail reviews.")
+
+      const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
+      if (!zeus?.system) throw new Error("expected zeus agent with a system prompt")
+      expect(zeus.system).toContain("You are a durable child Session")
+      expect(zeus.system).toContain("Do not spawn child agents")
+
+      const title = yield* agent.get(AgentV2.ID.make("title"))
+      if (!title?.system) throw new Error("expected title agent with a system prompt")
+      expect(title.system).toContain("Output exactly one natural thread title")
+      expect(title.system).not.toContain("<examples>")
+      expect(title.system.length).toBeLessThan(900)
+    }),
+  )
+
+  it.effect("preserves each utility agent's output contract", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(
+        host({
+          agent: agentHost(agent),
+        }),
+      ).pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+        ),
+      )
+
+      const compaction = yield* agent.get(AgentV2.ID.make("compaction"))
+      const goal = yield* agent.get(AgentV2.ID.make("goal"))
+      const summary = yield* agent.get(AgentV2.ID.make("summary"))
+      const btw = yield* agent.get(AgentV2.ID.make("btw"))
+      if (!compaction?.system || !goal?.system || !summary?.system || !btw?.system) {
+        throw new Error("expected utility agents with system prompts")
+      }
+
+      expect(compaction.system).toContain("<previous-summary>")
+      expect(compaction.system).toContain("Do not answer the conversation")
+      expect(goal.system).toContain("observable completion condition")
+      expect(goal.system).toContain("Output exactly one concise imperative sentence")
+      expect(summary.system).toContain("two or three first-person sentences")
+      expect(summary.system).toContain("preserve it verbatim")
+      expect(btw.system).toContain("read-only advisor")
+      expect(btw.system).toContain("Do not mutate files, state, or external systems")
+    }),
+  )
+
   it.effect("configures BTW as a read-only advisor that requests approval for mutations", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
