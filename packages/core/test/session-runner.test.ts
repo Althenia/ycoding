@@ -5380,56 +5380,172 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("recovers a reasoning-only transport failure with one text-only terminal response step", () =>
+  it.effect("retries a transport failure after empty reasoning within the same logical step", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const failure = providerUnavailable()
-      yield* admit(session, "Recover after reasoning transport failure")
+      yield* admit(session, "Retry after empty reasoning transport failure")
       responseStreams = [
         Stream.fromIterable([
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.reasoningStart({ id: "reasoning-transport-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-transport-failure", text: "" }),
         ]).pipe(Stream.concat(Stream.fail(failure))),
         Stream.fromIterable(reply.text("Recovered answer", "text-after-reasoning-transport-failure")),
       ]
 
-      yield* session.resume(sessionID)
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
 
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.tools).toEqual([])
-      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
       const eventTypes = yield* recordedEventTypes(sessionID)
-      expect(eventTypes).not.toContain("session.retry.scheduled.1")
-      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
-      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(0)
       expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
       const assistants = (yield* session.context(sessionID)).filter(
         (message): message is SessionMessage.Assistant => message.type === "assistant",
       )
-      expect(assistants).toHaveLength(2)
-      expect(assistants[0]).toMatchObject({ finish: "error", error: { type: "provider.transport" } })
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]).toMatchObject({
+        finish: "stop",
+        content: [
+          { type: "reasoning", text: "", time: { completed: expect.anything() } },
+          { type: "text", text: "Recovered answer" },
+        ],
+      })
       expect((yield* recordedStepSettlementEvents(sessionID, assistants[0].id)).map((event) => event.type)).toEqual([
         "session.step.started.1",
-        "session.step.failed.1",
+        "session.step.ended.1",
       ])
-      expect(assistants[1]).toMatchObject({
-        finish: "stop",
-        content: [{ type: "text", text: "Recovered answer" }],
+      yield* replaySessionProjection(sessionID)
+      expect(requireAssistant(yield* session.context(sessionID)).content[0]).toMatchObject({
+        type: "reasoning",
+        text: "",
+        time: { completed: expect.anything() },
       })
+    }),
+  )
+
+  it.effect("completes empty text before retrying its transport failure within the same logical step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const failure = providerUnavailable()
+      yield* admit(session, "Retry after empty text transport failure")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "text-before-transport-failure" }),
+          LLMEvent.textDelta({ id: "text-before-transport-failure", text: "" }),
+        ]).pipe(Stream.concat(Stream.fail(failure))),
+        Stream.fromIterable(reply.text("Recovered answer", "text-after-transport-failure")),
+      ]
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.text.ended.1")).toHaveLength(2)
+      const assistants = (yield* session.context(sessionID)).filter(
+        (message): message is SessionMessage.Assistant => message.type === "assistant",
+      )
+      expect(assistants).toHaveLength(1)
+      expect(assistants[0]).toMatchObject({
+        finish: "stop",
+        content: [
+          { type: "text", text: "" },
+          { type: "text", text: "Recovered answer" },
+        ],
+      })
+      expect((yield* recordedStepSettlementEvents(sessionID, assistants[0].id)).map((event) => event.type)).toEqual([
+        "session.step.started.1",
+        "session.step.ended.1",
+      ])
+      yield* replaySessionProjection(sessionID)
+      expect(requireAssistant(yield* session.context(sessionID)).content).toMatchObject([
+        { type: "text", text: "" },
+        { type: "text", text: "Recovered answer" },
+      ])
+      expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.text.ended.1")).toHaveLength(2)
+    }),
+  )
+
+  it.effect("does not retry a transport failure after non-empty reasoning", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const failure = providerUnavailable()
+      yield* admit(session, "Do not replay reasoning")
+      responseStream = Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "reasoning-before-transport-failure" }),
+        LLMEvent.reasoningDelta({ id: "reasoning-before-transport-failure", text: "Thinking" }),
+      ]).pipe(Stream.concat(Stream.fail(failure)))
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user" },
+        {
+          type: "assistant",
+          finish: "error",
+          error: { type: "provider.transport" },
+          content: [{ type: "reasoning", text: "Thinking" }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("does not retry a transport failure after tool evidence", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const failure = providerUnavailable()
+      yield* admit(session, "Do not replay tool evidence")
+      responseStream = Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolInputStart({ id: "tool-before-transport-failure", name: "echo" }),
+      ]).pipe(Stream.concat(Stream.fail(failure)))
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(1)
+      expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user" },
+        {
+          type: "assistant",
+          finish: "error",
+          error: { type: "provider.transport" },
+          content: [
+            {
+              type: "tool",
+              id: "tool-before-transport-failure",
+              state: { status: "error" },
+            },
+          ],
+        },
+      ])
     }),
   )
 
   it.effect("does not retry a failed terminal response recovery or create a third request", () =>
     Effect.gen(function* () {
       const session = yield* setup
-      const firstFailure = providerUnavailable()
       const recoveryFailure = providerUnavailable()
       yield* admit(session, "Fail terminal response recovery")
       responseStreams = [
         Stream.fromIterable([
           LLMEvent.stepStart({ index: 0 }),
           LLMEvent.reasoningStart({ id: "reasoning-before-failed-recovery" }),
-        ]).pipe(Stream.concat(Stream.fail(firstFailure))),
+        ]),
         Stream.fail(recoveryFailure),
         Stream.fromIterable(reply.text("Must not run", "text-after-failed-recovery")),
       ]

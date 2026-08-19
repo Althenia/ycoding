@@ -86,6 +86,8 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
     }
     const onError = (event: Event) => {
       cleanup()
+      if (ws.readyState !== globalThis.WebSocket.CLOSED && ws.readyState !== globalThis.WebSocket.CLOSING)
+        ws.close(1000)
       resume(
         Effect.fail(
           transportError("open", `Failed to open WebSocket: ${eventMessage(event)}`, { url: input.url, kind: "open" }),
@@ -371,6 +373,19 @@ export const json = <Body, Message extends Record<string, unknown>>(
     sessions.delete(key)
   }
 
+  const evictOldestInactive = () => {
+    const oldest = Array.from(sessions).find(([, state]) => !state.active)?.[0]
+    if (oldest === undefined) return false
+    evict(oldest)
+    return true
+  }
+
+  const evictToCapacity = (capacity: number) => {
+    while (sessions.size > capacity) {
+      if (!evictOldestInactive()) return
+    }
+  }
+
   const touch = (key: string, state: JsonSession<Message>) => {
     if (state.active) return
     if (state.idleTimer) clearTimeout(state.idleTimer)
@@ -405,9 +420,7 @@ export const json = <Body, Message extends Record<string, unknown>>(
   }
 
   const ensureCapacity = () => {
-    if (sessions.size < SESSION_MAX) return
-    const oldest = sessions.keys().next().value as string | undefined
-    if (oldest !== undefined) evict(oldest)
+    evictToCapacity(SESSION_MAX - 1)
   }
 
   const httpFrames = (
@@ -667,6 +680,7 @@ export const json = <Body, Message extends Record<string, unknown>>(
                 state.active = false
                 yield* state.permit.release(1)
                 touch(metadata.key, state)
+                evictToCapacity(SESSION_MAX)
               }
             }),
           ),

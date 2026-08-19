@@ -1090,7 +1090,9 @@ function llmError(method: string, error: unknown) {
 
 function isTransportError(error: unknown): error is Error {
   if (!(error instanceof Error)) return false
-  return /(?:socket|connection) (?:was )?closed unexpectedly|cannot connect to api/i.test(error.message)
+  return /(?:socket|connection) (?:was )?closed unexpectedly|cannot connect to api|websocket closed with code 1006/i.test(
+    error.message,
+  )
 }
 
 export const node = makeLocationNode({ service: Service, layer: locationLayer, deps: [] })

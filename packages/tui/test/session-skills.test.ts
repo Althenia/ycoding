@@ -72,15 +72,14 @@ describe("session skill presentation", () => {
 
   test("highlights loaded skill badges with the skill accent", () => {
     expect(sessionRoute).toContain("status={<StatusBadge color={accent()}>Loaded</StatusBadge>}")
-    expect(sessionRoute).toContain(
-      'status={props.part.state.status === "completed" ? <StatusBadge color={accent()}>Loaded</StatusBadge> : undefined}',
+    expect(sessionRoute.replace(/\s+/g, " ")).toContain(
+      'status={ props.part.state.status === "completed" ? <StatusBadge color={accent()}>Loaded</StatusBadge> : undefined }',
     )
     expect(sessionRoute).toContain("function StatusBadge(props: { children: string; color?: RGBA })")
   })
 
   test("hides only completed duplicate Skill tool parts", () => {
-    expect(sessionRoute).toContain(
-      'recordValue(recordValue((content as SessionMessageAssistantTool).state)?.structured)?.alreadyActive !== true',
-    )
+    expect(sessionRoute).toContain("function transcriptToolPartVisible(part: SessionMessageAssistantTool)")
+    expect(sessionRoute).toContain('content.type !== "tool" || transcriptToolPartVisible(content)')
   })
 })

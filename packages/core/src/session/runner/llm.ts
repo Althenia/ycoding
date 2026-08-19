@@ -249,7 +249,6 @@ const layer = Layer.effect(
       const ownedToolFibers: Array<Fiber.Fiber<void, ToolOutputStore.Error>> = []
       const providerStateCaptures: SessionProviderState.CaptureInput[] = []
       let needsContinuation = false
-      const terminalRecoveryEvidence = { reasoningStarted: false, blocked: false }
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -298,15 +297,6 @@ const layer = Layer.effect(
               overflowFailure = event
               return
             }
-            if (event.type === "reasoning-start") terminalRecoveryEvidence.reasoningStarted = true
-            if (
-              event.type === "reasoning-delta" ||
-              event.type === "text-start" ||
-              event.type === "tool-input-start" ||
-              event.type === "tool-input-error" ||
-              event.type === "tool-call"
-            )
-              terminalRecoveryEvidence.blocked = true
             yield* publish(event)
             if (LLMEvent.is.toolInputError(event)) {
               if (prepared.resolveToolCall(event.name).type === "settle") needsContinuation = true
@@ -530,6 +520,7 @@ const layer = Layer.effect(
               SessionRunnerRetry.isRetryable(llmFailure) &&
               !publisher.hasRetryEvidence()
             ) {
+              yield* serialized(publisher.flush())
               return yield* new SessionRunnerRetry.RetryableFailure({
                 cause: llmFailure,
                 assistantMessageID: yield* publisher.startAssistant(),
@@ -662,14 +653,6 @@ const layer = Layer.effect(
             !publisher.hasAssistantText() &&
             !needsContinuation &&
             (!publisher.hasStepStarted() || stepFailure?.type === "provider.invalid-output")
-          const recoverableFailedTerminalSilence =
-            !terminalResponseRecovery &&
-            llmFailure !== undefined &&
-            llmFailure.reason._tag === "Transport" &&
-            terminalRecoveryEvidence.reasoningStarted &&
-            !terminalRecoveryEvidence.blocked &&
-            !publisher.hasAssistantText() &&
-            !needsContinuation
           const promotePendingSteerAfterExhaustedRecovery =
             terminalResponseRecovery &&
             !publisher.hasAssistantText() &&
@@ -677,8 +660,7 @@ const layer = Layer.effect(
             stepFailure?.type === "provider.invalid-output" &&
             (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
-          if (stream._tag === "Failure" && !recoverableFailedTerminalSilence)
-            return yield* Effect.failCause(stream.cause)
+          if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
           if ((toolsInterrupted || infraError !== undefined) && settledFailure)
             return yield* Effect.failCause(settledFailure)
@@ -686,7 +668,6 @@ const layer = Layer.effect(
           if (
             stepFailure &&
             !recoverableTerminalSilence &&
-            !recoverableFailedTerminalSilence &&
             !promotePendingSteerAfterExhaustedRecovery
           )
             return yield* new StepFailedError({ error: stepFailure })
@@ -697,7 +678,6 @@ const layer = Layer.effect(
             promoted,
             terminalSilence:
               recoverableTerminalSilence ||
-              recoverableFailedTerminalSilence ||
               (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
           } as const
         }),

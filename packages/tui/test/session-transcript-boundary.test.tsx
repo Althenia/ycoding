@@ -48,6 +48,40 @@ function frame(app: Awaited<ReturnType<typeof testRender>>) {
 }
 
 describe("transcript row residency", () => {
+  test("does not render a completed duplicate Skill tool part", async () => {
+    const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
+      id: "msg_duplicate_skill",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "anthropic", id: "claude-opus-5" },
+      content: [
+        {
+          type: "tool",
+          id: "call_duplicate_skill",
+          name: "skill",
+          state: {
+            status: "completed",
+            input: { id: "focus-test" },
+            content: [{ type: "text", text: "duplicate" }],
+            structured: { alreadyActive: true },
+          },
+          time: { created: 1, ran: 1, completed: 2 },
+        },
+      ],
+      finish: "tool-calls",
+      time: { created: 1, completed: 2 },
+    }
+    const app = await renderTranscript(
+      { type: "part", ref: { messageID: message.id, partID: "call_duplicate_skill" } },
+      (messageID) => (messageID === message.id ? message : undefined),
+    )
+
+    expect(frame(app)).toContain("before\nafter")
+    expect(frame(app)).not.toContain("Loaded")
+
+    app.renderer.destroy()
+  })
+
   test("does not allocate a line for an unresolved transcript row", async () => {
     const app = await renderTranscript({ type: "message", messageID: "missing" })
 
