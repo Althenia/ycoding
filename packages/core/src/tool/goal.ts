@@ -43,7 +43,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Manage the current autonomous goal for this session. Goals are started by the user only (via /goal command or UI). The mainchat can use this tool to inspect (get), update, complete, or stop the active goal, but cannot start a new goal. When goal is stopped or completed it disappears from the sidebar. Use get to inspect, update to change text/status, complete to mark done, stop/clear to remove.",
+              "Manage the current autonomous goal for this session. Goals are enabled by the user only (via /goal command or UI) but the goal text is owned by the agent. After enable, the agent synthesizes the goal from the user prompt/history and maintains it: evaluate the latest user prompt/steer against the durable goal, and if misaligned update the goal via update to follow the agent's goal target so system goal stays aligned with agent goal. Use get to inspect, update to change text/status, complete to mark done, stop/clear to remove. Do not use set to create a goal; it will be rejected. When goal is stopped or completed it disappears from the sidebar.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: output.message }],

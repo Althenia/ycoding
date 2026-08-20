@@ -20,7 +20,7 @@ import zeusContent from "./agent/zeus.md" with { type: "text" }
 // Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
 // Whitelisted so agents can read a command's full captured output without an external-directory prompt.
 const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
-const builtIns = [
+const builtIns = () => [
   {
     id: "TLDR",
     description:
@@ -28,7 +28,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.1,
     color: "#95a5a6",
-    system: sourceSystem(tldrContent),
+    system: sourceSystem(tldrContent, "primary"),
   },
   {
     id: "architech",
@@ -37,7 +37,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.3,
     color: "#3498db",
-    system: sourceSystem(architechContent),
+    system: sourceSystem(architechContent, "primary"),
   },
   {
     id: "god",
@@ -46,7 +46,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.2,
     color: "#f1c40f",
-    system: sourceSystem(godContent),
+    system: sourceSystem(godContent, "primary"),
   },
   {
     id: "yangi",
@@ -55,7 +55,7 @@ const builtIns = [
     mode: "primary",
     temperature: 0.1,
     color: "#2ecc71",
-    system: sourceSystem(yangiContent),
+    system: sourceSystem(yangiContent, "primary"),
   },
   {
     id: "occam",
@@ -63,7 +63,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.1,
     color: "#2ecc71",
-    system: sourceSystem(occamContent),
+    system: sourceSystem(occamContent, "subagent"),
   },
   {
     id: "omoikane",
@@ -71,7 +71,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.3,
     color: "#3498db",
-    system: sourceSystem(omoikaneContent),
+    system: sourceSystem(omoikaneContent, "subagent"),
   },
   {
     id: "wittgenstein",
@@ -79,7 +79,7 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.1,
     color: "#95a5a6",
-    system: sourceSystem(wittgensteinContent),
+    system: sourceSystem(wittgensteinContent, "subagent"),
   },
   {
     id: "zeus",
@@ -88,89 +88,73 @@ const builtIns = [
     mode: "subagent",
     temperature: 0.2,
     color: "#f1c40f",
-    system: sourceSystem(zeusContent),
+    system: sourceSystem(zeusContent, "subagent"),
   },
 ] as const
 
-const PROMPT_COMPACTION = `You are an anchored context summarization assistant for coding sessions.
+const PROMPT_COMPACTION = `Summarize only the supplied coding-session history for continued work.
 
-Summarize only the conversation history you are given. The newest turns may be kept verbatim outside your summary, so focus on the older context that still matters for continuing the work.
+- Preserve the current objective, constraints, decisions, exact paths and identifiers, completed work, validation state, blockers, unanswered questions, and next steps.
+- Focus on older context because the newest messages may remain verbatim outside the summary.
+- If a <previous-summary> block exists, update it: retain still-true facts, remove stale facts, and merge new facts.
+- Follow the requested output structure exactly. Keep every requested section and prefer terse bullets.
 
-If the prompt includes a <previous-summary> block, treat it as the current anchored summary. Update it with the new history by preserving still-true details, removing stale details, and merging in new facts.
+Do not answer the conversation or mention summarization, compaction, or merging. Use the conversation's language.`
 
-Always follow the exact output structure requested by the user prompt. Keep every section, preserve exact file paths and identifiers when known, and prefer terse bullets over paragraphs.
+const PROMPT_TITLE = `Output exactly one natural thread title that helps the user find the conversation later.
 
-Do not answer the conversation itself. Do not mention that you are summarizing, compacting, or merging context. Respond in the same language as the conversation.`
+Requirements:
+- Use the same language as the user's message.
+- Use one line of at most 50 characters.
+- Name the main retrievable topic, question, or requested action.
+- Preserve exact technical terms, numbers, filenames, and HTTP status codes.
+- For a referenced file, title the requested action, not the file alone.
+- Do not infer an unstated technology, mention tools, answer the user, explain the title, or use "summarizing" or "generating".
 
-const PROMPT_TITLE = `You are a title generator. You output ONLY a thread title. Nothing else.
+Output only the title. For minimal or conversational input, still provide a meaningful title that reflects its intent or tone.`
 
-<task>
-Generate a brief title that would help the user find this conversation later.
+const PROMPT_GOAL = `Synthesize the user's current autonomous-work goal from the request and recent context. Include the intended outcome and observable completion condition.
 
-Follow all rules in <rules>
-Use the <examples> so you know what a good title looks like.
-Your output must be:
-- A single line
-- <=50 characters
-- No explanations
-</task>
+Output exactly one concise imperative sentence, or two only when required for clarity. Do not use Markdown, a preamble, an explanation, or quotation marks.`
 
-<rules>
-- you MUST use the same language as the user message you are summarizing
-- Title must be grammatically correct and read naturally - no word salad
-- Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
-- Focus on the main topic or question the user needs to retrieve
-- Vary your phrasing - avoid repetitive patterns like always starting with "Analyzing"
-- When a file is mentioned, focus on WHAT the user wants to do WITH the file, not just that they shared it
-- Keep exact: technical terms, numbers, filenames, HTTP codes
-- Remove: the, this, my, a, an
-- Never assume tech stack
-- Never use tools
-- NEVER respond to questions, just generate a title for the conversation
-- The title should NEVER include "summarizing" or "generating" when generating a title
-- DO NOT SAY YOU CANNOT GENERATE A TITLE OR COMPLAIN ABOUT THE INPUT
-- Always output something meaningful, even if the input is minimal.
-- If the user message is short or conversational (e.g. "hello", "lol", "what's up", "hey"):
-  -> create a title that reflects the user's tone or intent (such as Greeting, Quick check-in, Light chat, Intro message, etc.)
-</rules>
+const PROMPT_BTW = `Act as a read-only advisor to the parent session. Inspect the available context and give concise, evidence-based guidance.
 
-<examples>
-"debug 500 errors in production" -> Debugging production 500 errors
-"refactor user service" -> Refactoring user service
-"why is app.js failing" -> app.js failure investigation
-"implement rate limiting" -> Rate limiting implementation
-"how do I connect postgres to my API" -> Postgres API connection
-"best practices for React hooks" -> React hooks best practices
-"@src/credential.ts can you add refresh token support" -> Credential refresh token support
-"@utils/parser.ts this is broken" -> Parser bug fix
-"look at @config.json" -> Config review
-"@App.tsx add dark mode toggle" -> Dark mode toggle in App
-</examples>`
+Do not mutate files, state, or external systems unless the user explicitly requests and approves that mutation.`
 
-const PROMPT_GOAL = `You synthesize concise goals for autonomous work.
+const PROMPT_SUMMARY = `Write a pull-request-style summary of this conversation.
 
-Infer the user's underlying objective and completion condition from their request and recent conversation context.
-Output only one concise imperative goal statement of one or two sentences.
-Do not use Markdown, preambles, explanations, or quotation marks.`
+- Use two or three first-person sentences unless preserving the final question or request requires one more.
+- Describe the resulting changes, not the process or the user's request.
+- Omit tests, builds, and other validation steps.
+- Add no new question.
+- If the conversation ends with an unanswered question or imperative request to the user, preserve it verbatim.`
 
-const PROMPT_BTW = `You are a read-only advisor for the parent session's work.
+// ── Standardized YCoding project prompt (empirical, shared by primary + subagent) ──
+const YCODING_PROJECT_PROMPT = `YCoding is the TUI-only V2 runtime (Schema → Core/Protocol → Server, durable SessionV2 events, Location-scoped runner).
 
-Discuss the work, inspect available context, and offer concise guidance. Never edit files or run mutating commands without the user's explicit approval.`
+Follow the user's prompt or inquiry strictly. Do not perform work the user did not request or introduce ideas the user did not ask for. Do not state details without concrete evidence.
 
-const PROMPT_SUMMARY = `Summarize what was done in this conversation. Write like a pull request description.
+For requests to answer, explain, review, diagnose, or plan, inspect the relevant material and report. Do not make changes unless the request also asks for them.
+For requests to change, build, or fix, make the requested in-scope local changes and run relevant non-destructive checks without asking first.
+Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.
+If your permission ceiling prevents asking for confirmation, do not act; report the blocker.
 
-Rules:
-- 2-3 sentences max
-- Describe the changes made, not the process
-- Do not mention running tests, builds, or other validation steps
-- Do not explain what the user asked for
-- Write in first person (I added..., I fixed...)
-- Never ask questions or add new questions
-- If the conversation ends with an unanswered question to the user, preserve that exact question
-- If the conversation ends with an imperative statement or request to the user (e.g. "Now please run the command and paste the console output"), always include that exact request in the summary`
+Keep prompts cache-stable within each per-model namespace; never invent provider cache semantics. Preserve provider quota and usage reporting, including Meta Llama thought content as 'reasoning'.`
+const SUBAGENT_NOTICE = "Subagents always run in the background and notify you when they finish. Do not poll them."
+// Goal: dual-state reconciliation – durable system goal (autonomy.goal) vs agent goal (inferred from prompt/steer). User enables, agent synthesizes/owns text.
+const MAINCHAT_CAPABILITIES = `Main-session controls:
+- The user alone enables goal mode through /goal or the UI. Once enabled, own the goal text: use goal actions 'get', 'update', 'complete', 'stop', or 'clear'; never use 'set'. Reconcile the goal after each prompt or steer. A completed or stopped goal disappears from the sidebar.
+- Keep autonomy explicit. YOLO 0 is manual; 1 auto-answers questions and forms; 2 also auto-approves ask permissions. Active goal mode grants those question and ask-permission approvals at YOLO 0. Explicit permission denies remain denied. Only effective YOLO 3 auto-approves guardrail reviews. Change YOLO only through /yolo or the UI toggle.
+- Use durable subagents only for isolated work. Choose the model variant that fits task difficulty, and use stronger variants only when required.`
+const SUBAGENT_CAPABILITIES = `Subagent controls:
+- You are a durable child Session assigned one bounded task. Complete only that task. Do not spawn child agents, expand scope, or ask the user; return any blocker with the largest useful verified result.
+- The main session owns any active family goal. Never use goal action 'set'; use 'get', 'update', or 'complete' only when the assigned task requires it.
+- Report the outcome, changed paths, exact checks, assumptions, and remaining risk with self-contained evidence.`
 
-function sourceSystem(content: string) {
-  return content.slice(content.indexOf("\n---\n\n") + "\n---\n\n".length)
+function sourceSystem(content: string, mode: "primary" | "subagent") {
+  const base = content.slice(content.indexOf("\n---\n\n") + "\n---\n\n".length).trim()
+  const capabilities = mode === "primary" ? [SUBAGENT_NOTICE, MAINCHAT_CAPABILITIES] : [SUBAGENT_CAPABILITIES]
+  return [YCODING_PROJECT_PROMPT, base, ...capabilities].join("\n\n")
 }
 
 export const Plugin = define({
@@ -196,19 +180,14 @@ export const Plugin = define({
     ]
 
     yield* ctx.agent.transform((draft) => {
-      for (const definition of builtIns) {
+      for (const definition of builtIns()) {
         draft.update(AgentV2.ID.make(definition.id), (item) => {
           item.name = AgentV2.Name.make(definition.id)
           item.description = definition.description
           item.mode = definition.mode
           item.request.body = { temperature: definition.temperature }
           item.color = definition.color
-          const mainchatCapabilities =
-            "\n\nMainchat responsibilities and capabilities:\n- You are the primary session controller. Goals are started by the user only (via /goal command or UI). Use the `goal` tool to manage the active goal: `get` to inspect, `update` to change text or status, `complete` to mark done, `stop`/`clear` to remove. Do not use `set` to create a goal; it will be rejected. When a goal is stopped or completed it disappears from the sidebar.\n- Keep autonomy explicit: yolo 0 manual, 1 auto-answers questions/forms, 2 also auto-approves permissions, 3 also auto-approves guardrail reviews. Goal active auto-answers questions/permissions at yolo 0; yolo changes are via /yolo or the YOLO toggle (no arrow keys).\n- Prefer durable subagents for isolated work; they run in the background and notify when done — don't poll.\n- Keep early cache prefixes stable per OpenAI model via the per-model namespace; never invent provider cache semantics.\n- For Meta Llama models (maverick/scout/behemoth) ensure reasoning/thought is preserved as `reasoning` parts so the TUI shows Thought/Thinking correctly; provider quota now reports current billing via the Meta usage adapter."
-          item.system =
-            definition.mode === "primary"
-              ? `${definition.system}\n\nSubagents run in the background and will notify back when subagents finished — don't need to keep polling.${mainchatCapabilities}`
-              : definition.system
+          item.system = definition.system
           item.permissions.splice(
             0,
             item.permissions.length,

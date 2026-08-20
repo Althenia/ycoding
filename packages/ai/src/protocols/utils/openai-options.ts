@@ -266,6 +266,8 @@ const PUBLIC_OPENAI_CACHE_ROUTES = new Set([
   "openai-chat",
   "openai-responses",
   "openai-responses-websocket",
+  "github-copilot-chat",
+  "github-copilot-responses",
   "openrouter",
   "openrouter-responses",
 ])

@@ -962,10 +962,14 @@ it.effect("preserves and sanitizes structured AI SDK provider errors", () =>
   }),
 )
 
-it.effect("classifies a closed AI SDK socket while reading as a retryable transport failure", () =>
+it.effect("classifies AI SDK socket-closed and WebSocket close 1006 read failures as transport", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service
-    const failure = new Error("The socket connection was closed unexpectedly")
+    const failures = [
+      new Error("The socket connection was closed unexpectedly"),
+      new Error("WebSocket closed with code 1006"),
+    ]
+    let failure = failures[0]!
     yield* aisdk.hook.sdk((event) => {
       event.sdk = {
         languageModel: () => ({
@@ -987,12 +991,15 @@ it.effect("classifies a closed AI SDK socket while reading as a retryable transp
     })
 
     const resolved = yield* aisdk.model(model("@ai-sdk/anthropic"))
-    const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
-      Effect.provide(client),
-      Effect.flip,
-    )
+    for (const expected of failures) {
+      failure = expected
+      const error = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+        Effect.provide(client),
+        Effect.flip,
+      )
 
-    expect(error).toMatchObject({ method: "readStream", reason: { _tag: "Transport", message: failure.message } })
+      expect(error).toMatchObject({ method: "readStream", reason: { _tag: "Transport", message: expected.message } })
+    }
   }),
 )
 

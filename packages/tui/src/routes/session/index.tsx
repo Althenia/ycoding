@@ -1603,7 +1603,12 @@ export function SessionRowView(props: {
     if (row.type === "assistant-footer") return props.message(row.messageID)?.type === "assistant"
     if (row.type === "part") {
       const message = props.message(row.ref.messageID)
-      return message?.type === "assistant" && resolvePart(message, row.ref.partID) !== undefined
+      if (message?.type !== "assistant") return false
+      const content = resolvePart(message, row.ref.partID)
+      return (
+        content !== undefined &&
+        (content.type !== "tool" || transcriptToolPartVisible(content))
+      )
     }
     if (row.type === "group") {
       const refs = row.kind === "exploration" ? [...row.refs, ...row.pending] : row.refs
@@ -1612,7 +1617,7 @@ export function SessionRowView(props: {
         if (message?.type !== "assistant") return false
         const part = resolvePart(message, ref.partID)
         if (row.kind === "reasoning") return part?.type === "reasoning" && Boolean(reasoningContent(part))
-        return part?.type === "tool"
+        return part?.type === "tool" && transcriptToolPartVisible(part)
       })
     }
     return true
@@ -1936,7 +1941,7 @@ function SessionGroupView(props: {
       const message = props.message(ref.messageID)
       if (message?.type !== "assistant") return []
       const part = resolvePart(message, ref.partID)
-      if (part?.type !== "tool") return []
+      if (part?.type !== "tool" || !transcriptToolPartVisible(part)) return []
       return [part]
     })
   const grouped = createMemo(() => parts(props.refs))
@@ -4309,6 +4314,14 @@ export function toolDisplay(tool: string) {
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return
   return value as Record<string, unknown>
+}
+
+function transcriptToolPartVisible(part: SessionMessageAssistantTool) {
+  return (
+    part.name !== "skill" ||
+    part.state.status !== "completed" ||
+    recordValue(recordValue(part.state)?.structured)?.alreadyActive !== true
+  )
 }
 
 function formatSessionTranscript(session: SessionInfo, messages: SessionMessageInfo[], thinking: boolean) {

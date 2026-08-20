@@ -61,11 +61,11 @@ When a Session drain is active, selection waits for that drain to settle before 
 
 ## One Step Owns One Logical LLM Call
 
-Before each Step, the runner reloads Session History, resolves the selected agent and model, prepares instructions, and materializes tools. Most Steps make one Physical Attempt; overflow-triggered compaction recovery may rebuild the same Step for one additional provider request.
+Before each Step, the runner reloads Session History, resolves the selected agent and model, prepares instructions, and materializes tools. Most Steps make one Physical Attempt. A typed pre-output retry may repeat the Physical Attempt within the same Step, and overflow-triggered compaction recovery may rebuild the same Step for one additional provider request.
 
 Each complete local tool call is durable before side effects begin. Local calls start eagerly and may run concurrently, but settlement publication remains serialized. Every local and hosted call reaches durable success or failure before the Step publishes its single terminal ended or failed event.
 
-Every Step that publishes `session.step.started.1` publishes exactly one terminal `session.step.ended.1` or `session.step.failed.1`. Provider step settlement is required for `Step.Ended`. A malformed started Step with missing settlement fails truthfully as `provider.invalid-output`; an unstarted empty malformed request may proceed to the bounded terminal-silence recovery without inventing a Step event. A valid settled response with no non-whitespace assistant text and no local-tool continuation may start exactly one text-only recovery Step. The recovery disables tools and stored Responses continuation, carries no synthetic max-step message, and must fail without a third Step unless it receives both real provider settlement and non-whitespace assistant text.
+Every Step that publishes `session.step.started.1` publishes exactly one terminal `session.step.ended.1` or `session.step.failed.1`, including when the Step uses multiple Physical Attempts. Provider step settlement is required for `Step.Ended`. A malformed started Step with missing settlement fails truthfully as `provider.invalid-output`; an unstarted empty malformed request may proceed to the bounded terminal-silence recovery without inventing a Step event. A valid settled response with no non-whitespace assistant text and no local-tool continuation may start exactly one text-only recovery Step. The recovery disables tools and stored Responses continuation, carries no synthetic max-step message, and must fail without a third Step unless it receives both real provider settlement and non-whitespace assistant text.
 
 Tool calls belong to their assistant message. `callID` is unique only within that Step, so durable tool events also carry `assistantMessageID`.
 
@@ -81,9 +81,9 @@ After local settlement, continuation reloads projected history and begins a new 
 
 ## Retry Is Narrow And Observable
 
-Core retries typed rate-limit, provider-internal, and transport failures only before durable assistant content, tool-call, tool-output, or tool-execution evidence exists. The initial request plus at most four retries use exponential backoff, increased when the provider supplies a longer retry delay.
+Core retries typed rate-limit, provider-internal, and transport failures only before non-whitespace text or reasoning or any tool evidence exists. Empty text or reasoning starts and empty deltas do not cross this boundary. The initial request plus at most nine retries use exponential backoff, increased when the provider supplies a longer retry delay within the runtime ceiling. Anthropic AI SDK socket disconnects and abnormal WebSocket close code 1006 normalize to transport failures and use this policy.
 
-Each retry attempt is a distinct Step, consumes the selected agent's allowance, and reuses the assistant message ID while no durable output exists. `session.retry.scheduled` records the next attempt and absolute retry time. A later Step start or terminal failure clears projected retry state. Surviving retry history never triggers post-crash recovery by itself.
+Each retry is a new Physical Attempt within the same logical Step, reuses its assistant message ID, and does not consume another unit of the selected agent's Step allowance. The logical Step publishes one started event and one terminal event across all its attempts. `session.retry.scheduled` records the next attempt and absolute retry time. A later Step start or terminal failure clears projected retry state. Surviving retry history never triggers post-crash recovery by itself.
 
 A normalized content-filter finish fails the Step. Any partial streamed content remains visible.
 

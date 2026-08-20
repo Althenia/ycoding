@@ -1306,6 +1306,7 @@ describe("OpenAI Chat route", () => {
       ])
       const error = yield* LLMClient.generate(request).pipe(Effect.provide(layer), Effect.flip)
 
+      expect(error.reason).toMatchObject({ _tag: "Transport", kind: "read" })
       expect(error.message).toContain("Failed to read openai/openai-chat stream")
     }),
   )

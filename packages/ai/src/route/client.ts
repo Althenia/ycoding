@@ -227,7 +227,7 @@ export interface MakeTransportInput<Body, Prepared, Frame, Event, State> {
 const streamError = (route: string, message: string, cause: Cause.Cause<unknown>) => {
   const failed = cause.reasons.find(Cause.isFailReason)?.error
   if (failed instanceof LLMErrorClass) return failed
-  return ProviderShared.eventError(route, message, Cause.pretty(cause))
+  return ProviderShared.streamReadError(route, Cause.pretty(cause))
 }
 
 const requireTerminalEvent = (route: string) => (events: Stream.Stream<LLMEvent, LLMError>) =>
@@ -479,7 +479,9 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
             protocol.stream.step,
             protocol.stream.onHalt ? { onHalt: protocol.stream.onHalt } : undefined,
           ),
-          Stream.catchCause((cause) => Stream.fail(streamError(route, `Failed to read ${route} stream`, cause))),
+          Stream.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause) ? Stream.failCause(cause) : Stream.fail(streamError(route, `Failed to read ${route} stream`, cause)),
+          ),
           requireTerminalEvent(route),
         )
       },

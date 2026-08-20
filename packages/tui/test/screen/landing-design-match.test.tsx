@@ -69,7 +69,7 @@ async function expectLandingDesign(viewport: typeof DESIGN_VIEWPORT) {
       expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(62)
       expect(placeholder?.indexOf("Message YCoding…")).toBe(3)
       expect(header).toContain("Ling-3.0-flash · max")
-      expect(screen.colorOf("max")).toEqual([103, 215, 170, 255])
+      expect(screen.colorOf("max")).toEqual([103, 215, 164, 255])
       expect(lines.some((line) => /Enter send|↓ subagents|⌃x b sidebar/.test(line))).toBe(false)
       expect(lines[67]).toContain("⌃p commands")
       await screen.mouse.click(3, 62)

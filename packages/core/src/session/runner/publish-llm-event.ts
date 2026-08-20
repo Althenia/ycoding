@@ -359,7 +359,6 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         yield* startAssistant()
         return
       case "text-start":
-        retryEvidence = true
         nextContentOrdinal += 1
         const startedTextPhase = textPhase(event.providerMetadata)
         const startedTextState = startedTextPhase === undefined ? undefined : { phase: startedTextPhase }
@@ -372,6 +371,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         })
         return
       case "text-delta":
+        if (event.text.trim().length > 0) retryEvidence = true
         const deltaTextPhase = textPhase(event.providerMetadata)
         const deltaTextOrdinal = yield* text.append(
           event.id,
@@ -390,7 +390,6 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         yield* text.end(event.id, endedTextPhase === undefined ? undefined : { phase: endedTextPhase })
         return
       case "reasoning-start":
-        retryEvidence = true
         const reasoningMessageID = yield* startAssistant()
         const reasoningContentOrdinal = nextContentOrdinal++
         reasoningContentOrdinals.set(event.id, reasoningContentOrdinal)
@@ -410,6 +409,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         })
         return
       case "reasoning-delta":
+        if (event.text.trim().length > 0) retryEvidence = true
         const reasoningDeltaContentOrdinal = reasoningContentOrdinals.get(event.id)
         if (reasoningDeltaContentOrdinal === undefined)
           return yield* Effect.die(new Error(`Reasoning delta before start: ${event.id}`))

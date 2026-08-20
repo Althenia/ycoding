@@ -86,6 +86,8 @@ const waitOpen = (ws: globalThis.WebSocket, input: WebSocketRequest) => {
     }
     const onError = (event: Event) => {
       cleanup()
+      if (ws.readyState !== globalThis.WebSocket.CLOSED && ws.readyState !== globalThis.WebSocket.CLOSING)
+        ws.close(1000)
       resume(
         Effect.fail(
           transportError("open", `Failed to open WebSocket: ${eventMessage(event)}`, { url: input.url, kind: "open" }),
@@ -163,7 +165,9 @@ export const fromWebSocket = (
         ),
       )
     }
+    let closed = false
     const onError = (event: Event) => {
+      closed = true
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
@@ -172,6 +176,7 @@ export const fromWebSocket = (
       )
     }
     const onClose = (event: CloseEvent) => {
+      closed = true
       if (event.code === 1000 || event.code === 1005) return Queue.endUnsafe(messages)
       Queue.failCauseUnsafe(
         messages,
@@ -182,6 +187,7 @@ export const fromWebSocket = (
     }
     let pingInterval: ReturnType<typeof setInterval> | undefined
     const cleanup = Effect.sync(() => {
+      closed = true
       ws.removeEventListener("message", onMessage)
       ws.removeEventListener("error", onError)
       ws.removeEventListener("close", onClose)
@@ -222,7 +228,7 @@ export const fromWebSocket = (
           }),
         ),
       ),
-      isOpen: () => ws.readyState === globalThis.WebSocket.OPEN,
+      isOpen: () => !closed && ws.readyState === globalThis.WebSocket.OPEN,
     }
   })
 
@@ -269,6 +275,7 @@ interface JsonSession<Message extends Record<string, unknown>> {
   readonly permit: Semaphore.Semaphore
   fingerprint: string
   fallback: boolean
+  active: boolean
   connection?: WebSocketConnection
   previous?: {
     readonly message: Message
@@ -356,19 +363,44 @@ export const json = <Body, Message extends Record<string, unknown>>(
   const evict = (key: string) => {
     const existing = sessions.get(key)
     if (!existing) return
+    // Never evict while a request holds the permit — that would close the
+    // active websocket mid-stream and surface as a spurious interrupt after
+    // exactly IDLE_TTL_MS (the 60s failure observed in production).
+    if (existing.active) return
     if (existing.idleTimer) clearTimeout(existing.idleTimer)
     if (existing.fallbackTimer) clearTimeout(existing.fallbackTimer)
     if (existing.connection) Effect.runFork(existing.connection.close)
     sessions.delete(key)
   }
 
+  const evictOldestInactive = () => {
+    const oldest = Array.from(sessions).find(([, state]) => !state.active)?.[0]
+    if (oldest === undefined) return false
+    evict(oldest)
+    return true
+  }
+
+  const evictToCapacity = (capacity: number) => {
+    while (sessions.size > capacity) {
+      if (!evictOldestInactive()) return
+    }
+  }
+
   const touch = (key: string, state: JsonSession<Message>) => {
+    if (state.active) return
     if (state.idleTimer) clearTimeout(state.idleTimer)
     const timer = setTimeout(() => evict(key), IDLE_TTL_MS)
     if (typeof (timer as unknown as { unref?: () => void }).unref === "function") {
       ;(timer as unknown as { unref: () => void }).unref()
     }
     state.idleTimer = timer
+  }
+
+  const clearIdle = (state: JsonSession<Message>) => {
+    if (state.idleTimer) {
+      clearTimeout(state.idleTimer)
+      state.idleTimer = undefined
+    }
   }
 
   const resetFallback = (state: JsonSession<Message>) => {
@@ -388,9 +420,7 @@ export const json = <Body, Message extends Record<string, unknown>>(
   }
 
   const ensureCapacity = () => {
-    if (sessions.size < SESSION_MAX) return
-    const oldest = sessions.keys().next().value as string | undefined
-    if (oldest !== undefined) evict(oldest)
+    evictToCapacity(SESSION_MAX - 1)
   }
 
   const httpFrames = (
@@ -409,19 +439,14 @@ export const json = <Body, Message extends Record<string, unknown>>(
         },
         runtime.http.execute(prepared.http.request),
       ).pipe(
-        Effect.map((response) =>
-          prepared.http.framing.frame(
+        Effect.map((response) => {
+          const route = `${request.model.provider}/${request.model.route.id}`
+          return prepared.http.framing.frame(
             response.stream.pipe(
-              Stream.mapError((error) =>
-                ProviderShared.eventError(
-                  `${request.model.provider}/${request.model.route.id}`,
-                  `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
-                  ProviderShared.errorText(error),
-                ),
-              ),
+              Stream.mapError((error) => ProviderShared.streamReadError(route, error)),
             ),
-          ),
-        ),
+          )
+        }),
       ),
     )
 
@@ -471,11 +496,25 @@ export const json = <Body, Message extends Record<string, unknown>>(
       permit: Semaphore.makeUnsafe(1),
       fingerprint: metadata.fingerprint,
       fallback: false,
+      active: false,
     }
     if (!existed) ensureCapacity()
     sessions.set(metadata.key, state)
-    touch(metadata.key, state)
-    return Stream.fromEffect(state.permit.take(1)).pipe(
+    // Idle timer is managed via `active` flag. Do not arm it while the
+    // permit will be held — see `touch`/`evict`/`clearIdle` for the 60s
+    // mid-stream eviction fix.
+    let acquired = false
+    return Stream.fromEffect(
+      state.permit.take(1).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            acquired = true
+            state.active = true
+            clearIdle(state)
+          }),
+        ),
+      ),
+    ).pipe(
       Stream.flatMap(() =>
         Stream.unwrap(
           Effect.gen(function* () {
@@ -502,8 +541,9 @@ export const json = <Body, Message extends Record<string, unknown>>(
             // transparently replaced by HTTP mid-request. Connections without `isOpen` keep the
             // older behavior: fail this request and route the next one through HTTP.
             const reused = state.connection?.isOpen !== undefined
-            if (state.connection?.isOpen && !state.connection.isOpen()) {
-              yield* state.connection.close
+            const isStale = reused ? !state.connection!.isOpen?.() : false
+            if (isStale) {
+              yield* state.connection!.close.pipe(Effect.catch(() => Effect.void))
               state.connection = undefined
             }
 
@@ -539,6 +579,18 @@ export const json = <Body, Message extends Record<string, unknown>>(
                 resetFallback(state)
                 return fallbackError("sendText", error.message, prepared.url)
               }),
+              Effect.onError(() =>
+                Effect.gen(function* () {
+                  if (state.connection === connection) {
+                    state.connection = undefined
+                    if (!state.fallback) {
+                      state.fallback = true
+                      resetFallback(state)
+                    }
+                    yield* connection.close.pipe(Effect.catch(() => Effect.void))
+                  }
+                }),
+              ),
             )
 
             const decoder = new TextDecoder()
@@ -600,11 +652,15 @@ export const json = <Body, Message extends Record<string, unknown>>(
                           output,
                           messageBoundary: metadata.messageBoundary,
                         }
-                  if (terminal || rejected) {
+                  if (terminal && !rejected) {
                     touch(metadata.key, state)
                     return
                   }
                   state.connection = undefined
+                  if (rejected) {
+                    state.fallback = true
+                    resetFallback(state)
+                  }
                   yield* connection.close
                   touch(metadata.key, state)
                 }),
@@ -616,7 +672,19 @@ export const json = <Body, Message extends Record<string, unknown>>(
               }),
             )
           }),
-        ).pipe(Stream.ensuring(state.permit.release(1))),
+        ).pipe(
+          Stream.ensuring(
+            Effect.gen(function* () {
+              if (acquired) {
+                acquired = false
+                state.active = false
+                yield* state.permit.release(1)
+                touch(metadata.key, state)
+                evictToCapacity(SESSION_MAX)
+              }
+            }),
+          ),
+        ),
       ),
     )
   }

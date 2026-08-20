@@ -466,7 +466,7 @@ Inline shape:
 }
 ```
 
-When `default_agent` is omitted, YCoding selects the maintained `god` primary agent. The selectable built-in primaries are `TLDR`, `architech`, `god`, and `yangi`; maintained subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`. The visible `btw` advisor and hidden `compaction`, `title`, `goal`, and `summary` helpers remain registered. `compaction` remains `mode: primary`; its internal taskless child Session does not create a managed subagent task. `build`, `plan`, `explore`, `general`, `analyze`, and `brainstorm` are not built-ins.
+When `default_agent` is omitted, YCoding selects the maintained `god` primary agent. Agent listings place the effective default first, so a new TUI session starts with `god` while an explicit `default_agent` remains authoritative. The selectable built-in primaries are `TLDR`, `architech`, `god`, and `yangi`; maintained subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`. The visible `btw` advisor and hidden `compaction`, `title`, `goal`, and `summary` helpers remain registered. `compaction` remains `mode: primary`; its internal taskless child Session does not create a managed subagent task. `build`, `plan`, `explore`, `general`, `analyze`, and `brainstorm` are not built-ins.
 
 Agent fields:
 
