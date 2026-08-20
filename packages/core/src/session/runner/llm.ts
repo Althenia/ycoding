@@ -277,6 +277,7 @@ const layer = Layer.effect(
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => publication.withPermit(effect)
       const publish = (event: LLMEvent, error?: SessionError.Error) => serialized(publisher.publish(event, error))
       let overflowFailure: ProviderErrorEvent | undefined
+      let continuationFailure: ProviderErrorEvent | undefined
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
       requestTrackerState.attempts += 1
@@ -292,9 +293,18 @@ const layer = Layer.effect(
                 }),
               )
             }
-            if (overflowFailure || publisher.hasProviderError()) return
+            if (overflowFailure || continuationFailure || publisher.hasProviderError()) return
             if (LLMEvent.is.providerError(event) && isContextOverflowFailure(event) && !publisher.hasRetryEvidence()) {
               overflowFailure = event
+              return
+            }
+            if (
+              LLMEvent.is.providerError(event) &&
+              originalPrepared.continuation.used &&
+              !publisher.hasRetryEvidence() &&
+              isInvalidPreviousResponse(event.message)
+            ) {
+              continuationFailure = event
               return
             }
             yield* publish(event)
@@ -493,13 +503,10 @@ const layer = Layer.effect(
             yield* serialized(publisher.failAssistant(overflowLimit))
           }
 
-          if (
-            originalPrepared.continuation.used &&
-            !publisher.hasRetryEvidence() &&
-            streamFailure instanceof LLMError &&
-            streamFailure.reason._tag === "InvalidRequest" &&
-            isInvalidPreviousResponse(streamFailure.reason.message)
-          ) {
+          const invalidPreviousResponse =
+            continuationFailure !== undefined ||
+            (streamFailure instanceof LLMError && isInvalidPreviousResponse(streamFailure.reason.message))
+          if (originalPrepared.continuation.used && !publisher.hasRetryEvidence() && invalidPreviousResponse) {
             yield* continuation.clear(session.id)
             return {
               _tag: "RestartWithoutContinuation",

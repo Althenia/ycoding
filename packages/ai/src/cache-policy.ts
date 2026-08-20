@@ -408,13 +408,15 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
       : ["user", "tool"]
   const tools = policy.tools && !gpt56 ? markLastTool(request.tools, prefixHint, reserve) : request.tools
   const system = policy.system ? markLastSystem(request.system, prefixHint, reserve) : request.system
-  const trailingVolatile = request.messages.at(-1)?.volatile === true
-  const implicitReserved =
-    !gpt56 || OpenAIOptions.promptCacheOptions(request)?.mode === "explicit" || trailingVolatile ? 0 : 1
+  // Volatility is local metadata and does not disable the provider's managed
+  // latest-message breakpoint, so its read-candidate slot always stays reserved.
+  const implicitReserved = !gpt56 || OpenAIOptions.promptCacheOptions(request)?.mode === "explicit" ? 0 : 1
   const gpt56MessageLimit = gpt56
     ? Math.max(
         0,
-        OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT - implicitReserved - (system.some((part) => part.cache !== undefined) ? 1 : 0),
+        OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT -
+          implicitReserved -
+          (system.some((part) => part.cache !== undefined) ? 1 : 0),
       )
     : Number.MAX_SAFE_INTEGER
   const selectedMessages = !policy.messages

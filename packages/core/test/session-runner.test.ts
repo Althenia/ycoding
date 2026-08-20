@@ -866,7 +866,10 @@ const invalidPreviousResponse = () =>
   new LLMError({
     module: "test",
     method: "stream",
-    reason: new InvalidRequestReason({ message: "Previous response ID is invalid or expired" }),
+    reason: classifyProviderFailure({
+      code: "invalid_previous_response_id",
+      message: "Previous response ID is invalid or expired",
+    }),
   })
 
 const rateLimited = (retryAfterMs?: number) =>
@@ -1735,6 +1738,42 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(3)
       expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_first" })
+      expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+      expect(requests[1]?.id).toBe(requests[2]?.id)
+      const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))
+      expect((yield* recordedStepSettlementEvents(sessionID, assistant.id)).map((event) => event.type)).toEqual([
+        "session.step.started.1",
+        "session.step.ended.1",
+      ])
+      const records = yield* SessionProviderRequest.Service.pipe(
+        Effect.flatMap((providerRequests) => providerRequests.list(sessionID)),
+      )
+      expect(records.map((record) => ({ attempts: record.attempts, continuation: record.continuation }))).toEqual([
+        { attempts: 1, continuation: "full" },
+        { attempts: 2, continuation: "fallback" },
+      ])
+    }),
+  )
+
+  it.effect("falls back from a streamed invalid stored OpenAI response error", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = storedOpenAIResponsesModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+      responses = [
+        reply.toolWithResponse("call-fallback-event", "echo", { text: "fallback" }, "resp_event"),
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.providerError({ message: "invalid_previous_response_id: Previous response ID is invalid or expired" }),
+        ],
+        reply.textWithResponse("Recovered", "fallback-event-recovered", "resp_event_recovered"),
+      ]
+
+      yield* admit(session, "Recover streamed stale response state")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(requests[1]?.providerOptions?.openai).toMatchObject({ previousResponseId: "resp_event" })
       expect(requests[2]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
       expect(requests[1]?.id).toBe(requests[2]?.id)
       const assistant = requireAssistant((yield* session.context(sessionID)).slice(-1))

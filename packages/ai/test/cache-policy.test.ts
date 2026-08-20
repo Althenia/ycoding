@@ -1268,6 +1268,27 @@ describe("volatile messages", () => {
     expect(placement(second.messages).at(-1)).toEqual([undefined])
   })
 
+  it.effect("reserves the GPT-5.6 managed implicit candidate behind a volatile TeamView suffix", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(
+        LLM.request({
+          model: openai56ResponsesModel,
+          system: "Stable system",
+          messages: [
+            ...Array.from({ length: 60 }, (_, index) => Message.user(`user ${index}`)),
+            volatileUser("TeamView: child running"),
+          ],
+          cache: { system: true, messages: { tail: 50 } },
+          providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+        }),
+      )
+
+      expect(prepared.body).toMatchObject({ prompt_cache_options: { mode: "implicit", ttl: "30m" } })
+      expect(JSON.stringify(prepared.body).match(/"prompt_cache_breakpoint"/g)).toHaveLength(49)
+      expect(JSON.stringify(prepared.body.input.at(-1))).not.toContain("prompt_cache_breakpoint")
+    }),
+  )
+
   test("explicit tail policy anchors the last cacheable message before a volatile tail", () => {
     const applied = applyCachePolicy(
       LLM.request({
