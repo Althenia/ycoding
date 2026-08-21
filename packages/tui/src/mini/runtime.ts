@@ -324,8 +324,17 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
       }
     },
     onInterrupt: () => {
-      if (!state.sessionID || state.aborting) {
+      if (!state.sessionID) {
         return false
+      }
+
+      if (state.aborting) {
+        void state.sdk.session.interrupt({ sessionID: state.sessionID })
+          .catch(() => {})
+          .finally(() => {
+            state.aborting = false
+          })
+        return true
       }
 
       state.aborting = true
