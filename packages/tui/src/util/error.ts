@@ -2,7 +2,20 @@ import { isRecord } from "./record"
 
 type ConfigIssue = { message: string; path: string[] }
 
+function isMaxListenersNoise(input: unknown): boolean {
+  const text =
+    typeof input === "string"
+      ? input
+      : input instanceof Error
+        ? `${input.name}: ${input.message}\n${input.stack ?? ""}`
+        : isRecord(input) && typeof input.message === "string"
+          ? input.message
+          : String(input ?? "")
+  return text.includes("MaxListenersExceededWarning") || (text.includes("Possible EventEmitter memory leak") && text.includes("resize"))
+}
+
 export function cliErrorMessage(input: unknown): string | undefined {
+  if (isMaxListenersNoise(input)) return undefined
   if (input instanceof Error && isRecord(input.cause) && "body" in input.cause) {
     const formatted = cliErrorMessage(input.cause.body)
     if (formatted) return formatted
@@ -95,6 +108,7 @@ function field(input: Record<string, unknown>, key: string) {
 }
 
 export function errorFormat(error: unknown): string {
+  if (isMaxListenersNoise(error)) return ""
   if (error instanceof Error) {
     return error.stack ?? `${error.name}: ${error.message}`
   }
@@ -123,6 +137,7 @@ export function errorFormat(error: unknown): string {
 }
 
 export function errorMessage(error: unknown): string {
+  if (isMaxListenersNoise(error)) return ""
   if (error instanceof Error) {
     if (error.message) return error.message
     if (error.name) return error.name

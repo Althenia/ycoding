@@ -175,6 +175,13 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     consoleMode: "disabled",
     clearOnShutdown: false,
   })
+  // Many components use useTerminalDimensions() which each adds a `resize`
+  // listener to the same renderer emitter. The default EventEmitter limit
+  // (10) is easily exceeded in a full session view, emitting
+  // MaxListenersExceededWarning that leaks into the composer textarea.
+  // Raise the limit for this expected fan-out; individual subscriptions
+  // still clean up via `off` in their onCleanup.
+  ;(renderer as unknown as { setMaxListeners?: (n: number) => void }).setMaxListeners?.(0)
   const tuiConfig = await input.tuiConfig
   const theme = await resolveRunTheme(renderer, tuiConfig.theme)
   renderer.setBackgroundColor(theme.background)

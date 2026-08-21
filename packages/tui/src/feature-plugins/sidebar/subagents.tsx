@@ -1,11 +1,12 @@
 import type { SessionOrchestrationSummary, SessionOrchestrationTask } from "@ycoding-ai/client"
 import { Plugin } from "@ycoding-ai/plugin/tui"
-import { createEffect, createMemo, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
 import { useData } from "../../context/data"
 import { useRoute } from "../../context/route"
 import { useTheme } from "../../context/theme"
 import { RailRow, RailSection, useRail } from "../../routes/session/rail-section"
 import { getGlyph } from "../../ui/glyph"
+import { isActiveSubagent } from "../../util/subagent"
 import { formatSubagentElapsed } from "../../util/time"
 
 export function SubagentRail(props: { sessionID: string }) {
@@ -14,13 +15,18 @@ export function SubagentRail(props: { sessionID: string }) {
   createEffect(() => void data.session.subagent.sync(props.sessionID))
   const page = createMemo(() => data.session.subagent.page(props.sessionID))
   const navigation = createMemo(() => data.session.subagent.navigation(props.sessionID))
+  const [now, setNow] = createSignal(Date.now())
+  createEffect(() => {
+    const tasks = page()?.data ?? []
+    if (!tasks.some((task) => isActiveSubagent(task.state))) return
+    const interval = setInterval(() => setNow(Date.now()), 1000)
+    onCleanup(() => clearInterval(interval))
+  })
+  const tasksWithElapsed = createMemo(() => (page()?.data ?? []).map((task) => ({ ...task, elapsed: formatSubagentElapsed(task, now()) })))
 
   return (
     <SubagentRailContent
-      tasks={(page()?.data ?? []).map((task) => ({
-        ...task,
-        elapsed: formatSubagentElapsed(task),
-      }))}
+      tasks={tasksWithElapsed()}
       summary={page()?.summary}
       position={navigation().position}
       onSelect={(sessionID) => route.navigate({ type: "session", sessionID })}

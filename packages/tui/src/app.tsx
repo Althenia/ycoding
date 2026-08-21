@@ -221,6 +221,13 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         )
       })
       win32DisableProcessedInput()
+      // Many components subscribe to resize via useTerminalDimensions().
+      // With >10 mounted components the renderer's EventEmitter hits the
+      // default 10-listener limit and emits MaxListenersExceededWarning,
+      // which surfaces inside the composer textarea. The fan-out is
+      // expected, so raise the limit; each subscription still cleans up
+      // via off() on unmount.
+      ;(renderer as unknown as { setMaxListeners?: (n: number) => void }).setMaxListeners?.(0)
       const finalizers = new Set<() => Promise<void>>()
       yield* Effect.addFinalizer(() =>
         Effect.promise(async () => {
