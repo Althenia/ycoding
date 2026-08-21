@@ -87,18 +87,27 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     const messages = data.session.message.list(sessionID())
     const inputs = new Set(data.session.input.list(sessionID()))
     const revertID = revertBoundary()
-    const compactionBoundaryIndex = residentCompactionBoundary(sessionID(), messages, data.session.compaction.list(sessionID()))
+    const compactions = data.session.compaction.list(sessionID())
+    const compactionBoundaryIndex = residentCompactionBoundary(sessionID(), messages, compactions)
     const pruned = compactionBoundaryIndex === -1 ? messages : messages.filter((message, index) => index > compactionBoundaryIndex || message.type === "compaction")
+    const latestLifecycle = compactions.filter(compactionTranscriptVisible).at(-1)
+    const latestLegacy = pruned.findLast(
+      (message): message is Extract<SessionMessageInfo, { type: "compaction" }> =>
+        message.type === "compaction" && compactionMessageTranscriptVisible(message),
+    )
+    const showLifecycle =
+      latestLifecycle !== undefined &&
+      (latestLegacy === undefined || latestLifecycle.time.created >= latestLegacy.time.created)
     const visible = (revertID ? pruned.filter((message) => message.id < revertID) : pruned).filter(
-      (message) => message.type !== "compaction" || compactionMessageTranscriptVisible(message as Extract<SessionMessageInfo, { type: "compaction" }>),
+      (message) => message.type !== "compaction" || (!showLifecycle && message.id === latestLegacy?.id),
     )
     const rows = reduceSessionRows(visible, inputs, data.session.status(sessionID()) === "idle")
-    data.session.compaction.list(sessionID()).filter(compactionTranscriptVisible).forEach((item) => {
-      const row: SessionRow = { type: "compaction", jobID: item.jobID }
-      const index = compactionRowIndex(item, messages, rows)
+    if (showLifecycle) {
+      const row: SessionRow = { type: "compaction", jobID: latestLifecycle.jobID }
+      const index = compactionRowIndex(latestLifecycle, messages, rows)
       if (index === -1) rows.push(row)
       else rows.splice(index, 0, row)
-    })
+    }
     const activityBoundary = rows.findLastIndex((row) => {
       if (row.type === "compaction") return true
       if (row.type !== "message") return false

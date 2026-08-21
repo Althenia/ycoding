@@ -129,7 +129,7 @@ ${input.text}
 }
 
 export function modelTokens(entries: ReadonlyArray<{ readonly message: SessionMessage.Info }>) {
-  return Token.estimate(JSON.stringify(entries.map((entry) => encode(entry.message))))
+  return Token.estimateJson(entries.map((entry) => encode(entry.message)))
 }
 
 export const entriesForModelThrough = Effect.fnUntraced(function* (

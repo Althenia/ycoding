@@ -249,7 +249,7 @@ const make = (dependencies: Dependencies): Interface => {
           terminalSeq: EventV2.Seq.make(row.seq),
           inputKind: row.type,
           payload: row.data,
-          tokens: Token.estimate(JSON.stringify(row.data)),
+          tokens: Token.estimateJson(row.data),
         },
       ]
     })

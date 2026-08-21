@@ -126,6 +126,43 @@ describe("Session hard context gate", () => {
     }),
   )
 
+  it.effect("does not admit compaction for encoded tool-result image bytes", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("tool_image")
+      const result = yield* runGate({
+        fixture,
+        candidate: {
+          context: { revision: 0 },
+          prepared: {
+            request: LLM.request({
+              model,
+              messages: [
+                Message.tool({
+                  id: "call-image",
+                  name: "read",
+                  result: {
+                    type: "content",
+                    value: [
+                      {
+                        type: "file",
+                        uri: `data:image/png;base64,${"a".repeat(100_000)}`,
+                        mime: "image/png",
+                      },
+                    ],
+                  },
+                }),
+              ],
+            }),
+          },
+        },
+        reload: () => Effect.die("reload must not run"),
+      })
+
+      expect(result.compacted).toBe(false)
+      expect(yield* allJobs()).toEqual([])
+    }),
+  )
+
   it.effect("continues without admission when the exact cap is non-positive", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("non_positive")
