@@ -292,7 +292,7 @@ const targets = [
     // PLUGINS is deliberately not a stability marker: it is the last rail section, so whenever the
     // rail renders taller than the design it falls below the fold. Waiting on it turns a graded row
     // difference into a capture crash that freezes the whole board.
-    stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "SKILLS", "MCP"],
+    stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "MCP"],
     transcript: [
       ["ok", "Inspect cache telemetry callers", "done"],
       ["!!", "guardrail", "write outside workspace", "needs approval"],
@@ -312,7 +312,7 @@ const targets = [
     // PLUGINS is deliberately not a stability marker: it is the last rail section, so whenever the
     // rail renders taller than the design it falls below the fold. Waiting on it turns a graded row
     // difference into a capture crash that freezes the whole board.
-    stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "SKILLS", "MCP"],
+    stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "MCP"],
   },
 ]
 

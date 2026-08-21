@@ -28,7 +28,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
           {(item) => (
             <RailRow
               label={item.name}
-              value={item.status.status === "failed" ? item.status.error : mcpStatusPresentation(item.status.status).label}
+              value={mcpStatusPresentation(item.status.status).label}
               valueColor={color(mcpStatusPresentation(item.status.status).tone)}
             />
           )}

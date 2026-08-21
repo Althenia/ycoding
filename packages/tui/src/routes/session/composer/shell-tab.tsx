@@ -126,7 +126,7 @@ export function ShellTab(props: { sessionID: string }) {
   })
 
   createEffect(() => {
-    if (selected() >= entries().length) setSelected(Math.max(0, entries().length - 1))
+    if (selected() >= entries().length) setSelected(0)
   })
 
   createEffect(() => {
@@ -206,10 +206,12 @@ export function ShellTab(props: { sessionID: string }) {
         id: "composer.shell.kill",
         title: "Kill shell command",
         group: "Composer",
-        bind: "ctrl+x k",
+        bind: "<leader>k",
         run() {
           const entry = selectedEntry()
           if (!entry) return
+          setSelected(0)
+          if (scroll) scroll.scrollTo(0)
           const ref = location.current
           void client.api.shell.remove({
             id: entry.shell.id,

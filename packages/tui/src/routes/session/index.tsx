@@ -418,16 +418,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const headerModel = createMemo(() => {
     const model = session()?.model ?? headerMessage()?.model
     if (!model) return
-    return models().find((item) => item.providerID === model.providerID && item.id === model.id)?.name ?? model.id
+    const info = models().find((item) => item.providerID === model.providerID && item.id === model.id)
+    const name = info?.name ?? Locale.titlecase(model.id.replaceAll("-", " "))
+    return `${model.providerID}/${name}`
   })
   const headerVariant = createMemo(() => session()?.model?.variant ?? headerMessage()?.model.variant)
   const pendingHeaderModel = createMemo(() => {
     const selected = local.model.current()
     if (!selected) return undefined
-    return (
-      models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)?.name ??
-      selected.modelID
-    )
+    const info = models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
+    const name = info?.name ?? Locale.titlecase(selected.modelID.replaceAll("-", " "))
+    return `${selected.providerID}/${name}`
   })
   const pendingHeaderVariant = createMemo(() => local.model.variant.current())
   const headerAgent = createMemo(() => {

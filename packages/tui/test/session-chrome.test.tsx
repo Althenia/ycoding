@@ -54,11 +54,11 @@ describe("header truncation ladder", () => {
   })
 
   test("drops the path and shortens the model at 100 columns", () => {
-    expect(labels(100)).toEqual(["main", "Build", "claude-opus-5", "max"])
+    expect(labels(100)).toEqual(["main", "Build", "anthropic/claude-opus-5", "max"])
   })
 
   test("drops the branch whole at 80 columns", () => {
-    expect(labels(80)).toEqual(["Build", "claude-opus-5", "max"])
+    expect(labels(80)).toEqual(["Build", "anthropic/claude-opus-5", "max"])
   })
 
   test("omits segments the session has not resolved yet", () => {
@@ -77,7 +77,7 @@ describe("header status", () => {
     [{ type: "awaiting-input", count: 1 }, 100, "? awaiting input"],
     [{ type: "awaiting-input", count: 2 }, 100, "? awaiting input"],
     [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, 100, "provider error"],
-    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO \u00b7 auto-approve · ready"],
+    [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, 100, "YOLO 2 · auto-approve · ready"],
     [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "working", elapsed: 4.14 } }, 120, "Goal · autonomous · cooking 4.1s"],
   ]
 
@@ -218,7 +218,7 @@ describe("autonomy mode chips", () => {
   test("inverts YOLO because it auto-approves", () => {
     expect(modeChips({ autonomy: { mode: "normal", yolo: 2 } })[1]).toEqual({
       key: "yolo",
-      label: "YOLO",
+      label: "YOLO 2",
       tone: "danger",
     })
   })
@@ -318,7 +318,7 @@ describe("header rendering", () => {
       [{ type: "waiting", count: 2 }, "waiting · 2 subagents", theme.text.feedback.info.default],
       [{ type: "awaiting-input", count: 1 }, "? awaiting input", theme.text.feedback.warning.default],
       [{ type: "provider-error", message: "Provider overloaded; retry in 30 seconds." }, "provider error", theme.text.feedback.error.default],
-      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "YOLO · auto-approve · ready", theme.text.feedback.error.default],
+      [{ type: "autonomy", yolo: 2, goalActive: false, state: { type: "ready" } }, "YOLO 2 · auto-approve · ready", theme.text.feedback.error.default],
       [{ type: "autonomy", yolo: 0, goalActive: true, state: { type: "ready" } }, "Goal · autonomous · ready", theme.text.feedback.success.default],
       [{ type: "retry-scheduled", attempt: 2, at: Date.now() + 5_000 }, "1 failed · retry 2 · in", theme.text.feedback.warning.default],
       [{ type: "retrying", attempt: 2 }, "retrying · attempt 2", theme.text.feedback.warning.default],
@@ -375,7 +375,7 @@ describe("header rendering", () => {
     const frame = app.captureCharFrame()
     // Board 12 states YOLO with the header's right-hand status in the error ink. The previous
     // full-width destructive band under the header was an invention and read as a huge red bar.
-    expect(frame).toContain("YOLO \u00b7 auto-approve")
+    expect(frame).toContain("YOLO 2 \u00b7 auto-approve")
     expect(app.captureSpans().lines[3]?.spans ?? []).not.toHaveLength(0)
     expect(
       (app.captureSpans().lines[3]?.spans ?? []).some((span) =>
@@ -539,7 +539,7 @@ describe("header rendering", () => {
     const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
     const spans = app.captureSpans().lines.flatMap((line) => line.spans)
     const dotTrail = spans.find((span) => /\.\.●|\.●\.|●\.\./.test(span.text))
-    const status = spans.find((span) => span.text.includes("YOLO · auto-approve · cooking 4.1s"))
+    const status = spans.find((span) => span.text.includes("YOLO 2 · auto-approve · cooking 4.1s"))
 
     expect(dotTrail?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())
     expect(status?.fg.toInts()).toEqual(theme.text.feedback.error.default.toInts())

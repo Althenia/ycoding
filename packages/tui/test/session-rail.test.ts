@@ -11,15 +11,41 @@ import {
 
 describe("rail default expansion", () => {
   test("expands the sections that carry no header summary", () => {
-    expect(defaultExpanded({})).toEqual(["session", "context", "todo"])
+    expect(defaultExpanded({})).toEqual([
+      "session",
+      "context",
+      "todo",
+      "goal",
+      "autonomy",
+      "subagents",
+      "shells",
+      "mcp",
+      "plugins",
+      "guardrails",
+      "lsp",
+      "skills",
+    ])
   })
 
   test("adds goal and autonomy while they are active", () => {
-    expect(defaultExpanded({ goal: true, autonomy: true })).toEqual(["session", "context", "goal", "autonomy", "todo"])
+    expect(defaultExpanded({ goal: true, autonomy: true })).toEqual([
+      "session",
+      "context",
+      "todo",
+      "goal",
+      "autonomy",
+      "subagents",
+      "shells",
+      "mcp",
+      "plugins",
+      "guardrails",
+      "lsp",
+      "skills",
+    ])
   })
 
   test("keeps every default section expanded", () => {
-    expect(defaultExpanded({ goal: true, autonomy: true })).toHaveLength(5)
+    expect(defaultExpanded({ goal: true, autonomy: true })).toHaveLength(12)
   })
 })
 
