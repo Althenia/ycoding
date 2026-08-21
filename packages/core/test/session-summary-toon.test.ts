@@ -1,37 +1,64 @@
 import { describe, expect, test } from "bun:test"
 import { SessionSummaryToon } from "@ycoding-ai/core/session/summary-toon"
+import { encodeLines } from "@toon-format/toon"
 
 const options: SessionSummaryToon.ParseOptions = { throughSequence: 42, maxSummaryBytes: 100000 }
 
 const sample: SessionSummaryToon.Memory = {
-  version: 1,
+  version: 2,
   through_sequence: 42,
   objective: 'Fix the "quote" bug: done, mostly',
+  in_progress: ["Regression reproduced"],
+  pending: ["review", "Don't stop now"],
+  blocked: [],
+  decision: [
+    { text: "Keep snake_case", status: "accepted" },
+    { text: "Drop legacy", status: "superseded" },
+  ],
+  skill: ["typescript-developer"],
   requirements: ["Preserve exact protected state"],
   acceptance_criteria: ["Focused tests pass"],
-  progress: ["Regression reproduced"],
   current_state: "In progress\nwith a second line",
   facts: [
     { text: 'Uses TOON, with "quotes" and \\backslash', confidence: "confirmed" },
     { text: "日本語 émojis ✓ and 中文", confidence: "uncertain" },
     { text: "Third", confidence: "likely" },
   ],
-  decisions: [
-    { text: "Keep snake_case", status: "accepted" },
-    { text: "Drop legacy", status: "superseded" },
-  ],
   preferences: ["drafts: on", "wip"],
   constraints: ["no new deps"],
   completed: ["module", "tests"],
-  pending: ["review", "Don't stop now"],
-  blockers: [],
-  skills: ["typescript-developer"],
   unresolved: ["cache eviction"],
   important_identifiers: ["sum-1"],
   continuation: "Next: write docs. Then ship.",
 }
 
 describe("SessionSummaryToon", () => {
+  test("round trips the structured V2 continuation handoff fields", () => {
+    const memory = {
+      version: 2,
+      through_sequence: 42,
+      objective: "Restore restart-stable compaction",
+      in_progress: ["Project the completed compaction marker"],
+      pending: ["Run the TUI regression test"],
+      blocked: ["None"],
+      decision: [{ text: "Keep durable source messages", status: "accepted" }],
+      skill: ["typescript-developer"],
+      requirements: ["Preserve durable history"],
+      acceptance_criteria: ["Restart keeps compacted rows hidden"],
+      current_state: "Implementation is active",
+      facts: [{ text: "The TUI reloads canonical messages", confidence: "confirmed" }],
+      preferences: [],
+      constraints: ["V2 only"],
+      completed: ["Root cause reproduced"],
+      unresolved: [],
+      important_identifiers: ["session.compaction.ended"],
+      continuation: "Finish the projection and verify the TUI.",
+    } satisfies SessionSummaryToon.Memory
+    const encoded = Array.from(encodeLines({ conversation_memory: memory })).join("\n")
+
+    expect(SessionSummaryToon.parse(encoded, options)).toEqual(memory)
+  })
+
   test("round trips a full memory through encode and parse", () => {
     const result = SessionSummaryToon.parse(SessionSummaryToon.encode(sample), options)
     expect(result).toEqual(sample)
@@ -43,14 +70,15 @@ describe("SessionSummaryToon", () => {
       version: sample.version,
       through_sequence: sample.through_sequence,
       objective: sample.objective,
+      in_progress: sample.in_progress,
+      pending: sample.pending,
+      blocked: sample.blocked,
+      decision: sample.decision,
       current_state: sample.current_state,
       facts: sample.facts,
-      decisions: sample.decisions,
       preferences: sample.preferences,
       constraints: sample.constraints,
       completed: sample.completed,
-      pending: sample.pending,
-      blockers: sample.blockers,
       unresolved: sample.unresolved,
       important_identifiers: sample.important_identifiers,
       continuation: sample.continuation,
@@ -59,6 +87,7 @@ describe("SessionSummaryToon", () => {
 
     expect("_tag" in parsed).toBe(false)
     if ("_tag" in parsed) throw parsed
+    expect(SessionSummaryToon.isCanonical(encoded)).toBe(true)
     expect(SessionSummaryToon.encode(parsed)).toBe(encoded)
   })
 
@@ -69,8 +98,7 @@ describe("SessionSummaryToon", () => {
       .join("\n")
     const result = SessionSummaryToon.parse(input, options)
     expect(result).toBeInstanceOf(SessionSummaryToon.MissingFieldError)
-    if (result instanceof SessionSummaryToon.MissingFieldError)
-      expect(result.fields).toContain("acceptance_criteria")
+    if (result instanceof SessionSummaryToon.MissingFieldError) expect(result.fields).toContain("acceptance_criteria")
   })
 
   test("rejects input that is not valid TOON", () => {
@@ -79,12 +107,12 @@ describe("SessionSummaryToon", () => {
   })
 
   test("rejects a root key that is not conversation_memory", () => {
-    const result = SessionSummaryToon.parse("memory:\n  version: 1", options)
+    const result = SessionSummaryToon.parse("memory:\n  version: 2", options)
     expect(result).toBeInstanceOf(SessionSummaryToon.WrongRootError)
   })
 
   test("rejects an unsupported version", () => {
-    const input = SessionSummaryToon.encode(sample).replace("version: 1", "version: 2")
+    const input = SessionSummaryToon.encode(sample).replace("version: 2", "version: 3")
     const result = SessionSummaryToon.parse(input, options)
     expect(result).toBeInstanceOf(SessionSummaryToon.UnsupportedVersionError)
   })
@@ -107,21 +135,21 @@ describe("SessionSummaryToon", () => {
   test("rejects collection fields with wrong element types", () => {
     const input = [
       "conversation_memory:",
-      "  version: 1",
+      "  version: 2",
       "  through_sequence: 42",
       '  objective: "o"',
+      "  in_progress: []",
+      "  pending: []",
+      "  blocked: []",
+      "  decision: []",
+      "  skill: []",
       "  requirements: []",
       "  acceptance_criteria: []",
-      "  progress: []",
       '  current_state: "s"',
       "  facts: []",
-      "  decisions: []",
       "  preferences[2]: 1,2",
       "  constraints: []",
       "  completed: []",
-      "  pending: []",
-      "  blockers: []",
-      "  skills: []",
       "  unresolved: []",
       "  important_identifiers: []",
       '  continuation: "c"',
@@ -133,21 +161,21 @@ describe("SessionSummaryToon", () => {
   test("rejects an empty summary with no meaningful content", () => {
     const input = [
       "conversation_memory:",
-      "  version: 1",
+      "  version: 2",
       "  through_sequence: 42",
       '  objective: ""',
+      "  in_progress: []",
+      "  pending: []",
+      "  blocked: []",
+      "  decision: []",
+      "  skill: []",
       "  requirements: []",
       "  acceptance_criteria: []",
-      "  progress: []",
       '  current_state: ""',
       "  facts: []",
-      "  decisions: []",
       "  preferences: []",
       "  constraints: []",
       "  completed: []",
-      "  pending: []",
-      "  blockers: []",
-      "  skills: []",
       "  unresolved: []",
       "  important_identifiers: []",
       '  continuation: ""',

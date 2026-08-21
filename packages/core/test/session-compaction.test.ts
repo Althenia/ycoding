@@ -170,9 +170,7 @@ const itWithoutHelperMandatory = testWithConfig(
   new ConfigCompaction.Info({ keep_recent_messages: 0 }),
   unavailableHelpers,
 )
-const itWithOnePass = testWithConfig(
-  new ConfigCompaction.Info({ keep_recent_messages: 0, max_internal_passes: 1 }),
-)
+const itWithOnePass = testWithConfig(new ConfigCompaction.Info({ keep_recent_messages: 0, max_internal_passes: 1 }))
 const itWithHollowLimit = testWithConfig(
   new ConfigCompaction.Info({ keep_recent_messages: 0, max_manifest_bytes: 1_024, max_internal_passes: 1 }),
 )
@@ -409,10 +407,10 @@ function expectBestEffortCoverage(manifest: ContextManifest.Manifest) {
   expect(memory.objective).toContain("OBJECTIVE-")
   expect(memory.requirements).not.toHaveLength(0)
   expect(memory.acceptance_criteria).not.toHaveLength(0)
-  expect(memory.progress).not.toHaveLength(0)
+  expect(memory.in_progress).not.toHaveLength(0)
   expect(memory.pending).not.toHaveLength(0)
-  expect(memory.decisions).not.toHaveLength(0)
-  expect(memory.blockers).not.toHaveLength(0)
+  expect(memory.decision).not.toHaveLength(0)
+  expect(memory.blocked).not.toHaveLength(0)
 }
 
 function manifestJob(
@@ -453,17 +451,18 @@ function checkpoint(through: number, currentState = "Continue from the compacted
 
 function checkpointMemory(through: number, currentState = "Continue from the compacted conversation") {
   return {
-    version: 1,
+    version: 2,
     through_sequence: through,
     objective: "Continue the current session",
+    in_progress: [],
+    pending: [],
+    blocked: [],
+    decision: [],
     current_state: currentState,
     facts: [],
-    decisions: [],
     preferences: [],
     constraints: [],
     completed: [],
-    pending: [],
-    blockers: [],
     unresolved: [],
     important_identifiers: [],
     continuation: "Use the checkpoint and retained messages",
@@ -722,17 +721,17 @@ itWithBoundedManifest.effect(
         maxSummaryBytes: Buffer.byteLength(manifest.summary.text, "utf8"),
       })
       if ("_tag" in parsed) throw parsed
-      expect(parsed.skills).toHaveLength(1)
-      expect(parsed.skills[0]).toContain("Active skill: Semantic State Skill")
+      expect(parsed.skill).toHaveLength(1)
+      expect(parsed.skill[0]).toContain("Active skill: Semantic State Skill")
       expect(manifest.summary.text).toContain(
         "Active skill: semantic-retention; active because this compaction task requires it; route only compaction checkpoints.",
       )
       expect(parsed.requirements).toContain("Requirement: fail closed when mandatory state cannot fit.")
-      expect(parsed.decisions).toContainEqual({
+      expect(parsed.decision).toContainEqual({
         text: "Accepted decision: use existing TOON v1 fields.",
         status: "accepted",
       })
-      expect(parsed.progress).toContain("Todo [in_progress]: implement deterministic repair.")
+      expect(parsed.in_progress).toContain("Todo [in_progress]: implement deterministic repair.")
       expect(parsed.pending).toContain("Todo [pending]: run focused validation.")
       expect(parsed.pending).toContain("Next action: repair the helper checkpoint.")
       expect(manifest.summary.text).toContain("Semantic State Skill")
@@ -918,7 +917,12 @@ itWithoutHelperMandatory.effect(
         4,
         "We chose deterministic merging. Next, validate the package typecheck and prepare the preview without publishing it.",
       )
-      yield* insertAssistant(sessionID, ids[4]!, 5, "The implementation is still in progress and awaits focused validation.")
+      yield* insertAssistant(
+        sessionID,
+        ids[4]!,
+        5,
+        "The implementation is still in progress and awaits focused validation.",
+      )
 
       const manifest = yield* generateManifest(
         manifestJob(sessionID, { messageID: ids.at(-1)!, seq: ids.length }, 16_384, "mandatory"),
@@ -939,7 +943,7 @@ itWithoutHelperMandatory.effect(
       expect(longSourceFact).toContain("sha256=")
       expect(Array.from(longSourceFact).length).toBeLessThanOrEqual(384)
       expect(parsed.facts.map((fact) => fact.text).join("\n")).toContain("ARTIFACT-742")
-      expect(parsed.decisions.map((decision) => decision.text).join("\n")).toContain("deterministic merging")
+      expect(parsed.decision.map((decision) => decision.text).join("\n")).toContain("deterministic merging")
       expect(parsed.pending.join("\n")).toContain("package typecheck")
       expect(parsed.important_identifiers.join("\n")).toContain("/workspace/report.json")
       expect(parsed.current_state).toContain("in progress")
@@ -957,7 +961,8 @@ it.effect("merges later helper batches without erasing earlier semantic memory",
     yield* seedSession(sessionID, ids.length)
     yield* Effect.forEach(
       ids,
-      (id, index) => insertAssistant(sessionID, id, index + 1, `ordinary batch material ${index} ${"detail ".repeat(400)}`),
+      (id, index) =>
+        insertAssistant(sessionID, id, index + 1, `ordinary batch material ${index} ${"detail ".repeat(400)}`),
       { discard: true },
     )
     let call = 0
@@ -993,7 +998,8 @@ itWithOnePass.effect("keeps accumulated helper memory when the internal pass lim
     yield* seedSession(sessionID, ids.length)
     yield* Effect.forEach(
       ids,
-      (id, index) => insertAssistant(sessionID, id, index + 1, `pass exhaustion material ${index} ${"detail ".repeat(400)}`),
+      (id, index) =>
+        insertAssistant(sessionID, id, index + 1, `pass exhaustion material ${index} ${"detail ".repeat(400)}`),
       { discard: true },
     )
     responseForRequest = (request) => {
@@ -1055,29 +1061,31 @@ itWithoutHelperMandatory.effect("does not accumulate inactive skill instructions
   }),
 )
 
-itWithHollowLimit.effect("does not activate a semantically hollow checkpoint that cannot represent its covered ranges", () =>
-  Effect.gen(function* () {
-    reset()
-    const sessionID = SessionSchema.ID.make("ses_manifest_hollow_coverage")
-    const ids = Array.from({ length: 30 }, (_, index) =>
-      SessionMessage.ID.make(`msg_manifest_hollow_coverage_${index}`),
-    )
-    yield* seedSession(sessionID, ids.length)
-    yield* Effect.forEach(
-      ids,
-      (id, index) =>
-        insertMessage(sessionID, id, index + 1, `Distinct obligation RANGE-${index}: preserve result ID-${index}.`),
-      { discard: true },
-    )
-    responseForRequest = (request) =>
-      checkpoint(Number(promptText(request).match(/up to and including (\d+)/)?.[1]), "Generic hollow checkpoint")
+itWithHollowLimit.effect(
+  "does not activate a semantically hollow checkpoint that cannot represent its covered ranges",
+  () =>
+    Effect.gen(function* () {
+      reset()
+      const sessionID = SessionSchema.ID.make("ses_manifest_hollow_coverage")
+      const ids = Array.from({ length: 30 }, (_, index) =>
+        SessionMessage.ID.make(`msg_manifest_hollow_coverage_${index}`),
+      )
+      yield* seedSession(sessionID, ids.length)
+      yield* Effect.forEach(
+        ids,
+        (id, index) =>
+          insertMessage(sessionID, id, index + 1, `Distinct obligation RANGE-${index}: preserve result ID-${index}.`),
+        { discard: true },
+      )
+      responseForRequest = (request) =>
+        checkpoint(Number(promptText(request).match(/up to and including (\d+)/)?.[1]), "Generic hollow checkpoint")
 
-    const error = yield* generateManifest(
-      manifestJob(sessionID, { messageID: ids.at(-1)!, seq: ids.length }, 4_096, "mandatory"),
-    ).pipe(Effect.flip)
+      const error = yield* generateManifest(
+        manifestJob(sessionID, { messageID: ids.at(-1)!, seq: ids.length }, 4_096, "mandatory"),
+      ).pipe(Effect.flip)
 
-    expect(error.code).toBe("context_limit_unresolved")
-  }),
+      expect(error.code).toBe("context_limit_unresolved")
+    }),
 )
 
 itWithBoundedManifest.effect("summarizes labeled continuity without exact-copying unrelated oversized payload", () =>
@@ -1192,45 +1200,43 @@ itWithoutHelper.effect("activates a canonical local checkpoint when the latest s
   }),
 )
 
-itWithTargetEnforcement.effect(
-  "activates a reducing helper checkpoint above the advisory target",
-  () =>
-    Effect.gen(function* () {
-      reset()
-      const sessionID = SessionSchema.ID.make("ses_manifest_target_enforced")
-      const messageIDs = Array.from({ length: 6 }, (_, index) =>
-        SessionMessage.ID.make(`msg_manifest_target_enforced_${index}`),
+itWithTargetEnforcement.effect("activates a reducing helper checkpoint above the advisory target", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_manifest_target_enforced")
+    const messageIDs = Array.from({ length: 6 }, (_, index) =>
+      SessionMessage.ID.make(`msg_manifest_target_enforced_${index}`),
+    )
+    yield* seedSession(sessionID, messageIDs.length)
+    yield* Effect.forEach(
+      messageIDs,
+      (id, index) => insertAssistant(sessionID, id, index + 1, `large source ${index} ${"material ".repeat(1_000)}`),
+      { discard: true },
+    )
+    responseForRequest = (request) => {
+      const through = Number(promptText(request).match(/up to and including (\d+)/)?.[1])
+      return checkpoint(
+        through,
+        through === messageIDs.length
+          ? `HELPER_ABOVE_TARGET ${"expanded ".repeat(3_000)}`
+          : `Small intermediate checkpoint through ${through}`,
       )
-      yield* seedSession(sessionID, messageIDs.length)
-      yield* Effect.forEach(
-        messageIDs,
-        (id, index) => insertAssistant(sessionID, id, index + 1, `large source ${index} ${"material ".repeat(1_000)}`),
-        { discard: true },
-      )
-      responseForRequest = (request) => {
-        const through = Number(promptText(request).match(/up to and including (\d+)/)?.[1])
-        return checkpoint(
-          through,
-          through === messageIDs.length
-            ? `HELPER_ABOVE_TARGET ${"expanded ".repeat(3_000)}`
-            : `Small intermediate checkpoint through ${through}`,
-        )
-      }
-      const targetMaxInputTokens = 4_096
+    }
+    const targetMaxInputTokens = 4_096
 
-      const manifest = yield* generateManifest(
-        manifestJob(
-          sessionID,
-          { messageID: messageIDs.at(-1)!, seq: messageIDs.length },
-          targetMaxInputTokens,
-          "mandatory",
-        ),
-      )
+    const manifest = yield* generateManifest(
+      manifestJob(
+        sessionID,
+        { messageID: messageIDs.at(-1)!, seq: messageIDs.length },
+        targetMaxInputTokens,
+        "mandatory",
+      ),
+    )
 
-      expect(requests.length).toBeGreaterThan(0)
-      expect(manifest.summary?.text).toContain("HELPER_ABOVE_TARGET")
-      expect(manifest.retainedTokens).toBeLessThan(manifest.inputTokens)
-    }),
+    expect(requests.length).toBeGreaterThan(0)
+    expect(manifest.summary?.text).toContain("HELPER_ABOVE_TARGET")
+    expect(manifest.retainedTokens).toBeLessThan(manifest.inputTokens)
+  }),
 )
 
 itWithoutHelper.effect("activates a reducing checkpoint when the requested target is too small", () =>
@@ -1257,17 +1263,18 @@ it.effect("falls back to a validated rolling summary for unique history while re
     yield* insertAssistant(sessionID, firstID, 1, "first unique message ".repeat(200))
     yield* insertMessage(sessionID, boundaryID, 2, "second unique message")
     const summary = SessionSummaryToon.encode({
-      version: 1,
+      version: 2,
       through_sequence: 1,
       objective: "Preserve the first unique request",
+      in_progress: [],
+      pending: [],
+      blocked: [],
+      decision: [],
       current_state: "The earlier request is recorded",
       facts: [],
-      decisions: [],
       preferences: [],
       constraints: [],
       completed: [],
-      pending: [],
-      blockers: [],
       unresolved: [],
       important_identifiers: [],
       continuation: "Continue with the retained recent message",
@@ -1398,99 +1405,92 @@ itMandatory.effect("requires sequential compaction to reduce the current model-v
   }),
 )
 
-itWithoutHelperMandatory.effect(
-  "coalesces sequential source coverage into a reducing canonical checkpoint",
-  () =>
-    Effect.gen(function* () {
-      reset()
-      const db = (yield* Database.Service).db
-      const context = yield* SessionContextState.Service
-      const sessionID = SessionSchema.ID.make("ses_manifest_sequential_capsule_rollover")
-      const firstIDs = Array.from({ length: 88 }, (_, index) =>
-        SessionMessage.ID.make(`msg_manifest_capsule_rollover_first_${index}`),
-      )
-      const secondIDs = Array.from({ length: 88 }, (_, index) =>
-        SessionMessage.ID.make(`msg_manifest_capsule_rollover_second_${index}`),
-      )
-      const uniqueMaterial = (phase: string, index: number) =>
-        [
-          `Objective: preserve the ${phase} semantic objective OBJECTIVE-${index}.`,
-          "Requirement: compaction must retain required semantic fields.",
-          "Acceptance criteria: the canonical TOON checkpoint stays within its byte bound.",
-          "Progress: source coverage is confirmed and validation remains in progress.",
-          "Pending: continue the repaired Session without stopping the chat.",
-          "Accepted decision: use deterministic bounded source coverage.",
-          "Blocker: oversized historical provenance must not prevent useful reduction.",
-          Array.from({ length: 48 }, (_, word) => `${phase}_${index}_distinct_${word}`).join(" "),
-        ].join(" ")
+itWithoutHelperMandatory.effect("coalesces sequential source coverage into a reducing canonical checkpoint", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const context = yield* SessionContextState.Service
+    const sessionID = SessionSchema.ID.make("ses_manifest_sequential_capsule_rollover")
+    const firstIDs = Array.from({ length: 88 }, (_, index) =>
+      SessionMessage.ID.make(`msg_manifest_capsule_rollover_first_${index}`),
+    )
+    const secondIDs = Array.from({ length: 88 }, (_, index) =>
+      SessionMessage.ID.make(`msg_manifest_capsule_rollover_second_${index}`),
+    )
+    const uniqueMaterial = (phase: string, index: number) =>
+      [
+        `Objective: preserve the ${phase} semantic objective OBJECTIVE-${index}.`,
+        "Requirement: compaction must retain required semantic fields.",
+        "Acceptance criteria: the canonical TOON checkpoint stays within its byte bound.",
+        "Progress: source coverage is confirmed and validation remains in progress.",
+        "Pending: continue the repaired Session without stopping the chat.",
+        "Accepted decision: use deterministic bounded source coverage.",
+        "Blocker: oversized historical provenance must not prevent useful reduction.",
+        Array.from({ length: 48 }, (_, word) => `${phase}_${index}_distinct_${word}`).join(" "),
+      ].join(" ")
 
-      yield* seedSession(sessionID, firstIDs.length)
-      yield* SessionContextState.initialize(db, sessionID, 0)
-      yield* Effect.forEach(
-        firstIDs,
-        (id, index) => insertAssistant(sessionID, id, index + 1, uniqueMaterial("first", index)),
-        { discard: true },
-      )
+    yield* seedSession(sessionID, firstIDs.length)
+    yield* SessionContextState.initialize(db, sessionID, 0)
+    yield* Effect.forEach(
+      firstIDs,
+      (id, index) => insertAssistant(sessionID, id, index + 1, uniqueMaterial("first", index)),
+      { discard: true },
+    )
 
-      const first = yield* generateManifest(
-        manifestJob(
-          sessionID,
-          { messageID: firstIDs.at(-1)!, seq: firstIDs.length },
-          16_384,
-          "mandatory",
-        ),
-      )
-      if (!first.summary) throw new Error("Expected first rolling checkpoint")
-      const firstMemory = SessionSummaryToon.parse(first.summary.text, {
-        throughSequence: first.summary.coveredThrough.seq,
-        maxSummaryBytes: 65_536,
-      })
-      if ("_tag" in firstMemory) throw firstMemory
-      expect(firstMemory.facts.filter((fact) => fact.text.startsWith("[source sequence="))).toHaveLength(88)
-      retainManifestGuardrail(sessionID, first)
-      yield* context.activate({ sessionID, manifest: first })
+    const first = yield* generateManifest(
+      manifestJob(sessionID, { messageID: firstIDs.at(-1)!, seq: firstIDs.length }, 16_384, "mandatory"),
+    )
+    if (!first.summary) throw new Error("Expected first rolling checkpoint")
+    const firstMemory = SessionSummaryToon.parse(first.summary.text, {
+      throughSequence: first.summary.coveredThrough.seq,
+      maxSummaryBytes: 65_536,
+    })
+    if ("_tag" in firstMemory) throw firstMemory
+    expect(firstMemory.facts.filter((fact) => fact.text.startsWith("[source sequence="))).toHaveLength(88)
+    retainManifestGuardrail(sessionID, first)
+    yield* context.activate({ sessionID, manifest: first })
 
-      yield* Effect.forEach(
-        secondIDs,
-        (id, index) => insertAssistant(sessionID, id, firstIDs.length + index + 1, uniqueMaterial("second", index)),
-        { discard: true },
-      )
-      yield* db
-        .update(EventSequenceTable)
-        .set({ seq: firstIDs.length + secondIDs.length })
-        .where(eq(EventSequenceTable.aggregate_id, sessionID))
-        .run()
-        .pipe(Effect.orDie)
+    yield* Effect.forEach(
+      secondIDs,
+      (id, index) => insertAssistant(sessionID, id, firstIDs.length + index + 1, uniqueMaterial("second", index)),
+      { discard: true },
+    )
+    yield* db
+      .update(EventSequenceTable)
+      .set({ seq: firstIDs.length + secondIDs.length })
+      .where(eq(EventSequenceTable.aggregate_id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
 
-      const second = yield* generateManifest({
-        ...manifestJob(
-          sessionID,
-          {
-            messageID: secondIDs.at(-1)!,
-            seq: firstIDs.length + secondIDs.length,
-          },
-          16_384,
-          "mandatory",
-        ),
-        baseContextRevision: 1,
-      })
-      if (!second.summary) throw new Error("Expected second rolling checkpoint")
-      const secondMemory = SessionSummaryToon.parse(second.summary.text, {
-        throughSequence: second.summary.coveredThrough.seq,
-        maxSummaryBytes: Number.MAX_SAFE_INTEGER,
-      })
-      if ("_tag" in secondMemory) throw secondMemory
+    const second = yield* generateManifest({
+      ...manifestJob(
+        sessionID,
+        {
+          messageID: secondIDs.at(-1)!,
+          seq: firstIDs.length + secondIDs.length,
+        },
+        16_384,
+        "mandatory",
+      ),
+      baseContextRevision: 1,
+    })
+    if (!second.summary) throw new Error("Expected second rolling checkpoint")
+    const secondMemory = SessionSummaryToon.parse(second.summary.text, {
+      throughSequence: second.summary.coveredThrough.seq,
+      maxSummaryBytes: Number.MAX_SAFE_INTEGER,
+    })
+    if ("_tag" in secondMemory) throw secondMemory
 
-      expect(second.retainedTokens).toBeLessThan(second.inputTokens)
-      expect(secondMemory.objective).toContain("OBJECTIVE-")
-      expect(secondMemory.requirements).not.toHaveLength(0)
-      expect(secondMemory.acceptance_criteria).not.toHaveLength(0)
-      expect(secondMemory.progress).not.toHaveLength(0)
-      expect(secondMemory.pending).not.toHaveLength(0)
-      expect(secondMemory.decisions).not.toHaveLength(0)
-      expect(secondMemory.blockers).not.toHaveLength(0)
-      expect(secondMemory.skills).toEqual([])
-    }),
+    expect(second.retainedTokens).toBeLessThan(second.inputTokens)
+    expect(secondMemory.objective).toContain("OBJECTIVE-")
+    expect(secondMemory.requirements).not.toHaveLength(0)
+    expect(secondMemory.acceptance_criteria).not.toHaveLength(0)
+    expect(secondMemory.in_progress).not.toHaveLength(0)
+    expect(secondMemory.pending).not.toHaveLength(0)
+    expect(secondMemory.decision).not.toHaveLength(0)
+    expect(secondMemory.blocked).not.toHaveLength(0)
+    expect(secondMemory.skill).toEqual([])
+  }),
 )
 
 itMandatory.effect("recovers source pressure locally after a helper provider error", () =>
@@ -1498,9 +1498,7 @@ itMandatory.effect("recovers source pressure locally after a helper provider err
     reset()
     const fixture = yield* seedCoveragePressure("provider_error")
 
-    const manifest = yield* generateManifest(
-      manifestJob(fixture.sessionID, fixture.boundary, 16_384, "mandatory"),
-    )
+    const manifest = yield* generateManifest(manifestJob(fixture.sessionID, fixture.boundary, 16_384, "mandatory"))
 
     expect(requests).toHaveLength(1)
     expectBestEffortCoverage(manifest)
@@ -1513,9 +1511,7 @@ itMandatory.effect("recovers source pressure locally after malformed helper TOON
     const fixture = yield* seedCoveragePressure("malformed")
     responseForRequest = () => '{"not":"toon"}'
 
-    const manifest = yield* generateManifest(
-      manifestJob(fixture.sessionID, fixture.boundary, 16_384, "mandatory"),
-    )
+    const manifest = yield* generateManifest(manifestJob(fixture.sessionID, fixture.boundary, 16_384, "mandatory"))
 
     expect(requests.length).toBeGreaterThan(0)
     expectBestEffortCoverage(manifest)
@@ -1529,9 +1525,7 @@ itWithOnePass.effect("recovers source pressure locally after oversized helper TO
     responseForRequest = (request) =>
       checkpoint(Number(promptText(request).match(/up to and including (\d+)/)?.[1]), "x".repeat(100_000))
 
-    const manifest = yield* generateManifest(
-      manifestJob(fixture.sessionID, fixture.boundary, 16_384, "mandatory"),
-    )
+    const manifest = yield* generateManifest(manifestJob(fixture.sessionID, fixture.boundary, 16_384, "mandatory"))
 
     expect(requests).toHaveLength(1)
     expectBestEffortCoverage(manifest)

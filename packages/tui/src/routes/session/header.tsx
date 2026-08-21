@@ -298,7 +298,7 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
   const route = useRoute().data
   const data = useData()
   if (route.type === "home") {
-    const model = data.location.model.list(data.location.default())?.find((item) => item.name === props.model)
+    const model = data.location.model.list(data.location.default())?.find((item) => item.name === props.model || `${item.providerID}/${item.name}` === props.model)
     return { ...props, variant: props.variant ?? model?.variants.at(0)?.id }
   }
   if (route.type !== "session") return props
@@ -309,10 +309,13 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
     .model
     .list(session.location)
     ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
+  const resolvedName = model?.name ?? Locale.titlecase(sessionModel.id.replaceAll("-", " "))
+  const providerID = model?.providerID ?? sessionModel.providerID
+  const modelLabel = providerID ? `${providerID}/${resolvedName}` : resolvedName
   return {
     ...props,
     agent: props.agent ?? (session.agent ? Locale.titlecase(session.agent) : undefined),
-    model: props.model ?? model?.name ?? Locale.titlecase(sessionModel.id.replaceAll("-", " ")),
+    model: props.model ?? modelLabel,
     variant: props.variant ?? sessionModel.variant,
     runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,
   }
@@ -329,5 +332,5 @@ function truncatePath(value: string | undefined, width: number) {
 }
 
 function shortModel(value: string | undefined) {
-  return value?.split("/").at(-1)
+  return value
 }

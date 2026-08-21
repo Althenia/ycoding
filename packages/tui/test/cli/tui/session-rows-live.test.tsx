@@ -771,7 +771,7 @@ test("keeps a production V2 compaction before newer assistant and tool rows afte
   }
 })
 
-test("renders repeated completed compactions chronologically before later chat", async () => {
+test("renders only the latest completed compaction before later chat", async () => {
   const sessionID = "session-v2-repeated-compaction-order"
   const messages: SessionMessageInfo[] = [
     {
@@ -827,7 +827,8 @@ test("renders repeated completed compactions chronologically before later chat",
     )
 
   try {
-    await wait(() => mounted.rows.filter((row) => row.type === "compaction").length === 3)
+    await wait(() => mounted.data.session.compaction.list(sessionID).length === 3)
+    await wait(() => mounted.rows.some((row) => row.type === "compaction" && row.jobID === "cmp_three"))
     const rendered = await testRender(
       () => (
         <TestTuiContexts>
@@ -860,14 +861,9 @@ test("renders repeated completed compactions chronologically before later chat",
       await rendered.waitForFrame((frame) => frame.includes("Later chat after compactions"))
       const frame = rendered.captureCharFrame()
 
-      expect(order()).toEqual([
-        "compaction:cmp_one",
-        "compaction:cmp_two",
-        "compaction:cmp_three",
-        "message:msg_later_chat",
-      ])
-      expect(frame.indexOf("Compression #1")).toBeLessThan(frame.indexOf("Compression #2"))
-      expect(frame.indexOf("Compression #2")).toBeLessThan(frame.indexOf("Compression #3"))
+      expect(order()).toEqual(["compaction:cmp_three", "message:msg_later_chat"])
+      expect(frame).not.toContain("Compression #1")
+      expect(frame).not.toContain("Compression #2")
       expect(frame.indexOf("Compression #3")).toBeLessThan(frame.indexOf("Later chat after compactions"))
     } finally {
       rendered.renderer.destroy()

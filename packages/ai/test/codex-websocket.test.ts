@@ -172,7 +172,7 @@ describe("Codex Responses WebSocket transport", () => {
     }),
   )
 
-  it.effect("switches an unhealthy session to HTTP with the full request body", () =>
+  it.effect("surfaces websocket failure as hard transport error without HTTP fallback", () =>
     Effect.gen(function* () {
       const sent: Array<Record<string, unknown>> = []
       const httpBodies: Array<Record<string, unknown>> = []
@@ -228,15 +228,9 @@ describe("Codex Responses WebSocket transport", () => {
       const failure = yield* LLMClient.generate(
         LLM.request({ model, messages, providerOptions: metadata("fallback-session", 3) }),
       ).pipe(Effect.provide(client), Effect.flip)
-      expect(failure.reason).toMatchObject({ _tag: "Transport", kind: "websocket-fallback" })
-
-      yield* LLMClient.generate(
-        LLM.request({ model, messages, providerOptions: metadata("fallback-session", 3, "fingerprint", true) }),
-      ).pipe(Effect.provide(client))
+      expect(failure.reason._tag).toBe("Transport")
       expect(sent[1]).toHaveProperty("previous_response_id", "resp_1")
-      expect(httpBodies).toHaveLength(1)
-      expect(httpBodies[0]?.input).toHaveLength(3)
-      expect(httpBodies[0]).not.toHaveProperty("previous_response_id")
+      expect(httpBodies).toHaveLength(0)
     }),
   )
 })

@@ -274,7 +274,6 @@ export interface JsonTransport<Body, Message extends Record<string, unknown>>
 interface JsonSession<Message extends Record<string, unknown>> {
   readonly permit: Semaphore.Semaphore
   fingerprint: string
-  fallback: boolean
   active: boolean
   connection?: WebSocketConnection
   previous?: {
@@ -284,12 +283,10 @@ interface JsonSession<Message extends Record<string, unknown>> {
     readonly messageBoundary: number
   }
   idleTimer?: ReturnType<typeof setTimeout>
-  fallbackTimer?: ReturnType<typeof setTimeout>
 }
 
 const SESSION_MAX = 64
 const IDLE_TTL_MS = 60_000
-const FALLBACK_TTL_MS = 30_000
 
 const decodedJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown))
 
@@ -346,9 +343,6 @@ const responseErrorText = (event: Record<string, unknown>) => {
 const invalidPreviousResponse = (message: string) =>
   /previous[_ ]response(?:_id)?/i.test(message) && /invalid|expired|not found|unknown|missing/i.test(message)
 
-const fallbackError = (method: string, message: string, url: string) =>
-  transportError(method, message, { url, kind: "websocket-fallback" })
-
 const continuationError = (message: string, url: string) =>
   transportError("continuation", message, { url, kind: "websocket-continuation" })
 
@@ -368,7 +362,6 @@ export const json = <Body, Message extends Record<string, unknown>>(
     // exactly IDLE_TTL_MS (the 60s failure observed in production).
     if (existing.active) return
     if (existing.idleTimer) clearTimeout(existing.idleTimer)
-    if (existing.fallbackTimer) clearTimeout(existing.fallbackTimer)
     if (existing.connection) Effect.runFork(existing.connection.close)
     sessions.delete(key)
   }
@@ -403,52 +396,9 @@ export const json = <Body, Message extends Record<string, unknown>>(
     }
   }
 
-  const resetFallback = (state: JsonSession<Message>) => {
-    if (state.fallbackTimer) clearTimeout(state.fallbackTimer)
-    if (!state.fallback) return
-    const timer = setTimeout(() => {
-      state.fallback = false
-      if (state.fallbackTimer) {
-        clearTimeout(state.fallbackTimer)
-        state.fallbackTimer = undefined
-      }
-    }, FALLBACK_TTL_MS)
-    if (typeof (timer as unknown as { unref?: () => void }).unref === "function") {
-      ;(timer as unknown as { unref: () => void }).unref()
-    }
-    state.fallbackTimer = timer
-  }
-
   const ensureCapacity = () => {
     evictToCapacity(SESSION_MAX - 1)
   }
-
-  const httpFrames = (
-    prepared: JsonPrepared<Message>,
-    request: LLMRequest,
-    runtime: Parameters<JsonTransport<Body, Message>["frames"]>[2],
-  ) =>
-    Stream.unwrap(
-      TransportAttempt.track(
-        {
-          requestID: request.id ?? "request",
-          routeID: request.model.route.id,
-          transport: "http-json",
-          attempt: 1,
-          observer: runtime.observeAttempt,
-        },
-        runtime.http.execute(prepared.http.request),
-      ).pipe(
-        Effect.map((response) => {
-          const route = `${request.model.provider}/${request.model.route.id}`
-          return prepared.http.framing.frame(
-            response.stream.pipe(
-              Stream.mapError((error) => ProviderShared.streamReadError(route, error)),
-            ),
-          )
-        }),
-      ),
-    )
 
   const oneShotFrames = (
     prepared: JsonPrepared<Message>,
@@ -495,7 +445,6 @@ export const json = <Body, Message extends Record<string, unknown>>(
     const state = sessions.get(metadata.key) ?? {
       permit: Semaphore.makeUnsafe(1),
       fingerprint: metadata.fingerprint,
-      fallback: false,
       active: false,
     }
     if (!existed) ensureCapacity()
@@ -524,24 +473,14 @@ export const json = <Body, Message extends Record<string, unknown>>(
                 clearTimeout(state.idleTimer)
                 state.idleTimer = undefined
               }
-              if (state.fallbackTimer) {
-                clearTimeout(state.fallbackTimer)
-                state.fallbackTimer = undefined
-              }
               state.connection = undefined
               state.previous = undefined
-              state.fallback = false
               state.fingerprint = metadata.fingerprint
               touch(metadata.key, state)
             }
             if (metadata.fullReplay) state.previous = undefined
-            if (state.fallback) return httpFrames(prepared, request, runtime)
 
-            // Only a liveness-reporting connection carried over from an earlier request may be
-            // transparently replaced by HTTP mid-request. Connections without `isOpen` keep the
-            // older behavior: fail this request and route the next one through HTTP.
-            const reused = state.connection?.isOpen !== undefined
-            const isStale = reused ? !state.connection!.isOpen?.() : false
+            const isStale = state.connection?.isOpen !== undefined ? !state.connection.isOpen() : false
             if (isStale) {
               yield* state.connection!.close.pipe(Effect.catch(() => Effect.void))
               state.connection = undefined
@@ -559,12 +498,6 @@ export const json = <Body, Message extends Record<string, unknown>>(
                   observer: runtime.observeAttempt,
                 },
                 webSocket.open({ url: prepared.url, headers: prepared.headers }),
-              ).pipe(
-                Effect.mapError((error) => {
-                  state.fallback = true
-                  resetFallback(state)
-                  return fallbackError("open", error.message, prepared.url)
-                }),
               ))
             state.connection = connection
             const continuedMessage = metadata.fullReplay
@@ -574,19 +507,10 @@ export const json = <Body, Message extends Record<string, unknown>>(
             const continued = continuedMessage !== undefined
             const replayMessage = yield* input.continuation!.replayMessage(request, metadata.messageBoundary)
             yield* connection.sendText(input.encodeMessage(sent)).pipe(
-              Effect.mapError((error) => {
-                state.fallback = true
-                resetFallback(state)
-                return fallbackError("sendText", error.message, prepared.url)
-              }),
               Effect.onError(() =>
                 Effect.gen(function* () {
                   if (state.connection === connection) {
                     state.connection = undefined
-                    if (!state.fallback) {
-                      state.fallback = true
-                      resetFallback(state)
-                    }
                     yield* connection.close.pipe(Effect.catch(() => Effect.void))
                   }
                 }),
@@ -595,7 +519,6 @@ export const json = <Body, Message extends Record<string, unknown>>(
 
             const decoder = new TextDecoder()
             const output: unknown[] = []
-            let emitted = false
             let completedResponseID: string | undefined
             let terminal = false
             let rejected = false
@@ -624,21 +547,21 @@ export const json = <Body, Message extends Record<string, unknown>>(
                   return message
                 }),
               ),
-              Stream.tap(() => Effect.sync(() => {
-                emitted = true
-              })),
               Stream.mapError((error) => {
                 state.previous = undefined
                 if (isContinuationError(error)) return error
-                state.fallback = true
-                resetFallback(state)
-                return fallbackError("frames", error.message, prepared.url)
+                return error
               }),
               Stream.onEnd(
                 Effect.suspend(() =>
                   terminal
                     ? Effect.void
-                    : Effect.fail(fallbackError("frames", "WebSocket closed before a terminal response", prepared.url)),
+                    : Effect.fail(
+                        transportError("frames", "WebSocket closed before a terminal response", {
+                          url: prepared.url,
+                          kind: "close",
+                        }),
+                      ),
                 ),
               ),
               Stream.ensuring(
@@ -657,19 +580,10 @@ export const json = <Body, Message extends Record<string, unknown>>(
                     return
                   }
                   state.connection = undefined
-                  if (rejected) {
-                    state.fallback = true
-                    resetFallback(state)
-                  }
                   yield* connection.close
                   touch(metadata.key, state)
                 }),
               ),
-            ).pipe(
-              Stream.catch((error) => {
-                if (!reused || emitted || isContinuationError(error)) return Stream.fail(error)
-                return httpFrames(prepared, request, runtime)
-              }),
             )
           }),
         ).pipe(

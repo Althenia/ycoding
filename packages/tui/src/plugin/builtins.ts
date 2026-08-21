@@ -3,7 +3,6 @@ import SidebarContext from "../feature-plugins/sidebar/context"
 import SidebarFooter from "../feature-plugins/sidebar/footer"
 import SidebarMcp from "../feature-plugins/sidebar/mcp"
 import SidebarShells from "../feature-plugins/sidebar/shells"
-import SidebarSkills from "../feature-plugins/sidebar/skills"
 import SidebarSubagents from "../feature-plugins/sidebar/subagents"
 import SidebarTodo from "../feature-plugins/sidebar/todo"
 import DiffViewer from "../feature-plugins/system/diff-viewer"
@@ -17,7 +16,6 @@ export const builtins = [
   SidebarTodo,
   SidebarSubagents,
   SidebarShells,
-  SidebarSkills,
   SidebarMcp,
   SidebarFooter,
   Scrap,

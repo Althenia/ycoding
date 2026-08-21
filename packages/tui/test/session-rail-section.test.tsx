@@ -5,7 +5,6 @@ import type { GuardrailStatusOutput, SessionAutonomyState, SessionCacheDiagnosti
 import { expect, test } from "bun:test"
 import { createSignal, type JSX } from "solid-js"
 import { useTheme } from "../src/context/theme"
-import type { SessionSkill } from "../src/util/session-skills"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
@@ -47,9 +46,8 @@ test("expands the default sections and collapses the summarised ones", async () 
 
   const frame = app.captureCharFrame()
   expect(frame).toContain("todo body")
-  // MCP summarises itself on the header row, so collapsing it costs no information.
   expect(frame).toContain("3 connected")
-  expect(frame).not.toContain("mcp body")
+  expect(frame).toContain("mcp body")
   app.renderer.destroy()
 })
 
@@ -65,7 +63,6 @@ test("registers sidebar content in the rail design order", async () => {
     "internal:sidebar-todo",
     "internal:sidebar-subagents",
     "internal:sidebar-shells",
-    "internal:sidebar-skills",
     "internal:sidebar-mcp",
   ])
 })
@@ -191,39 +188,16 @@ test("renders a summary on both expanded and collapsed headers", async () => {
 })
 
 test("renders compact operational rail summaries from live component state", async () => {
-  const [{ RailProvider }, { SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }, { SkillsRailContent }] =
+  const [{ RailProvider }, { SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }] =
     await Promise.all([
       import("../src/routes/session/rail-section"),
       import("../src/routes/session/sidebar"),
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
       import("../src/feature-plugins/sidebar/shells"),
-      import("../src/feature-plugins/sidebar/skills"),
     ])
   const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: { text: "Ship summaries", status: "active", iteration: 1, noProgress: 0, maxNoProgress: 5 },
   }
-  const skills: SessionSkill[] = [
-    {
-      id: "review",
-      name: "review",
-      activatedBy: "tool",
-      activationMessageID: "msg_review",
-      content: "",
-      conflicts: [{ type: "skill", id: "test", name: "test" }],
-      declarations: {},
-      state: "active",
-    },
-    {
-      id: "test",
-      name: "test",
-      activatedBy: "tool",
-      activationMessageID: "msg_test",
-      content: "",
-      conflicts: [],
-      declarations: {},
-      state: "active",
-    },
-  ]
   const app = await mount(
     () => (
       <box width={50}>
@@ -247,7 +221,6 @@ test("renders compact operational rail summaries from live component state", asy
             ]}
             terminalCount={1}
           />
-          <SkillsRailContent skills={skills} />
         </RailProvider>
       </box>
     ),
@@ -263,7 +236,6 @@ test("renders compact operational rail summaries from live component state", asy
       ["TODO LIST", "1/2 open"],
       ["SUBAGENTS", "3/12 running · 2 waiting"],
       ["SHELLS", "1/2 running · 1 orphaned"],
-      ["SKILLS", "2/2 active · 1 conflict"],
     ]
     for (const [title, summary] of expectations) {
       const header = frame.split("\n").find((line) => line.includes(title))
@@ -312,10 +284,6 @@ test("leaves one blank row after normal expanded SUBAGENTS content", async () =>
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
 
   try {
-    const header = app.captureCharFrame().split("\n").findIndex((line) => line.includes("SUBAGENTS"))
-    await app.mockMouse.click(2, header)
-    await app.waitForFrame((frame) => frame.includes("Completed task"))
-
     const lines = app.captureCharFrame().split("\n")
     const completed = lines.findIndex((line) => line.includes("Completed task"))
     const next = lines.findIndex((line) => line.includes("NEXT"))
@@ -329,31 +297,16 @@ test("leaves one blank row after normal expanded SUBAGENTS content", async () =>
 })
 
 test("applies one outer surface row around populated normal rail sections", async () => {
-  const [{ RailProvider, RailRow, RailSection }, { SubagentRailContent }, { ShellRailContent }, { SkillsRailContent }] =
+  const [{ RailProvider, RailRow, RailSection }, { SubagentRailContent }, { ShellRailContent }] =
     await Promise.all([
       import("../src/routes/session/rail-section"),
       import("../src/feature-plugins/sidebar/subagents"),
       import("../src/feature-plugins/sidebar/shells"),
-      import("../src/feature-plugins/sidebar/skills"),
     ])
   const app = await mount(() => (
     <RailProvider>
       <SubagentRailContent tasks={[{ sessionID: "ses_subagent", description: "subagent row", state: "running", elapsed: "2m" }]} />
       <ShellRailContent groups={[{ owner: { label: "Main chat" }, shells: [{ id: "shell", status: "running" }] }]} terminalCount={0} />
-      <SkillsRailContent
-        skills={[
-          {
-            id: "writer",
-            name: "writer row",
-            activatedBy: "tool",
-            activationMessageID: "msg_writer",
-            content: "",
-            conflicts: [],
-            declarations: {},
-            state: "active",
-          },
-        ]}
-      />
       <RailSection section="mcp" title="MCP" summary="1/1 connected">
         <RailRow label="server row" value="Connected" />
       </RailSection>
@@ -362,17 +315,12 @@ test("applies one outer surface row around populated normal rail sections", asyn
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS") && frame.includes("MCP"))
 
   try {
-    for (const title of ["SUBAGENTS", "SHELLS", "SKILLS"]) {
-      const row = app.captureCharFrame().split("\n").findIndex((line) => line.includes(title))
-      await app.mockMouse.click(2, row)
-    }
-    await app.waitForFrame((frame) => frame.includes("writer row"))
+    await app.waitForFrame((frame) => frame.includes("Main chat"))
 
     const lines = app.captureCharFrame().split("\n")
-    const pairs = [
+    const pairs: Array<[string, string, string]> = [
       ["SUBAGENTS", "subagent row", "SHELLS"],
-      ["SHELLS", "Main chat", "SKILLS"],
-      ["SKILLS", "writer row", "MCP"],
+      ["SHELLS", "Main chat", "MCP"],
     ]
     for (const [header, content, nextHeader] of pairs) {
       const headerRow = lines.findIndex((line) => line.includes(header))
@@ -589,9 +537,9 @@ test("renders rail header glyphs and colors for expanded, collapsed, and attenti
     expect(expanded[0]?.plainText).toBe("\u2212")
     expect(expanded[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
     expect(expanded[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(collapsed[0]?.plainText).toBe("+")
-    expect(collapsed[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
-    expect(collapsed[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
+    expect(collapsed[0]?.plainText).toBe("−")
+    expect(collapsed[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
+    expect(collapsed[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
     expect(attentionExpanded[0]?.plainText).toBe("\u2212")
     expect(attentionExpanded[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
     expect(attentionExpanded[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
@@ -614,24 +562,23 @@ test("auto-expands on attention and re-collapses once it clears", async () => {
     </RailProvider>
   ))
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
-  expect(app.captureCharFrame()).not.toContain("subagent body")
+  expect(app.captureCharFrame()).toContain("subagent body")
 
   setWaiting(true)
   await app.waitForFrame((frame) => frame.includes("subagent body"))
 
   setWaiting(false)
-  await app.waitForFrame((frame) => !frame.includes("subagent body"))
+  await app.waitForFrame((frame) => frame.includes("subagent body"))
   app.renderer.destroy()
 })
 
 test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail rows, and a TODO LIST in the correct order", async () => {
-  const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }, { SkillsRailContent }] =
+  const [{ SessionRailContent, AutonomyRailContent }, { TodoRailContent }, { SubagentRailContent }, { ShellRailContent }] =
     await Promise.all([
       import("../src/routes/session/sidebar"),
       import("../src/feature-plugins/sidebar/todo"),
       import("../src/feature-plugins/sidebar/subagents"),
       import("../src/feature-plugins/sidebar/shells"),
-      import("../src/feature-plugins/sidebar/skills"),
     ])
   const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
   const autonomy: SessionAutonomyState = { mode: "normal", yolo: true, goal: {
@@ -643,18 +590,6 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
     },
   }
   const todos: SessionTodoInfo[] = [{ content: "Verify baseline", status: "completed", priority: "medium" }]
-  const skills: SessionSkill[] = [
-    {
-      id: "review",
-      name: "Code Review",
-      activatedBy: "tool",
-      activationMessageID: "msg_skill",
-      content: "Review the change.",
-      conflicts: [],
-      declarations: {},
-      state: "active",
-    },
-  ]
   const app = await mount(() => {
     setThemeV2(useTheme().themeV2)
     return (
@@ -664,7 +599,6 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
         <TodoRailContent list={todos} />
         <SubagentRailContent tasks={[{ sessionID: "ses_docs", description: "docs-sync", state: "running", elapsed: "2m14s" }]} />
         <ShellRailContent groups={[{ owner: { label: "docs-sync" }, shells: [{ id: "running" }] }]} terminalCount={0} />
-        <SkillsRailContent skills={skills} />
       </>
     )
   }, { width: 40, height: 60 })
@@ -682,7 +616,6 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
       "TODO LIST",
       "SUBAGENTS",
       "SHELLS",
-      "SKILLS",
     ]
     const indexes = sectionHeaders.map((label) => frame.indexOf(label))
     expect(indexes.every((index) => index >= 0)).toBe(true)
@@ -700,7 +633,6 @@ test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail row
     expect(frame).not.toContain("ses_0085fc701234567")
     expect(frame).not.toContain("workspace")
     expect(frame).toContain("docs-sync")
-    expect(frame).toContain("1/1 active")
     const subagentHeader = frame.split("\n").find((line) => line.includes("SUBAGENTS"))
     expect(subagentHeader).toContain("1/1 running")
     expect(subagentHeader).not.toContain("subagents")
@@ -773,36 +705,23 @@ test("a user can toggle a collapsed section from its header", async () => {
   await app.waitForFrame((frame) => frame.includes("1 active"))
 
   try {
-    expect(app.captureCharFrame()).not.toContain("mcp body")
+    expect(app.captureCharFrame()).toContain("mcp body")
     const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
     await app.mockMouse.click(2, headingRow)
-    await app.waitForFrame((frame) => frame.includes("mcp body"))
-    await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("mcp body"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => frame.includes("mcp body"))
   } finally {
     app.renderer.destroy()
   }
 })
 
-test("renders accurate shell and skills summaries and releases orphaned-shell attention", async () => {
-  const [{ RailProvider }, { ShellRailContent }, { SkillsRailContent }] = await Promise.all([
+test("renders accurate shell summaries and releases orphaned-shell attention", async () => {
+  const [{ RailProvider }, { ShellRailContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
     import("../src/feature-plugins/sidebar/shells"),
-    import("../src/feature-plugins/sidebar/skills"),
   ])
   const [orphaned, setOrphaned] = createSignal(false)
-  const skills: SessionSkill[] = [
-    {
-      id: "review",
-      name: "Code Review",
-      activatedBy: "tool",
-      activationMessageID: "msg_skill",
-      content: "Review the change.",
-      conflicts: [],
-      declarations: {},
-      state: "active",
-    },
-  ]
   const app = await mount(() => (
     <RailProvider>
       <ShellRailContent
@@ -816,7 +735,6 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
         }
         terminalCount={1}
       />
-      <SkillsRailContent skills={skills} />
     </RailProvider>
   ))
   await app.waitForFrame((frame) => frame.includes("SHELLS"))
@@ -825,7 +743,6 @@ test("renders accurate shell and skills summaries and releases orphaned-shell at
     let frame = app.captureCharFrame()
     expect(frame).toContain("1/2 running")
     expect(frame).not.toContain("orphaned")
-    expect(frame).toContain("1/1 active")
 
     setOrphaned(true)
     await app.waitForFrame((value) => value.includes("Unknown session 1"))

@@ -4,6 +4,7 @@ import type { LLMRequest } from "@ycoding-ai/ai"
 import { Config } from "../config"
 import { ConfigCompaction } from "../config/compaction"
 import type { ModelV2 } from "../model"
+import { Token } from "../util/token"
 import { SessionContextBudget } from "./context-budget"
 
 export const policy = (entries: readonly Config.Entry[]) =>
@@ -31,17 +32,7 @@ export const estimatedInputTokens = (input: Usage) =>
   SessionContextBudget.sumInputTokens({
     systemInstructions: SessionContextBudget.countTokens(input.system.map((part) => part.text).join("\n")),
     toolDefinitions: SessionContextBudget.countTokens(JSON.stringify(input.tools)),
-    recentMessages: SessionContextBudget.countTokens(
-      JSON.stringify(
-        input.messages.map((message) => ({
-          ...message,
-          content:
-            typeof message.content === "string"
-              ? message.content
-              : message.content.map((part) => (part.type === "media" ? { ...part, data: "" } : part)),
-        })),
-      ),
-    ),
+    recentMessages: Token.estimateJson(input.messages),
   })
 
 export const level = (

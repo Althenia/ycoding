@@ -277,7 +277,7 @@ export function SubagentsTab(props: { sessionID: string }) {
     }
     if (selectedIdx >= 0 && selectedIdx !== store.selected) setStore("selected", selectedIdx)
     wasActive = true
-    if (store.selected >= list.length) moveTo(Math.max(0, list.length - 1))
+    if (store.selected >= list.length) moveTo(0)
   })
 
   function moveTo(next: number, center = false) {
@@ -398,6 +398,7 @@ export function SubagentsTab(props: { sessionID: string }) {
         run() {
           const entry = selectedEntry()
           if (!entry || !canCancelSubagent(entry.status)) return
+          moveTo(0, false)
           const id = parentID()
           void cancelManagedSubagent(client, id, entry.sessionID)
             .then(() => {

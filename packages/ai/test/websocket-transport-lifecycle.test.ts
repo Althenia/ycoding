@@ -107,7 +107,7 @@ describe("WebSocket JSON transport lifecycle", () => {
     }),
   )
 
-  it.effect("surfaces close 1006 through frames and uses HTTP on the following physical request", () =>
+  it.effect("surfaces close 1006 through frames as hard transport error without HTTP fallback", () =>
     Effect.gen(function* () {
       let websocketRequests = 0
       let httpRequests = 0
@@ -169,14 +169,15 @@ describe("WebSocket JSON transport lifecycle", () => {
 
       expect(error).toBeInstanceOf(LLMError)
       if (!(error instanceof LLMError)) return
-      expect(error.method).toBe("frames")
+      expect(error.method).toBe("message")
       expect(error.reason._tag).toBe("Transport")
       if (error.reason._tag !== "Transport") return
-      expect(error.reason.kind).toBe("websocket-fallback")
+      expect(error.reason.kind).toBe("close")
       expect(error.reason.message).toContain("WebSocket closed with code 1006")
-      yield* LLMClient.generate(request).pipe(Effect.provide(client))
-      expect(websocketRequests).toBe(1)
-      expect(httpRequests).toBe(1)
+      const secondError = yield* LLMClient.generate(request).pipe(Effect.provide(client), Effect.flip)
+      expect(secondError).toBeInstanceOf(LLMError)
+      expect(websocketRequests).toBe(2)
+      expect(httpRequests).toBe(0)
       expect(closed).toBe(true)
     }),
   )

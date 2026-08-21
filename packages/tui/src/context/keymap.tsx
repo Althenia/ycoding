@@ -6,8 +6,8 @@ import {
   registerBaseLayoutFallback,
   registerCommaBindings,
   registerEscapeClearsPendingSequence,
+  registerLeader,
   registerManagedTextareaLayer,
-  registerTimedLeader,
 } from "@opentui/keymap/addons/opentui"
 import { formatCommandBindings, formatKeySequence } from "@opentui/keymap/extras"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
@@ -127,10 +127,9 @@ function Provider(props: ParentProps<{ config?: KeymapConfig }>) {
   const leader = config.keybinds.get("leader")?.[0]?.key
   if (leader) {
     dispose.push(
-      registerTimedLeader(keymap, {
+      registerLeader(keymap, {
         trigger: leader,
         name: "leader",
-        timeoutMs: config.leader?.timeout ?? ("leader_timeout" in config ? config.leader_timeout : undefined) ?? 2000,
       }),
     )
   }
@@ -241,7 +240,8 @@ function createLayer(input: () => KeymapLayer) {
           const configured = value.config.keybinds.get(command.id)
           if (configured.length) return configured
           if (typeof command.bind !== "string") return []
-          return [{ key: command.bind, cmd: command.id }]
+          const key = command.bind.startsWith("ctrl+x ") ? `<leader>${command.bind.slice("ctrl+x ".length)}` : command.bind
+          return [{ key, cmd: command.id }]
         }),
         ...(bindings ?? []).flatMap((id) => value.config.keybinds.get(id)),
       ],

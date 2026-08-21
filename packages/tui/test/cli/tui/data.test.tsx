@@ -123,9 +123,9 @@ test("releases rows through a completed V2 compaction boundary after each canoni
   const calls = createFetch((url) => {
     if (url.pathname === `/api/session/${sessionID}/message`) {
       messageRequests++
-      // Each response is a complete canonical transcript. The second response
-      // adds a completed compaction without dropping durable history.
-      return json({ data: messageRequests === 1 ? resident : canonical, cursor: {} })
+      // A fresh process receives complete durable history plus the projected
+      // compaction marker; resident pruning must happen in the same publication.
+      return json({ data: canonical, cursor: {} })
     }
     return undefined
   }, events)
@@ -156,7 +156,14 @@ test("releases rows through a completed V2 compaction boundary after each canoni
     await data.session.message.sync(sessionID)
     const residentMessageIDs = () => data.session.message.list(sessionID).map((message) => message.id)
     const compaction = () => data.session.compaction.get(sessionID, "cmp_resident")
-    expect(residentMessageIDs()).toEqual(resident.map((message) => message.id))
+    expect(residentMessageIDs()).toEqual(["msg_compaction_job"])
+    expect(publications).not.toContainEqual(resident.map((message) => message.id))
+    expect(compaction()).toMatchObject({
+      jobID: "cmp_resident",
+      messageID: "msg_compaction_job",
+      trigger: "advised",
+      status: "completed",
+    })
 
     publications.length = 0
     data.session.message.invalidate(sessionID)
@@ -164,12 +171,7 @@ test("releases rows through a completed V2 compaction boundary after each canoni
     expect(residentMessageIDs()).toEqual(["msg_compaction_job"])
     expect(publications).toEqual([["msg_compaction_job"]])
     expect(data.session.message.list(sessionID).filter((message) => message.type === "compaction")).toHaveLength(1)
-    expect(compaction()).toMatchObject({
-      jobID: "cmp_resident",
-      messageID: "msg_compaction_job",
-      trigger: "advised",
-      status: "completed",
-    })
+    expect(compaction()).toMatchObject({ status: "completed" })
     expect(messageRequests).toBe(2)
   } finally {
     app.renderer.destroy()

@@ -126,16 +126,27 @@ test("classifies exact, exceeded, zero, and negative hard input caps as mandator
   expect(classify(10, 11)).toBe("mandatory")
 })
 
-test("does not count raw image media bytes as input tokens", () => {
-  const image = (data: string) =>
+test("does not count encoded image payloads as input tokens", () => {
+  const image = (data: string | Uint8Array) =>
     Message.make({
       role: "user",
       content: [{ type: "media", mediaType: "image/png", data, filename: "image.png" }],
     })
-  const estimate = (data: string) =>
-    SessionContextPressure.estimatedInputTokens({ system: [], tools: [], messages: [image(data)] })
+  const toolImage = (data: string) =>
+    Message.tool({
+      id: "call-image",
+      name: "read",
+      result: {
+        type: "content",
+        value: [{ type: "file", uri: `data:image/png;base64,${data}`, mime: "image/png", name: "image.png" }],
+      },
+    })
+  const estimate = (message: Message) =>
+    SessionContextPressure.estimatedInputTokens({ system: [], tools: [], messages: [message] })
 
-  expect(estimate("a".repeat(100_000))).toBe(estimate(""))
+  expect(estimate(image("a".repeat(100_000)))).toBe(estimate(image("")))
+  expect(estimate(image(new Uint8Array(100_000)))).toBe(estimate(image(new Uint8Array())))
+  expect(estimate(toolImage("a".repeat(100_000)))).toBe(estimate(toolImage("")))
 })
 
 test("advisory false suppresses soft advice but not mandatory classification", () => {

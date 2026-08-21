@@ -1180,7 +1180,7 @@ export function createPromptState(input: PromptInput): PromptState {
 
   createEffect(() => {
     input.state().phase
-    if (!input.prompt() || !area || area.isDestroyed || input.state().phase !== "idle") {
+    if (!input.prompt() || !area || area.isDestroyed) {
       return
     }
 

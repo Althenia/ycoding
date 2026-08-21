@@ -20,84 +20,87 @@ import zeusContent from "./agent/zeus.md" with { type: "text" }
 // Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
 // Whitelisted so agents can read a command's full captured output without an external-directory prompt.
 const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
-const builtIns = () => [
-  {
-    id: "TLDR",
-    description:
-      "Aggressively lazy but competent builder that refuses unnecessary work, silently finishes the smallest correct solution, and answers briefly.",
-    mode: "primary",
-    temperature: 0.1,
-    color: "#95a5a6",
-    system: sourceSystem(tldrContent, "primary"),
-  },
-  {
-    id: "architech",
-    description:
-      "Pragmatic evidence-led architect that finds material system gaps, connects every relevant boundary, and implements sound trade-offs.",
-    mode: "primary",
-    temperature: 0.3,
-    color: "#3498db",
-    system: sourceSystem(architechContent, "primary"),
-  },
-  {
-    id: "god",
-    description:
-      "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
-    mode: "primary",
-    temperature: 0.2,
-    color: "#f1c40f",
-    system: sourceSystem(godContent, "primary"),
-  },
-  {
-    id: "yangi",
-    description:
-      "Seasoned old master who speaks concisely, decides precisely, and completes engineering work without wasted motion.",
-    mode: "primary",
-    temperature: 0.1,
-    color: "#2ecc71",
-    system: sourceSystem(yangiContent, "primary"),
-  },
-  {
-    id: "occam",
-    description: "Pragmatic minimalist that completes one bounded task precisely with minimum waste.",
-    mode: "subagent",
-    temperature: 0.1,
-    color: "#2ecc71",
-    system: sourceSystem(occamContent, "subagent"),
-  },
-  {
-    id: "omoikane",
-    description: "Systems-minded designer and implementer that connects the wider context for one bounded task.",
-    mode: "subagent",
-    temperature: 0.3,
-    color: "#3498db",
-    system: sourceSystem(omoikaneContent, "subagent"),
-  },
-  {
-    id: "wittgenstein",
-    description: "Silent executor that completes one bounded task and reports only essential evidence.",
-    mode: "subagent",
-    temperature: 0.1,
-    color: "#95a5a6",
-    system: sourceSystem(wittgensteinContent, "subagent"),
-  },
-  {
-    id: "zeus",
-    description:
-      "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
-    mode: "subagent",
-    temperature: 0.2,
-    color: "#f1c40f",
-    system: sourceSystem(zeusContent, "subagent"),
-  },
-] as const
+const builtIns = () =>
+  [
+    {
+      id: "TLDR",
+      description:
+        "Aggressively lazy but competent builder that refuses unnecessary work, silently finishes the smallest correct solution, and answers briefly.",
+      mode: "primary",
+      temperature: 0.1,
+      color: "#95a5a6",
+      system: sourceSystem(tldrContent, "primary"),
+    },
+    {
+      id: "architech",
+      description:
+        "Pragmatic evidence-led architect that finds material system gaps, connects every relevant boundary, and implements sound trade-offs.",
+      mode: "primary",
+      temperature: 0.3,
+      color: "#3498db",
+      system: sourceSystem(architechContent, "primary"),
+    },
+    {
+      id: "god",
+      description:
+        "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
+      mode: "primary",
+      temperature: 0.2,
+      color: "#f1c40f",
+      system: sourceSystem(godContent, "primary"),
+    },
+    {
+      id: "yangi",
+      description:
+        "Seasoned old master who speaks concisely, decides precisely, and completes engineering work without wasted motion.",
+      mode: "primary",
+      temperature: 0.1,
+      color: "#2ecc71",
+      system: sourceSystem(yangiContent, "primary"),
+    },
+    {
+      id: "occam",
+      description: "Pragmatic minimalist that completes one bounded task precisely with minimum waste.",
+      mode: "subagent",
+      temperature: 0.1,
+      color: "#2ecc71",
+      system: sourceSystem(occamContent, "subagent"),
+    },
+    {
+      id: "omoikane",
+      description: "Systems-minded designer and implementer that connects the wider context for one bounded task.",
+      mode: "subagent",
+      temperature: 0.3,
+      color: "#3498db",
+      system: sourceSystem(omoikaneContent, "subagent"),
+    },
+    {
+      id: "wittgenstein",
+      description: "Silent executor that completes one bounded task and reports only essential evidence.",
+      mode: "subagent",
+      temperature: 0.1,
+      color: "#95a5a6",
+      system: sourceSystem(wittgensteinContent, "subagent"),
+    },
+    {
+      id: "zeus",
+      description:
+        "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
+      mode: "subagent",
+      temperature: 0.2,
+      color: "#f1c40f",
+      system: sourceSystem(zeusContent, "subagent"),
+    },
+  ] as const
 
 const PROMPT_COMPACTION = `Summarize only the supplied coding-session history for continued work.
 
-- Preserve the current objective, constraints, decisions, exact paths and identifiers, completed work, validation state, blockers, unanswered questions, and next steps.
+- Preserve the current objective, requirements, acceptance criteria, constraints, exact facts, paths and identifiers, completed work, validation state, unresolved questions, and continuation action.
+- Keep active work in in_progress, not-started work in pending, and work that cannot proceed plus its cause in blocked.
+- Record durable choices in decision with accepted, rejected, or superseded status. Record only currently active skills and their required practices in skill.
 - Focus on older context because the newest messages may remain verbatim outside the summary.
-- If a <previous-summary> block exists, update it: retain still-true facts, remove stale facts, and merge new facts.
-- Follow the requested output structure exactly. Keep every requested section and prefer terse bullets.
+- If a previous conversation_memory document exists, merge it with newer evidence, retain still-true values, and remove values superseded by newer material.
+- Follow the requested TOON structure exactly, keep every requested field, use empty collections when no supported value exists, and never invent placeholder state.
 
 Do not answer the conversation or mention summarization, compaction, or merging. Use the conversation's language.`
 

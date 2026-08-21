@@ -21,28 +21,25 @@ export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
  * Sections that carry no summary on their header row, so collapsing them would hide information.
  * The remaining sections summarise themselves and stay collapsed until an attention event.
  */
-export function defaultExpanded(input: {
+export function defaultExpanded(_input: {
   goal?: boolean
   autonomy?: boolean
   shellSurface?: boolean
   allExpanded?: boolean
 }): RailSectionKey[] {
-  if (input.allExpanded)
-    return ["session", "goal", "autonomy", "context", "subagents", "shells", "skills"]
-  if (input.shellSurface)
-    return [
-      "shells" as const,
-      "session" as const,
-      ...(input.goal ? (["goal"] as const) : []),
-      ...(input.autonomy ? (["autonomy"] as const) : []),
-      "todo" as const,
-    ]
   return [
-    "session" as const,
-    "context" as const,
-    ...(input.goal ? (["goal"] as const) : []),
-    ...(input.autonomy ? (["autonomy"] as const) : []),
-    "todo" as const,
+    "session",
+    "context",
+    "todo",
+    "goal",
+    "autonomy",
+    "subagents",
+    "shells",
+    "mcp",
+    "plugins",
+    "guardrails",
+    "lsp",
+    "skills",
   ]
 }
 

@@ -40,6 +40,8 @@ export function SidebarCacheContent(props: {
     const metrics = railMetrics(dimensions().width)
     return Math.floor(railWidth(dimensions().width)) - metrics.paddingLeft - metrics.paddingRight
   })
+  const providerText = (model: SessionCacheDiagnostics["model"], opposite: string) =>
+    Locale.truncateWidth(model.providerID, Math.max(1, rowWidth() - opposite.length - 1))
   const modelText = (model: SessionCacheDiagnostics["model"], opposite: string) =>
     Locale.truncateWidth(contextModelLabel(model), Math.max(1, rowWidth() - opposite.length - 1))
   // Spend rows stay provider-distinct (costs are provider-priced), so the label carries provider+model+
@@ -98,6 +100,7 @@ export function SidebarCacheContent(props: {
       <Show when={diagnostics()}>
         {(value) => (
           <>
+            <RailRow label="Provider" value={providerText(value().model, "Provider")} />
             <RailRow label="Model" value={modelText(value().model, "Model")} />
             <Show when={summarizing()}>
               <RailRow label="Status" value="Summarizing" valueColor={themeV2.text.feedback.info.default} />

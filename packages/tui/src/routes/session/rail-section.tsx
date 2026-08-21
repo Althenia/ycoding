@@ -109,17 +109,16 @@ export function RailSection(
         gap={1}
         height={RAIL_SECTION_BAND_HEIGHT}
         alignItems={rail ? "center" : "flex-start"}
-        paddingLeft={rail ? metrics().paddingLeft - (rail.leftRule ? 1 : 0) : 0}
+        paddingLeft={rail ? metrics().paddingLeft : 0}
         paddingRight={rail ? metrics().paddingRight : 0}
+        marginLeft={rail?.leftRule ? -1 : 0}
         backgroundColor={themeV2.background.surface.overlay}
-        // The whole band toggles, not just its glyph, label and summary. Handlers on those children
-        // alone left the band's padding dead, so a click one column left of the marker did nothing.
         onMouseUp={toggle}
       >
-        <text fg={headerColor()} wrapMode="none" flexShrink={0} onMouseUp={toggle}>
+        <text fg={headerColor()} wrapMode="none" flexShrink={0}>
           {expanded() ? "\u2212" : "\u002b"}
         </text>
-        <box flexGrow={1} paddingLeft={metrics().sectionLabelPadding} onMouseUp={toggle}>
+        <box flexGrow={1} paddingLeft={metrics().sectionLabelPadding}>
           <text fg={headerColor()} wrapMode="none">
             <b>{props.title}</b>
           </text>
@@ -130,7 +129,6 @@ export function RailSection(
               fg={props.attention ? themeV2.text.feedback.warning.default : themeV2.text.subdued}
               wrapMode="none"
               flexShrink={0}
-              onMouseUp={toggle}
             >
               {summary()}
             </text>

@@ -192,9 +192,9 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         // The session composer renders no hint row by explicit user instruction.
         expect(lines.some((line) => line.includes("Enter send"))).toBe(false)
         expect(screen.colorOf("─")).toEqual([103, 215, 170, 255])
-        // Verify rail section order: SESSION, GOAL, AUTONOMY, CONTEXT, SUBAGENTS, SHELLS, SKILLS
+        // Verify rail section order: SESSION, GOAL, AUTONOMY, CONTEXT, SUBAGENTS, SHELLS
         const rail = lines.join("\n")
-        const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "CONTEXT", "SUBAGENTS", "SHELLS", "SKILLS"]
+        const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "CONTEXT", "SUBAGENTS", "SHELLS"]
         const indexes = sectionHeaders.map((header) => rail.indexOf(header))
         expect(indexes.every((index) => index >= 0)).toBe(true)
         expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
