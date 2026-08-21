@@ -19,9 +19,12 @@ export class WrongRootError extends Schema.TaggedErrorClass<WrongRootError>()("S
   }
 }
 
-export class MissingFieldError extends Schema.TaggedErrorClass<MissingFieldError>()("SessionSummary.MissingFieldError", {
-  fields: Schema.Array(Schema.String),
-}) {
+export class MissingFieldError extends Schema.TaggedErrorClass<MissingFieldError>()(
+  "SessionSummary.MissingFieldError",
+  {
+    fields: Schema.Array(Schema.String),
+  },
+) {
   override get message() {
     return `Missing required field(s): ${this.fields.join(", ")}`
   }
@@ -32,7 +35,7 @@ export class UnsupportedVersionError extends Schema.TaggedErrorClass<Unsupported
   { version: Schema.String },
 ) {
   override get message() {
-    return `Unsupported summary version: ${this.version}; supported: [1]`
+    return `Unsupported summary version: ${this.version}; supported: [2]`
   }
 }
 
@@ -54,7 +57,10 @@ export class InvalidElementError extends Schema.TaggedErrorClass<InvalidElementE
   }
 }
 
-export class EmptySummaryError extends Schema.TaggedErrorClass<EmptySummaryError>()("SessionSummary.EmptySummaryError", {}) {
+export class EmptySummaryError extends Schema.TaggedErrorClass<EmptySummaryError>()(
+  "SessionSummary.EmptySummaryError",
+  {},
+) {
   override get message() {
     return "Summary contains no meaningful content"
   }
@@ -92,29 +98,29 @@ const Decision = Schema.Struct({ text: Schema.String, status: DecisionStatus })
 const TextList = Schema.Array(Schema.String)
 
 const MemoryShape = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   through_sequence: Schema.Int,
   objective: Schema.String,
+  in_progress: TextList,
+  pending: TextList,
+  blocked: TextList,
+  decision: Schema.Array(Decision),
+  skill: TextList,
   requirements: TextList,
   acceptance_criteria: TextList,
-  progress: TextList,
   current_state: Schema.String,
   facts: Schema.Array(Fact),
-  decisions: Schema.Array(Decision),
   preferences: TextList,
   constraints: TextList,
   completed: TextList,
-  pending: TextList,
-  blockers: TextList,
-  skills: TextList,
   unresolved: TextList,
   important_identifiers: TextList,
   continuation: Schema.String,
 })
 
 export type Memory = Schema.Schema.Type<typeof MemoryShape>
-type MemoryInput = Omit<Memory, "requirements" | "acceptance_criteria" | "progress" | "skills"> &
-  Partial<Pick<Memory, "requirements" | "acceptance_criteria" | "progress" | "skills">>
+type MemoryInput = Omit<Memory, "requirements" | "acceptance_criteria" | "skill"> &
+  Partial<Pick<Memory, "requirements" | "acceptance_criteria" | "skill">>
 
 export interface ParseOptions {
   /** Expected session boundary that the summary must claim via `through_sequence`. */
@@ -127,18 +133,18 @@ const REQUIRED_FIELDS = [
   "version",
   "through_sequence",
   "objective",
+  "in_progress",
+  "pending",
+  "blocked",
+  "decision",
+  "skill",
   "requirements",
   "acceptance_criteria",
-  "progress",
   "current_state",
   "facts",
-  "decisions",
   "preferences",
   "constraints",
   "completed",
-  "pending",
-  "blockers",
-  "skills",
   "unresolved",
   "important_identifiers",
   "continuation",
@@ -163,18 +169,18 @@ export function encode(memory: MemoryInput): string {
         version: memory.version,
         through_sequence: memory.through_sequence,
         objective: memory.objective,
+        in_progress: memory.in_progress,
+        pending: memory.pending,
+        blocked: memory.blocked,
+        decision: memory.decision,
+        skill: memory.skill ?? [],
         requirements: memory.requirements ?? [],
         acceptance_criteria: memory.acceptance_criteria ?? [],
-        progress: memory.progress ?? [],
         current_state: memory.current_state,
         facts: memory.facts,
-        decisions: memory.decisions,
         preferences: memory.preferences,
         constraints: memory.constraints,
         completed: memory.completed,
-        pending: memory.pending,
-        blockers: memory.blockers,
-        skills: memory.skills ?? [],
         unresolved: memory.unresolved,
         important_identifiers: memory.important_identifiers,
         continuation: memory.continuation,
@@ -183,34 +189,31 @@ export function encode(memory: MemoryInput): string {
   ).join("\n")
 }
 
-/** Retains source-backed text verbatim in existing TOON v1 fields. */
+/** Retains source-backed text verbatim in the structured TOON handoff. */
 export function retainRequiredTexts(memory: Memory, texts: ReadonlyArray<string>): Memory {
   return texts
     .filter((text, index) => text.trim() && texts.indexOf(text) === index)
-    .reduce<Memory>(
-      (result, text) => {
-        if (memoryTexts(result).some((value) => value.includes(text))) return result
-        if (/^objective\s*:/i.test(text)) return { ...result, objective: text }
-        if (/\bactive skill\b/i.test(text)) return { ...result, skills: [...result.skills, text] }
-        if (/\baccept(?:ance)?[ _-]?criteria\b/i.test(text))
-          return { ...result, acceptance_criteria: [...result.acceptance_criteria, text] }
-        if (/\brequirement\b/i.test(text)) return { ...result, requirements: [...result.requirements, text] }
-        if (/\b(?:accepted|rejected|superseded) decision\b/i.test(text)) {
-          const status = /\brejected decision\b/i.test(text)
-            ? "rejected"
-            : /\bsuperseded decision\b/i.test(text)
-              ? "superseded"
-              : "accepted"
-          return { ...result, decisions: [...result.decisions, { text, status }] }
-        }
-        if (/\bblocker\b/i.test(text)) return { ...result, blockers: [...result.blockers, text] }
-        if (/\b(?:pending|todo|next action)\b/i.test(text)) return { ...result, pending: [...result.pending, text] }
-        if (/\b(?:progress|in[_ -]?progress|completed|validation)\b/i.test(text))
-          return { ...result, progress: [...result.progress, text] }
-        return { ...result, facts: [...result.facts, { text, confidence: "confirmed" }] }
-      },
-      memory,
-    )
+    .reduce<Memory>((result, text) => {
+      if (memoryTexts(result).some((value) => value.includes(text))) return result
+      if (/^objective\s*:/i.test(text)) return { ...result, objective: text }
+      if (/\bactive skill\b/i.test(text)) return { ...result, skill: [...result.skill, text] }
+      if (/\baccept(?:ance)?[ _-]?criteria\b/i.test(text))
+        return { ...result, acceptance_criteria: [...result.acceptance_criteria, text] }
+      if (/\brequirement\b/i.test(text)) return { ...result, requirements: [...result.requirements, text] }
+      if (/\b(?:accepted|rejected|superseded) decision\b/i.test(text)) {
+        const status = /\brejected decision\b/i.test(text)
+          ? "rejected"
+          : /\bsuperseded decision\b/i.test(text)
+            ? "superseded"
+            : "accepted"
+        return { ...result, decision: [...result.decision, { text, status }] }
+      }
+      if (/\bblocker\b/i.test(text)) return { ...result, blocked: [...result.blocked, text] }
+      if (/\b(?:pending|todo|next action)\b/i.test(text)) return { ...result, pending: [...result.pending, text] }
+      if (/\b(?:progress|in[_ -]?progress|completed|validation)\b/i.test(text))
+        return { ...result, in_progress: [...result.in_progress, text] }
+      return { ...result, facts: [...result.facts, { text, confidence: "confirmed" }] }
+    }, memory)
 }
 
 /**
@@ -228,16 +231,30 @@ export function parse(input: string, options: ParseOptions): Memory | ParseError
   if ("reason" in found) return new WrongRootError({ got: found.reason })
   const body = found.body
   if (!Object.hasOwn(body, "version")) return new MissingFieldError({ fields: ["version"] })
-  if (body.version !== 1) return new UnsupportedVersionError({ version: String(body.version) })
+  if (body.version !== 2) return new UnsupportedVersionError({ version: String(body.version) })
   if (!Object.hasOwn(body, "through_sequence")) return new MissingFieldError({ fields: ["through_sequence"] })
   if (body.through_sequence !== options.throughSequence)
-    return new SequenceMismatchError({ expected: String(options.throughSequence), actual: String(body.through_sequence) })
+    return new SequenceMismatchError({
+      expected: String(options.throughSequence),
+      actual: String(body.through_sequence),
+    })
   const missing = REQUIRED_FIELDS.filter((field) => !Object.hasOwn(body, field))
   if (missing.length) return new MissingFieldError({ fields: missing })
   const result = Schema.decodeUnknownResult(MemoryShape)(body)
   if (Result.isFailure(result)) return new InvalidElementError({ reason: result.failure.message })
   if (isEmpty(result.success)) return new EmptySummaryError({})
   return result.success
+}
+
+/** True when input is the canonical V2 handoff encoding. */
+export function isCanonical(input: string): boolean {
+  if (isFencedDocument(input) || findProseLine(input) !== undefined) return false
+  const decoded = decodeToon(input)
+  if (decoded instanceof InvalidToonError) return false
+  const found = rootBody(decoded)
+  if ("reason" in found) return false
+  const result = Schema.decodeUnknownResult(MemoryShape)(found.body)
+  return Result.isSuccess(result) && encode(result.success) === input
 }
 
 function isFencedDocument(input: string) {
@@ -270,15 +287,15 @@ function isEmpty(memory: Memory): boolean {
   const lists = [
     memory.requirements,
     memory.acceptance_criteria,
-    memory.progress,
+    memory.in_progress,
     memory.facts,
-    memory.decisions,
+    memory.decision,
     memory.preferences,
     memory.constraints,
     memory.completed,
     memory.pending,
-    memory.blockers,
-    memory.skills,
+    memory.blocked,
+    memory.skill,
     memory.unresolved,
     memory.important_identifiers,
   ]
@@ -290,17 +307,17 @@ function memoryTexts(memory: Memory) {
     memory.objective,
     ...memory.requirements,
     ...memory.acceptance_criteria,
-    ...memory.progress,
+    ...memory.in_progress,
     memory.current_state,
     memory.continuation,
     ...memory.facts.map((fact) => fact.text),
-    ...memory.decisions.map((decision) => decision.text),
+    ...memory.decision.map((decision) => decision.text),
     ...memory.preferences,
     ...memory.constraints,
     ...memory.completed,
     ...memory.pending,
-    ...memory.blockers,
-    ...memory.skills,
+    ...memory.blocked,
+    ...memory.skill,
     ...memory.unresolved,
     ...memory.important_identifiers,
   ]

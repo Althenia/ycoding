@@ -43,9 +43,31 @@ const SKILL_TEXT_MAX_CHARS = 2_048
 const SUMMARY_SCALAR_MAX_CHARS = 2_048
 const SUMMARY_TEMPLATE = `Output exactly one TOON document, and nothing else, rooted at conversation_memory.
 
-The document must contain version: 1; through_sequence as the exact supplied sequence; objective, current_state, and continuation strings; facts as { text, confidence } rows where confidence is confirmed, likely, or uncertain; decisions as { text, status } rows where status is accepted, rejected, or superseded; and requirements, acceptance_criteria, progress, preferences, constraints, completed, pending, blockers, skills, unresolved, and important_identifiers as string arrays.
+Use this exact field schema and order:
 
-Keep the memory terse and factual. Preserve still-true goals, constraints, decisions, exact facts, identifiers, paths, commands, and errors. Merge the previous memory when supplied and remove only details superseded by newer material. Emit no Markdown fences, prose, or commentary.`
+conversation_memory:
+  version: 2
+  through_sequence: 0
+  objective: ""
+  in_progress: []
+  pending: []
+  blocked: []
+  decision: []
+  skill: []
+  requirements: []
+  acceptance_criteria: []
+  current_state: ""
+  facts: []
+  preferences: []
+  constraints: []
+  completed: []
+  unresolved: []
+  important_identifiers: []
+  continuation: ""
+
+Replace through_sequence with the exact supplied sequence. decision rows have { text, status }, where status is accepted, rejected, or superseded. facts rows have { text, confidence }, where confidence is confirmed, likely, or uncertain. Every other collection is a string array; use [] when there is no value. in_progress contains work actively underway, pending contains not-started next work, blocked contains work that cannot proceed and why, and skill contains active skill names plus any practices that must continue.
+
+Keep the memory terse and factual. Preserve still-true goals, constraints, decisions, exact facts, identifiers, paths, commands, errors, validation state, and remaining risks. Merge a supplied conversation_memory document with newer material and remove only details superseded by newer evidence. Emit no Markdown fences, prose, or commentary.`
 
 export interface Interface {
   readonly manifest: (job: SessionCompactionJob.Job) => Effect.Effect<ContextManifest.Manifest, ManifestError>
@@ -271,8 +293,7 @@ const make = (dependencies: Dependencies): Interface => {
       authorities: [],
       resourceAuthorities: [],
       toolResults: [],
-      recentTail:
-        recentTailCount === 0 ? [] : uncoveredItems.slice(-recentTailCount).map(ContextManifest.selector),
+      recentTail: recentTailCount === 0 ? [] : uncoveredItems.slice(-recentTailCount).map(ContextManifest.selector),
       protectedTargets: [],
       providerLinks: [],
       protectedState: SessionLiveState.toProtectedState(liveState.sources),
@@ -396,7 +417,7 @@ const generateCheckpoint = Effect.fn("SessionCompaction.generateCheckpoint")(fun
 }) {
   let cursor = 0
   let memory: SessionSummaryToon.Memory | undefined = input.previousMemory
-    ? { ...input.previousMemory, skills: [] }
+    ? { ...input.previousMemory, skill: [] }
     : undefined
   let summary = memory ? SessionSummaryToon.encode(memory) : undefined
   let calls = 0
@@ -465,14 +486,17 @@ const generateCheckpoint = Effect.fn("SessionCompaction.generateCheckpoint")(fun
   return yield* new ManifestError({ code: "context_limit_unresolved" })
 })
 
-function localCheckpoint(input: {
-  readonly source: ReadonlyArray<SummarySource>
-  readonly maxBytes: number
-  readonly acceptsModelInput: (summary: string, through: number) => boolean
-  readonly requiredTexts: ReadonlyArray<string>
-  readonly requiredSkills: ReadonlyArray<string>
-  readonly previousMemory?: SessionSummaryToon.Memory
-}, memory = input.previousMemory) {
+function localCheckpoint(
+  input: {
+    readonly source: ReadonlyArray<SummarySource>
+    readonly maxBytes: number
+    readonly acceptsModelInput: (summary: string, through: number) => boolean
+    readonly requiredTexts: ReadonlyArray<string>
+    readonly requiredSkills: ReadonlyArray<string>
+    readonly previousMemory?: SessionSummaryToon.Memory
+  },
+  memory = input.previousMemory,
+) {
   return finalizeCheckpoint(
     input,
     fallbackCheckpoint(
@@ -495,31 +519,30 @@ function mergeMemory(
   current: SessionSummaryToon.Memory,
   through: number,
 ): SessionSummaryToon.Memory {
-  if (!previous) return { ...current, through_sequence: through, skills: [] }
+  if (!previous) return { ...current, through_sequence: through, skill: [] }
   const strings = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) => [...new Set([...left, ...right])]
   const facts = [...previous.facts, ...current.facts].filter(
     (fact, index, all) => all.findIndex((candidate) => candidate.text === fact.text) === index,
   )
-  const decisions = [...previous.decisions, ...current.decisions].filter(
-    (decision, index, all) =>
-      all.findLastIndex((candidate) => candidate.text === decision.text) === index,
+  const decisions = [...previous.decision, ...current.decision].filter(
+    (decision, index, all) => all.findLastIndex((candidate) => candidate.text === decision.text) === index,
   )
   return {
-    version: 1,
+    version: 2,
     through_sequence: through,
     objective: mergeMeaningfulScalar(previous.objective, current.objective),
     requirements: strings(previous.requirements, current.requirements),
     acceptance_criteria: strings(previous.acceptance_criteria, current.acceptance_criteria),
-    progress: strings(previous.progress, current.progress),
+    in_progress: strings(previous.in_progress, current.in_progress),
     current_state: mergeScalar(previous.current_state, current.current_state),
     facts,
-    decisions,
+    decision: decisions,
     preferences: strings(previous.preferences, current.preferences),
     constraints: strings(previous.constraints, current.constraints),
     completed: strings(previous.completed, current.completed),
     pending: strings(previous.pending, current.pending),
-    blockers: strings(previous.blockers, current.blockers),
-    skills: [],
+    blocked: strings(previous.blocked, current.blocked),
+    skill: [],
     unresolved: strings(previous.unresolved, current.unresolved),
     important_identifiers: strings(previous.important_identifiers, current.important_identifiers),
     continuation: usefulScalar(current.continuation) ? current.continuation : previous.continuation,
@@ -587,14 +610,14 @@ function validateCheckpoint(
     through,
     input.maxBytes,
     input.acceptsModelInput,
-    memory ? { ...memory, skills: [] } : undefined,
+    memory ? { ...memory, skill: [] } : undefined,
   )
   const required = SessionSummaryToon.retainRequiredTexts(continuity, input.requiredTexts)
   const coverage = input.source.map((entry) => ({ text: entry.capsule, confidence: "confirmed" as const }))
   const encoded = SessionSummaryToon.encode({
     ...required,
     facts: [...required.facts.filter((fact) => !coverage.some((item) => item.text === fact.text)), ...coverage],
-    skills: [...new Set(input.requiredSkills)],
+    skill: [...new Set(input.requiredSkills)],
   })
   const parsed = SessionSummaryToon.parse(encoded, {
     throughSequence: through,
@@ -690,7 +713,9 @@ function retainLocalContinuity(
   const objective = lines.findLast((line) => /^objective\s*:/i.test(line)) ?? lines[0]
   const currentState = lines.findLast((line) => line !== "…")
   const requirements = lines
-    .filter((line) => /^requirements?\s*:/i.test(line) || /\b(?:must|shall|required?|never|do not|should)\b/i.test(line))
+    .filter(
+      (line) => /^requirements?\s*:/i.test(line) || /\b(?:must|shall|required?|never|do not|should)\b/i.test(line),
+    )
     .slice(-8)
   const acceptanceCriteria = lines
     .filter(
@@ -724,7 +749,7 @@ function retainLocalContinuity(
       if (!match && !inferred) return []
       const status = match?.[1]?.toLowerCase() ?? inferred
       if (status !== "accepted" && status !== "rejected" && status !== "superseded") return []
-      return [{ text: line, status }] satisfies SessionSummaryToon.Memory["decisions"]
+      return [{ text: line, status }] satisfies SessionSummaryToon.Memory["decision"]
     })
     .slice(-8)
   const constraints = lines
@@ -773,23 +798,23 @@ function retainLocalContinuity(
     })),
     ...decisions.map((decision) => (memory: SessionSummaryToon.Memory) => ({
       ...memory,
-      decisions: memory.decisions.some(
+      decision: memory.decision.some(
         (existing) => existing.text === decision.text && existing.status === decision.status,
       )
-        ? memory.decisions
-        : [...memory.decisions, decision],
+        ? memory.decision
+        : [...memory.decision, decision],
     })),
     ...blockers.map((text) => (memory: SessionSummaryToon.Memory) => ({
       ...memory,
-      blockers: append(memory.blockers, text),
+      blocked: append(memory.blocked, text),
     })),
     ...skills.map((text) => (memory: SessionSummaryToon.Memory) => ({
       ...memory,
-      skills: append(memory.skills, text),
+      skill: append(memory.skill, text),
     })),
     ...progress.map((text) => (memory: SessionSummaryToon.Memory) => ({
       ...memory,
-      progress: append(memory.progress, text),
+      in_progress: append(memory.in_progress, text),
     })),
     ...constraints.map((text) => (memory: SessionSummaryToon.Memory) => ({
       ...memory,
@@ -843,21 +868,21 @@ function checkpointMemory(seq: number, message: SessionMessage.Info): ReadonlyAr
 
 function emptyCheckpoint(through: number): SessionSummaryToon.Memory {
   return {
-    version: 1,
+    version: 2,
     through_sequence: through,
     objective: "Continue the current session from the retained state.",
     requirements: [],
     acceptance_criteria: [],
-    progress: [],
+    in_progress: [],
     current_state: "",
     facts: [],
-    decisions: [],
+    decision: [],
     preferences: [],
     constraints: [],
     completed: [],
     pending: [],
-    blockers: [],
-    skills: [],
+    blocked: [],
+    skill: [],
     unresolved: [],
     important_identifiers: [],
     continuation: "Use the checkpoint and later messages; ask the user if omitted detail is required.",
@@ -903,9 +928,11 @@ function sourceText(message: SessionMessage.Info | undefined, payload: Schema.Js
     )
   if (message.type === "shell")
     return boundedText(
-      [`Command: ${message.command}`, `Status: ${message.status}`, ...(message.exit === undefined ? [] : [`Exit: ${message.exit}`])].join(
-        "\n",
-      ),
+      [
+        `Command: ${message.command}`,
+        `Status: ${message.status}`,
+        ...(message.exit === undefined ? [] : [`Exit: ${message.exit}`]),
+      ].join("\n"),
       SOURCE_TEXT_MAX_CHARS,
     )
   return boundedText(semanticValues(payload).join("\n"), SOURCE_TEXT_MAX_CHARS)
@@ -922,7 +949,9 @@ function semanticValues(value: unknown, key?: string, depth = 0): string[] {
   if (Array.isArray(value)) return value.flatMap((item) => semanticValues(item, key, depth + 1)).slice(0, 24)
   if (typeof value !== "object") return []
   return Object.entries(value)
-    .filter(([name]) => !["metadata", "tokens", "diagnostics", "time", "providerState", "providerResultState"].includes(name))
+    .filter(
+      ([name]) => !["metadata", "tokens", "diagnostics", "time", "providerState", "providerResultState"].includes(name),
+    )
     .flatMap(([name, item]) => semanticValues(item, name, depth + 1))
     .slice(0, 32)
 }

@@ -17,6 +17,7 @@ import { WorkspaceV2 } from "../workspace"
 import { InstructionState } from "./instruction-state"
 import {
   SessionPendingTable,
+  SessionCompactionJobTable,
   SessionMessageTable,
   SessionFileChangeTable,
   SessionProviderRequestTable,
@@ -461,6 +462,78 @@ function insertMessage(db: DatabaseService, event: SessionEvent.DurableEvent, me
     .run()
     .pipe(Effect.orDie)
 }
+
+const currentCompactionMessage = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  jobID: string,
+) {
+  const row = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, sessionID),
+        eq(SessionMessageTable.type, "compaction"),
+        sql`json_extract(${SessionMessageTable.data}, '$.jobID') = ${jobID}`,
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  if (!row) return
+  const message = decodeMessage({ ...row.data, id: row.id, type: row.type })
+  return message.type === "compaction" && "jobID" in message ? message : undefined
+})
+
+function storeCurrentCompaction(
+  db: DatabaseService,
+  event: SessionEvent.DurableEvent,
+  message: SessionMessage.Compaction,
+  update: boolean,
+) {
+  if (!update) return insertMessage(db, event, message)
+  const encoded = encodeMessage(message)
+  const { id, type, ...data } = encoded
+  return db
+    .update(SessionMessageTable)
+    .set({ type, time_created: DateTime.toEpochMillis(message.time.created), data })
+    .where(
+      and(
+        eq(SessionMessageTable.session_id, event.data.sessionID),
+        eq(SessionMessageTable.id, SessionMessage.ID.make(id)),
+      ),
+    )
+    .run()
+    .pipe(Effect.orDie)
+}
+
+const projectCurrentCompaction = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  event: typeof SessionEvent.Compaction.Admitted.Type | typeof SessionEvent.Compaction.Started.Type,
+  status: "pending" | "running",
+) {
+  const job = yield* db
+    .select({ trigger: SessionCompactionJobTable.trigger, timeCreated: SessionCompactionJobTable.time_created })
+    .from(SessionCompactionJobTable)
+    .where(eq(SessionCompactionJobTable.id, event.data.jobID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!job) return
+  const current = yield* currentCompactionMessage(db, event.data.sessionID, event.data.jobID)
+  const base = {
+    id: current?.id ?? SessionMessage.ID.fromEvent(event.id),
+    type: "compaction" as const,
+    jobID: event.data.jobID,
+    trigger: job.trigger,
+    metadata: current?.metadata ?? event.metadata,
+    time: current?.time ?? { created: DateTime.makeUnsafe(job.timeCreated) },
+  }
+  const message =
+    status === "pending"
+      ? SessionMessage.CompactionPending.make({ ...base, status })
+      : SessionMessage.CompactionRunningCurrent.make({ ...base, status })
+  yield* storeCurrentCompaction(db, event, message, current !== undefined)
+})
 
 class TaskProjectionConflict extends Error {}
 
@@ -959,6 +1032,8 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.RetryScheduled, (event) => run(db, event))
+    yield* events.project(SessionEvent.Compaction.Admitted, (event) => projectCurrentCompaction(db, event, "pending"))
+    yield* events.project(SessionEvent.Compaction.Started, (event) => projectCurrentCompaction(db, event, "running"))
     yield* events.project(SessionEvent.Compaction.StartedV1, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.EndedV1, (event) =>
       Effect.gen(function* () {
@@ -971,7 +1046,35 @@ const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.Compaction.Ended, (event) =>
-      InstructionState.advanceEpoch(db, event.data.sessionID, event.durable.seq),
+      Effect.gen(function* () {
+        const job = yield* db
+          .select({ trigger: SessionCompactionJobTable.trigger, timeCreated: SessionCompactionJobTable.time_created })
+          .from(SessionCompactionJobTable)
+          .where(eq(SessionCompactionJobTable.id, event.data.jobID))
+          .get()
+          .pipe(Effect.orDie)
+        if (job) {
+          const current = yield* currentCompactionMessage(db, event.data.sessionID, event.data.jobID)
+          yield* storeCurrentCompaction(
+            db,
+            event,
+            SessionMessage.CompactionCompletedCurrent.make({
+              id: current?.id ?? SessionMessage.ID.fromEvent(event.id),
+              type: "compaction",
+              jobID: event.data.jobID,
+              trigger: job.trigger,
+              status: "completed",
+              revision: event.data.revision,
+              boundary: event.data.boundary,
+              metrics: event.data.metrics,
+              metadata: current?.metadata ?? event.metadata,
+              time: current?.time ?? { created: DateTime.makeUnsafe(job.timeCreated) },
+            }),
+            current !== undefined,
+          )
+        }
+        yield* InstructionState.advanceEpoch(db, event.data.sessionID, event.durable.seq)
+      }),
     )
     // Replacement is a durable transcript-reload signal. The committed summary already occupies
     // its historical boundary, so projecting this event must not append a second compaction row.
@@ -983,6 +1086,34 @@ const layer = Layer.effectDiscard(
           return yield* Effect.die(new Error("Durable Session event is missing aggregate sequence"))
         if (event.data.reason === "manual")
           yield* SessionPending.settleCompaction(db, { sessionID: event.data.sessionID })
+      }),
+    )
+    yield* events.project(SessionEvent.Compaction.Failed, (event) =>
+      Effect.gen(function* () {
+        const job = yield* db
+          .select({ trigger: SessionCompactionJobTable.trigger, timeCreated: SessionCompactionJobTable.time_created })
+          .from(SessionCompactionJobTable)
+          .where(eq(SessionCompactionJobTable.id, event.data.jobID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!job) return
+        const current = yield* currentCompactionMessage(db, event.data.sessionID, event.data.jobID)
+        yield* storeCurrentCompaction(
+          db,
+          event,
+          SessionMessage.CompactionFailedCurrent.make({
+            id: current?.id ?? SessionMessage.ID.fromEvent(event.id),
+            type: "compaction",
+            jobID: event.data.jobID,
+            trigger: job.trigger,
+            status: "failed",
+            code: event.data.code,
+            error: event.data.error,
+            metadata: current?.metadata ?? event.metadata,
+            time: current?.time ?? { created: DateTime.makeUnsafe(job.timeCreated) },
+          }),
+          current !== undefined,
+        )
       }),
     )
     yield* events.project(SessionEvent.RevertEvent.Staged, (event) =>
@@ -1058,13 +1189,9 @@ const layer = Layer.effectDiscard(
   }),
 )
 
-
 // Durable compaction boundary is read from SessionCompactionManifest (SessionContextState) and
 // durable session.compaction.ended events. Must be queried on every fetch/switch, never cached.
-export function latestCompactionBoundary(
-  db: DatabaseService,
-  sessionID: SessionSchema.ID,
-) {
+export function latestCompactionBoundary(db: DatabaseService, sessionID: SessionSchema.ID) {
   return Effect.gen(function* () {
     const ctx = yield* db
       .select({ seq: SessionContextStateTable.covered_through_seq })

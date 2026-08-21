@@ -16,6 +16,7 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { Money } from "@ycoding-ai/schema/money"
+import { SessionCompaction } from "@ycoding-ai/schema/session-compaction"
 import { SessionMessageUpdater } from "@ycoding-ai/core/session/message-updater"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
@@ -23,7 +24,10 @@ import { fromRow } from "@ycoding-ai/core/session/info"
 import { SessionPending } from "@ycoding-ai/core/session/pending"
 import { Shell } from "@ycoding-ai/schema/shell"
 import {
+  CompactionManifestBlobTable,
   InstructionStateTable,
+  SessionCompactionJobTable,
+  SessionContextRevisionTable,
   SessionPendingTable,
   SessionMessageTable,
   SessionTable,
@@ -57,6 +61,108 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("projects a completed current compaction as a restart-stable transcript marker", () =>
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          directory: "/project",
+          title: "test",
+        })
+        .run()
+      yield* db
+        .insert(SessionContextRevisionTable)
+        .values({ session_id: sessionID, revision: 0, time_created: 0 })
+        .run()
+      const manifestDigest = "a".repeat(64)
+      yield* db
+        .insert(CompactionManifestBlobTable)
+        .values({
+          digest: manifestDigest,
+          schema_version: 1,
+          content: {},
+          input_tokens: 100,
+          retained_tokens: 40,
+          time_created: 1,
+        })
+        .run()
+      const jobID = SessionCompaction.ID.make("cmp_restart_marker")
+      const boundary = { messageID: SessionMessage.ID.make("msg_compaction_boundary"), seq: 2 }
+      yield* db
+        .insert(SessionCompactionJobTable)
+        .values({
+          id: jobID,
+          session_id: sessionID,
+          trigger: "manual",
+          requested_through_message_id: boundary.messageID,
+          requested_through_seq: boundary.seq,
+          base_context_revision: 0,
+          target_max_input_tokens: 8_000,
+          config_digest: "b".repeat(64),
+          status: "pending",
+          attempts: 0,
+          time_created: 1,
+        })
+        .run()
+
+      const events = yield* EventV2.Service
+      yield* events.publish(SessionEvent.Compaction.Admitted, { sessionID, jobID })
+      const pending = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .get()
+      expect(
+        pending &&
+          Schema.decodeUnknownSync(SessionMessage.Info)({ ...pending.data, id: pending.id, type: pending.type }),
+      ).toMatchObject({ type: "compaction", jobID, trigger: "manual", status: "pending" })
+
+      yield* db
+        .update(SessionCompactionJobTable)
+        .set({
+          status: "ended",
+          attempts: 1,
+          manifest_digest: manifestDigest,
+          time_started: 2,
+          time_ended: 3,
+        })
+        .where(eq(SessionCompactionJobTable.id, jobID))
+        .run()
+      yield* events.publish(SessionEvent.Compaction.Ended, {
+        sessionID,
+        jobID,
+        revision: 1,
+        boundary,
+        metrics: { excludedMessages: 2, excludedParts: 3, inputTokens: 100, retainedTokens: 40 },
+      })
+
+      const row = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .get()
+      expect(row?.id).toBe(pending?.id)
+      expect(row?.seq).toBe(pending?.seq)
+      expect(
+        row && Schema.decodeUnknownSync(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type }),
+      ).toMatchObject({
+        type: "compaction",
+        jobID,
+        trigger: "manual",
+        status: "completed",
+        revision: 1,
+        boundary,
+      })
+    }),
+  )
+
   it.effect("does not settle a pending manual compaction on an auto failure", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db

@@ -571,77 +571,79 @@ const compactionExecution = Layer.effect(
               .from(SessionMessageTable)
               .where(
                 and(
-                eq(SessionMessageTable.session_id, job.sessionID),
+                  eq(SessionMessageTable.session_id, job.sessionID),
                   eq(SessionMessageTable.type, "user"),
                   lte(SessionMessageTable.seq, job.requestedThrough.seq),
                 ),
               )
               .orderBy(asc(SessionMessageTable.seq))
               .all()
-              .pipe(Effect.orDie))
-              .flatMap((row) =>
-                Schema.is(Schema.Json)(row.data) &&
-                typeof row.data === "object" &&
-                row.data !== null &&
-                !Array.isArray(row.data) &&
-                "text" in row.data &&
-                typeof row.data.text === "string" &&
-                row.data.text.trim()
-                  ? [row.data.text]
-                  : [],
-              )
+              .pipe(Effect.orDie)).flatMap((row) =>
+              Schema.is(Schema.Json)(row.data) &&
+              typeof row.data === "object" &&
+              row.data !== null &&
+              !Array.isArray(row.data) &&
+              "text" in row.data &&
+              typeof row.data.text === "string" &&
+              row.data.text.trim()
+                ? [row.data.text]
+                : [],
+            )
           : []
         const summary = compactionSummary
           ? SessionSummaryToon.encode({
-              version: 1,
+              version: 2,
               through_sequence: job.requestedThrough.seq,
               objective: "Retain the completed exchange.",
+              in_progress: [],
+              pending: [],
+              blocked: [],
+              decision: [],
               current_state: "Continue with the next user request.",
               facts: coveredUserTexts.map((text) => ({ text, confidence: "confirmed" as const })),
-              decisions: [],
               preferences: [],
               constraints: [],
               completed: ["The covered exchange completed."],
-              pending: [],
-              blockers: [],
               unresolved: [],
               important_identifiers: [],
               continuation: "Answer the next user request.",
             })
           : undefined
-        yield* contextState.activate({
-          sessionID: job.sessionID,
-          jobID: job.id,
-          leaseOwner: owner,
-          manifest: Object.freeze({
-            schemaVersion: 1,
-            baseContextRevision: job.baseContextRevision,
-            coveredThrough: Object.freeze({
-              messageID: job.requestedThrough.messageID,
-              seq: EventV2.Seq.make(job.requestedThrough.seq),
-            }),
-            protectedState: Object.freeze(
-              SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrail }).map((entry) =>
-                Object.freeze(entry),
+        yield* contextState
+          .activate({
+            sessionID: job.sessionID,
+            jobID: job.id,
+            leaseOwner: owner,
+            manifest: Object.freeze({
+              schemaVersion: 1,
+              baseContextRevision: job.baseContextRevision,
+              coveredThrough: Object.freeze({
+                messageID: job.requestedThrough.messageID,
+                seq: EventV2.Seq.make(job.requestedThrough.seq),
+              }),
+              protectedState: Object.freeze(
+                SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrail }).map((entry) =>
+                  Object.freeze(entry),
+                ),
               ),
-            ),
-            exclusions: Object.freeze([]),
-            ...(summary === undefined || boundaryData === undefined
-              ? {}
-              : {
-                  summary: Object.freeze({
-                    text: summary,
-                    coveredThrough: Object.freeze({
-                      messageID: job.requestedThrough.messageID,
-                      seq: EventV2.Seq.make(job.requestedThrough.seq),
+              exclusions: Object.freeze([]),
+              ...(summary === undefined || boundaryData === undefined
+                ? {}
+                : {
+                    summary: Object.freeze({
+                      text: summary,
+                      coveredThrough: Object.freeze({
+                        messageID: job.requestedThrough.messageID,
+                        seq: EventV2.Seq.make(job.requestedThrough.seq),
+                      }),
+                      digest: ContextManifest.payloadDigest(boundaryData),
                     }),
-                    digest: ContextManifest.payloadDigest(boundaryData),
                   }),
-                }),
-            inputTokens: 100,
-            retainedTokens: 50,
-          }),
-        }).pipe(Effect.orDie)
+              inputTokens: 100,
+              retainedTokens: 50,
+            }),
+          })
+          .pipe(Effect.orDie)
         const settled = yield* jobs.get(job.id)
         if (!settled || (settled.status !== "ended" && settled.status !== "failed"))
           return yield* Effect.die(`Compaction job did not settle: ${job.id}`)
@@ -694,7 +696,10 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [McpInstructions.node, mcpInstructions],
   [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
   [PluginSupervisor.node, pluginSupervisor],
-  [SessionCompaction.node, Layer.succeed(SessionCompaction.Service, SessionCompaction.Service.of({ manifest: () => Effect.die("unused") }))],
+  [
+    SessionCompaction.node,
+    Layer.succeed(SessionCompaction.Service, SessionCompaction.Service.of({ manifest: () => Effect.die("unused") })),
+  ],
 ])
 const execution = Layer.effect(
   SessionExecution.Service,
@@ -1468,7 +1473,9 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = openAI56Model
-      responses = Array.from({ length: 5 }, (_, index) => reply.textWithCache(`Step ${index + 1}`, `cache-low-${index}`, 1, 0))
+      responses = Array.from({ length: 5 }, (_, index) =>
+        reply.textWithCache(`Step ${index + 1}`, `cache-low-${index}`, 1, 0),
+      )
 
       for (const prompt of ["First", "Second", "Third", "Fourth", "Fifth"]) {
         yield* admit(session, prompt)
@@ -1764,7 +1771,9 @@ describe("SessionRunnerLLM", () => {
         reply.toolWithResponse("call-fallback-event", "echo", { text: "fallback" }, "resp_event"),
         [
           LLMEvent.stepStart({ index: 0 }),
-          LLMEvent.providerError({ message: "invalid_previous_response_id: Previous response ID is invalid or expired" }),
+          LLMEvent.providerError({
+            message: "invalid_previous_response_id: Previous response ID is invalid or expired",
+          }),
         ],
         reply.textWithResponse("Recovered", "fallback-event-recovered", "resp_event_recovered"),
       ]
@@ -5071,7 +5080,7 @@ describe("SessionRunnerLLM", () => {
         "First user request",
         "Active skill: runner-retention; active because this request selected it; route only post-compaction requests.",
         "Objective: preserve the first request.",
-        "Accepted decision: keep TOON version 1.",
+        "Accepted decision: keep TOON version 2.",
         "Todo [in_progress]: send the rebased provider request.",
         "Todo [pending]: validate the response.",
         "```ts",
@@ -5155,7 +5164,7 @@ describe("SessionRunnerLLM", () => {
       expect(modelInput).toContain("conversation_memory")
       expect(modelInput).toContain("Active skill: runner-retention")
       expect(modelInput).toContain("Objective: preserve the first request")
-      expect(modelInput).toContain("Accepted decision: keep TOON version 1")
+      expect(modelInput).toContain("Accepted decision: keep TOON version 2")
       expect(modelInput).toContain("Todo [in_progress]: send the rebased provider request")
       expect(modelInput).toContain("Todo [pending]: validate the response")
       expect(modelInput).toContain("retained-fence")

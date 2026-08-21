@@ -233,7 +233,8 @@ describe("AgentV2", () => {
       expect(god.system).toContain("You are God, an autonomous production software builder.")
       expect(god.system).toContain("## Delivery")
       expect(god).toMatchObject({
-        description: "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
+        description:
+          "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
         mode: "primary",
         request: { body: { temperature: 0.2 } },
         color: "#f1c40f",
@@ -257,7 +258,8 @@ describe("AgentV2", () => {
       expect(zeus.system).toContain("You are Zeus, an autonomous software implementer.")
       expect(zeus.system).toContain("## Execution")
       expect(zeus).toMatchObject({
-        description: "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
+        description:
+          "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
         mode: "subagent",
         request: { body: { temperature: 0.2 } },
         color: "#f1c40f",
@@ -339,7 +341,10 @@ describe("AgentV2", () => {
         throw new Error("expected utility agents with system prompts")
       }
 
-      expect(compaction.system).toContain("<previous-summary>")
+      expect(compaction.system).toContain("previous conversation_memory")
+      expect(compaction.system).toContain("in_progress")
+      expect(compaction.system).toContain("decision")
+      expect(compaction.system).toContain("skill")
       expect(compaction.system).toContain("Do not answer the conversation")
       expect(goal.system).toContain("observable completion condition")
       expect(goal.system).toContain("Output exactly one concise imperative sentence")

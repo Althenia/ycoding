@@ -696,7 +696,7 @@ const requireManifest = Effect.fnUntraced(function* (
         if (
           !Schema.is(ContextManifest.RollingSummary)(manifest.summary) ||
           "_tag" in parsed ||
-          SessionSummaryToon.encode(parsed) !== manifest.summary.text ||
+          !SessionSummaryToon.isCanonical(manifest.summary.text) ||
           manifest.summary.coveredThrough.seq > manifest.coveredThrough.seq
         )
           throw new ActivationError({ code: "invalid_manifest", message: "Manifest rolling summary is invalid" })

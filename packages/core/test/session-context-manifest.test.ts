@@ -328,17 +328,18 @@ describe("ContextManifest selector identity and canonical manifests", () => {
     const items = duplicateItems().map((item) => ({ ...item, tokens: 1_000 }))
     const boundary = items.at(-1)!
     const text = SessionSummaryToon.encode({
-      version: 1,
+      version: 2,
       through_sequence: boundary.terminalSeq,
       objective: "Continue the session",
+      in_progress: [],
+      pending: [],
+      blocked: [],
+      decision: [],
       current_state: "The selected boundary is checkpointed",
       facts: [],
-      decisions: [],
       preferences: [],
       constraints: [],
       completed: [],
-      pending: [],
-      blockers: [],
       unresolved: [],
       important_identifiers: [],
       continuation: "Use the checkpoint for earlier history",
@@ -1029,17 +1030,18 @@ describe("ContextManifest activation integration", () => {
         const fixture = yield* activationFixture(SessionSchema.ID.make("ses_manifest_model_checkpoint"))
         const summaryBoundary = fixture.items[0]!
         const text = SessionSummaryToon.encode({
-          version: 1,
+          version: 2,
           through_sequence: summaryBoundary.terminalSeq,
           objective: "Continue the current task",
+          in_progress: [],
+          pending: [],
+          blocked: [],
+          decision: [],
           current_state: "Earlier canonical messages are represented by this checkpoint",
           facts: [],
-          decisions: [],
           preferences: [],
           constraints: [],
           completed: [],
-          pending: [],
-          blockers: [],
           unresolved: [],
           important_identifiers: [],
           continuation: "Continue from the later canonical messages",
@@ -1091,10 +1093,7 @@ describe("ContextManifest activation integration", () => {
         expect(model[0]?.id).toBe(SessionMessage.ID.make(`msg_compaction_${activation.manifestDigest}`))
         expect(model[0]?.time.created).toEqual(DateTime.makeUnsafe(current.timeActivated!))
         expect(model[0]?.type === "synthetic" ? model[0].text : "").toContain(text)
-        expect(model.slice(1).map((message) => message.id)).toEqual([
-          fixture.retained.id,
-          fixture.afterBoundary.id,
-        ])
+        expect(model.slice(1).map((message) => message.id)).toEqual([fixture.retained.id, fixture.afterBoundary.id])
         expect(repeated[0]?.id).toBe(model[0]?.id)
         expect(repeated[0]?.time.created).toEqual(model[0]?.time.created)
       }).pipe(
