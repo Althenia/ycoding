@@ -38,7 +38,7 @@ import {
 } from "./context/runtime"
 import { DialogProvider, useDialog } from "./ui/dialog"
 import { DialogIntegration } from "./component/dialog-integration"
-import { ErrorComponent } from "./component/error-component"
+import { ErrorComponent, FatalCrashGuard } from "./component/error-component"
 import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
@@ -267,7 +267,11 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
               >
                 <EpilogueProvider set={(value) => (exit.epilogue = value)}>
                   <ErrorBoundary
-                    fallback={(error, reset) => <ErrorComponent error={error} reset={reset} mode={mode} />}
+                    fallback={(error, reset) => (
+                      <FatalCrashGuard error={error}>
+                        <ErrorComponent error={error} reset={reset} mode={mode} />
+                      </FatalCrashGuard>
+                    )}
                   >
                     <TuiPathsProvider
                       value={{

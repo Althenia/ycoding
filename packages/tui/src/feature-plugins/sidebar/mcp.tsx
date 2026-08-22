@@ -9,9 +9,10 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
   const list = createMemo(() => props.context.data.location.mcp.server.list(session()?.location) ?? [])
   const summary = createMemo(() => {
-    const connected = list().filter((item) => item.status.status === "connected").length
-    const failed = list().filter((item) => item.status.status === "failed").length
-    return `${connected}/${list().length} connected${failed ? ` · ${failed} failed` : ""}`
+    const l = list()
+    const connected = l.filter((item) => item.status.status === "connected").length
+    const failed = l.filter((item) => item.status.status === "failed").length
+    return `${connected}/${l.length} connected${failed ? ` · ${failed} failed` : ""}`
   })
 
   const color = (tone: McpTone) => {

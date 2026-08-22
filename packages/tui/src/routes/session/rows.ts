@@ -235,7 +235,7 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
     setRows(
       produce((draft) => {
         if (hasPart(draft, ref)) return
-        append(draft, ref, part, queuedStart(draft))
+        append(draft, ref, part, queuedStart(draft), true)
       }),
     )
 
@@ -245,7 +245,9 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
         if (draft.some((row) => row.type === "assistant-footer" && row.messageID === messageID)) return
         const index = queuedStart(draft)
         completePrevious(draft, index)
-        draft.splice(index, 0, { type: "assistant-footer", messageID })
+        const row: SessionRow = { type: "assistant-footer", messageID }
+        Object.assign(row, { key: rowKey(row) })
+        draft.splice(index, 0, row)
       }),
     )
 
@@ -447,7 +449,15 @@ export function resolvePart(message: SessionMessageAssistant, partID: string) {
 
 type AppendPart = { type: "text" } | { type: "reasoning" } | { type: "tool"; name: string }
 
-function append(rows: SessionRow[], ref: PartRef, part: AppendPart, index = rows.length) {
+// `keyed` is set only on the incremental store paths (appendPart) so newly created rows carry the
+// same key reduce() would assign. Without it, a later reconcile(reduce(), { key }) cannot match the
+// streamed rows and tears down and recreates their renderables (and native text buffers). reduce()
+// itself passes keyed=false and re-keys its whole output afterwards, so its shape stays unchanged.
+function append(rows: SessionRow[], ref: PartRef, part: AppendPart, index = rows.length, keyed = false) {
+  const insert = (row: SessionRow) => {
+    if (keyed) Object.assign(row, { key: rowKey(row) })
+    rows.splice(index, 0, row)
+  }
   if (part.type === "reasoning") {
     const previous = rows[index - 1]
     if (previous?.type === "group" && previous.kind === "reasoning") {
@@ -455,7 +465,7 @@ function append(rows: SessionRow[], ref: PartRef, part: AppendPart, index = rows
       return
     }
     completePrevious(rows, index)
-    rows.splice(index, 0, { type: "group", kind: "reasoning", refs: [ref], completed: false })
+    insert({ type: "group", kind: "reasoning", refs: [ref], completed: false })
     return
   }
   if (part.type === "tool" && exploration(part.name)) {
@@ -465,11 +475,11 @@ function append(rows: SessionRow[], ref: PartRef, part: AppendPart, index = rows
       return
     }
     completePrevious(rows, index)
-    rows.splice(index, 0, { type: "group", kind: "exploration", refs: [ref], pending: [], completed: false })
+    insert({ type: "group", kind: "exploration", refs: [ref], pending: [], completed: false })
     return
   }
   completePrevious(rows, index)
-  rows.splice(index, 0, { type: "part", ref })
+  insert({ type: "part", ref })
 }
 
 function completePrevious(rows: SessionRow[], index = rows.length) {

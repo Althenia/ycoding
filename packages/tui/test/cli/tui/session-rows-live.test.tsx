@@ -1037,6 +1037,72 @@ test("streaming text and tool deltas preserve transcript row identity", async ()
   }
 })
 
+test("a full reconcile after streaming preserves incremental part row identity", async () => {
+  const sessionID = "session-reconcile-stream-identity"
+  const mounted = await mountRows(sessionID)
+
+  try {
+    mounted.events.emit({
+      id: "evt_step_started",
+      created: 1,
+      type: "session.step.started",
+      durable: durable(sessionID, 1),
+      data: {
+        sessionID,
+        assistantMessageID: "msg_assistant",
+        agent: "build",
+        model: { providerID: "provider", id: "model" },
+      },
+    } as unknown as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_text_started",
+      created: 2,
+      type: "session.text.started",
+      data: { sessionID, assistantMessageID: "msg_assistant", ordinal: 0 },
+    } as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_text_ended",
+      created: 3,
+      type: "session.text.ended",
+      data: { sessionID, assistantMessageID: "msg_assistant", ordinal: 0, text: "streamed answer" },
+    } as YCodingEvent)
+    mounted.events.emit({
+      id: "evt_tool_started",
+      created: 4,
+      type: "session.tool.input.started",
+      data: { sessionID, assistantMessageID: "msg_assistant", callID: "call_x", name: "project_index" },
+    } as YCodingEvent)
+    await wait(() => mounted.rows.some((row) => row.type === "part" && row.ref.partID === "text:0"))
+    await wait(() => mounted.rows.some((row) => row.type === "part" && row.ref.partID === "call_x"))
+
+    const textRow = mounted.rows.find((row) => row.type === "part" && row.ref.partID === "text:0")
+    const toolRow = mounted.rows.find((row) => row.type === "part" && row.ref.partID === "call_x")
+
+    // A user prompt during or after streaming changes the message list, which triggers a full
+    // reconcile(reduce(), { key }). Incremental rows must carry the same key reduce() assigns so
+    // reconcile reuses them instead of tearing down and recreating their renderables (and the
+    // native text buffers behind them).
+    mounted.events.emit({
+      id: "evt_user_next",
+      created: 5,
+      type: "session.input.admitted",
+      location: { directory },
+      durable: durable(sessionID, 5),
+      data: {
+        sessionID,
+        inputID: "msg_user_next",
+        input: { type: "user", data: { text: "next" }, delivery: "steer" },
+      },
+    } as unknown as YCodingEvent)
+    await wait(() => mounted.rows.some((row) => row.type === "message" && row.messageID === "msg_user_next"))
+
+    expect(mounted.rows.find((row) => row.type === "part" && row.ref.partID === "text:0")).toBe(textRow)
+    expect(mounted.rows.find((row) => row.type === "part" && row.ref.partID === "call_x")).toBe(toolRow)
+  } finally {
+    mounted.destroy()
+  }
+})
+
 test("an active subagent does not create a transcript row", async () => {
   const sessionID = "session-subagent-activity-stable"
   const task: SessionOrchestrationTask = {
