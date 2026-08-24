@@ -2358,6 +2358,16 @@ export type ProjectArtifactAgentDefinition = {
   permissions: PermissionV2Ruleset
 }
 
+export type SessionDiagnosticsUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.diagnostics.updated"
+  location?: LocationRef
+  data: { sessionID: string; diagnostics: SessionCacheDiagnostics }
+}
+
 export type SessionMessageUser = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -3128,6 +3138,7 @@ export type V2Event =
   | SessionMoved
   | SessionRenamed
   | SessionUsageUpdated
+  | SessionDiagnosticsUpdated
   | SessionDeleted
   | SessionForked
   | SessionInputPromoted

@@ -7,6 +7,7 @@ import { Cause, Effect, Schedule, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { Config } from "../config"
 import { PluginRuntime } from "../plugin/runtime"
+import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { PermissionV2 } from "../permission"
 import { SessionGuardrail } from "../session/guardrail"
 import { SessionSchema } from "../session/schema"
@@ -278,7 +279,10 @@ export const Plugin = {
           .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
         // The TeamView changes on every child state update, so it is appended after all real
         // history as a volatile message that never carries a cache breakpoint.
-        if (team?.view.children.some((child) => !SessionOrchestration.isTerminal(child.state)))
+        if (
+          event.routeID !== OpenAICodex.routeID &&
+          team?.view.children.some((child) => !SessionOrchestration.isTerminal(child.state))
+        )
           event.messages.push(Message.make({ role: "user", content: team.text, volatile: true }))
         const tool = event.tools[name]
         if (!tool) return

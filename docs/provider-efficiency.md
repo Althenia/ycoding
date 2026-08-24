@@ -100,6 +100,8 @@ The public OpenAI API-key route and the ChatGPT/Codex subscription backend are d
 
 Responses assistant item `phase` values (`commentary` and `final_answer`) are retained in provider metadata and replayed on later direct or Codex Responses requests. OpenAI documents phase replay for GPT-5.3 Codex and later as a performance requirement; dropping it can degrade follow-up behavior and can also change the exact model-visible prefix.
 
+Codex preserves trusted chronological system updates as native `system` input rather than moving them into the implicit-cache-eligible user channel. Automatic TeamView injection is omitted on this key-only route; active child state remains available through `subagent_control list`, while terminal notifications stay append-only. Other Responses routes retain the escaped chronological-system fallback. This request-shape rule avoids one moving synthetic user suffix but does not guarantee backend cache reuse.
+
 Direct GPT-5.6 Responses requests send `reasoning.context: "all_turns"` and `context_management: [{ type: "compaction", compact_threshold: 200000 }]`. In `stored` state mode, compatible later requests may send `previous_response_id` plus only the new suffix. In `stateless` mode, YCoding sends `store: false`, retains the returned opaque encrypted compaction item outside public messages, replays it only for the same provider model, and omits input before that provider boundary. The native `web_search` tool is provider-executed and its returned call item is replayed on stateless follow-ups. This is OpenAI-hosted search, not Core's provider-independent local Exa/Parallel `websearch` tool. YCoding exposes no standalone `/responses/compact` endpoint.
 
 ## Adaptive Anthropic TTL
@@ -179,7 +181,7 @@ The local section reports:
 
 Unknown pricing renders `Estimated cost unavailable`. A real zero-priced catalog model renders `$0.0000`.
 
-The Session rail and subagent economics intentionally omit a prefix-stability label. They retain the measured hit ratio and provider-reported cache read/write tokens because a stable local namespace describes request identity, not a cache-hit guarantee.
+The Session rail and subagent economics intentionally omit a prefix-stability label. They retain the measured hit ratio and provider-reported cache read/write tokens because a stable local namespace describes request identity, not a cache-hit guarantee. When provider terminal usage arrives before local tool execution finishes, an instance-local diagnostics event updates these last-step values immediately instead of waiting for the tool-settlement boundary; durable provider-request and assistant projections remain the restart authority after the step becomes terminal.
 
 OpenAI ChatGPT/Codex and Anthropic Claude Code connections retain the selected model's catalog prices instead of replacing them with zero. Their Session cost is an API-equivalent list-price estimate for comparing model usage; it is not the subscription invoice or remaining plan allowance. Provider quota reporting remains a separate read-only surface. Codex cache usage parsing is field-based: `cached_tokens` and `cache_write_tokens` remain separate categories regardless of model-family detection. The committed models.dev snapshot supplies release-time OpenAI and Anthropic master data, runtime refreshes may update it, and explicit context tiers take precedence over the legacy `context_over_200k` field so GPT-5.6 long-context pricing starts at its documented 272K boundary.
 

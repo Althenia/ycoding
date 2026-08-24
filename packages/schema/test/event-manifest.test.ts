@@ -219,9 +219,11 @@ describe("public event manifest", () => {
     expect(EventManifest.Latest.has("session.usage.recorded")).toBe(false)
     expect(EventManifest.Latest.has("session.provider.request.recorded")).toBe(false)
     expect(SessionEvent.UsageUpdated.durability).toBe("ephemeral")
+    expect(SessionEvent.DiagnosticsUpdated.durability).toBe("ephemeral")
     expect(SessionEvent.Compaction.Delta.durability).toBe("ephemeral")
     expect(EventManifest.Durable.has("session.compaction.delta.1")).toBe(false)
     expect(EventManifest.ServerDefinitions).toContain(SessionEvent.UsageUpdated)
+    expect(EventManifest.ServerDefinitions).toContain(SessionEvent.DiagnosticsUpdated)
     expect(EventManifest.Definitions.every((definition) => definition.durability !== undefined)).toBe(true)
   })
 

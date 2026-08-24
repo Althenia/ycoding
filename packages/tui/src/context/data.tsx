@@ -957,6 +957,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           if (store.session.usage[event.data.sessionID] !== undefined)
             void result.session.usage.sync(event.data.sessionID).catch(() => undefined)
           break
+        case "session.diagnostics.updated":
+          setStore("session", "diagnostics", event.data.sessionID, event.data.diagnostics)
+          break
         case "catalog.updated":
           result.location.model.invalidate(event.location)
           result.location.provider.invalidate(event.location)

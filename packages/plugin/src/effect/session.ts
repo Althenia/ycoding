@@ -10,6 +10,7 @@ export interface SessionContext {
   readonly sessionID: Session.ID
   readonly agent: Agent.ID
   readonly model: Model.Ref
+  readonly routeID?: string
   system: Array<SystemPart>
   messages: Array<Message>
   tools: Record<string, { description: string; input: JsonSchema.JsonSchema }>

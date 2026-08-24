@@ -276,6 +276,14 @@ const layer = Layer.effect(
       // mid-event.
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => publication.withPermit(effect)
       const publish = (event: LLMEvent, error?: SessionError.Error) => serialized(publisher.publish(event, error))
+      const stepUsage = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
+        cost: SessionUsage.calculateCost(effective.cost, settlement.tokens),
+        tokens: settlement.tokens,
+      })
+      const providerCache = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
+        mechanism: SessionCacheDiagnostics.mechanism(effectiveModel.route.id, effective.ref, settlement.tokens),
+        ...settlement.reporting,
+      })
       let overflowFailure: ProviderErrorEvent | undefined
       let continuationFailure: ProviderErrorEvent | undefined
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
@@ -308,6 +316,24 @@ const layer = Layer.effect(
               return
             }
             yield* publish(event)
+            if (LLMEvent.is.stepFinish(event)) {
+              const settlement =
+                publisher.stepSettlement() ??
+                (yield* Effect.die(new Error("Step finish did not produce provider settlement")))
+              const usage = stepUsage(settlement)
+              yield* serialized(
+                events.publish(SessionEvent.DiagnosticsUpdated, {
+                  sessionID: session.id,
+                  diagnostics: SessionCacheDiagnostics.calculate({
+                    model: effective.ref,
+                    tokens: usage.tokens,
+                    estimatedCost: usage.cost,
+                    contextLimit: effectiveModel.route.defaults.limits?.context,
+                    providerCache: providerCache(settlement),
+                  }),
+                }),
+              )
+            }
             if (LLMEvent.is.toolInputError(event)) {
               if (prepared.resolveToolCall(event.name).type === "settle") needsContinuation = true
               return
@@ -359,16 +385,6 @@ const layer = Layer.effect(
         ),
         Effect.ensuring(serialized(publisher.flush())),
       )
-
-      const stepUsage = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
-        cost: SessionUsage.calculateCost(effective.cost, settlement.tokens),
-        tokens: settlement.tokens,
-      })
-
-      const providerCache = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
-        mechanism: SessionCacheDiagnostics.mechanism(effectiveModel.route.id, effective.ref, settlement.tokens),
-        ...settlement.reporting,
-      })
 
       const completeProviderRequest = (
         settlement?: NonNullable<ReturnType<typeof publisher.stepSettlement>>,

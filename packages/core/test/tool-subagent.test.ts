@@ -1444,7 +1444,7 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("injects the TeamView as a volatile trailing user message instead of a system part", () =>
+  it.live("injects TeamView as a volatile trailing user outside Codex and omits it on Codex", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -1484,6 +1484,7 @@ describe("SubagentTool", () => {
             sessionID: parent.id,
             agent: toolIdentity.agent,
             model: parentModel,
+            routeID: "openai-responses",
             system: [SystemPart.make("base system prompt")],
             messages: [Message.user("earlier history")],
             tools: { [SubagentTool.name]: { description: SubagentTool.description, input: { type: "object" } } },
@@ -1498,6 +1499,14 @@ describe("SubagentTool", () => {
           expect(last?.role).toBe("user")
           expect(last?.content).toEqual([{ type: "text", text: team.text }])
           expect(last?.volatile).toBe(true)
+
+          const codexEvent: SessionHooks["context"] = {
+            ...event,
+            routeID: "openai-codex-responses",
+            messages: [Message.user("codex history")],
+          }
+          yield* hooks.trigger("session", "context", codexEvent)
+          expect(codexEvent.messages).toEqual([Message.user("codex history")])
 
           yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: "done" })
           const terminalEvent: SessionHooks["context"] = {

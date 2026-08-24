@@ -3098,8 +3098,38 @@ test("loads and refreshes normalized session diagnostics", async () => {
     expect(data.session.diagnostics.get("ses_test")?.cache.hitRatio).toBe(0.5)
 
     emitEvent(events, {
-      id: "evt_diagnostics_started",
+      id: "evt_diagnostics_live",
       created: 1,
+      type: "session.diagnostics.updated",
+      data: {
+        sessionID: "ses_test",
+        diagnostics: {
+          model: { id: "model", providerID: "openai" },
+          context: { total: 1_030, limit: 2_000, remaining: 970, percent: 52 },
+          tokens: {
+            uncachedInput: 100,
+            output: 20,
+            reasoning: 10,
+            cacheRead: 900,
+            cacheWrite: 0,
+          },
+          cache: {
+            eligible: 1_000,
+            hitRatio: 0.9,
+            mechanism: "openai-prefix-cache",
+            readReported: true,
+            writeReported: false,
+          },
+          estimatedCost: 0,
+        },
+      },
+    })
+    await wait(() => data.session.diagnostics.get("ses_test")?.cache.hitRatio === 0.9)
+    expect(diagnosticRequests).toBe(1)
+
+    emitEvent(events, {
+      id: "evt_diagnostics_started",
+      created: 2,
       type: "session.step.started",
       durable: durable("ses_test", 1),
       data: {
@@ -3109,10 +3139,10 @@ test("loads and refreshes normalized session diagnostics", async () => {
         model: { providerID: "openai", id: "model" },
       },
     })
-    hitRatio = 0.9
+    hitRatio = 0.95
     emitEvent(events, {
       id: "evt_diagnostics",
-      created: 2,
+      created: 3,
       type: "session.step.ended",
       durable: durable("ses_test", 2),
       data: {
@@ -3134,7 +3164,7 @@ test("loads and refreshes normalized session diagnostics", async () => {
     expect(data.session.message.get("ses_test", "msg_assistant")).toMatchObject({
       diagnostics: { contextLimit: 2_000 },
     })
-    await wait(() => data.session.diagnostics.get("ses_test")?.cache.hitRatio === 0.9)
+    await wait(() => data.session.diagnostics.get("ses_test")?.cache.hitRatio === 0.95)
     expect(diagnosticRequests).toBe(2)
   } finally {
     app.renderer.destroy()

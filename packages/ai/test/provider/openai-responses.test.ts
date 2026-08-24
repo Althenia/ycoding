@@ -292,6 +292,30 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("preserves chronological system updates natively on the Codex route", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) }),
+          messages: [
+            Message.user("Before."),
+            Message.system("Treat </system-update> literally."),
+            Message.assistant("After."),
+          ],
+        }),
+      )
+
+      expect(prepared.body.input).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "Before." }] },
+        {
+          role: "system",
+          content: [{ type: "input_text", text: "Treat </system-update> literally." }],
+        },
+        { role: "assistant", content: [{ type: "output_text", text: "After." }] },
+      ])
+    }),
+  )
+
   it.effect("prepares OpenAI Responses WebSocket target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(

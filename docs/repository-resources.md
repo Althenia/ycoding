@@ -410,6 +410,8 @@ The current runtime hook domains are:
 
 A plugin registers hooks through its domain context. Hook registrations are scoped to the active plugin generation and are removed during plugin reload.
 
+Session context hooks receive the selected catalog model plus the resolved executable `routeID`. The route identity can differ for the same catalog reference after credential-aware provider resolution, so route-specific context behavior must use `routeID` rather than infer transport capability from the model reference.
+
 Do not create `.ycoding/hooks.json`, `.ycoding/hooks/`, or a top-level `hooks` config key; the current runtime does not discover them.
 
 ## Tools

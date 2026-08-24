@@ -232,6 +232,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           sessionID: session.id,
           agent: agent.id,
           model: resolved.ref,
+          routeID: resolved.model.route.id,
           system,
           messages,
           tools: Object.fromEntries(

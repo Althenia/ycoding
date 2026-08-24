@@ -137,6 +137,8 @@ OpenAI public API-key and ChatGPT/Codex subscription routes have separate cache 
 
 The bounded Session diagnostics response includes the latest provider-request invalidation reason without exposing prompt content, full cache keys, system digests, or tool digests. Compatibility reads treat a missing historical model variant as `default`. The owner's first provider request after an ended compaction reports `compaction-reset`; otherwise a changed provider or model produces `model-switched`, and a changed normalized variant produces `model-variant-switched`. These reasons take precedence over system, tool, and generic prefix-change reasons.
 
+The instance-wide live stream emits `session.diagnostics.updated` when a provider step reports terminal usage, before waiting for local tools started by that step. Its payload is the normalized last-step `SessionCacheDiagnostics.Info`; the TUI may use it to refresh context and cache telemetry while the step remains active. The event is ephemeral and has no replay guarantee. Terminal `session.step.ended` or token-bearing `session.step.failed` remains the durable source used by the diagnostics endpoint after reconnect or restart.
+
 ## Durable Events Are Session-Scoped
 
 `sessions.log({ sessionID, after?, follow? })` verifies the Session and reads public durable Session events after an exclusive aggregate sequence. With `follow: true`, it subscribes before replay and emits one synchronization marker at the captured watermark before live durable events continue.
