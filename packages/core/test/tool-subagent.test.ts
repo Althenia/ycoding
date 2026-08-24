@@ -1498,6 +1498,14 @@ describe("SubagentTool", () => {
           expect(last?.role).toBe("user")
           expect(last?.content).toEqual([{ type: "text", text: team.text }])
           expect(last?.volatile).toBe(true)
+
+          yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: "done" })
+          const terminalEvent: SessionHooks["context"] = {
+            ...event,
+            messages: [Message.user("later history")],
+          }
+          yield* hooks.trigger("session", "context", terminalEvent)
+          expect(terminalEvent.messages).toEqual([Message.user("later history")])
         }),
       ),
     ),

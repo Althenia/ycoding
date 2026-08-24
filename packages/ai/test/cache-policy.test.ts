@@ -58,7 +58,7 @@ const geminiModel = Gemini.route
 const openrouterModel = OpenRouter.configure({ apiKey: "test" }).model("anthropic/claude-sonnet-4.5")
 
 test("pins the provider-native cache policy revision", () => {
-  expect(CACHE_POLICY_REVISION).toBe("provider-native/v7")
+  expect(CACHE_POLICY_REVISION).toBe("provider-native/v8")
 })
 
 const unknownAnthropicModel = AnthropicMessages.route
@@ -1268,7 +1268,61 @@ describe("volatile messages", () => {
     expect(placement(second.messages).at(-1)).toEqual([undefined])
   })
 
-  it.effect("reserves the GPT-5.6 managed implicit candidate behind a volatile TeamView suffix", () =>
+  test("managed implicit placement switches to explicit before a trailing volatile suffix", () => {
+    const build = (mode: "implicit" | "explicit") =>
+      applyCachePolicy(
+        LLM.request({
+          model: openai56ResponsesModel,
+          system: "Stable system",
+          messages: [
+            Message.user("stable user history"),
+            Message.make({ role: "system", content: "current live state", volatile: true }),
+            volatileUser("TeamView: child running"),
+          ],
+          cache: "auto",
+          providerOptions: { openai: { promptCacheOptions: { mode, ttl: "30m" } } },
+        }),
+      )
+
+    const applied = build("implicit")
+
+    expect(applied.providerOptions?.openai?.promptCacheOptions).toEqual({ mode: "explicit", ttl: "30m" })
+    expect(applied.messages.map((message) => message.volatile)).toEqual([undefined, true, true])
+    expect(placement(applied.messages)).toEqual([[new CacheHint({ type: "ephemeral" })], [undefined], [undefined]])
+    expect(build("explicit").messages.map((message) => message.volatile)).toEqual([undefined, true, true])
+
+    const stable = applyCachePolicy(
+      LLM.request({
+        model: openai56ResponsesModel,
+        messages: [Message.user("stable")],
+        cache: "auto",
+        providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+      }),
+    )
+    expect(stable.providerOptions?.openai?.promptCacheOptions).toEqual({ mode: "implicit", ttl: "30m" })
+
+    const disabled = applyCachePolicy(
+      LLM.request({
+        model: openai56ResponsesModel,
+        messages: [Message.user("stable"), volatileUser("TeamView")],
+        cache: "none",
+        providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+      }),
+    )
+    expect(disabled.providerOptions?.openai?.promptCacheOptions).toEqual({ mode: "explicit", ttl: "30m" })
+    expect(placement(disabled.messages)).toEqual([[undefined], [undefined]])
+
+    const unconfigured = applyCachePolicy(
+      LLM.request({
+        model: openai56ResponsesModel,
+        messages: [Message.user("stable"), volatileUser("TeamView")],
+        cache: "auto",
+      }),
+    )
+    expect(unconfigured.providerOptions?.openai?.promptCacheOptions).toBeUndefined()
+  })
+
+  it.effect("uses all GPT-5.6 explicit candidates before a volatile TeamView suffix", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -1283,8 +1337,8 @@ describe("volatile messages", () => {
         }),
       )
 
-      expect(prepared.body).toMatchObject({ prompt_cache_options: { mode: "implicit", ttl: "30m" } })
-      expect(JSON.stringify(prepared.body).match(/"prompt_cache_breakpoint"/g)).toHaveLength(49)
+      expect(prepared.body).toMatchObject({ prompt_cache_options: { mode: "explicit", ttl: "30m" } })
+      expect(JSON.stringify(prepared.body).match(/"prompt_cache_breakpoint"/g)).toHaveLength(50)
       expect(JSON.stringify(prepared.body.input.at(-1))).not.toContain("prompt_cache_breakpoint")
     }),
   )

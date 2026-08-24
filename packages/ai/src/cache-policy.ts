@@ -15,11 +15,11 @@
 // Manual `cache: CacheHint` placements on individual parts are preserved —
 // this function only fills gaps the caller left empty.
 import { cacheProfile } from "./cache-profile"
-import { CacheHint, type CachePolicy, type CachePolicyObject } from "./schema/options"
+import { CacheHint, mergeProviderOptions, type CachePolicy, type CachePolicyObject } from "./schema/options"
 import { LLMRequest, Message, ToolDefinition, type ContentPart, type ToolContent } from "./schema/messages"
 import { OpenAIOptions } from "./protocols/utils/openai-options"
 
-export const CACHE_POLICY_REVISION = "provider-native/v7"
+export const CACHE_POLICY_REVISION = "provider-native/v8"
 export const OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT = 50
 
 const AUTO: CachePolicyObject = {
@@ -408,9 +408,22 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
       : ["user", "tool"]
   const tools = policy.tools && !gpt56 ? markLastTool(request.tools, prefixHint, reserve) : request.tools
   const system = policy.system ? markLastSystem(request.system, prefixHint, reserve) : request.system
-  // Volatility is local metadata and does not disable the provider's managed
-  // latest-message breakpoint, so its read-candidate slot always stays reserved.
-  const implicitReserved = !gpt56 || OpenAIOptions.promptCacheOptions(request)?.mode === "explicit" ? 0 : 1
+  const promptCacheOptions = OpenAIOptions.promptCacheOptions(request)
+  const explicitVolatileSuffix =
+    gpt56 &&
+    promptCacheOptions !== undefined &&
+    promptCacheOptions.mode !== "explicit" &&
+    request.messages.at(-1)?.volatile === true
+  const providerOptions = explicitVolatileSuffix
+    ? mergeProviderOptions(request.providerOptions, {
+        openai: { promptCacheOptions: { ...promptCacheOptions, mode: "explicit" } },
+      })
+    : request.providerOptions
+  // The provider-managed tail cannot honor YCoding's local volatility boundary.
+  // Volatile suffixes switch to explicit mode above; only remaining implicit
+  // requests reserve the managed breakpoint's read-candidate slot.
+  const managedImplicitBreakpoint = gpt56 && promptCacheOptions?.mode !== "explicit" && !explicitVolatileSuffix
+  const implicitReserved = managedImplicitBreakpoint ? 1 : 0
   const gpt56MessageLimit = gpt56
     ? Math.max(
         0,
@@ -426,6 +439,12 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
       : markMessages(request.messages, policy.messages, tailHint, reserve, gpt56Roles, gpt56MessageLimit)
   const messages = gpt56 ? boundGpt56Messages(selectedMessages, gpt56MessageLimit) : selectedMessages
 
-  if (tools === request.tools && system === request.system && messages === request.messages) return request
-  return LLMRequest.update(request, { tools, system, messages })
+  if (
+    tools === request.tools &&
+    system === request.system &&
+    messages === request.messages &&
+    providerOptions === request.providerOptions
+  )
+    return request
+  return LLMRequest.update(request, { tools, system, messages, providerOptions })
 }
