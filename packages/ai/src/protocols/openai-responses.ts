@@ -627,6 +627,14 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 
   for (const message of pruneMessagesForServerCompaction(request).slice(continuationInputStart)) {
     if (message.role === "system") {
+      if (request.model.route.id === "openai-codex-responses") {
+        const content = yield* ProviderShared.systemUpdateText("OpenAI Responses", message)
+        input.push({
+          role: "system",
+          content: content.map((part) => ({ type: "input_text" as const, text: part.text })),
+        })
+        continue
+      }
       const part = yield* ProviderShared.wrappedSystemUpdate("OpenAI Responses", message)
       const previous = input.at(-1)
       if (previous && Schema.is(OpenAIResponsesUserInputItem)(previous))

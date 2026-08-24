@@ -1,9 +1,49 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
-import { expect, test } from "bun:test"
+import { KeyEvent } from "@opentui/core"
+import { expect, spyOn, test } from "bun:test"
 import { ConfigProvider } from "../src/config"
 import { Keymap } from "../src/context/keymap"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+
+test("drops key events with an empty name instead of erroring in the resolver", async () => {
+  const app = await testRender(() => (
+    <ConfigProvider config={createTuiResolvedConfig()}>
+      <Keymap.Provider>
+        <box />
+      </Keymap.Provider>
+    </ConfigProvider>
+  ))
+  const errors: string[] = []
+  const spy = spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+    errors.push(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" "))
+  })
+  try {
+    // Some terminal sequences parse into a key event with an empty name. OpenTUI's default
+    // event-match resolver calls resolveKey({ name }) which throws on an empty name, so the
+    // keymap must consume these before dispatch instead of erroring on every one.
+    app.renderer.keyInput.emit(
+      "keypress",
+      new KeyEvent({
+        name: "",
+        ctrl: false,
+        meta: false,
+        shift: false,
+        option: false,
+        sequence: "",
+        number: false,
+        raw: "",
+        eventType: "press",
+        source: "raw",
+      }),
+    )
+    await Bun.sleep(5)
+    expect(errors.some((line) => line.includes("event-match-resolver-error"))).toBe(false)
+  } finally {
+    spy.mockRestore()
+    app.renderer.destroy()
+  }
+})
 
 test("legacy page key aliases compile as page keys", async () => {
   let read = () => ({ up: "", down: "" })

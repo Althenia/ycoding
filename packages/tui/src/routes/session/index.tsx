@@ -543,6 +543,16 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     ),
   )
   const boundaries = createMemo(() => messageBoundaryIDs(rows, messages()))
+  const MAX_MOUNTED_ROWS = 400
+  const mountedRows = createMemo(() =>
+    rows.length > MAX_MOUNTED_ROWS ? rows.slice(rows.length - MAX_MOUNTED_ROWS) : rows.slice(),
+  )
+  const mountedBoundaries = createMemo(() => {
+    const all = boundaries()
+    const count = mountedRows().length
+    return count >= all.length ? all.slice() : all.slice(all.length - count)
+  })
+  const hiddenCount = createMemo(() => rows.length - mountedRows().length)
   const [navigationMessage, setNavigationMessage] = createSignal<string>()
   const [navigationSlack, setNavigationSlack] = createSignal(0)
 
@@ -1340,6 +1350,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               <Show when={session()?.parentID}>
                 <SubagentSiblingSwitcher />
               </Show>
+              <Show when={hiddenCount() > 0}>
+                <box paddingLeft={1} flexShrink={0}>
+                  <text fg={themeV2.text.subdued}>
+                    {hiddenCount()} older rows hidden — scroll history is capped at {MAX_MOUNTED_ROWS} mounted rows
+                  </text>
+                </box>
+              </Show>
               <scrollbox
                 ref={(r) => (scroll = r)}
                 viewportOptions={{
@@ -1370,7 +1387,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                     />
                   )}
                 </Show>
-                <For each={rows}>
+                <For each={mountedRows()}>
                   {(row, index) => (
                     <SessionRowView
                       row={row}
@@ -1378,7 +1395,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                       compaction={(jobID) => data.session.compaction.get(route.sessionID, jobID)}
                       compactions={() => data.session.compaction.list(route.sessionID)}
                       assistantIdentity={assistantIdentity()}
-                      boundaryID={boundaries()[index()]}
+                      boundaryID={mountedBoundaries()[index()]}
                       width={contentWidth()}
                       hidden={!!blockedQuestion()}
                       running={data.session.status(route.sessionID) === "running"}
@@ -1772,6 +1789,10 @@ function SessionPartView(props: {
     if (item?.type !== "assistant") return
     return resolvePart(item, props.partRef.partID)
   })
+  const streaming = createMemo(() => {
+    const item = message()
+    return item?.type === "assistant" && item.time.completed === undefined
+  })
   return (
     <Show when={part()}>
       {(item) => (
@@ -1780,6 +1801,7 @@ function SessionPartView(props: {
             <TextPart
               part={item() as SessionMessageAssistantText}
               last={false}
+              streaming={streaming()}
               identity={props.partRef.partID === "text:0" ? props.assistantIdentity : undefined}
               subagent={props.assistantIdentity?.subagent}
               index={Number(props.partRef.partID.split(":")[1])}
@@ -2731,6 +2753,7 @@ function reasoningContent(part: SessionMessageAssistantReasoning) {
 function TextPart(props: {
   last: boolean
   part: SessionMessageAssistantText
+  streaming: boolean
   identity?: { label: string; subagent: boolean }
   subagent?: boolean
   index?: number
@@ -2739,6 +2762,12 @@ function TextPart(props: {
   const { themeV2, syntax } = useTheme()
   // The goal-mode completion marker is a control token for the autonomy loop, not prose.
   const text = createMemo(() => stripGoalCompletionMarker(props.part.text))
+  const imagePlaceholder = createMemo(() => /\[Image \d+\]/.test(text()))
+  // OpenTUI 0.4.5 drops bare transcript image placeholders when finalized, so wrap only that
+  // model-visible marker as inline code while retaining top-level rendering for its visual shape.
+  const markdown = createMemo(() =>
+    props.streaming ? text() : text().replace(/\[Image (\d+)\]/g, "`[Image $1]`"),
+  )
   return (
     <Show when={text()}>
       <box
@@ -2758,9 +2787,9 @@ function TextPart(props: {
         </Show>
         <markdown
           syntaxStyle={syntax()}
-          streaming={true}
-          internalBlockMode="top-level"
-          content={text()}
+          streaming={props.streaming}
+          internalBlockMode={props.streaming || imagePlaceholder() ? "top-level" : "coalesced"}
+          content={markdown()}
           tableOptions={{ style: "grid" }}
           conceal={true}
           fg={themeV2.markdown.text}
@@ -3349,18 +3378,13 @@ function ToolOutput(props: { output?: string; error: boolean; nested?: boolean }
         flexShrink={0}
         onMouseUp={display().expandable ? toggle : undefined}
       >
-        <For each={display().output.split("\n")}>
-          {(line, index) => (
-            <text
-              paddingLeft={3}
-              fg={props.error ? themeV2.text.feedback.error.default : themeV2.text.subdued}
-              wrapMode="word"
-            >
-              {index() === 0 ? (display().expandable ? (expanded() ? "- " : "+ ") : "↳ ") : "  "}
-              {line}
-            </text>
-          )}
-        </For>
+        <text
+          paddingLeft={3}
+          fg={props.error ? themeV2.text.feedback.error.default : themeV2.text.subdued}
+          wrapMode="word"
+        >
+          {prefixLines(display().output, display().expandable ? (expanded() ? "- " : "+ ") : "↳ ", "  ")}
+        </text>
       </box>
     </Show>
   )
@@ -3414,19 +3438,21 @@ function SkillContent(props: { content: unknown }) {
             maxHeight={height()}
             scrollbarOptions={{ visible: false }}
           >
-            <For each={display().output.split("\n")}>
-              {(line) => (
-                <text fg={themeV2.text.subdued} wrapMode="word">
-                  {" "}
-                  {line}
-                </text>
-              )}
-            </For>
+            <text fg={themeV2.text.subdued} wrapMode="word">
+              {prefixLines(display().output, " ", " ")}
+            </text>
           </scrollbox>
         </Show>
       </box>
     </Show>
   )
+}
+
+function prefixLines(output: string, first: string, rest: string) {
+  return output
+    .split("\n")
+    .map((line, index) => `${index === 0 ? first : rest}${line}`)
+    .join("\n")
 }
 
 function InlineTool(props: {

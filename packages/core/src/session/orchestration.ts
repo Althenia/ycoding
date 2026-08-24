@@ -35,6 +35,7 @@ import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
 
 const TeamViewBytes = 32 * 1024
 const terminalStates = new Set<State>(["cancelled", "completed", "failed", "lost"])
+export const isTerminal = (state: State) => terminalStates.has(state)
 const PageSize = 10
 type DatabaseService = Database.Interface["db"]
 export { truncateUtf8 }

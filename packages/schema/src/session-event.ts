@@ -158,6 +158,15 @@ export const UsageUpdated = Event.ephemeral({
 })
 export type UsageUpdated = typeof UsageUpdated.Type
 
+export const DiagnosticsUpdated = Event.ephemeral({
+  type: "session.diagnostics.updated",
+  schema: {
+    ...Base,
+    diagnostics: SessionCacheDiagnostics.Info,
+  },
+})
+export type DiagnosticsUpdated = typeof DiagnosticsUpdated.Type
+
 export const Deleted = Event.durable({
   type: "session.deleted",
   durable: {
@@ -731,6 +740,7 @@ export const Definitions = Event.inventory(
   Moved,
   Renamed,
   UsageUpdated,
+  DiagnosticsUpdated,
   Deleted,
   Forked,
   InputPromoted,

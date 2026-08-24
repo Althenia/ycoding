@@ -433,17 +433,12 @@ const codexAffinityAuth = Auth.custom((input) => {
     typeof openai?.promptCacheKey === "string"
       ? openai.promptCacheKey
       : undefined;
-  const providerSessionID =
-    typeof openai?.providerSessionID === "string"
-      ? openai.providerSessionID
-      : undefined;
-  if (promptCacheKey === undefined || providerSessionID === undefined)
-    return Effect.succeed(input.headers);
+  if (promptCacheKey === undefined) return Effect.succeed(input.headers);
   return Effect.succeed(
     Headers.setAll(input.headers, {
       "session-id": promptCacheKey,
-      "thread-id": providerSessionID,
-      "x-client-request-id": providerSessionID,
+      "thread-id": promptCacheKey,
+      "x-client-request-id": promptCacheKey,
     }),
   );
 });

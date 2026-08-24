@@ -1,6 +1,6 @@
 import { RGBA, TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
-import { createSignal, For, Show } from "solid-js"
+import { createSignal, ErrorBoundary, For, Show, type ParentProps } from "solid-js"
 import { getScrollAcceleration } from "../util/scroll"
 import { useClipboard } from "../context/clipboard"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
@@ -211,6 +211,30 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
         </Show>
       </box>
     </box>
+  )
+}
+
+// The crash screen is the ErrorBoundary fallback, and Solid does not catch a fallback's own render
+// error. If ErrorComponent throws — e.g. the renderer's native text-buffer allocator is broken, which
+// is what "Failed to create TextBuffer" reports — rendering more TUI would fail the same way and the
+// terminal freezes with no way out. Catch that here and exit with the original crash instead: exit()
+// restores the terminal and the program surfaces the reason on stderr.
+export function FatalCrashGuard(props: ParentProps<{ error: unknown }>) {
+  const exit = useExit()
+  let exited = false
+  return (
+    <ErrorBoundary
+      fallback={() => {
+        if (!exited) {
+          exited = true
+          // Defer so the renderer is not destroyed in the middle of this render pass.
+          queueMicrotask(() => exit(props.error))
+        }
+        return null
+      }}
+    >
+      {props.children}
+    </ErrorBoundary>
   )
 }
 

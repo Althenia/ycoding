@@ -1,7 +1,8 @@
-import type { RGBA } from "@opentui/core"
+import { TextAttributes, type RGBA } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createContext, createEffect, createMemo, createSignal, Show, useContext, type ParentProps } from "solid-js"
 import { useTheme } from "../../context/theme"
+import { Locale } from "../../util/locale"
 import {
   collapseSection,
   defaultExpanded,
@@ -97,6 +98,11 @@ export function RailSection(
     if (props.attention) return themeV2.text.feedback.warning.default
     return expanded() ? themeV2.text.feedback.success.default : themeV2.text.feedback.info.default
   })
+  const titleText = createMemo(() => Locale.truncate(String(props.title ?? "").trim() || "—", 80))
+  const summaryText = createMemo(() => {
+    const raw = String(props.summary ?? "").trim()
+    return raw ? Locale.truncate(raw, 80) : ""
+  })
   const toggle = () => rail?.toggle(props.section)
 
   createEffect(() => rail?.attend(props.section, Boolean(props.attention)))
@@ -119,20 +125,18 @@ export function RailSection(
           {expanded() ? "\u2212" : "\u002b"}
         </text>
         <box flexGrow={1} paddingLeft={metrics().sectionLabelPadding}>
-          <text fg={headerColor()} wrapMode="none">
-            <b>{props.title}</b>
+          <text fg={headerColor()} wrapMode="none" attributes={TextAttributes.BOLD}>
+            {titleText()}
           </text>
         </box>
-        <Show when={props.summary}>
-          {(summary) => (
-            <text
-              fg={props.attention ? themeV2.text.feedback.warning.default : themeV2.text.subdued}
-              wrapMode="none"
-              flexShrink={0}
-            >
-              {summary()}
-            </text>
-          )}
+        <Show when={summaryText()}>
+          <text
+            fg={props.attention ? themeV2.text.feedback.warning.default : themeV2.text.subdued}
+            wrapMode="none"
+            flexShrink={0}
+          >
+            {summaryText()}
+          </text>
         </Show>
       </box>
       <Show when={expanded()}>
@@ -154,20 +158,23 @@ export function RailSection(
 
 export function RailSubheading(props: ParentProps) {
   const { themeV2 } = useTheme()
+  const text = () => Locale.truncate(String(props.children ?? "").trim() || "—", 80)
 
-  return <text fg={themeV2.text.label}>{props.children}</text>
+  return <text fg={themeV2.text.label}>{text()}</text>
 }
 
 export function RailRow(props: { label: string; value: string; valueColor?: RGBA }) {
   const { themeV2 } = useTheme()
+  const label = () => Locale.truncate(String(props.label ?? "").trim() || "—", 120)
+  const value = () => Locale.truncate(String(props.value ?? "").trim() || "—", 80)
 
   return (
-    <box width="100%" flexDirection="row" justifyContent="space-between" gap={1} overflow="hidden">
-      <text fg={themeV2.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1} overflow="hidden">
-        {props.label}
+    <box width="100%" flexDirection="row" justifyContent="space-between" gap={1}>
+      <text fg={themeV2.text.subdued} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
+        {label()}
       </text>
       <text fg={props.valueColor ?? themeV2.text.default} wrapMode="none" flexShrink={0}>
-        {props.value}
+        {value()}
       </text>
     </box>
   )

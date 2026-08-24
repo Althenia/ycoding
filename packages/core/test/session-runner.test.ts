@@ -1173,6 +1173,7 @@ describe("SessionRunnerLLM", () => {
       const session = yield* setup
       const db = (yield* Database.Service).db
       const hooks = yield* PluginHooks.Service
+      const routeIDs: Array<string | undefined> = []
       const todos = yield* SessionTodo.Service
       yield* todos.update({
         sessionID,
@@ -1196,6 +1197,7 @@ describe("SessionRunnerLLM", () => {
         .pipe(Effect.orDie)
       yield* hooks.register("session", "context", (event) =>
         Effect.sync(() => {
+          routeIDs.push(event.routeID)
           event.messages.push(Message.make({ role: "user", content: "TeamView marker", volatile: true }))
         }),
       )
@@ -1205,7 +1207,9 @@ describe("SessionRunnerLLM", () => {
 
       const first = requests[0]
       expect(first).toBeDefined()
-      const volatile = first!.messages.filter((message) => message.volatile === true)
+      expect(routeIDs.length).toBeGreaterThan(0)
+      expect(routeIDs.every((routeID) => routeID === first?.model.route.id)).toBe(true)
+      const volatile = first.messages.filter((message) => message.volatile === true)
       expect(volatile.map((message) => message.role)).toEqual(["system", "user"])
       expect(volatile[0]?.content).toEqual([
         {
@@ -1214,7 +1218,7 @@ describe("SessionRunnerLLM", () => {
         },
       ])
       expect(volatile[1]?.content).toEqual([{ type: "text", text: "TeamView marker" }])
-      expect(JSON.stringify(first!.messages)).not.toContain("queued secret prompt")
+      expect(JSON.stringify(first.messages)).not.toContain("queued secret prompt")
     }),
   )
 
@@ -1973,6 +1977,70 @@ describe("SessionRunnerLLM", () => {
       expect(diagnostics && "application" in diagnostics).toBe(false)
       yield* replaySessionProjection(sessionID)
       expect(yield* session.diagnostics(sessionID)).toEqual(diagnostics)
+    }),
+  )
+
+  it.effect("publishes live cache diagnostics before settled local tools finish", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventV2.Service
+      currentModel = Model.make({
+        id: "diagnostic-model",
+        provider: "openai",
+        route: OpenAIChat.route.with({ limits: { context: 20_000, output: 200 } }),
+      })
+      toolExecutionGate = yield* Deferred.make<void>()
+      toolExecutionsStarted = yield* Deferred.make<void>()
+      toolExecutionsReady = 1
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "call-diagnostics", name: "echo", input: { text: "blocked" } }),
+          LLMEvent.stepFinish({
+            index: 0,
+            reason: "tool-calls",
+            usage: {
+              inputTokens: 1_000,
+              nonCachedInputTokens: 100,
+              cacheReadInputTokens: 900,
+              outputTokens: 30,
+              reasoningTokens: 10,
+            },
+          }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        reply.text("Done", "text-after-diagnostics"),
+      ]
+      const live = yield* events.subscribe(SessionEvent.DiagnosticsUpdated).pipe(
+        Stream.filter((event) => event.data.sessionID === sessionID),
+        Stream.runHead,
+        Effect.forkScoped,
+      )
+
+      yield* admit(session, "Report cache while the tool runs")
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(toolExecutionsStarted)
+      const observed = yield* Fiber.join(live).pipe(Effect.timeout("1 second"))
+
+      expect(observed).toMatchObject({
+        _tag: "Some",
+        value: {
+          data: {
+            sessionID,
+            diagnostics: {
+              context: { total: 1_030, limit: 20_000, remaining: 18_970, percent: 5 },
+              tokens: { uncachedInput: 100, output: 20, reasoning: 10, cacheRead: 900, cacheWrite: 0 },
+              cache: { eligible: 1_000, hitRatio: 0.9, readReported: true, writeReported: false },
+            },
+          },
+        },
+      })
+      expect(yield* session.diagnostics(sessionID)).toBeUndefined()
+
+      yield* Deferred.succeed(toolExecutionGate, undefined)
+      yield* Fiber.join(run)
+      toolExecutionGate = undefined
+      toolExecutionsStarted = undefined
     }),
   )
 

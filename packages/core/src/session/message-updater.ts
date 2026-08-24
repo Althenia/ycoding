@@ -272,6 +272,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
     yield* SessionEvent.match(event, {
       "session.created": () => Effect.void,
       "session.usage.updated": () => Effect.void,
+      "session.diagnostics.updated": () => Effect.void,
       "session.usage.recorded": () => Effect.void,
       "session.provider.request.recorded": () => Effect.void,
       "session.agent.selected": (event) => {

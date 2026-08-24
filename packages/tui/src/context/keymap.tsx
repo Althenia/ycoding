@@ -1,6 +1,6 @@
 import type { KeymapCommand, KeymapLayer } from "@ycoding-ai/plugin/tui/context"
 import { InputRenderable, TextareaRenderable, type KeyEvent, type Renderable } from "@opentui/core"
-import { stringifyKeyStroke, type Binding, type CommandContext } from "@opentui/keymap"
+import { stringifyKeyStroke, type Binding, type CommandContext, type KeyInputContext } from "@opentui/keymap"
 import {
   registerBackspacePopsPendingSequence,
   registerBaseLayoutFallback,
@@ -50,6 +50,11 @@ const Context = createContext<{
   readonly input: (id: string) => string | undefined
 }>()
 
+function consumeEmptyNamedKey(context: KeyInputContext) {
+  if (context.event.name && context.event.name.trim()) return
+  context.consume({ preventDefault: false, stopPropagation: true })
+}
+
 function Provider(props: ParentProps<{ config?: KeymapConfig }>) {
   const renderer = useRenderer()
   const config: KeymapConfig = props.config ?? useConfig().data
@@ -66,6 +71,12 @@ function Provider(props: ParentProps<{ config?: KeymapConfig }>) {
     }
   }
   const dispose = [
+    // Some terminal sequences parse into a key event with an empty name. OpenTUI's default
+    // event-match resolver calls resolveKey({ name }), which throws "Invalid key name: key name
+    // cannot be empty", and the keymap logs that error for every such event. They can never match
+    // a binding, so consume them (press and release) before dispatch.
+    keymap.intercept("key", consumeEmptyNamedKey),
+    keymap.intercept("key", consumeEmptyNamedKey, { release: true }),
     registerCommaBindings(keymap),
     keymap.appendBindingExpander((context) => {
       const key = Object.entries({ enter: "return", esc: "escape", pgdown: "pagedown", pgup: "pageup" }).reduce(

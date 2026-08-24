@@ -104,12 +104,10 @@ describe("Codex Responses WebSocket transport", () => {
       expect(sent[0]).not.toHaveProperty("previous_response_id")
       expect(sent[1]).toMatchObject({ type: "response.create", store: false, previous_response_id: "resp_1" })
       expect(sent[1]?.input).toEqual([
+        { role: "user", content: [{ type: "input_text", text: "Second question" }] },
         {
-          role: "user",
-          content: [
-            { type: "input_text", text: "Second question" },
-            { type: "input_text", text: "<system-update>\nstate two\n</system-update>" },
-          ],
+          role: "system",
+          content: [{ type: "input_text", text: "state two" }],
         },
       ])
     }),

@@ -684,14 +684,34 @@ describe("SessionRunnerModel", () => {
       expect(headers.authorization).toBe("Bearer chatgpt-token");
       expect(headers["chatgpt-account-id"]).toBe("acct_123");
       expect(headers["session-id"]).toBe(cache.promptCacheKey);
-      expect(headers["thread-id"]).toBe(
-        SessionRunnerCache.providerSessionNamespace({
-          projectID: "project",
-          sessionID: "ses_codex_affinity",
-          providerID: "test-provider",
-        }),
-      );
+      expect(headers["thread-id"]).toBe(cache.promptCacheKey);
       expect(headers["x-client-request-id"]).toBe(headers["thread-id"]);
+
+      const otherCache = SessionRunnerCache.providerOptions({
+        projectID: "project",
+        directory: "/repo",
+        providerID: "test-provider",
+        modelID: "test-model",
+        apiModelID: resolved.id,
+        variant: "default",
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: [],
+        system: [],
+        tools: [],
+        sessionID: "ses_codex_affinity_other",
+        routeID: resolved.route.id,
+      });
+      const otherHeaders = yield* resolved.route.auth.apply({
+        request: LLM.request({ model: resolved, prompt: "Hello", providerOptions: otherCache.providerOptions }),
+        method: "POST",
+        url: "https://chatgpt.com/backend-api/codex/responses",
+        body: "{}",
+        headers: Headers.empty,
+      });
+      expect(otherCache.promptCacheKey).toBe(cache.promptCacheKey);
+      expect(otherHeaders["session-id"]).toBe(cache.promptCacheKey);
+      expect(otherHeaders["thread-id"]).toBe(cache.promptCacheKey);
+      expect(otherHeaders["x-client-request-id"]).toBe(cache.promptCacheKey);
     }),
   );
 

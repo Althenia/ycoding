@@ -45,7 +45,7 @@ const namespaceWithSchema = (inputSchema: Readonly<Record<string, unknown>>) =>
 
 test("pins the canonical prompt-cache namespace digest", () => {
   expect(SessionRunnerCache.promptCacheNamespace(base)).toBe(
-    "3537645d5e6210f16f79be6f3b717923d6621ce3a7431e11a5e483f945885fc6",
+    "33b8a467597e0b90e8e0480631e32f6fe9fdc146d1419dedd0365ec95b7bb343",
   )
 })
 
@@ -53,7 +53,7 @@ test("keeps ordinary keys stable while isolating compaction cache scope", () => 
   const normal = SessionRunnerCache.promptCacheNamespace(base)
   const compaction = SessionRunnerCache.promptCacheNamespace({ ...base, scope: "compaction" })
 
-  expect(normal).toBe("3537645d5e6210f16f79be6f3b717923d6621ce3a7431e11a5e483f945885fc6")
+  expect(normal).toBe("33b8a467597e0b90e8e0480631e32f6fe9fdc146d1419dedd0365ec95b7bb343")
   expect(compaction).not.toBe(normal)
 })
 
@@ -103,7 +103,7 @@ test("canonicalizes object order and preserves JSON array positions", () => {
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {
   expect(namespaceWithSchema({ "10": "ten", "2": "two", "\u{10000}": "astral", "\u{e000}": "bmp" })).toBe(
-    "59ed4c65fe5898614f648ffac4e181dedb2616fcf913d747f419b6178d858c25",
+    "d161839876dda2ab02f6520544e01e811634103578ced22879cdb63107d91bd2",
   )
 })
 
@@ -354,11 +354,6 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
   })
   expect(codexBackend.providerOptions.openai).toEqual({
     promptCacheKey: codexBackend.promptCacheKey,
-    providerSessionID: SessionRunnerCache.providerSessionNamespace({
-      projectID: base.projectID,
-      sessionID: "ses_openai_codex",
-      providerID: base.providerID,
-    }),
   })
   expect(codexBackend.cache).toBeUndefined()
 

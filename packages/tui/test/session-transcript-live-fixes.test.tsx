@@ -1,7 +1,14 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, mock, test } from "bun:test"
+import { MarkdownRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import type { SessionAutonomyState, SessionMessageInfo, SessionPendingInfo, SessionTodoInfo, YCodingEvent } from "@ycoding-ai/client"
+import type {
+  SessionAutonomyState,
+  SessionMessageInfo,
+  SessionPendingInfo,
+  SessionTodoInfo,
+  YCodingEvent,
+} from "@ycoding-ai/client"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { Global } from "@ycoding-ai/core/global"
 import { Effect, FileSystem } from "effect"
@@ -227,6 +234,110 @@ const narrowTranscript = [
     time: { created: 2 },
   },
 ] as SessionMessageInfo[]
+
+const resourceTranscript = [
+  { id: "msg_user_resource", type: "user", text: "Inspect the long tool output", time: { created: 1 } },
+  {
+    id: "msg_shell_resource",
+    type: "shell",
+    shellID: "sh_resource_output",
+    command: "resource-probe",
+    status: "exited",
+    exit: 0,
+    output: {
+      output: Array.from({ length: 512 }, (_, index) => `resource-line-${index.toString().padStart(3, "0")}`).join(
+        "\n",
+      ),
+      cursor: 0,
+      size: 512,
+      truncated: false,
+    },
+    time: { created: 2, completed: 3 },
+  },
+] as SessionMessageInfo[]
+
+const markdownResourceTranscript = [
+  { id: "msg_user_markdown_resource", type: "user", text: "Render the long answer", time: { created: 1 } },
+  {
+    id: "msg_assistant_markdown_resource",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    content: [
+      {
+        type: "text",
+        text: Array.from(
+          { length: 128 },
+          (_, index) =>
+            `markdown-resource-${index.toString().padStart(3, "0")} keeps one logical answer block bounded.`,
+        ).join("\n\n"),
+      },
+    ],
+    finish: "stop",
+    time: { created: 2, completed: 3 },
+  },
+] as SessionMessageInfo[]
+
+const imageMarkdownTranscript = [
+  { id: "msg_user_image_markdown", type: "user", text: "Render the image receipt", time: { created: 1 } },
+  {
+    id: "msg_assistant_image_markdown",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    content: [{ type: "text", text: "# Image result\n\nThe **[Image 1]** placeholder remains visible." }],
+    finish: "stop",
+    time: { created: 2, completed: 3 },
+  },
+] as SessionMessageInfo[]
+
+const skillResourceTranscript = [
+  { id: "msg_user_skill_resource", type: "user", text: "Load the resource skill", time: { created: 1 } },
+  {
+    id: "msg_assistant_skill_resource",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    content: [
+      {
+        type: "tool",
+        id: "call_skill_resource",
+        name: "skill",
+        state: {
+          status: "completed",
+          input: { id: "resource-skill" },
+          content: [
+            {
+              type: "text",
+              text: Array.from(
+                { length: 512 },
+                (_, index) => `skill-resource-${index.toString().padStart(3, "0")}`,
+              ).join("\n"),
+            },
+          ],
+          structured: {},
+        },
+        time: { created: 2, ran: 2, completed: 3 },
+      },
+    ],
+    finish: "tool-calls",
+    time: { created: 2, completed: 3 },
+  },
+] as SessionMessageInfo[]
+
+const largeTranscript: SessionMessageInfo[] = Array.from({ length: 600 }, (_, i) => {
+  const idx = String(i).padStart(4, "0")
+  if (i % 2 === 0) return { id: `msg_large_user_${idx}`, type: "user", text: `Large prompt ${idx}`, time: { created: i } } as SessionMessageInfo
+  return {
+    id: `msg_large_assistant_${idx}`,
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    content: [{ type: "text", text: `Large answer ${idx} keeps coalesced rendering bounded.` }],
+    finish: "stop",
+    time: { created: i, completed: i + 1 },
+  } as SessionMessageInfo
+})
 
 const lifecycleStart = 1_000
 const lifecycleEnd = lifecycleStart + 134_000
@@ -1196,6 +1307,97 @@ test("bounds streaming growth renders and confines spinner frame changes to its 
   }
 }, 60_000)
 
+test("keeps multiline tool output in one native text buffer", async () => {
+  const screen = await renderMeasuredScreen({
+    ...DESIGN_VIEWPORT,
+    route: routeFor(resourceTranscript),
+    settle: "resource-line-000",
+    config: { animations: false },
+  })
+
+  try {
+    expect(countTextBuffersContaining(screen.renderer.root, "resource-line-")).toBe(1)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps one assistant Markdown message in one native text buffer", async () => {
+  const screen = await renderMeasuredScreen({
+    ...DESIGN_VIEWPORT,
+    route: routeFor(markdownResourceTranscript),
+    settle: "markdown-resource-127",
+    config: { animations: false },
+  })
+
+  try {
+    const markdown = findMarkdown(screen.renderer.root)
+    expect(markdown).toBeDefined()
+    expect(markdown ? countTextBuffers(markdown) : 0).toBe(1)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("finalizes completed Markdown while preserving image placeholders", async () => {
+  const screen = await renderMeasuredScreen({
+    ...DESIGN_VIEWPORT,
+    route: routeFor(imageMarkdownTranscript),
+    settle: "[Image 1]",
+    config: { animations: false },
+  })
+
+  try {
+    const markdown = findMarkdown(screen.renderer.root)
+    expect(markdown).toBeDefined()
+    expect(markdown?.streaming).toBe(false)
+    expect(screen.frame().match(/\[Image 1\]/g)).toHaveLength(1)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps expanded skill content in one native text buffer", async () => {
+  const screen = await renderMeasuredScreen({
+    ...DESIGN_VIEWPORT,
+    route: routeFor(skillResourceTranscript),
+    settle: "+ Skill content",
+    config: { animations: false },
+  })
+
+  try {
+    const label = findTextBuffer(screen.renderer.root, "+ Skill content")
+    const focusable = label ? findFocusableAncestor(label) : undefined
+    expect(focusable).toBeDefined()
+    focusable?.focus()
+    screen.input.pressEnter()
+    await waitForFrame(screen.frame, "skill-resource-000")
+
+    expect(countTextBuffersContaining(screen.renderer.root, "skill-resource-")).toBe(1)
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("caps large transcript at bounded mounted window", async () => {
+  const screen = await renderMeasuredScreen({
+    ...DESIGN_VIEWPORT,
+    route: routeFor(largeTranscript),
+    settle: "Large answer 0599",
+    config: { animations: false },
+  })
+  try {
+    expect(screen.frame()).toContain("older rows hidden")
+    expect(screen.frame()).toContain("Large answer 0599")
+    // 600 messages produce >400 rows; mounted window keeps handle count bounded.
+    expect(countTextBuffers(screen.renderer.root)).toBeLessThan(900)
+    // Oldest prompt should be hidden by the cap.
+    expect(screen.frame()).not.toContain("Large prompt 0000")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 function bubbleBounds(lines: string[], text: string) {
   const bodyRow = lines.findIndex((line) => line.includes(text))
   if (bodyRow === -1) throw new Error(`missing bubble text: ${text}`)
@@ -1238,6 +1440,38 @@ async function renderBubble(
 function changedRows(before: string, after: string) {
   const previous = before.split("\n")
   return after.split("\n").flatMap((line, index) => (line === previous[index] ? [] : [index]))
+}
+
+function countTextBuffersContaining(root: Renderable, text: string): number {
+  return (
+    Number(root instanceof TextBufferRenderable && root.plainText.includes(text)) +
+    root.getChildren().reduce((total, child) => total + countTextBuffersContaining(child, text), 0)
+  )
+}
+
+function countTextBuffers(root: Renderable): number {
+  return (
+    Number(root instanceof TextBufferRenderable) +
+    root.getChildren().reduce((total, child) => total + countTextBuffers(child), 0)
+  )
+}
+
+function findTextBuffer(root: Renderable, text: string): TextBufferRenderable | undefined {
+  if (root instanceof TextBufferRenderable && root.plainText.includes(text)) return root
+  return root
+    .getChildren()
+    .map((child) => findTextBuffer(child, text))
+    .find(Boolean)
+}
+
+function findFocusableAncestor(renderable: Renderable): Renderable | undefined {
+  if (renderable.focusable) return renderable
+  return renderable.parent ? findFocusableAncestor(renderable.parent) : undefined
+}
+
+function findMarkdown(root: Renderable): MarkdownRenderable | undefined {
+  if (root instanceof MarkdownRenderable) return root
+  return root.getChildren().map(findMarkdown).find(Boolean)
 }
 
 async function waitForFrame(frame: () => string, text: string) {
@@ -1284,6 +1518,7 @@ async function renderMeasuredScreen(input: {
   return {
     events,
     renderer: setup.renderer,
+    input: setup.mockInput,
     frame: () => setup.captureCharFrame(),
     async dispose() {
       if (!setup.renderer.isDestroyed) setup.renderer.destroy()
