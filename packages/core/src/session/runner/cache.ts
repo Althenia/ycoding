@@ -211,7 +211,6 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
   const controlledOpenAI = openaiCacheCapability === "gpt-5.6" && breakpointOpenAI
   const openai = {
     promptCacheKey,
-    ...(input.routeID === "openai-codex-responses" ? { providerSessionID } : {}),
     ...(controlledOpenAI
       ? {
           promptCacheOptions: {
