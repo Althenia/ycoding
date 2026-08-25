@@ -6,6 +6,7 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
+import { EventTable } from "@ycoding-ai/core/event/sql"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { Project } from "@ycoding-ai/core/project"
@@ -31,7 +32,7 @@ import {
 } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { Hash } from "@ycoding-ai/core/util/hash"
-import { asc } from "drizzle-orm"
+import { and, asc, eq } from "drizzle-orm"
 import { DateTime, Effect, Layer, LayerMap, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 
@@ -250,6 +251,27 @@ describe("Session hard context gate", () => {
           configDigest: ConfigCompaction.admissionDigest(disabledPolicy),
         },
       ])
+      const event = yield* (yield* Database.Service).db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, fixture.sessionID),
+            eq(EventTable.type, "session.compaction.admitted.2"),
+          ),
+        )
+        .get()
+      expect(event?.data).toMatchObject({
+        pressure: { safeInputTokens: 800, estimatedInputTokens: expect.any(Number) },
+      })
+      const pressure = event?.data.pressure
+      if (
+        pressure &&
+        typeof pressure === "object" &&
+        "estimatedInputTokens" in pressure &&
+        typeof pressure.estimatedInputTokens === "number"
+      )
+        expect(pressure.estimatedInputTokens).toBeGreaterThanOrEqual(800)
     }),
   )
 

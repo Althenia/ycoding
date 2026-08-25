@@ -667,7 +667,7 @@ export namespace Compaction {
   export const Admitted = Event.durable({
     type: "session.compaction.admitted",
     ...current,
-    schema: { ...Base, jobID: SessionCompaction.ID },
+    schema: { ...Base, jobID: SessionCompaction.ID, pressure: SessionCompaction.Pressure.pipe(optional) },
   })
   export type Admitted = typeof Admitted.Type
 

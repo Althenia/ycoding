@@ -22,6 +22,7 @@ export function SidebarCacheContent(props: {
   diagnostics: () => SessionCacheDiagnostics | null | undefined
   usage?: () => ProviderRequestSummary | undefined
   summarizing?: () => boolean
+  pressure?: () => { estimatedInputTokens: number; safeInputTokens: number } | undefined
   fallback?: () => { tokens: { input: number; output: number }; cost: number } | undefined
   currentModel?: () => { identity: string; limit: number } | undefined
   cost?: () => number | undefined
@@ -32,6 +33,7 @@ export function SidebarCacheContent(props: {
   const diagnostics = createMemo(props.diagnostics)
   const usage = createMemo(() => props.usage?.() ?? diagnostics()?.requests)
   const summarizing = createMemo(() => props.summarizing?.() ?? false)
+  const pressure = createMemo(() => (summarizing() ? props.pressure?.() : undefined))
   const fallback = createMemo(() => props.fallback?.())
   // A rail row right-aligns its value, so an over-long model identity would run into it. Rows are bounded
   // by the docked rail width minus its horizontal padding; outside a rail the section spans the terminal.
@@ -54,12 +56,17 @@ export function SidebarCacheContent(props: {
     )
   const summary = createMemo(() => {
     const value = diagnostics()
-    return value
+    const currentPressure = pressure()
+    return value || currentPressure
       ? [
-          value.context.percent === undefined ? undefined : `${value.context.percent}%`,
-          cacheHitPercent(value.cache.hitRatio) === undefined
+          currentPressure
+            ? `${Math.round((currentPressure.estimatedInputTokens / currentPressure.safeInputTokens) * 100)}% est`
+            : value?.context.percent === undefined
+              ? undefined
+              : `${value.context.percent}%`,
+          cacheHitPercent(value?.cache.hitRatio) === undefined
             ? undefined
-            : `${cacheHitPercent(value.cache.hitRatio)}% hit`,
+            : `${cacheHitPercent(value?.cache.hitRatio)}% hit`,
         ]
           .filter((item): item is string => item !== undefined)
           .join(" · ")
@@ -74,6 +81,9 @@ export function SidebarCacheContent(props: {
     return value === undefined ? undefined : { value }
   })
   const context = createMemo(() => {
+    const currentPressure = pressure()
+    if (currentPressure)
+      return `${currentPressure.estimatedInputTokens.toLocaleString()} / ${currentPressure.safeInputTokens.toLocaleString()} est`
     const value = diagnostics()?.context
     if (!value || value.limit === undefined) return "unreported"
     return `${value.total.toLocaleString()} / ${value.limit.toLocaleString()}`
@@ -102,13 +112,17 @@ export function SidebarCacheContent(props: {
           <>
             <RailRow label="Provider" value={providerText(value().model, "Provider")} />
             <RailRow label="Model" value={modelText(value().model, "Model")} />
-            <Show when={summarizing()}>
-              <RailRow label="Status" value="Summarizing" valueColor={themeV2.text.feedback.info.default} />
-            </Show>
-            <RailRow label="Context" value={context()} />
-            <RailRow label="Cache" value={cache()} valueColor={themeV2.text.feedback.success.default} />
           </>
         )}
+      </Show>
+      <Show when={summarizing()}>
+        <RailRow label="Status" value="Summarizing" valueColor={themeV2.text.feedback.info.default} />
+      </Show>
+      <Show when={diagnostics() || pressure()}>
+        <RailRow label="Context" value={context()} />
+      </Show>
+      <Show when={diagnostics()}>
+        <RailRow label="Cache" value={cache()} valueColor={themeV2.text.feedback.success.default} />
       </Show>
       <Show when={hasSpend()}>
         <>
@@ -155,6 +169,11 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
       data.session.compaction.list(props.sessionID),
     ),
   )
+  const pressure = createMemo(() =>
+    data.session.compaction
+      .list(props.sessionID)
+      .findLast((item) => item.status === "pending" || item.status === "running")?.pressure,
+  )
   const fallback = createMemo(() => {
     const current = session()
     return current
@@ -173,6 +192,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
       diagnostics={diagnostics}
       usage={usage}
       summarizing={summarizing}
+      pressure={pressure}
       fallback={fallback}
       cost={cost}
     />

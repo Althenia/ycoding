@@ -40,6 +40,12 @@ export const Metrics = Schema.Struct({
   retainedTokens: NonNegativeInt,
 }).annotate({ identifier: "SessionCompaction.Metrics" })
 
+export interface Pressure extends Schema.Schema.Type<typeof Pressure> {}
+export const Pressure = Schema.Struct({
+  estimatedInputTokens: NonNegativeInt,
+  safeInputTokens: NonNegativeInt,
+}).annotate({ identifier: "SessionCompaction.Pressure" })
+
 export interface Admission extends Schema.Schema.Type<typeof Admission> {}
 export const Admission = Schema.Struct({
   id: ID,

@@ -520,11 +520,13 @@ const projectCurrentCompaction = Effect.fnUntraced(function* (
     .pipe(Effect.orDie)
   if (!job) return
   const current = yield* currentCompactionMessage(db, event.data.sessionID, event.data.jobID)
+  const pressure = current?.pressure ?? ("pressure" in event.data ? event.data.pressure : undefined)
   const base = {
     id: current?.id ?? SessionMessage.ID.fromEvent(event.id),
     type: "compaction" as const,
     jobID: event.data.jobID,
     trigger: job.trigger,
+    ...(pressure ? { pressure } : {}),
     metadata: current?.metadata ?? event.metadata,
     time: current?.time ?? { created: DateTime.makeUnsafe(job.timeCreated) },
   }
@@ -1063,6 +1065,7 @@ const layer = Layer.effectDiscard(
               type: "compaction",
               jobID: event.data.jobID,
               trigger: job.trigger,
+              ...(current?.pressure ? { pressure: current.pressure } : {}),
               status: "completed",
               revision: event.data.revision,
               boundary: event.data.boundary,
@@ -1106,6 +1109,7 @@ const layer = Layer.effectDiscard(
             type: "compaction",
             jobID: event.data.jobID,
             trigger: job.trigger,
+            ...(current?.pressure ? { pressure: current.pressure } : {}),
             status: "failed",
             code: event.data.code,
             error: event.data.error,

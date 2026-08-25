@@ -177,7 +177,11 @@ test("derives active background compaction from V2 lifecycle instead of conversa
       <TestTuiContexts>
         <ConfigProvider config={createTuiResolvedConfig()}>
           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-            <module.SidebarCacheContent diagnostics={() => diagnostics} summarizing={() => true} />
+            <module.SidebarCacheContent
+              diagnostics={() => diagnostics}
+              summarizing={() => true}
+              pressure={() => ({ estimatedInputTokens: 600_000, safeInputTokens: 642_000 })}
+            />
           </ThemeProvider>
         </ConfigProvider>
       </TestTuiContexts>
@@ -190,6 +194,9 @@ test("derives active background compaction from V2 lifecycle instead of conversa
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("Summarizing")
+    expect(frame).toContain("93% est")
+    expect(frame).toContain("600,000 / 642,000 est")
+    expect(frame).not.toContain("1,030 / 2,000")
     expect(frame.indexOf("Model")).toBeLessThan(frame.indexOf("Summarizing"))
     expect(frame.indexOf("Summarizing")).toBeLessThan(frame.indexOf("Context"))
   } finally {

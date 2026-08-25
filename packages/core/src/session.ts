@@ -134,7 +134,10 @@ type CompactBaseInput = {
   id?: ID
   sessionID: SessionSchema.ID
 }
-export type AdvisorCompactInput = CompactBaseInput & { trigger: "consider" | "advised" }
+export type AdvisorCompactInput = CompactBaseInput & {
+  trigger: "consider" | "advised"
+  estimatedInputTokens?: number
+}
 export type ManualCompactInput = CompactBaseInput & { trigger?: never }
 type CompactInput = AdvisorCompactInput | ManualCompactInput
 
@@ -1321,6 +1324,14 @@ const layer = Layer.effect(
                   baseContextRevision: current.revision,
                   targetMaxInputTokens,
                   configDigest,
+                  ...(input.estimatedInputTokens === undefined
+                    ? {}
+                    : {
+                        pressure: {
+                          estimatedInputTokens: input.estimatedInputTokens,
+                          safeInputTokens: hardInputCap,
+                        },
+                      }),
                 } as const
                 if (yield* compactionJobs.hasUnchangedDeterministicFailure(admission)) return undefined
                 const admitted = yield* admit(admission)

@@ -101,17 +101,7 @@ export type SessionCacheMechanism =
   | "provider-reported"
   | "none"
 
-export type SessionMessageCompactionPending = {
-  type: "compaction"
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  jobID: string
-  trigger: "consider" | "advised" | "mandatory" | "manual"
-  status: "pending"
-  summary?: string
-  recent?: string
-}
+export type SessionCompactionPressure = { estimatedInputTokens: number; safeInputTokens: number }
 
 export type SessionMessageCompactionRunningV1 = {
   type: "compaction"
@@ -122,18 +112,6 @@ export type SessionMessageCompactionRunningV1 = {
   status: "running"
   summary: string
   recent: string
-}
-
-export type SessionMessageCompactionRunning = {
-  type: "compaction"
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  jobID: string
-  trigger: "consider" | "advised" | "mandatory" | "manual"
-  status: "running"
-  summary?: string
-  recent?: string
 }
 
 export type SessionCompactionBoundary = { messageID: string; seq: number }
@@ -851,17 +829,6 @@ export type SessionToolInputEnded = {
   data: { sessionID: string; assistantMessageID: string; callID: string; text: string }
 }
 
-export type SessionCompactionAdmitted = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.compaction.admitted"
-  durable: { aggregateID: string; seq: number; version: 2 }
-  location?: LocationRef
-  data: { sessionID: string; jobID: string }
-}
-
 export type SessionCompactionStarted = {
   id: string
   created: number
@@ -1264,27 +1231,6 @@ export type SessionMessageCompactionFailedV1 = {
   error: SessionStructuredError
 }
 
-export type SessionMessageCompactionFailed = {
-  type: "compaction"
-  id: string
-  metadata?: { [x: string]: JsonValue }
-  time: { created: number }
-  jobID: string
-  trigger: "consider" | "advised" | "mandatory" | "manual"
-  status: "failed"
-  code:
-    | "cancelled"
-    | "superseded"
-    | "invalid_manifest"
-    | "protected_state_changed"
-    | "context_limit_unresolved"
-    | "migration_failed"
-    | "provider_failed"
-  error: SessionStructuredError
-  summary?: string
-  recent?: string
-}
-
 export type SessionExecutionFailed = {
   id: string
   created: number
@@ -1336,6 +1282,65 @@ export type SessionProviderCacheDiagnostics = {
   writeReported: boolean
 }
 
+export type SessionMessageCompactionPending = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  pressure?: SessionCompactionPressure
+  status: "pending"
+  summary?: string
+  recent?: string
+}
+
+export type SessionMessageCompactionRunning = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  pressure?: SessionCompactionPressure
+  status: "running"
+  summary?: string
+  recent?: string
+}
+
+export type SessionMessageCompactionFailed = {
+  type: "compaction"
+  id: string
+  metadata?: { [x: string]: JsonValue }
+  time: { created: number }
+  jobID: string
+  trigger: "consider" | "advised" | "mandatory" | "manual"
+  pressure?: SessionCompactionPressure
+  status: "failed"
+  code:
+    | "cancelled"
+    | "superseded"
+    | "invalid_manifest"
+    | "protected_state_changed"
+    | "context_limit_unresolved"
+    | "migration_failed"
+    | "provider_failed"
+  error: SessionStructuredError
+  summary?: string
+  recent?: string
+}
+
+export type SessionCompactionAdmitted = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.compaction.admitted"
+  durable: { aggregateID: string; seq: number; version: 2 }
+  location?: LocationRef
+  data: { sessionID: string; jobID: string; pressure?: SessionCompactionPressure }
+}
+
 export type SessionCompactionResult = {
   id: string
   sessionID: string
@@ -1360,6 +1365,7 @@ export type SessionMessageCompactionCompleted = {
   time: { created: number }
   jobID: string
   trigger: "consider" | "advised" | "mandatory" | "manual"
+  pressure?: SessionCompactionPressure
   status: "completed"
   revision: number
   boundary: SessionCompactionBoundary
@@ -3023,7 +3029,7 @@ export type SessionLogItem =
       type: "session.compaction.admitted"
       durable: { aggregateID: string; seq: number; version: 2 }
       location?: LocationRef
-      data: { sessionID: string; jobID: string }
+      data: { sessionID: string; jobID: string; pressure?: SessionCompactionPressure }
     }
   | {
       id: string

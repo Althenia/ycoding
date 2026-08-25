@@ -27,10 +27,16 @@ export const Plugin = {
           description: tool.description,
           inputSchema: tool.input,
         }))
+        const estimatedInputTokens = SessionContextPressure.estimatedInputTokens({
+          system: event.system,
+          tools,
+          messages: event.messages,
+        })
         const current = SessionContextPressure.modelLevel({
           models,
           model: event.model,
           policy,
+          estimate: estimatedInputTokens,
           system: event.system,
           tools,
           messages: event.messages,
@@ -48,7 +54,7 @@ export const Plugin = {
         if (previous !== undefined && pressureRank(previous) >= pressureRank(current)) return
         pressure.set(sessionID, current)
         yield* runtime.session
-          .compact({ id: SessionCompaction.ID.create(), sessionID, trigger: current })
+          .compact({ id: SessionCompaction.ID.create(), sessionID, trigger: current, estimatedInputTokens })
           .pipe(
             Effect.catch(() =>
               Effect.sync(() => {
