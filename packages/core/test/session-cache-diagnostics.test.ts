@@ -138,6 +138,7 @@ test("derives provider cache mechanisms from native (non-AI-SDK) route ids", () 
     "openai-compatible-responses": "openai-prefix-cache",
     "openai-responses-websocket": "openai-prefix-cache",
     "openai-codex-responses": "openai-prefix-cache",
+    "openai-codex-websocket-responses": "openai-prefix-cache",
     "github-copilot-chat": "openai-prefix-cache",
     "github-copilot-responses": "openai-prefix-cache",
   } as const

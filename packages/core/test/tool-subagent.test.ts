@@ -1508,6 +1508,14 @@ describe("SubagentTool", () => {
           yield* hooks.trigger("session", "context", codexEvent)
           expect(codexEvent.messages).toEqual([Message.user("codex history")])
 
+          const codexWebSocketEvent: SessionHooks["context"] = {
+            ...event,
+            routeID: "openai-codex-websocket-responses",
+            messages: [Message.user("codex websocket history")],
+          }
+          yield* hooks.trigger("session", "context", codexWebSocketEvent)
+          expect(codexWebSocketEvent.messages).toEqual([Message.user("codex websocket history")])
+
           yield* orchestration.settle(child.sessionID, { type: "completed", excerpt: "done" })
           const terminalEvent: SessionHooks["context"] = {
             ...event,

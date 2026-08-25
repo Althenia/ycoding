@@ -64,6 +64,7 @@ it("allows only the two direct OpenAI Responses routes", () =>
     for (const routeID of [
       "openai-chat",
       "openai-codex-responses",
+      "openai-codex-websocket-responses",
       "github-copilot-responses",
       "ai-sdk:@ai-sdk/github-copilot",
     ]) {
