@@ -301,9 +301,20 @@ export const errorText = (error: unknown): string => {
   return "Unknown stream error"
 }
 
+const responseStreamFailureMessage = (error: unknown) => {
+  const message = errorText(error).toLowerCase()
+  if (message.includes("socket connection was closed unexpectedly"))
+    return "The socket connection was closed unexpectedly"
+  if (message.includes("connection reset") || message.includes("reset by peer") || message.includes("econnreset"))
+    return "The connection was reset"
+  if (message.includes("timed out") || message.includes("timeout") || message.includes("etimedout"))
+    return "The response stream timed out"
+  return "The HTTP response stream failed"
+}
+
 export const streamReadError = (route: string, error: unknown) => {
   if (error instanceof LLMError) return error
-  const message = `Failed to read ${route} stream: ${errorText(error)}`
+  const message = `Failed to read ${route} stream: ${responseStreamFailureMessage(error)}`
   return new LLMError({
     module: "ProviderShared",
     method: "stream",

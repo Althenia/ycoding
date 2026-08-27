@@ -8,6 +8,7 @@ import {
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@ycoding-ai/ai"
+import { RequestExecutor } from "@ycoding-ai/ai/route"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
@@ -17,6 +18,7 @@ import { EventV2 } from "../../event"
 import { PermissionV2 } from "../../permission"
 import { QuestionTool } from "../../tool/question"
 import { ToolOutputStore } from "../../tool-output-store"
+import { OpenAICodex } from "../../plugin/provider/openai-codex"
 import { InstructionState } from "../instruction-state"
 import { SessionCompaction } from "../compaction"
 import { SessionCacheDiagnostics } from "../cache-diagnostics"
@@ -58,6 +60,7 @@ type StepEnd = {
 type AttemptState = {
   current?: SessionProviderRequest.Tracker
   attempts: number
+  nextConnection?: "fresh"
   continuationFallback?: boolean
   overflowRecovery?: "pending" | "used"
 }
@@ -288,8 +291,14 @@ const layer = Layer.effect(
       let continuationFailure: ProviderErrorEvent | undefined
       const [consumedInputID, ...remainingConsumedInputIDs] = consumedInputIDs
       let inputConsumptionPending = consumedInputID !== undefined
+      const freshConnection =
+        requestTrackerState.nextConnection === "fresh" && effectiveModel.route.id === OpenAICodex.routeID
+      requestTrackerState.nextConnection = undefined
       requestTrackerState.attempts += 1
-      const providerStream = llm.stream(prepared.request).pipe(
+      const providerEvents = llm.stream(prepared.request)
+      const providerStream = (
+        freshConnection ? RequestExecutor.withFreshConnection(providerEvents) : providerEvents
+      ).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             if (inputConsumptionPending && consumedInputID) {
@@ -543,6 +552,12 @@ const layer = Layer.effect(
               SessionRunnerRetry.isRetryable(llmFailure) &&
               !publisher.hasRetryEvidence()
             ) {
+              if (
+                effectiveModel.route.id === OpenAICodex.routeID &&
+                llmFailure.reason._tag === "Transport" &&
+                llmFailure.reason.kind === "read"
+              )
+                requestTrackerState.nextConnection = "fresh"
               yield* serialized(publisher.flush())
               return yield* new SessionRunnerRetry.RetryableFailure({
                 cause: llmFailure,

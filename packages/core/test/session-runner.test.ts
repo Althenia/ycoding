@@ -93,7 +93,8 @@ import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { Location } from "@ycoding-ai/core/location"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Stream } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -101,6 +102,7 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
 
 const requests: LLMRequest[] = []
+const requestKeepalive: Array<boolean | undefined> = []
 const runnerDirectory = AbsolutePath.make(import.meta.dir)
 type TestStreamError = LLMError | Error
 let response: LLMEvent[] = []
@@ -123,14 +125,20 @@ const client = Layer.succeed(
       requests.push(request)
       const observed = <E>(stream: Stream.Stream<LLMEvent, E>) =>
         Stream.unwrap(
-          ProviderRequestObserver.observe({
-            requestID: request.id ?? "request",
-            routeID: request.model.route.id,
-            transport: "test-client",
-            attempt: 1,
-            phase: "started",
-            time: 0,
-          }).pipe(Effect.as(stream)),
+          Effect.gen(function* () {
+            requestKeepalive.push(
+              Option.getOrUndefined(yield* Effect.serviceOption(FetchHttpClient.RequestInit))?.keepalive,
+            )
+            yield* ProviderRequestObserver.observe({
+              requestID: request.id ?? "request",
+              routeID: request.model.route.id,
+              transport: "test-client",
+              attempt: 1,
+              phase: "started",
+              time: 0,
+            })
+            return stream
+          }),
         )
       if (responseStreams) return observed(responseStreams.shift() ?? Stream.empty)
       if (responseStream) {
@@ -218,6 +226,15 @@ const model = Model.make({
   id: "fake-model",
   provider: "fake",
   route: OpenAIChat.route.with({ limits: testLimits }),
+})
+const codexModel = Model.make({
+  id: "gpt-5.6",
+  provider: "openai",
+  route: OpenAIResponses.route.with({
+    id: "openai-codex-responses",
+    provider: "openai",
+    limits: testLimits,
+  }),
 })
 const anthropicCacheModel = Model.make({
   id: "claude-sonnet-4-5",
@@ -806,6 +823,7 @@ const setup = Effect.gen(function* () {
     discard: true,
   })
   requests.length = 0
+  requestKeepalive.length = 0
   authorizations.length = 0
   executions.length = 0
   response = reply.text("Fixture response", "text-fixture")
@@ -851,6 +869,13 @@ const providerUnavailable = () =>
     module: "test",
     method: "stream",
     reason: new TransportReason({ message: "Provider unavailable" }),
+  })
+
+const streamReadFailure = () =>
+  new LLMError({
+    module: "test",
+    method: "stream",
+    reason: new TransportReason({ message: "Connection reset while reading response", kind: "read" }),
   })
 
 const invalidRequest = () =>
@@ -5403,6 +5428,7 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(run)
 
       expect(requests).toHaveLength(2)
+      expect(requestKeepalive).toEqual([undefined, undefined])
       const eventTypes = yield* recordedEventTypes(sessionID)
       expect(eventTypes).toContain("session.retry.scheduled.1")
       expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
@@ -5421,6 +5447,43 @@ describe("SessionRunnerLLM", () => {
       const replayed = yield* session.context(sessionID)
       expect(replayed.filter((message) => message.type === "assistant")).toHaveLength(1)
       expect(replayed.find((message) => message.type === "user")?.time.consumed).toBeDefined()
+    }),
+  )
+
+  it.effect("uses a fresh connection only when retrying a pre-output Codex stream read failure", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = codexModel
+      yield* admit(session, "Retry Codex stream read")
+      responseStream = Stream.fail(streamReadFailure())
+      response = reply.text("Recovered", "fresh-connection-retry-success")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      expect(requests.every((request) => request.model.route.id === "openai-codex-responses")).toBe(true)
+      expect(requestKeepalive).toEqual([undefined, false])
+    }),
+  )
+
+  it.effect("keeps pooling when retrying a Codex transport failure outside response reading", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = codexModel
+      yield* admit(session, "Retry Codex connection failure")
+      responseStream = Stream.fail(providerUnavailable())
+      response = reply.text("Recovered", "pooled-connection-retry-success")
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      expect(requestKeepalive).toEqual([undefined, undefined])
     }),
   )
 

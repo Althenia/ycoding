@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, Stream } from "effect"
 import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
@@ -67,6 +67,46 @@ const expectLLMError = (error: unknown) => {
 const errorHttp = (error: LLMError) => ("http" in error.reason ? error.reason.http : undefined)
 
 describe("RequestExecutor", () => {
+  it.live("opens a fresh TCP connection only for a fresh-bound request", () =>
+    Effect.gen(function* () {
+      const ports: number[] = []
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: (request, server) => {
+              const port = server.requestIP(request)?.port
+              if (port !== undefined) ports.push(port)
+              return new Response("ok")
+            },
+          }),
+        ),
+        (server) => Effect.sync(() => server.stop(true)),
+      )
+      const localRequest = HttpClientRequest.get(server.url)
+      const execute = (fresh = false) =>
+        Effect.gen(function* () {
+          const executor = yield* RequestExecutor.Service
+          const response = yield* executor.execute(localRequest)
+          yield* response.text
+        }).pipe(Stream.fromEffect, (stream) => (fresh ? RequestExecutor.withFreshConnection(stream) : stream), Stream.runDrain)
+      const program = Effect.gen(function* () {
+        yield* execute()
+        yield* execute()
+        yield* execute(true)
+        yield* execute()
+      }).pipe(Effect.provide(RequestExecutor.fetchLayer))
+
+      yield* program
+
+      expect(ports).toHaveLength(4)
+      expect(ports[1]).toBe(ports[0])
+      expect(ports[2]).not.toBe(ports[1])
+      expect(ports[3]).toBe(ports[0])
+    }),
+  )
+
   it.effect("classifies context overflow responses", () =>
     Effect.gen(function* () {
       const executor = yield* RequestExecutor.Service

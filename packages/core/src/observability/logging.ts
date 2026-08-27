@@ -1,4 +1,4 @@
-import { Formatter, Logger, type LogLevel } from "effect"
+import { Effect, FileSystem, Formatter, Logger, type LogLevel } from "effect"
 import path from "path"
 import { Global } from "../global"
 import { InstallationChannel, InstallationLocal } from "../installation/version"
@@ -54,7 +54,13 @@ export function file(local = InstallationLocal, channel = InstallationChannel) {
 
 export function fileLogger(target = file(), id: string = runID) {
   // Do not set batchWindow to 0; it causes high idle CPU usage.
-  return Logger.toFile(formatter(id), target, { flag: "a" })
+  return Effect.gen(function* () {
+    const logger = yield* Logger.toFile(formatter(id), target, { flag: "a", mode: 0o600 })
+    if (process.platform === "win32") return logger
+    const fs = yield* FileSystem.FileSystem
+    yield* fs.chmod(target, 0o600)
+    return logger
+  })
 }
 
 const stderrLogger = Logger.make((options) => process.stderr.write(formatter().log(options) + "\n"))
