@@ -79,6 +79,7 @@ async function mountRows(
 test("reconciles V2 compaction rows by jobID through terminal lifecycle events", async () => {
   const sessionID = "session-v2-compaction-rows"
   const jobID = "cmp_lifecycle"
+  const pressure = { estimatedInputTokens: 600_000, safeInputTokens: 642_000 }
   let messageRequests = 0
   let resolveMessages!: (response: Response) => void
   const mounted = await mountRows(sessionID, [], {
@@ -101,10 +102,11 @@ test("reconciles V2 compaction rows by jobID through terminal lifecycle events",
       type: "session.compaction.admitted",
       location: { directory },
       durable: durable(sessionID, 1),
-      data: { sessionID, jobID },
+      data: { sessionID, jobID, pressure },
     })
     await wait(() => compaction()?.status === "pending")
     const pending = compaction()
+    expect(compaction()?.pressure).toEqual(pressure)
     expect(compaction()).not.toHaveProperty("trigger")
 
     mounted.events.emit({
@@ -116,6 +118,7 @@ test("reconciles V2 compaction rows by jobID through terminal lifecycle events",
       data: { sessionID, jobID },
     })
     await wait(() => compaction()?.status === "running")
+    expect(compaction()?.pressure).toEqual(pressure)
     expect(compaction()).not.toHaveProperty("trigger")
 
     resolveMessages(
@@ -138,6 +141,7 @@ test("reconciles V2 compaction rows by jobID through terminal lifecycle events",
       jobID,
       messageID: "msg_compaction_lifecycle",
       trigger: "advised",
+      pressure,
       status: "running",
     })
     const queued = row()
@@ -159,7 +163,7 @@ test("reconciles V2 compaction rows by jobID through terminal lifecycle events",
     })
 
     await wait(() => compaction()?.status === "completed")
-    expect(compaction()).toMatchObject({ jobID, status: "completed", revision: 1 })
+    expect(compaction()).toMatchObject({ jobID, pressure, status: "completed", revision: 1 })
     expect(compaction()).not.toBe(pending)
     expect(row()).toBe(queued)
 

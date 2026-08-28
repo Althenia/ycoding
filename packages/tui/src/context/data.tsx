@@ -69,6 +69,7 @@ export type DataSessionCompactionLifecycle = {
   jobID: string
   messageID?: string
   trigger?: CurrentCompactionMessage["trigger"]
+  pressure?: CurrentCompactionMessage["pressure"]
   status: "pending" | "running" | "completed" | "failed"
   revision?: number
   boundary?: { messageID: string; seq: number }
@@ -90,6 +91,7 @@ function compactionLifecycle(message: SessionMessageInfo): DataSessionCompaction
     jobID: current.jobID,
     messageID: current.id,
     trigger: current.trigger,
+    pressure: current.pressure,
     status: current.status,
     time: current.time,
   }
@@ -108,10 +110,12 @@ function mergeCompactionLifecycle(
   const lifecycle = rank[update.status] >= rank[current.status] ? update : current
   const messageID = update.messageID ?? current.messageID
   const trigger = update.trigger ?? current.trigger
+  const pressure = update.pressure ?? current.pressure
   const base = {
     jobID: update.jobID,
     ...(messageID ? { messageID } : {}),
     ...(trigger ? { trigger } : {}),
+    ...(pressure ? { pressure } : {}),
     time: { created: Math.min(current.time.created, update.time.created) },
   }
   if (lifecycle.status === "completed")
@@ -1385,6 +1389,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.compaction.admitted":
           updateCompaction(event.data.sessionID, {
             jobID: event.data.jobID,
+            pressure: event.data.pressure,
             status: "pending",
             time: { created: event.created },
           })

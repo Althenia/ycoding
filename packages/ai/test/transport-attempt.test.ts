@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import { createServer } from "node:net"
 import { Effect, Layer, Stream } from "effect"
 import { HttpClientResponse } from "effect/unstable/http"
 import { LLM } from "../src"
@@ -12,6 +13,30 @@ import { deltaChunk, finishChunk, usageChunk } from "./lib/openai-chunks"
 import { sseEvents } from "./lib/sse"
 
 const it = testEffect(Layer.empty)
+
+const resetServer = Effect.callback<ReturnType<typeof createServer>, Error>((resume) => {
+  const server = createServer((socket) => {
+    socket.once("data", () => {
+      const event = `data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "partial" }))}\n\n`
+      const response = [
+        "HTTP/1.1 200 OK",
+        "Content-Type: text/event-stream",
+        "Transfer-Encoding: chunked",
+        "Connection: keep-alive",
+        "",
+        `${new TextEncoder().encode(event).byteLength.toString(16)}\r\n${event}\r\n`,
+      ].join("\r\n")
+      socket.write(response)
+      setTimeout(() => socket.resetAndDestroy(), 10)
+    })
+  })
+  const onError = (error: Error) => resume(Effect.fail(error))
+  server.once("error", onError)
+  server.listen(0, "127.0.0.1", () => {
+    server.off("error", onError)
+    resume(Effect.succeed(server))
+  })
+})
 
 describe("TransportAttempt", () => {
   it.effect("observes one started and one succeeded event while containing observer failures", () =>
@@ -78,6 +103,43 @@ describe("TransportAttempt", () => {
         transport: "http-json",
         attempt: 1,
       })
+      expect(events.at(-1)).toMatchObject({ phase: "succeeded", stage: "stream", status: 200 })
+    }),
+  )
+
+  it.live("observes a real HTTP 200 body reset as a stream-stage failure", () =>
+    Effect.gen(function* () {
+      const events: TransportAttempt.Info[] = []
+      const server = yield* Effect.acquireRelease(
+        resetServer,
+        (server) =>
+          Effect.callback<void>((resume) => {
+            server.close(() => resume(Effect.void))
+          }),
+      )
+      const address = server.address()
+      if (!address || typeof address === "string") return yield* Effect.die(new Error("Expected TCP server address"))
+      const model = OpenAIChat.route
+        .with({ endpoint: { baseURL: `http://127.0.0.1:${address.port}/v1` }, auth: Auth.bearer("test") })
+        .model({ id: "gpt-4o-mini" })
+      const client = LLMClient.configured({
+        observeAttempt: (event) => Effect.sync(() => events.push(event)),
+      }).pipe(Layer.provide(RequestExecutor.fetchLayer))
+
+      const error = yield* LLMClient.generate(LLM.request({ id: "req_socket_reset", model, prompt: "hello" })).pipe(
+        Effect.provide(client),
+        Effect.flip,
+      )
+
+      expect(error.reason).toMatchObject({ _tag: "Transport", kind: "read" })
+      expect(events.map((event) => event.phase)).toEqual(["started", "failed"])
+      expect(events.at(-1)).toMatchObject({
+        phase: "failed",
+        stage: "stream",
+        status: 200,
+        failure: "response-read",
+      })
+      expect(events.at(-1)?.error).toBeUndefined()
     }),
   )
 
@@ -145,7 +207,8 @@ describe("TransportAttempt", () => {
 
       expect(exit._tag).toBe("Failure")
       expect(events.map((event) => event.phase)).toEqual(["started", "failed"])
-      expect(events.at(-1)?.error).toContain("provider failed")
+      expect(events.at(-1)).toMatchObject({ phase: "failed", failure: "request" })
+      expect(events.at(-1)?.error).toBeUndefined()
     }),
   )
 })

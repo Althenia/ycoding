@@ -397,7 +397,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           : 0
         const continuedMessages = state ? stableMessages : contextEvent.messages
         const transportRequest =
-          model.route.id !== OpenAICodex.routeID
+          !OpenAICodex.isWebSocketRoute(model.route.id)
             ? baseRequest
             : LLMRequest.update(baseRequest, {
                 providerOptions: mergeProviderOptions(baseRequest.providerOptions, {

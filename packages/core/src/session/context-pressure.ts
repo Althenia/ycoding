@@ -39,11 +39,12 @@ export const level = (
   input: Usage & {
     readonly capabilities: SessionContextBudget.Capabilities
     readonly policy?: ConfigCompaction.Resolved
+    readonly estimate?: number
   },
 ): Level => {
   const hardInputCap = hardInputCapTokens(input.capabilities)
   if (hardInputCap <= 0) return "mandatory"
-  const estimate = estimatedInputTokens(input)
+  const estimate = input.estimate ?? estimatedInputTokens(input)
   if (estimate >= hardInputCap) return "mandatory"
   const resolved = input.policy ?? ConfigCompaction.resolve([])
   if (resolved.advisory === false) return "normal"
@@ -57,6 +58,7 @@ export const modelLevel = (
     readonly models: readonly ModelV2.Info[]
     readonly model: ModelV2.Ref
     readonly policy: ConfigCompaction.Resolved
+    readonly estimate?: number
   },
 ) => {
   const capabilities = SessionContextBudget.resolveCapabilities(input.models, input.model.providerID, input.model.id, {

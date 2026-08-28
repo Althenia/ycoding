@@ -1311,6 +1311,34 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("redacts request secrets from mid-stream transport errors", () =>
+    Effect.gen(function* () {
+      const secret = "stream-query-secret"
+      const prompt = "private prompt fragment"
+      const privateUrl = "https://private.example.test/customer"
+      const localPath = "/private/workspace/file.ts"
+      const model = OpenAIChat.route
+        .with({ endpoint: { baseURL: "https://api.openai.test/v1", query: { access_token: secret } } })
+        .model({ id: "gpt-4o-mini" })
+      const error = yield* LLMClient.generate(LLM.request({ model, prompt: "Say hello." })).pipe(
+        Effect.provide(
+          truncatedStream(
+            [`data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "Hello" }))}\n\n`],
+            new Error(`connection reset: ${prompt} ${privateUrl} ${localPath}`),
+          ),
+        ),
+        Effect.flip,
+      )
+
+      expect(error.reason).toMatchObject({ _tag: "Transport", kind: "read" })
+      expect(error.reason.message).toBe("Failed to read openai/openai-chat stream: The connection was reset")
+      expect(JSON.stringify(error)).not.toContain(secret)
+      expect(JSON.stringify(error)).not.toContain(prompt)
+      expect(JSON.stringify(error)).not.toContain(privateUrl)
+      expect(JSON.stringify(error)).not.toContain(localPath)
+    }),
+  )
+
   it.effect("fails HTTP provider errors before stream parsing", () =>
     Effect.gen(function* () {
       const error = yield* LLMClient.generate(request).pipe(

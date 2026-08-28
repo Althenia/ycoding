@@ -54,6 +54,15 @@ export function clampAutocompleteIndex(index: number, count: number) {
   return Math.min(index, count - 1)
 }
 
+/** Keep only the rows that can be displayed resident while retaining their indexes in the full list. */
+export function autocompleteWindow<T>(options: readonly T[], selected: number, rows: number) {
+  const size = Math.max(0, Math.floor(rows))
+  if (size === 0 || options.length === 0) return { start: 0, options: options.slice(0, 0) }
+  const index = clampAutocompleteIndex(selected, options.length)
+  const start = Math.min(Math.max(0, index - size + 1), Math.max(0, options.length - size))
+  return { start, options: options.slice(start, start + size) }
+}
+
 /** Directory entries already carry a trailing separator; drilling into one must not double it. */
 export function expandDirectoryQuery(display: string) {
   const text = display.trim()

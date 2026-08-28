@@ -63,7 +63,8 @@ const respectsInlineHints = (request: LLMRequest) =>
   RESPECTS_INLINE_HINTS.has(request.model.route.protocol) ||
   INLINE_HINT_ROUTES.has(request.model.route.id) ||
   (OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id) &&
-    (request.model.route.id === "openai-codex-responses" || OpenAIOptions.promptCacheOptions(request) !== undefined))
+    (["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) ||
+      OpenAIOptions.promptCacheOptions(request) !== undefined))
 
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
   ttlSeconds !== undefined ? new CacheHint({ type: "ephemeral", ttlSeconds }) : new CacheHint({ type: "ephemeral" })

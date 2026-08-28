@@ -130,23 +130,28 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
       })),
     ),
   frames: (prepared, request, runtime) =>
-    Stream.unwrap(
-      TransportAttempt.track(
-        {
-          requestID: request.id ?? "request",
-          routeID: request.model.route.id,
-          transport: "http-json",
-          attempt: 1,
-          observer: runtime.observeAttempt,
-        },
-        runtime.http.execute(prepared.request),
-      ).pipe(
-        Effect.map((response) => {
-          const route = `${request.model.provider}/${request.model.route.id}`
-          return prepared.framing.frame(
-            response.stream.pipe(Stream.mapError((error) => ProviderShared.streamReadError(route, error))),
-          )
-        }),
+    TransportAttempt.trackStream(
+      {
+        requestID: request.id ?? "request",
+        routeID: request.model.route.id,
+        transport: "http-json",
+        attempt: 1,
+        observer: runtime.observeAttempt,
+      },
+      runtime.http.execute(prepared.request).pipe(
+        Effect.map((response) => ({
+          status: response.status,
+          stream: prepared.framing.frame(
+            response.stream.pipe(
+              Stream.mapError((error) =>
+                ProviderShared.streamReadError(
+                  `${request.model.provider}/${request.model.route.id}`,
+                  error,
+                ),
+              ),
+            ),
+          ),
+        })),
       ),
     ),
 })

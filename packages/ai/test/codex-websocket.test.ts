@@ -12,7 +12,7 @@ const it = testEffect(Layer.empty)
 
 const model = OpenAIResponses.webSocketRoute
   .with({
-    id: "openai-codex-responses",
+    id: "openai-codex-websocket-responses",
     endpoint: { baseURL: "https://chatgpt.test/backend-api/codex" },
     auth: Auth.bearer("test"),
   })
@@ -229,6 +229,65 @@ describe("Codex Responses WebSocket transport", () => {
       expect(failure.reason._tag).toBe("Transport")
       expect(sent[1]).toHaveProperty("previous_response_id", "resp_1")
       expect(httpBodies).toHaveLength(0)
+    }),
+  )
+
+  it.effect("preserves a rejected continuation for an exact WebSocket retry", () =>
+    Effect.gen(function* () {
+      const sent: Array<Record<string, unknown>> = []
+      let opens = 0
+      const deps = Layer.mergeAll(
+        Layer.succeed(
+          RequestExecutor.Service,
+          RequestExecutor.Service.of({ execute: () => Effect.die("unexpected HTTP request") }),
+        ),
+        Layer.succeed(
+          WebSocketExecutor.Service,
+          WebSocketExecutor.Service.of({
+            open: () =>
+              Effect.gen(function* () {
+                opens += 1
+                const socket = yield* Queue.unbounded<string, LLMError>()
+                return {
+                  sendText: (message: string) =>
+                    Effect.gen(function* () {
+                      sent.push(ProviderShared.decodeJson(message) as Record<string, unknown>)
+                      if (sent.length === 1) yield* Queue.offerAll(socket, completed("resp_1", "msg_1", "answer"))
+                      if (sent.length === 2)
+                        yield* Queue.offer(
+                          socket,
+                          ProviderShared.encodeJson({
+                            type: "error",
+                            error: {
+                              code: "invalid_previous_response_id",
+                              message: "Invalid previous_response_id",
+                            },
+                          }),
+                        )
+                      if (sent.length === 3)
+                        yield* Queue.offerAll(socket, completed("resp_3", "msg_3", "recovered"))
+                    }),
+                  messages: Stream.fromQueue(socket),
+                  close: Effect.void,
+                }
+              }),
+          }),
+        ),
+      )
+      const client = LLMClient.layer.pipe(Layer.provide(deps))
+      const first = yield* LLMClient.generate(
+        LLM.request({ model, messages: [Message.user("one")], providerOptions: metadata("retry-session", 1) }),
+      ).pipe(Effect.provide(client))
+      const messages = [Message.user("one"), first.message, Message.user("two")]
+      const request = LLM.request({ model, messages, providerOptions: metadata("retry-session", 3) })
+
+      yield* LLMClient.generate(request).pipe(Effect.provide(client), Effect.flip)
+      yield* LLMClient.generate(request).pipe(Effect.provide(client))
+
+      expect(sent[1]).toHaveProperty("previous_response_id", "resp_1")
+      expect(sent[2]).toHaveProperty("previous_response_id", "resp_1")
+      expect(sent[2]?.input).toEqual(sent[1]?.input)
+      expect(opens).toBe(2)
     }),
   )
 })

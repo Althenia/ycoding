@@ -346,9 +346,6 @@ const invalidPreviousResponse = (message: string) =>
 const continuationError = (message: string, url: string) =>
   transportError("continuation", message, { url, kind: "websocket-continuation" })
 
-const isContinuationError = (error: LLMError) =>
-  error.reason._tag === "Transport" && error.reason.kind === "websocket-continuation"
-
 export const json = <Body, Message extends Record<string, unknown>>(
   input: JsonInput<Body, Message>,
 ): JsonTransport<Body, Message> => {
@@ -547,11 +544,6 @@ export const json = <Body, Message extends Record<string, unknown>>(
                   return message
                 }),
               ),
-              Stream.mapError((error) => {
-                state.previous = undefined
-                if (isContinuationError(error)) return error
-                return error
-              }),
               Stream.onEnd(
                 Effect.suspend(() =>
                   terminal
@@ -566,15 +558,13 @@ export const json = <Body, Message extends Record<string, unknown>>(
               ),
               Stream.ensuring(
                 Effect.gen(function* () {
-                  state.previous =
-                    completedResponseID === undefined
-                      ? undefined
-                      : {
-                          message: replayMessage,
-                          responseID: completedResponseID,
-                          output,
-                          messageBoundary: metadata.messageBoundary,
-                        }
+                  if (completedResponseID !== undefined)
+                    state.previous = {
+                      message: replayMessage,
+                      responseID: completedResponseID,
+                      output,
+                      messageBoundary: metadata.messageBoundary,
+                    }
                   if (terminal && !rejected) {
                     touch(metadata.key, state)
                     return

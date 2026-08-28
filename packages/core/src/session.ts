@@ -134,7 +134,10 @@ type CompactBaseInput = {
   id?: ID
   sessionID: SessionSchema.ID
 }
-export type AdvisorCompactInput = CompactBaseInput & { trigger: "consider" | "advised" }
+export type AdvisorCompactInput = CompactBaseInput & {
+  trigger: "consider" | "advised"
+  estimatedInputTokens?: number
+}
 export type ManualCompactInput = CompactBaseInput & { trigger?: never }
 type CompactInput = AdvisorCompactInput | ManualCompactInput
 
@@ -1167,12 +1170,7 @@ const layer = Layer.effect(
           (session.model.variant ?? "default") === (input.model.variant ?? "default")
         )
           return { status: "switched" }
-        // Switching waits for the current drain to finish. This keeps the active request
-        // on its already-selected model and validates the transcript at the next request
-        // boundary; it does not cancel or compact any session state.
-        yield* execution.awaitIdle(session.id)
-        const settled = yield* result.get(session.id)
-        const checked = yield* checkModelSwitch(settled, input.model)
+        const checked = yield* checkModelSwitch(session, input.model)
         if (checked.status === "blocked") return checked
         yield* events.publish(SessionEvent.ModelSelected, {
           sessionID: session.id,
@@ -1321,6 +1319,14 @@ const layer = Layer.effect(
                   baseContextRevision: current.revision,
                   targetMaxInputTokens,
                   configDigest,
+                  ...(input.estimatedInputTokens === undefined
+                    ? {}
+                    : {
+                        pressure: {
+                          estimatedInputTokens: input.estimatedInputTokens,
+                          safeInputTokens: hardInputCap,
+                        },
+                      }),
                 } as const
                 if (yield* compactionJobs.hasUnchangedDeterministicFailure(admission)) return undefined
                 const admitted = yield* admit(admission)

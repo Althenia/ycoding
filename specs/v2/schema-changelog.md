@@ -2,6 +2,17 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-08-25: Expose Compaction Admission Pressure
+
+- Add optional `pressure: { estimatedInputTokens, safeInputTokens }` to current `session.compaction.admitted.2` events and projected compaction messages.
+- Capture the exact local estimate and safe input cap for automatic and mandatory admissions. Manual and historical compactions omit pressure because they are threshold-independent or predate the field.
+- While a job is pending or running, the TUI labels and displays this durable estimate instead of the previous provider step's context occupancy; provider cache telemetry remains separate and unchanged.
+
+Compatibility:
+
+- The field is additive and optional. Existing durable events and projected messages decode without pressure.
+- Promise and Effect client surfaces are regenerated for the additive event and Session message field.
+
 ## 2026-08-07: Replace Durable Attachment Payloads With Managed References
 
 - Keep prompt inputs URI-shaped while replacing durable `Prompt.FileAttachment.data` and `.source` with `content: { type: "managed", digest, bytes, path }`.

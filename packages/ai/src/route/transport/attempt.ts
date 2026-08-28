@@ -1,6 +1,6 @@
 export * as TransportAttempt from "./attempt"
 
-import { Cause, Effect, Exit } from "effect"
+import { Cause, Effect, Exit, Stream } from "effect"
 
 export interface Info {
   readonly requestID: string
@@ -9,7 +9,10 @@ export interface Info {
   readonly attempt: number
   readonly phase: "started" | "succeeded" | "failed"
   readonly time: number
+  readonly stage?: "request" | "stream"
+  readonly elapsedMs?: number
   readonly status?: number
+  readonly failure?: "request" | "response-read"
   readonly error?: string
 }
 
@@ -44,7 +47,58 @@ export const track = <A, E, R>(input: TrackInput, effect: Effect.Effect<A, E, R>
             ...base,
             phase: Exit.isSuccess(exit) ? "succeeded" : "failed",
             time: now(),
-            ...(Exit.isFailure(exit) ? { error: Cause.pretty(exit.cause) } : {}),
+            ...(Exit.isFailure(exit) ? { failure: "request" as const } : {}),
+          }),
+        ),
+      ),
+    ),
+  )
+}
+
+export const trackStream = <A, E, R, R2>(
+  input: TrackInput,
+  response: Effect.Effect<{ readonly status: number; readonly stream: Stream.Stream<A, E, R> }, E, R2>,
+): Stream.Stream<A, E, R | R2> => {
+  if (input.observer === undefined) return Stream.unwrap(response.pipe(Effect.map((value) => value.stream)))
+  const now = input.now ?? Date.now
+  const startedAt = now()
+  const base = {
+    requestID: input.requestID,
+    routeID: input.routeID,
+    transport: input.transport,
+    attempt: input.attempt,
+  } as const
+  const observed = response.pipe(
+    Effect.onExit((exit) => {
+      if (Exit.isSuccess(exit)) return Effect.void
+      const time = now()
+      return observe(input.observer, {
+        ...base,
+        phase: "failed",
+        stage: "request",
+        time,
+        elapsedMs: time - startedAt,
+        failure: "request",
+      })
+    }),
+  )
+  return Stream.unwrap(
+    observe(input.observer, { ...base, phase: "started", stage: "request", time: startedAt }).pipe(
+      Effect.andThen(observed),
+      Effect.map((value) =>
+        value.stream.pipe(
+          Stream.onExit((exit) => {
+            const time = now()
+            const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+            return observe(input.observer, {
+              ...base,
+              phase: Exit.isSuccess(exit) || interrupted ? "succeeded" : "failed",
+              stage: "stream",
+              status: value.status,
+              time,
+              elapsedMs: time - startedAt,
+              ...(Exit.isFailure(exit) && !interrupted ? { failure: "response-read" as const } : {}),
+            })
           }),
         ),
       ),

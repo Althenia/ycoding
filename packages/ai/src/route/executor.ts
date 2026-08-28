@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Layer, Option, Stream } from "effect"
 import {
   FetchHttpClient,
   Headers,
@@ -24,6 +24,16 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/LLM/RequestExecutor") {}
+
+export const withFreshConnection = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const requestInit = Option.getOrUndefined(yield* Effect.serviceOption(FetchHttpClient.RequestInit))
+      return stream.pipe(
+        Stream.provideService(FetchHttpClient.RequestInit, { ...requestInit, keepalive: false }),
+      )
+    }),
+  )
 
 const BODY_LIMIT = 16_384
 const REDACTED = "<redacted>"

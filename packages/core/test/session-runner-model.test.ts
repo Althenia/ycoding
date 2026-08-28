@@ -628,7 +628,7 @@ describe("SessionRunnerModel", () => {
       }),
   );
 
-  it.effect("routes ChatGPT OAuth credentials to the codex backend", () =>
+  it.effect("routes ChatGPT OAuth credentials to the codex HTTP backend by default", () =>
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         model(ProviderV2.aisdk("@ai-sdk/openai"), {
@@ -675,12 +675,12 @@ describe("SessionRunnerModel", () => {
       expect(resolved.route).toMatchObject({
         id: "openai-codex-responses",
         endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
-        transport: { id: "websocket-json" },
+        transport: { id: "http-json" },
         defaults: {
-          headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" },
           providerOptions: { openai: { store: false } },
         },
       });
+      expect(resolved.route.defaults.headers).not.toHaveProperty("OpenAI-Beta");
       expect(headers.authorization).toBe("Bearer chatgpt-token");
       expect(headers["chatgpt-account-id"]).toBe("acct_123");
       expect(headers["session-id"]).toBe(cache.promptCacheKey);
@@ -712,6 +712,36 @@ describe("SessionRunnerModel", () => {
       expect(otherHeaders["session-id"]).toBe(cache.promptCacheKey);
       expect(otherHeaders["thread-id"]).toBe(cache.promptCacheKey);
       expect(otherHeaders["x-client-request-id"]).toBe(cache.promptCacheKey);
+    }),
+  );
+
+  it.effect("routes explicitly configured ChatGPT OAuth credentials to the codex WebSocket backend", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          settings: { baseURL: "https://openai.example/v1", transport: "websocket" },
+          headers: {},
+          body: {},
+        }),
+        Credential.OAuth.make({
+          type: "oauth",
+          methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "chatgpt-token",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+          metadata: { accountID: "acct_123" },
+        }),
+      );
+
+      expect(resolved.route).toMatchObject({
+        id: "openai-codex-websocket-responses",
+        endpoint: { baseURL: "https://chatgpt.com/backend-api/codex" },
+        transport: { id: "websocket-json" },
+        defaults: {
+          headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" },
+          providerOptions: { openai: { store: false } },
+        },
+      });
     }),
   );
 

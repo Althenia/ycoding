@@ -20,4 +20,9 @@ describe("global paths", () => {
   test("tmp path is created on module load", async () => {
     expect((await fs.stat(Global.Path.tmp)).isDirectory()).toBe(true)
   })
+
+  test("log directory is private", async () => {
+    if (process.platform === "win32") return
+    expect((await fs.stat(Global.Path.log)).mode & 0o777).toBe(0o700)
+  })
 })

@@ -59,6 +59,7 @@ describe("conversation compaction advisor scheduling", () => {
           yield* trigger("consider")
         }),
       (input) => {
+        expect(input.estimatedInputTokens).toBeGreaterThan(0)
         attempts += 1
         if (attempts === 1) return Effect.fail({ message: "No completed compaction boundary is available" })
         if (attempts === 3)
@@ -174,4 +175,5 @@ type Compact = (input: {
   readonly id: SessionCompaction.ID
   readonly sessionID: SessionSchema.ID
   readonly trigger: "consider" | "advised"
+  readonly estimatedInputTokens: number
 }) => Effect.Effect<SessionCompaction.Admission | undefined, { readonly message: string }, Scope.Scope>

@@ -40,6 +40,7 @@ await Promise.all([
   fs.mkdir(Path.bin, { recursive: true }),
   fs.mkdir(Path.repos, { recursive: true }),
 ])
+if (process.platform !== "win32") await fs.chmod(Path.log, 0o700)
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/Global") {}
 

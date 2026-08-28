@@ -60,7 +60,8 @@ export const ensureWithinLimit = <
   Effect.gen(function* () {
     const cap = SessionContextPressure.hardInputCapTokens(input.capabilities)
     if (cap <= 0) return { ...input.candidate, compacted: false }
-    if (!input.force && estimate(input.candidate) < cap) return { ...input.candidate, compacted: false }
+    const initialEstimate = estimate(input.candidate)
+    if (!input.force && initialEstimate < cap) return { ...input.candidate, compacted: false }
 
     const db = (yield* Database.Service).db
     const jobs = yield* SessionCompactionJob.Service
@@ -72,6 +73,7 @@ export const ensureWithinLimit = <
         Effect.gen(function* () {
           let gateOwnedAdmissions = 0
           let compacted = false
+          let currentEstimate = initialEstimate
           while (true) {
             if (gateOwnedAdmissions === 2) {
               const rebuilt = yield* input.reload({ fullRebase: false })
@@ -87,7 +89,8 @@ export const ensureWithinLimit = <
               const settled = yield* waitFor(existing.id)
               const rebuilt = yield* input.reload({ fullRebase: settled.status === "ended" })
               compacted ||= settled.status === "ended"
-              if (estimate(rebuilt) < cap) return { ...rebuilt, compacted }
+              currentEstimate = estimate(rebuilt)
+              if (currentEstimate < cap) return { ...rebuilt, compacted }
               continue
             }
             if (
@@ -108,12 +111,14 @@ export const ensureWithinLimit = <
               baseContextRevision: revision,
               targetMaxInputTokens,
               configDigest,
+              pressure: { estimatedInputTokens: currentEstimate, safeInputTokens: cap },
             })
             gateOwnedAdmissions += 1
             const settled = yield* waitFor(admitted.id)
             const rebuilt = yield* input.reload({ fullRebase: settled.status === "ended" })
             compacted ||= settled.status === "ended"
-            if (estimate(rebuilt) < cap) return { ...rebuilt, compacted }
+            currentEstimate = estimate(rebuilt)
+            if (currentEstimate < cap) return { ...rebuilt, compacted }
           }
         }),
       )

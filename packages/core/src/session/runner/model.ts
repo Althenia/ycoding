@@ -408,11 +408,12 @@ const codexModel = (
   key: ReturnType<typeof Auth.value> | undefined,
 ) => {
   const account = OpenAICodex.accountID(credential);
-  return withDefaults(model, OpenAIResponses.webSocketRoute)
+  const webSocket = model.settings?.transport === "websocket";
+  return withDefaults(model, webSocket ? OpenAIResponses.webSocketRoute : OpenAIResponses.route)
     .with({
-      id: OpenAICodex.routeID,
+      id: webSocket ? OpenAICodex.webSocketRouteID : OpenAICodex.routeID,
       endpoint: { baseURL: OpenAICodex.baseURL },
-      headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" },
+      ...(webSocket ? { headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" } } : {}),
       auth: (key === undefined ? Auth.none : Auth.bearer(key)).andThen(
         account === undefined
           ? Auth.none

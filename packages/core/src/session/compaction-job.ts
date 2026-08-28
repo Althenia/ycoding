@@ -50,6 +50,7 @@ export interface AdmitInput {
   readonly baseContextRevision: number
   readonly targetMaxInputTokens: number
   readonly configDigest: string
+  readonly pressure?: SessionCompaction.Pressure
 }
 
 export type DeterministicFailureInput = Omit<AdmitInput, "id" | "trigger">
@@ -239,7 +240,11 @@ const publishAdmission = Effect.fnUntraced(function* (
   yield* events
     .publish(
       SessionEvent.Compaction.Admitted,
-      { sessionID: input.sessionID, jobID: id },
+      {
+        sessionID: input.sessionID,
+        jobID: id,
+        ...(input.pressure === undefined ? {} : { pressure: input.pressure }),
+      },
       {
         commit: () =>
           db

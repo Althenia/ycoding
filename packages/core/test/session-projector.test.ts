@@ -113,7 +113,8 @@ describe("SessionProjector", () => {
         .run()
 
       const events = yield* EventV2.Service
-      yield* events.publish(SessionEvent.Compaction.Admitted, { sessionID, jobID })
+      const pressure = { estimatedInputTokens: 7_200, safeInputTokens: 8_000 }
+      yield* events.publish(SessionEvent.Compaction.Admitted, { sessionID, jobID, pressure })
       const pending = yield* db
         .select()
         .from(SessionMessageTable)
@@ -122,7 +123,7 @@ describe("SessionProjector", () => {
       expect(
         pending &&
           Schema.decodeUnknownSync(SessionMessage.Info)({ ...pending.data, id: pending.id, type: pending.type }),
-      ).toMatchObject({ type: "compaction", jobID, trigger: "manual", status: "pending" })
+      ).toMatchObject({ type: "compaction", jobID, trigger: "manual", status: "pending", pressure })
 
       yield* db
         .update(SessionCompactionJobTable)
@@ -159,6 +160,7 @@ describe("SessionProjector", () => {
         status: "completed",
         revision: 1,
         boundary,
+        pressure,
       })
     }),
   )
