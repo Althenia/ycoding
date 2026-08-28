@@ -3,6 +3,7 @@ import {
   AUTOCOMPLETE_NON_FILE_LIMIT,
   MENTION_DIRECTORY_LIMIT,
   MENTION_RESULT_LIMIT,
+  autocompleteWindow,
   clampAutocompleteIndex,
   expandDirectoryQuery,
   mergeAutocompleteOptions,
@@ -100,6 +101,16 @@ describe("selection clamping", () => {
     expect(clampAutocompleteIndex(1, 5)).toBe(1)
     expect(clampAutocompleteIndex(-2, 5)).toBe(0)
     expect(clampAutocompleteIndex(3, 0)).toBe(0)
+  })
+})
+
+describe("render window", () => {
+  test("keeps only the selected viewport resident while preserving option indexes", () => {
+    const options = Array.from({ length: 20 }, (_, index) => `option-${index}`)
+
+    expect(autocompleteWindow(options, 0, 10)).toEqual({ start: 0, options: options.slice(0, 10) })
+    expect(autocompleteWindow(options, 10, 10)).toEqual({ start: 1, options: options.slice(1, 11) })
+    expect(autocompleteWindow(options, 19, 10)).toEqual({ start: 10, options: options.slice(10) })
   })
 })
 

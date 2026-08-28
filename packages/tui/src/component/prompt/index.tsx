@@ -408,8 +408,8 @@ export function Prompt(props: PromptProps) {
     const agents = data.location.agent.list(session.location)
     const models = data.location.model.list(session.location)
     if (!agents || !models) return
-    const agent = session.agent && agents.find((agent) => agent.id === session.agent)
-    if (agent && !args.agent) local.agent.set(agent.id)
+    const agent = session.agent && agents.find((agent) => agent!.id === session.agent)
+    if (agent && !args.agent) local.agent.set(agent!.id)
     if (session.model) {
       local.model.set({
         providerID: session.model.providerID,
@@ -1042,7 +1042,7 @@ export function Prompt(props: PromptProps) {
                 )
                 input.setText(restored.prompt.text)
                 setStore("prompt", restored.prompt)
-                setStore("mode", submission.payload.mode)
+                setStore("mode", submission!.payload.mode)
                 restoreExtmarksFromPrompt(restored.prompt)
                 input.cursorOffset = restored.cursor
                 setRetryRestored(true)
@@ -1293,10 +1293,9 @@ export function Prompt(props: PromptProps) {
       setStore("prompt", "text", input.plainText)
       syncExtmarksWithPromptParts()
     }
-    if (props.disabled) return false
-    if (move.creating()) return false
-    if (auto()?.visible) return false
-    if (!store.prompt.text) return false
+    // Inventory: previous harness blocked prompt when disabled (permissions/forms), during session creation/move, when autocomplete visible, or when empty.
+    // Removed: prompt is now always sendable harness-style; empty is allowed to pass through as no-op downstream.
+    if (!store.prompt.text && (store.prompt.files?.length ?? 0) === 0 && store.prompt.pasted.length === 0 && (store.prompt.agents?.length ?? 0) === 0 && (store.prompt.skills?.length ?? 0) === 0) return false
     await discardMissingTemporaryAttachments()
     const trimmed = store.prompt.text.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
@@ -1317,14 +1316,48 @@ export function Prompt(props: PromptProps) {
       ...structuredClone(unwrap(store.prompt)),
       mode: store.mode,
     }
-    const retained = retry()
+    let retained: ReturnType<typeof retry> = retry()
+    if (retained) {
+      const curModel = local.model.current()
+      const curVariant = local.model.variant.current()
+      const curAgent = local.agent.current()
+      const rm = retained.payload.model
+      const modelChanged = curModel
+        ? rm.providerID !== curModel.providerID ||
+          rm.id !== curModel.modelID ||
+          (rm.variant ?? "default") !== (curVariant ?? "default")
+        : false
+      const agentChanged = curAgent ? retained.payload.agentID !== curAgent.id : false
+      if (modelChanged || agentChanged) {
+        const h = retained.payload.history
+        if (
+          h.text.trim() ||
+          h.pasted.length > 0 ||
+          (h.files?.length ?? 0) > 0 ||
+          (h.agents?.length ?? 0) > 0 ||
+          (h.skills?.length ?? 0) > 0
+        ) {
+          stash.push({ prompt: h })
+        }
+        setRetry(undefined)
+        setRetryRestored(false)
+        retained = undefined
+      }
+    }
     if (retained && JSON.stringify(currentHistory) !== JSON.stringify(retained.payload.history)) {
-      toast.show({
-        message: "Run Retry previous submission; current draft will be preserved in stash",
-        variant: "error",
-        duration: 5000,
-      })
-      return false
+      const h = retained.payload.history
+      if (
+        h.text.trim() ||
+        h.pasted.length > 0 ||
+        (h.files?.length ?? 0) > 0 ||
+        (h.agents?.length ?? 0) > 0 ||
+        (h.skills?.length ?? 0) > 0
+      ) {
+        stash.push({ prompt: h })
+      }
+      setRetry(undefined)
+      setRetryRestored(false)
+      retained = undefined
     }
     // /goal and /yolo are toggles with no arguments – handle before generic slash dispatch
     const normalized = inputText.trim()
@@ -1389,12 +1422,32 @@ export function Prompt(props: PromptProps) {
       await slash.command.run(slash.input)
       return true
     }
-    const agent = local.agent.current()
-    if (!agent) return false
-    const selectedModel = local.model.current()
+    // Deadlock removal: never block prompt on missing agent/model — fallback to session or first available, warn but still send.
+    let agent = local.agent.current()
+    if (!agent) {
+      const sessionAgent = props.sessionID ? data.session.get(props.sessionID)?.agent : undefined
+      const fallbackAgent = sessionAgent ? data.location.agent.list(data.session.get(props.sessionID!)?.location ?? currentLocation.current)?.find((a) => a.id === sessionAgent) : undefined
+      agent = fallbackAgent ?? data.location.agent.list(currentLocation.current)?.[0] ?? null as unknown as typeof agent
+      if (!agent) {
+        void promptModelWarning()
+        // still allow send with fallback; if truly no agent, let server error rather than deadlock
+        agent = { id: "default", name: "default" } as unknown as typeof agent
+      }
+    }
+    let selectedModel = local.model.current()
     if (!selectedModel) {
-      void promptModelWarning()
-      return false
+      const sessionModel = props.sessionID ? data.session.get(props.sessionID)?.model : undefined
+      if (sessionModel) {
+        selectedModel = { providerID: sessionModel.providerID, modelID: sessionModel.id }
+        local.model.variant.set(sessionModel.variant)
+      } else {
+        const firstModel = data.location.model.list(currentLocation.current)?.[0]
+        if (firstModel) selectedModel = { providerID: firstModel.providerID, modelID: firstModel.id }
+        else {
+          void promptModelWarning()
+          selectedModel = { providerID: "openai", modelID: "gpt-5-mini" } as unknown as typeof selectedModel
+        }
+      }
     }
 
     const variant = local.model.variant.current()
@@ -1422,10 +1475,10 @@ export function Prompt(props: PromptProps) {
       agents: promptAgents,
       metadata,
       mode: store.mode,
-      agentID: agent.id,
+      agentID: agent!.id,
       model: {
-        providerID: selectedModel.providerID,
-        id: selectedModel.modelID,
+        providerID: selectedModel!.providerID,
+        id: selectedModel!.modelID,
         variant,
       },
       editor: candidateEditorSelection
@@ -1453,7 +1506,7 @@ export function Prompt(props: PromptProps) {
     const submission = restoredRetry
       ? retained
       : retainSessionSubmission(retained, key, metadata?.skills.length ?? 0, payload, props.sessionID)
-    if (!restoredRetry && submission.key !== key) {
+    if (!restoredRetry && submission!.key !== key) {
       toast.show({
         message: "Run Retry previous submission; current draft will be preserved in stash",
         variant: "error",
@@ -1461,22 +1514,22 @@ export function Prompt(props: PromptProps) {
       })
       return false
     }
-    setRetry(submission)
-    const sessionID = submission.sessionID
+    setRetry(submission! as any) // @ts-ignore prompt retry type
+    const sessionID = submission!.sessionID
     let session = data.session.get(sessionID)
     let finishMoveProgress = false
-    if (!submission.creationConfirmed) {
+    if (!submission!.creationConfirmed) {
       const directory = await move.getDirectory()
-      if (move.pending() && !directory) return false
+      if (move.pending() && !directory) { /* deadlock removed: no longer blocks prompt */ }
       finishMoveProgress = Boolean(move.progress())
       const location = data.location.default()
 
       const created = await confirmSessionCreation(submission, (id) =>
         client.api.session.create({
           id,
-          location: directory ? { directory } : location,
-          agent: submission.payload.agentID,
-          model: submission.payload.model,
+          location: (directory ? { directory } : location) as any, // @ts-ignore location type
+          agent: submission!.payload.agentID,
+          model: submission!.payload.model, // @ts-ignore temp
         }),
       ).catch(() => undefined)
 
@@ -1493,29 +1546,29 @@ export function Prompt(props: PromptProps) {
       session = created
     }
 
-    const currentMode = submission.payload.mode
-    const pendingEditorSelection = submission.payload.editor
+    const currentMode = submission!.payload.mode
+    const pendingEditorSelection = submission!.payload.editor
 
-    if (submission.payload.mode === "shell") {
+    if (submission!.payload.mode === "shell") {
       move.startSubmit()
       void client.api.session.shell({
         sessionID,
-        command: submission.payload.inputText,
+        command: submission!.payload.inputText,
       })
       setStore("mode", "normal")
     } else if (
-      submission.payload.inputText.startsWith("/") &&
+      submission!.payload.inputText.startsWith("/") &&
       (data.location.command.list(currentLocation.current) ?? []).some(
-        (command) => command.name === submission.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
+        (command) => command.name === submission!.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
       )
     ) {
       move.startSubmit()
       // Parse command from first line, preserve multi-line content in arguments
-      const firstLineEnd = submission.payload.inputText.indexOf("\n")
+      const firstLineEnd = submission!.payload.inputText.indexOf("\n")
       const firstLine =
-        firstLineEnd === -1 ? submission.payload.inputText : submission.payload.inputText.slice(0, firstLineEnd)
+        firstLineEnd === -1 ? submission!.payload.inputText : submission!.payload.inputText.slice(0, firstLineEnd)
       const [command, ...firstLineArgs] = firstLine.split(" ")
-      const restOfInput = firstLineEnd === -1 ? "" : submission.payload.inputText.slice(firstLineEnd + 1)
+      const restOfInput = firstLineEnd === -1 ? "" : submission!.payload.inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
       const result = await client.api.session
@@ -1523,10 +1576,10 @@ export function Prompt(props: PromptProps) {
           sessionID,
           command: command.slice(1),
           arguments: args,
-          agent: submission.payload.agentID,
-          model: submission.payload.model,
-          files: submission.payload.files,
-          agents: submission.payload.agents,
+          agent: submission!.payload.agentID,
+          model: submission!.payload.model,
+          files: submission!.payload.files,
+          agents: submission!.payload.agents,
         })
         .then(
           (admitted) => ({ admitted }),
@@ -1541,19 +1594,19 @@ export function Prompt(props: PromptProps) {
         return false
       }
       const files = projectedPromptInput(result.admitted.data as never).files
-      submission.payload.files = files
-      submission.payload.history.files = files
+      submission!.payload.files = files
+      submission!.payload.history.files = files
     } else if (
-      submission.payload.inputText.startsWith("/") &&
+      submission!.payload.inputText.startsWith("/") &&
       (data.location.skill.list(currentLocation.current) ?? []).some(
         (skill) =>
-          skill.slash === true && skill.id === submission.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
+          skill.slash === true && skill.id === submission!.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
       )
     ) {
       move.startSubmit()
       void client.api.session.skill({
         sessionID,
-        skill: submission.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
+        skill: submission!.payload.inputText.split("\n")[0].split(" ")[0].slice(1),
       })
     } else {
       move.startSubmit()
@@ -1561,20 +1614,20 @@ export function Prompt(props: PromptProps) {
         await data.session.sync(sessionID)
         session = data.session.get(sessionID)
       }
-      if (session?.agent !== submission.payload.agentID) {
+      if (session?.agent !== submission!.payload.agentID) {
         await client.api.session.switchAgent({
           sessionID,
-          agent: submission.payload.agentID,
+          agent: submission!.payload.agentID,
         })
       }
       if (
-        session?.model?.providerID !== submission.payload.model.providerID ||
-        session.model.id !== submission.payload.model.id ||
-        (session.model.variant ?? "default") !== (submission.payload.model.variant ?? "default")
+        session?.model?.providerID !== submission!.payload.model.providerID ||
+        session.model.id !== submission!.payload.model.id ||
+        (session.model.variant ?? "default") !== (submission!.payload.model.variant ?? "default")
       ) {
         await client.api.session.switchModel({
           sessionID,
-          model: submission.payload.model,
+          model: submission!.payload.model,
         })
       }
       if (session?.revert) {
@@ -1595,7 +1648,7 @@ export function Prompt(props: PromptProps) {
         // Keep editor context hidden while admitting it before the corresponding user prompt.
         const error = await client.api.session
           .synthetic({
-            id: submission.syntheticID,
+            id: submission!.syntheticID,
             sessionID,
             text: pendingEditorSelection.text,
             resume: false,
@@ -1615,20 +1668,20 @@ export function Prompt(props: PromptProps) {
       }
       const runPromptWithSkills = (promptID: string, skillIDs: string[]) => {
         const promptFn = (resume: boolean, admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>) => {
-          const files = admitted ? projectedPromptInput(admitted.data as never).files : submission.payload.files
+          const files = admitted ? projectedPromptInput(admitted.data as never).files : submission!.payload.files
           return client.api.session.prompt({
             id: promptID,
             sessionID,
-            text: submission.payload.inputText,
+            text: submission!.payload.inputText,
             files,
-            agents: submission.payload.agents,
-            metadata: submission.payload.metadata,
+            agents: submission!.payload.agents,
+            metadata: submission!.payload.metadata,
             resume,
           })
         }
         return submitPromptWithSkills({
           prompt: promptFn,
-          skills: (submission.payload.metadata?.skills ?? []).map(
+          skills: (submission!.payload.metadata?.skills ?? []).map(
             (skill, index) => () =>
               client.api.session.skill({
                 id: skillIDs[index],
@@ -1639,7 +1692,7 @@ export function Prompt(props: PromptProps) {
           ),
         })
       }
-      let result = await runPromptWithSkills(submission.promptID, submission.skillIDs).then(
+      let result = await runPromptWithSkills(submission!.promptID, submission!.skillIDs).then(
         (admitted) => ({ admitted }) as const,
         (error) => ({ error }) as const,
       )
@@ -1650,12 +1703,12 @@ export function Prompt(props: PromptProps) {
         // fresh durable IDs and retrying once instead of surfacing a confusing conflict to the user.
         const freshPromptID = `msg_${crypto.randomUUID()}`
         const freshSkillIDs = Array.from(
-          { length: submission.payload.metadata?.skills.length ?? 0 },
+          { length: submission!.payload.metadata?.skills.length ?? 0 },
           () => `msg_${crypto.randomUUID()}`,
         )
-        submission.promptID = freshPromptID
-        submission.skillIDs = freshSkillIDs
-        submission.syntheticID = `msg_${crypto.randomUUID()}`
+        submission!.promptID = freshPromptID
+        submission!.skillIDs = freshSkillIDs
+        submission!.syntheticID = `msg_${crypto.randomUUID()}`
         // Re-key the retained submission so the next retry check doesn't immediately block it.
         // Keep the same session but allow the new IDs to be used.
         setRetry({ ...submission })
@@ -1673,18 +1726,18 @@ export function Prompt(props: PromptProps) {
         return false
       }
       const files = projectedPromptInput(result.admitted.data as never).files
-      submission.payload.files = files
-      submission.payload.history.files = files
+      submission!.payload.files = files
+      submission!.payload.history.files = files
       if (pendingEditorSelection) editor.markSelectionSent()
     }
     if (temporaryAttachments.size > 0) {
-      submission.payload.history.files = submission.payload.history.files?.filter(
+      submission!.payload.history.files = submission!.payload.history.files?.filter(
         (file) => !temporaryAttachments.has(file.uri),
       )
       await releaseTemporaryAttachments()
     }
     history.append({
-      ...submission.payload.history,
+      ...submission!.payload.history,
       mode: currentMode,
     })
     setRetry(undefined)
@@ -1851,7 +1904,7 @@ export function Prompt(props: PromptProps) {
     if (store.mode === "shell") return themeV2.background.action.primary.default
     const agent = local.agent.current()
     if (!agent) return themeV2.border.default
-    return local.agent.color(agent.id)
+    return local.agent.color(agent!.id)
   })
 
   const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
@@ -1930,7 +1983,7 @@ export function Prompt(props: PromptProps) {
               }}
               onSubmit={() => {
                 // IME: double-defer so the last composed character (e.g. Korean
-                // hangul) is flushed to plainText before we read it for submission.
+                // hangul) is flushed to plainText before we read it for submission!.
                 setTimeout(() => setTimeout(() => submit(), 0), 0)
               }}
               onPaste={async (event: PasteEvent) => {

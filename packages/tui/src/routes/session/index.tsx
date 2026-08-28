@@ -144,6 +144,29 @@ addDefaultParsers(parsers.parsers)
 // Exclude temporary bottom space when measuring the real transcript height.
 const NAVIGATION_SLACK_ID = "session-navigation-slack"
 
+function SessionLoading() {
+  const { themeV2 } = useTheme()
+  const dimensions = useTerminalDimensions()
+  return (
+    <box
+      width={dimensions().width}
+      height={dimensions().height}
+      position="absolute"
+      top={0}
+      left={0}
+      flexDirection="column"
+      alignItems="center"
+      justifyContent="center"
+      backgroundColor={themeV2.background.default}
+    >
+      <box width={62} maxWidth="90%" flexDirection="column" alignItems="center" gap={1}>
+        <Spinner color={themeV2.text.subdued}>Waiting for server...</Spinner>
+        <text fg={themeV2.text.subdued}>Loading session...</text>
+      </box>
+    </box>
+  )
+}
+
 const context = createContext<{
   width: number
   sessionID: string
@@ -271,6 +294,32 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
   const client = useClient()
+  const [sessionMessagesSynced, setSessionMessagesSynced] = createSignal(false)
+  createEffect(() => {
+    const sid = route.sessionID
+    const status = client.connection.status()
+    if (status !== "connected") {
+      setSessionMessagesSynced(false)
+      return
+    }
+    setSessionMessagesSynced(false)
+    void data.session.message.sync(sid)
+      .then(() => {
+        if (route.sessionID === sid && client.connection.status() === "connected") setSessionMessagesSynced(true)
+      })
+      .catch(() => undefined)
+  })
+  const sessionReady = createMemo(() => {
+    const s = data.session.get(route.sessionID)
+    if (!s) return false
+    const msgs = data.session.message.list(route.sessionID)
+    if (msgs === undefined) return false
+    if (!sessionMessagesSynced()) return false
+    const locReady = !!data.location.info(s.location)
+    if (!locReady) return false
+    if (client.connection.status() !== "connected") return false
+    return true
+  })
   const [branch, setBranch] = createSignal<string>()
   createEffect(
     on([location, () => client.connection.status()], ([target, status]) => {
@@ -1315,23 +1364,24 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   }))
 
   return (
-    <context.Provider
-      value={{
-        get width() {
-          return contentWidth()
-        },
-        sessionID: route.sessionID,
-        thinkingMode,
-        showThinking,
-        groupExploration,
-        diffWrapMode,
-        models,
-        config,
-      }}
-    >
-      <SessionMemoryCommand sessionID={route.sessionID} />
-      <ProviderUsageCommand />
-      <Header
+    <Show when={sessionReady()} fallback={<SessionLoading />}>
+      <context.Provider
+        value={{
+          get width() {
+            return contentWidth()
+          },
+          sessionID: route.sessionID,
+          thinkingMode,
+          showThinking,
+          groupExploration,
+          diffWrapMode,
+          models,
+          config,
+        }}
+      >
+        <SessionMemoryCommand sessionID={route.sessionID} />
+        <ProviderUsageCommand />
+        <Header
         path={location()?.directory}
         branch={branch()}
         agent={headerAgent()}
@@ -1473,7 +1523,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 <SubagentEconomicsSurface economics={economics()} />
               </Show>
             </box>
-          </Show>
+            </Show>
         </box>
         <Show when={sidebarVisible()}>
           <Switch>
@@ -1502,7 +1552,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       >
         <SubagentFooter />
       </Show>
-    </context.Provider>
+      </context.Provider>
+    </Show>
   )
 
   function sessionPrompt() {

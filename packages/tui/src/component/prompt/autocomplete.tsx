@@ -24,6 +24,7 @@ import { autocompleteTriggerIndex, displayCharAt, mentionTriggerIndex, skillTrig
 import {
   MENTION_DIRECTORY_LIMIT,
   MENTION_RESULT_LIMIT,
+  autocompleteWindow,
   clampAutocompleteIndex,
   expandDirectoryQuery,
   mergeAutocompleteOptions,
@@ -93,6 +94,7 @@ export function Autocomplete(props: {
   const config = useConfig().data
   const paths = useTuiPaths()
   const location = useLocation()
+  const [hasOpened, setHasOpened] = createSignal(false)
   const [store, setStore] = createStore({
     index: 0,
     selected: 0,
@@ -540,6 +542,7 @@ export function Autocomplete(props: {
   })
 
   const options = createMemo(() => {
+    if (!store.visible) return []
     const fileSearch = files()
     const referenceMatchValue = referenceMatch()
     const agentsValue = agents()
@@ -715,6 +718,7 @@ export function Autocomplete(props: {
   }))
 
   function show(mode: "@" | "/" | "$" | "#") {
+    setHasOpened(true)
     setStore({
       visible: mode,
       index: props.input().cursorOffset,
@@ -816,6 +820,7 @@ export function Autocomplete(props: {
     const commandStart = 1 + textLeftInset()
     return Math.max(1, Math.round(contentWidth * COMMAND_DESCRIPTION_OFFSET) - commandStart - 1)
   })
+  const renderWindow = createMemo(() => autocompleteWindow(options(), store.selected, height()))
 
   let scroll: ScrollBoxRenderable
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
@@ -830,6 +835,7 @@ export function Autocomplete(props: {
   const emptyError = createMemo(() => store.visible === "@" && !files.loading && files().failed)
 
   return (
+    <Show when={hasOpened()}>
     <box
       visible={store.visible !== false}
       position="absolute"
@@ -863,9 +869,13 @@ export function Autocomplete(props: {
         height={height()}
         scrollbarOptions={{ visible: false }}
         scrollAcceleration={scrollAcceleration()}
+        onMouseScroll={(event) => {
+          if (event.scroll?.direction === "up") move(-1)
+          if (event.scroll?.direction === "down") move(1)
+        }}
       >
         <For
-          each={options()}
+          each={renderWindow().options}
           fallback={
             <box paddingLeft={1} paddingRight={1}>
               <text fg={emptyError() ? theme.error : theme.textMuted}>{emptyMessage()}</text>
@@ -881,15 +891,15 @@ export function Autocomplete(props: {
               flexDirection="column"
               onMouseMove={() => {
                 setStore("input", "mouse")
-                moveTo(index())
+                moveTo(renderWindow().start + index())
               }}
               onMouseOver={() => {
                 setStore("input", "mouse")
-                moveTo(index())
+                moveTo(renderWindow().start + index())
               }}
               onMouseDown={() => {
                 setStore("input", "mouse")
-                moveTo(index())
+                moveTo(renderWindow().start + index())
               }}
               onMouseUp={() => select()}
             >
@@ -898,7 +908,7 @@ export function Autocomplete(props: {
                 paddingLeft={textLeftInset()}
                 paddingRight={textRightInset()}
                 backgroundColor={
-                  index() === store.selected
+                  renderWindow().start + index() === store.selected
                     ? selection.fill
                     : store.visible === "/"
                       ? themeV2.background.surface.offset
@@ -907,7 +917,7 @@ export function Autocomplete(props: {
                 flexDirection="row"
               >
                 <box width={store.visible === "/" ? commandDescriptionWidth() : undefined} flexShrink={0} overflow="hidden">
-                  <text fg={index() === store.selected ? selection.foreground : themeV2.text.default} flexShrink={0}>
+                  <text fg={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.default} flexShrink={0}>
                     <AutocompleteOptionText
                       text={option.display}
                       matches={
@@ -915,10 +925,10 @@ export function Autocomplete(props: {
                           ? Array.from({ length: search().length + 1 }, (_, match) => match)
                           : option.matches
                       }
-                      selected={index() === store.selected}
-                      foreground={index() === store.selected ? selection.foreground : themeV2.text.default}
+                      selected={renderWindow().start + index() === store.selected}
+                      foreground={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.default}
                       background={
-                        index() === store.selected
+                        renderWindow().start + index() === store.selected
                           ? selection.fill
                           : store.visible === "/"
                             ? themeV2.background.surface.offset
@@ -929,20 +939,20 @@ export function Autocomplete(props: {
                   </text>
                 </box>
                 <Show when={option.marker}>
-                  <text fg={index() === store.selected ? selection.foreground : themeV2.text.feedback.warning.default} flexShrink={0}>
+                  <text fg={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.feedback.warning.default} flexShrink={0}>
                     {" · " + option.marker}
                   </text>
                 </Show>
                 <Show when={option.description}>
                   <text
-                    fg={index() === store.selected ? selection.foreground : themeV2.text.subdued}
+                    fg={renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.subdued}
                     wrapMode="none"
                   >
                     <span
                       style={{
-                        fg: index() === store.selected ? selection.foreground : themeV2.text.subdued,
+                        fg: renderWindow().start + index() === store.selected ? selection.foreground : themeV2.text.subdued,
                         bg:
-                          index() === store.selected
+                          renderWindow().start + index() === store.selected
                             ? selection.fill
                             : store.visible === "/"
                               ? themeV2.background.surface.offset
@@ -967,6 +977,7 @@ export function Autocomplete(props: {
         </>
       </Show>
     </box>
+    </Show>
   )
 }
 

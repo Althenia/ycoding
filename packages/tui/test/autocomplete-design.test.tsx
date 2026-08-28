@@ -34,7 +34,7 @@ function SyncLocation() {
   return null
 }
 
-function Commands(props: { onCommand?: (command: string) => void }) {
+function Commands(props: { onCommand?: (command: string) => void; commandCount?: number }) {
   Keymap.createLayer(() => ({
     mode: "global",
     commands: [
@@ -42,6 +42,13 @@ function Commands(props: { onCommand?: (command: string) => void }) {
       { id: "test.mode", title: "Mode", description: "normal \u00b7 yolo \u00b7 goal", slash: { name: "mode" }, run: () => props.onCommand?.("mode") },
       { id: "test.compact", title: "Compact", description: "compact the transcript", slash: { name: "compact", aliases: ["mo-c"] }, run: () => props.onCommand?.("compact") },
       { id: "test.mcp", title: "MCP", description: "manage MCP servers", slash: { name: "mcp", aliases: ["mo-managed-mcp-command"] }, run: () => props.onCommand?.("mcp") },
+      ...Array.from({ length: props.commandCount ?? 0 }, (_, index) => ({
+        id: `test.command-${index.toString().padStart(2, "0")}`,
+        title: `Command ${index}`,
+        description: `run command ${index}`,
+        slash: { name: `command-${index.toString().padStart(2, "0")}` },
+        run: () => props.onCommand?.(`command-${index}`),
+      })),
     ],
   }))
   return null
@@ -51,7 +58,13 @@ function sessionMainWidth(width: number) {
   return railPlacement(width) === "docked" ? width - railWidth(width) : width
 }
 
-async function renderAutocomplete(viewport: typeof DESIGN_VIEWPORT, onCommand?: (command: string) => void) {
+async function renderAutocomplete(
+  viewport: typeof DESIGN_VIEWPORT,
+  onCommand?: (command: string) => void,
+  commandCount?: number,
+  query = "/mo",
+  activate = true,
+) {
   const events = createEventStream()
   const calls = createFetch(() => undefined, events)
   let textarea!: TextareaRenderable
@@ -71,7 +84,7 @@ async function renderAutocomplete(viewport: typeof DESIGN_VIEWPORT, onCommand?: 
                   <EditorContextProvider>
                     <FrecencyProvider>
                       <Keymap.Provider>
-                        <Commands onCommand={onCommand} />
+                        <Commands onCommand={onCommand} commandCount={commandCount} />
                         <box width={viewport.width} height={viewport.height} flexDirection="row">
                           <box width={mainWidth} height="100%" flexDirection="column">
                             <box flexGrow={1} />
@@ -84,7 +97,7 @@ async function renderAutocomplete(viewport: typeof DESIGN_VIEWPORT, onCommand?: 
                             </box>
                             <text>ready</text>
                             <Autocomplete
-                              value="/mo"
+                              value={query}
                               anchor={() => anchor}
                               input={() => textarea}
                               ref={(value) => (autocomplete = value)}
@@ -116,10 +129,11 @@ async function renderAutocomplete(viewport: typeof DESIGN_VIEWPORT, onCommand?: 
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("ready"))
+  if (!activate) return app
   textarea.focus()
-  textarea.insertText("/mo")
-  autocomplete.onInput("/mo")
-  await app.waitForFrame((frame) => frame.includes("/model"))
+  textarea.insertText(query)
+  autocomplete.onInput(query)
+  await app.waitForFrame((frame) => frame.includes(query === "/" ? "/command-00" : "/model"))
   return app
 }
 
@@ -243,6 +257,33 @@ test("keeps the command popup geometry proportional at the wide design viewport"
   }
 })
 
+test("keeps only the visible command rows resident", async () => {
+  const app = await renderAutocomplete(DESIGN_VIEWPORT, undefined, 20, "/")
+  try {
+    expect(findTexts(app.renderer.root, /^\/command-/)).toHaveLength(10)
+    const first = findText(app.renderer.root, "/command-00")
+    if (!first) throw new Error("first command row did not render")
+    first.processMouseEvent(mouseScrollEvent(first, "down"))
+    await app.waitFor(() => selectedCommands(app).join() === "/command-01")
+    Array.from({ length: 9 }).forEach(() => app.mockInput.pressArrow("down"))
+    await app.waitForFrame((frame) => frame.includes("/command-10"))
+    expect(findTexts(app.renderer.root, /^\/command-/)).toHaveLength(10)
+    expect(selectedCommands(app)).toEqual(["/command-10"])
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("does not allocate command rows while autocomplete is hidden", async () => {
+  const app = await renderAutocomplete(DESIGN_VIEWPORT, undefined, 20, "/", false)
+  try {
+    expect(findTexts(app.renderer.root, /^\/command-/)).toHaveLength(0)
+    expect(findText(app.renderer.root, "No matching files, agents, or references")).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("moves the only selected command to the hovered row and selects that row on click", async () => {
   let command: string | undefined
   const app = await renderAutocomplete(DESIGN_VIEWPORT, (value) => (command = value))
@@ -315,6 +356,13 @@ function findText(node: Renderable, text: string): TextRenderable | undefined {
     .at(0)
 }
 
+function findTexts(node: Renderable, pattern: RegExp): TextRenderable[] {
+  return [
+    ...(node instanceof TextRenderable && pattern.test(node.plainText) ? [node] : []),
+    ...node.getChildren().flatMap((child) => findTexts(child, pattern)),
+  ]
+}
+
 function mouseEvent(target: Renderable, type: "move" | "down" | "up") {
   return new MouseEvent(target, {
     type,
@@ -322,5 +370,16 @@ function mouseEvent(target: Renderable, type: "move" | "down" | "up") {
     x: target.x,
     y: target.y,
     modifiers: { shift: false, alt: false, ctrl: false },
+  })
+}
+
+function mouseScrollEvent(target: Renderable, direction: "up" | "down") {
+  return new MouseEvent(target, {
+    type: "scroll",
+    button: direction === "up" ? 4 : 5,
+    x: target.x,
+    y: target.y,
+    modifiers: { shift: false, alt: false, ctrl: false },
+    scroll: { direction, delta: 1 },
   })
 }
