@@ -46,22 +46,6 @@ export function autonomyProgressLabel(state: SessionAutonomyState) {
   return `exhausted after ${goal.noProgress}/${goal.maxNoProgress} repeats without progress`
 }
 
-/**
- * Control token the model emits to end a goal loop. It stays in the durable transcript so the
- * server keeps detecting completion when it replays history, so only rendering hides it.
- * Mirrors SessionAutonomy.CompletionMarker in @ycoding-ai/core, which is not imported here
- * because that module pulls the database layer in; a test pins the two together.
- */
-export const GOAL_COMPLETION_MARKER = "<goal-complete/>"
-/** Every spelling the server accepts as completion, so rendering hides exactly what it detects. */
-export const GOAL_COMPLETION_PATTERN = "<goal-complete\\s*/>"
-const goalCompletion = new RegExp(GOAL_COMPLETION_PATTERN, "g")
-
-/** Renderable assistant text: the completion marker removed and surrounding blanks trimmed. */
-export function stripGoalCompletionMarker(text: string) {
-  return text.replace(goalCompletion, "").trim()
-}
-
 export function parseGoalCommand(input: string) {
   const match = input.match(/^\/goal(?=\s|$)(?:\s+([\s\S]*))?$/)
   if (!match) return

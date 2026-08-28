@@ -160,8 +160,9 @@ const layer = Layer.effect(
           if (!state.goal || state.goal.status !== "active") return [] as ReadonlyArray<Message>
           const text = [
             `Active autonomous goal (iteration ${state.goal.iteration}, noProgress ${state.goal.noProgress}/${state.goal.maxNoProgress}): ${state.goal.text}`,
-            `The human (mainchat) must explicitly decide completion via goal clear; do not treat ${SessionAutonomy.CompletionMarker} as automatic completion.`,
-            "Continue toward the goal while it is active, but do not claim completion without human confirmation.",
+            "Call goal report exactly once before ending this autonomous iteration, using your own no-progress decision.",
+            "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
+            "Call goal complete only after the goal is achieved and verified. Completion remains your explicit agent-owned decision.",
           ].join("\n")
           return [Message.make({ role: "system", content: text })] as ReadonlyArray<Message>
         })

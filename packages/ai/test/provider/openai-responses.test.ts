@@ -316,6 +316,56 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  for (const route of ["openai-responses", "openai-responses-websocket", "github-copilot-responses"] as const) {
+    for (const mode of [undefined, "explicit"] as const) {
+      it.effect(`preserves GPT-5.6 chronological system updates natively on ${route} with ${mode ?? "implicit"} cache mode`, () =>
+        Effect.gen(function* () {
+          const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+            LLM.request({
+              model: Model.update(model, {
+                id: "gpt-5.6",
+                route: model.route.with({ id: route }),
+              }),
+              messages: [Message.user("Before."), Message.system("Trusted update."), Message.assistant("After.")],
+              providerOptions: mode
+                ? { openai: { promptCacheOptions: { mode, ttl: "30m" } } }
+                : undefined,
+            }),
+          )
+
+          expect(prepared.body.input.map((item) => ("role" in item ? item.role : item.type))).toEqual([
+            "user",
+            "system",
+            "assistant",
+          ])
+          expect(prepared.body.input[1]).toEqual({
+            role: "system",
+            content: [{ type: "input_text", text: "Trusted update." }],
+          })
+        }),
+      )
+    }
+  }
+
+  it.effect("keeps the wrapped-user chronological system fallback before GPT-5.6", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.update(model, { id: "gpt-5.5" }),
+          messages: [Message.user("Before."), Message.system("Trusted update."), Message.assistant("After.")],
+        }),
+      )
+
+      expect(prepared.body.input[0]).toEqual({
+        role: "user",
+        content: [
+          { type: "input_text", text: "Before." },
+          { type: "input_text", text: "<system-update>\nTrusted update.\n</system-update>" },
+        ],
+      })
+    }),
+  )
+
   it.effect("prepares OpenAI Responses WebSocket target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(

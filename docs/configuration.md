@@ -150,6 +150,7 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 | `references`            | record                                | Named local or Git context sources.                                                         |
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
 | `providers`             | record                                | Provider and model overrides.                                                               |
+| `ntfy`                  | object                                | Optional attention-notification tool configuration.                                         |
 | `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
 | `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                               |
 | `experimental`          | object                                | Subagent depth and resource policies.                                                       |
@@ -161,6 +162,21 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 A finite limit supplies `GOMEMLIMIT=<limit>MiB` to Go runtimes, including compatible `tsgo` builds, and appends `--max-old-space-size=<limit>` to `NODE_OPTIONS` for Node processes. Bun does not expose an inherited heap-size option equivalent to Node's, so Bun itself is governed by the sampled process-tree ceiling while child Go or Node runtimes receive their soft hints.
 
 On macOS and Linux, YCoding samples aggregate resident memory for the detached shell process group every 250 milliseconds and terminates the group with status `memory-limit` after a sample exceeds the limit. Sampling can overshoot between checks, shared pages can be counted more than once, and a command that deliberately creates a new process group can escape aggregate accounting. This is resource control, not a security boundary or a kernel hard limit. Windows rejects a finite shell memory limit because the current process abstraction cannot assign the command to a Job Object before it starts.
+
+### ntfy attention notifications
+
+The built-in provider-visible `ntfy` tool is disabled by default. Enable it for a Location with a non-blank topic:
+
+```jsonc
+{
+  "ntfy": {
+    "enabled": true,
+    "topic": "project-attention",
+  },
+}
+```
+
+Each tool execution reads the current merged Location configuration. It returns a configuration failure without requesting permission or sending HTTP unless `ntfy.enabled` is exactly `true` and `ntfy.topic` is present and non-blank. When configured, the tool requests permission for the external write, posts its one plain-text message to `https://ntfy.sh/{URL-encoded-topic}`, and accepts only successful HTTP statuses. Its delivery confirmation does not include the topic or ntfy response data. Agents use this tool for a question, confirmation/approval, or a verified completed task that needs user attention; it is not for routine progress. During active goal mode, routine autonomous decisions, background progress, retries, and auto-resolvable questions do not warrant notification. Genuine attention triggers are exhausted goal attempts, a user-owned blocker, confirmation/approval that autonomy cannot resolve, or verified task completion. Agents should use the existing goal system and tool state visible to them; ntfy does not read or duplicate Session autonomy state.
 
 ### Field defaults and nested Schema contract
 
@@ -191,6 +207,7 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `references`                                      | record of `Config.Reference.Entry`                                             | unset           | Named local or Git context sources.                                                              |
 | `plugins`                                         | (`string` \| `{ package: string, options?: Record<string, unknown> }`)[]       | unset           | Ordered runtime plugin directives.                                                               |
 | `providers`                                       | record of `Config.Provider`                                                    | unset           | Provider/model overrides.                                                                        |
+| `ntfy`                                            | `{ enabled?: boolean, topic?: string }`                                         | disabled        | Built-in attention notifications; it runs only when `enabled` is `true` and `topic` is non-blank. |
 | `provider_usage`                                  | `Config.ProviderUsage`                                                         | unset           | Read-only provider-usage client bridge.                                                          |
 | `efficiency`                                      | `Config.Efficiency`                                                            | runtime-derived | Helper-model, cache, and continuation policy.                                                    |
 | `image_analyzer`                                  | `Config.ImageAnalyzer`                                                         | unset           | Vision fallback for text-only models: provider/model, prompt, and thresholds.                  |

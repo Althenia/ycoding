@@ -26,6 +26,8 @@ import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
+import { Shell } from "@ycoding-ai/core/shell"
+import { ID, Info } from "@ycoding-ai/schema/shell"
 import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -200,7 +202,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("stops goal continuations after three repeated no-progress responses", () =>
+  it.effect("stops goal continuations only after three explicit no-progress reports", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionV2.ID.make("ses_goal_loop")
@@ -213,6 +215,7 @@ describe("SessionExecution lifecycle", () => {
       const context = yield* buildExecution(scope, () =>
         Effect.gen(function* () {
           drains += 1
+          yield* autonomy.report({ sessionID, noProgress: drains > 1 }).pipe(Effect.orDie)
           yield* recordAssistant(database, sessionID, drains, [{ type: "text", text: "Still investigating." }])
         }),
       )
@@ -236,7 +239,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("completes a goal when the final assistant turn carries the completion marker", () =>
+  it.effect("does not infer goal progress or completion from terminal assistant text", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionV2.ID.make("ses_goal_completed")
@@ -249,10 +252,9 @@ describe("SessionExecution lifecycle", () => {
       const context = yield* buildExecution(scope, () =>
         Effect.gen(function* () {
           drains += 1
-          // A real turn ends on prose interleaved with tool calls; the marker rides the last text part.
           yield* recordAssistant(database, sessionID, drains, [
             { type: "text", text: "Ran the suite." },
-            { type: "text", text: `All green. ${SessionAutonomy.CompletionMarker}` },
+            { type: "text", text: "All green. <goal-complete/>" },
           ])
         }),
       )
@@ -264,7 +266,54 @@ describe("SessionExecution lifecycle", () => {
       expect(drains).toBe(1)
       expect(yield* autonomy.get(sessionID)).toMatchObject({
         mode: "normal",
-        goal: { status: "completed", iteration: 1 },
+        goal: { status: "active", iteration: 0, noProgress: 0 },
+      })
+      expect(yield* admittedInputs(database)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("does not spin a reported parent goal while its background shell is still running", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_goal_background_shell")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(
+        scope,
+        () =>
+          Effect.gen(function* () {
+            drains += 1
+            yield* autonomy.report({ sessionID, noProgress: false }).pipe(Effect.orDie)
+          }),
+        undefined,
+        noopCompactionExecution(),
+        () =>
+          Effect.succeed([
+            Info.make({
+              id: ID.make("sh_goal_background_shell"),
+              status: "running",
+              command: "sleep",
+              cwd: "/project",
+              shell: "/bin/sh",
+              file: "/tmp/sh_goal_background_shell.log",
+              metadata: { sessionID },
+              time: { started: 1 },
+            }),
+          ]),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(1)
+      expect(yield* autonomy.get(sessionID)).toMatchObject({
+        goal: { status: "active", iteration: 1, noProgress: 0 },
       })
       expect(yield* admittedInputs(database)).toEqual([])
       yield* Scope.close(scope, Exit.void)
@@ -288,8 +337,9 @@ describe("SessionExecution lifecycle", () => {
           const context = yield* buildExecution(scope, () =>
             Effect.gen(function* () {
               drains += 1
+              if (drains === 2) yield* autonomy.complete(parentID).pipe(Effect.orDie)
               yield* recordAssistant(database, parentID, drains, [
-                { type: "text", text: `Verified. ${SessionAutonomy.CompletionMarker}` },
+                { type: "text", text: "Verified." },
               ])
             }),
           )
@@ -318,7 +368,7 @@ describe("SessionExecution lifecycle", () => {
           expect(drains).toBe(2)
           expect(yield* autonomy.get(parentID)).toMatchObject({
             mode: "normal",
-            goal: { status: "completed", iteration: 1 },
+            goal: { status: "completed", iteration: 0 },
           })
           expect(yield* admittedInputs(database)).toEqual([])
           yield* Scope.close(scope, Exit.void)
@@ -341,9 +391,9 @@ describe("SessionExecution lifecycle", () => {
       const context = yield* buildExecution(
         scope,
         () =>
-          recordAssistant(database, sessionID, 1, [
-            { type: "text", text: `Verified. ${SessionAutonomy.CompletionMarker}` },
-          ]),
+          autonomy
+            .complete(sessionID)
+            .pipe(Effect.orDie, Effect.andThen(recordAssistant(database, sessionID, 1, [{ type: "text", text: "Verified." }]))),
         (type) =>
           autonomy.get(sessionID).pipe(
             Effect.tap((state) => Effect.sync(() => void observed.push({ type, state }))),
@@ -357,7 +407,7 @@ describe("SessionExecution lifecycle", () => {
 
       expect(observed.find((entry) => entry.type === "session.execution.succeeded")?.state).toMatchObject({
         mode: "normal",
-        goal: { status: "completed", iteration: 1 },
+        goal: { status: "completed", iteration: 0 },
       })
       yield* Scope.close(scope, Exit.void)
     }),
@@ -546,6 +596,7 @@ function buildExecution(
   drain: SessionRunner.Interface["drain"],
   observePublish?: (type: string) => Effect.Effect<void>,
   compactionExecution = noopCompactionExecution(),
+  shells: Shell.Interface["list"] = () => Effect.succeed([]),
 ) {
   return Effect.gen(function* () {
     const database = yield* Database.Service
@@ -560,13 +611,14 @@ function buildExecution(
     const store = yield* SessionStore.Service
     const autonomy = SessionAutonomy.make({ db: database.db })
     const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ drain }))
+    const shell = Layer.mock(Shell.Service, { list: shells })
     const locations = Layer.effect(
       LocationServiceMap.Service,
       LayerMap.make(
         () =>
           // The local execution test only needs the Session runner from the Location graph.
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-          runner as unknown as Layer.Layer<LocationServices>,
+          Layer.mergeAll(runner, shell) as unknown as Layer.Layer<LocationServices>,
       ),
     )
     return yield* Layer.buildWithScope(

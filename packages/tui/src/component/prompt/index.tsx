@@ -1620,16 +1620,10 @@ export function Prompt(props: PromptProps) {
           agent: submission!.payload.agentID,
         })
       }
-      if (
+      const switchRequired =
         session?.model?.providerID !== submission!.payload.model.providerID ||
         session.model.id !== submission!.payload.model.id ||
         (session.model.variant ?? "default") !== (submission!.payload.model.variant ?? "default")
-      ) {
-        await client.api.session.switchModel({
-          sessionID,
-          model: submission!.payload.model,
-        })
-      }
       if (session?.revert) {
         const error = await client.api.session.revert.commit({ sessionID }).then(
           () => undefined,
@@ -1667,8 +1661,19 @@ export function Prompt(props: PromptProps) {
         }
       }
       const runPromptWithSkills = (promptID: string, skillIDs: string[]) => {
-        const promptFn = (resume: boolean, admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>) => {
+        let switched = false
+        const promptFn = async (
+          resume: boolean,
+          admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>,
+        ) => {
           const files = admitted ? projectedPromptInput(admitted.data as never).files : submission!.payload.files
+          if (resume && switchRequired && !switched) {
+            await client.api.session.switchModel({
+              sessionID,
+              model: submission!.payload.model,
+            })
+            switched = true
+          }
           return client.api.session.prompt({
             id: promptID,
             sessionID,

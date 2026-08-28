@@ -52,6 +52,7 @@ import { SubagentControlTool } from "../tool/subagent-control";
 import { SubagentReportTool } from "../tool/subagent-report";
 import { TodoWriteTool } from "../tool/todowrite";
 import { GoalTool } from "../tool/goal";
+import { NtfyTool } from "../tool/ntfy";
 import { ProjectArtifactTool } from "../tool/project-artifact";
 import { ProjectArtifactStore } from "../project-artifact";
 import { Tools } from "../tool/tools";
@@ -177,6 +178,7 @@ const pre = [
   SubagentReportTool.Plugin,
   TodoWriteTool.Plugin,
   ProjectArtifactTool.Plugin,
+  NtfyTool.Plugin,
   WebFetchTool.Plugin,
   WebSearchTool.Plugin,
   WriteTool.Plugin,

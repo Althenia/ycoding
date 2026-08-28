@@ -1,30 +1,27 @@
 import { expect, test } from "bun:test"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
-import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import {
   activateGoal,
   autonomyModeLabel,
   autonomyProgressLabel,
   createSessionAutonomyRefreshGuard,
-  GOAL_COMPLETION_MARKER,
-  GOAL_COMPLETION_PATTERN,
   parseGoalCommand,
-  stripGoalCompletionMarker,
 } from "../src/util/session-autonomy"
 
-test("mirrors the goal completion marker the server instructs the model to emit", () => {
-  expect(GOAL_COMPLETION_MARKER).toBe(SessionAutonomy.CompletionMarker)
-  expect(GOAL_COMPLETION_PATTERN).toBe(SessionAutonomy.CompletionPattern)
-})
-
-test("hides the goal completion marker from rendered assistant text", () => {
-  expect(stripGoalCompletionMarker(`Verified the fix. ${GOAL_COMPLETION_MARKER}`)).toBe("Verified the fix.")
-  expect(stripGoalCompletionMarker(`Done.\n\n${GOAL_COMPLETION_MARKER}`)).toBe("Done.")
-  expect(stripGoalCompletionMarker(GOAL_COMPLETION_MARKER)).toBe("")
-  expect(stripGoalCompletionMarker("  Plain answer  ")).toBe("Plain answer")
-  // Every spelling the server accepts as completion is a control token, so none of them render.
-  expect(stripGoalCompletionMarker("Verified the fix. <goal-complete />")).toBe("Verified the fix.")
-  expect(SessionAutonomy.isCompleted("Verified the fix. <goal-complete />")).toBe(true)
+test("represents explicit goal reports through the progress label", () => {
+  expect(
+    autonomyProgressLabel({
+      mode: "normal",
+      yolo: 0,
+      goal: {
+        text: "Finish the migration",
+        status: "active",
+        iteration: 7,
+        noProgress: 2,
+        maxNoProgress: 3,
+      },
+    }),
+  ).toBe("7 · no progress 2/3")
 })
 
 test("re-reads goal state when execution settles rather than when the assistant turn ends", async () => {
@@ -54,10 +51,12 @@ test("rejects an older refresh after a newer refresh starts", () => {
   expect(guard.accepts(current)).toBe(true)
 })
 
-test("renders assistant text through the completion-marker filter", async () => {
+test("renders durable assistant text directly without treating literal marker text as control state", async () => {
   const source = await Bun.file(new URL("../src/routes/session/index.tsx", import.meta.url)).text()
   const body = source.slice(source.indexOf("function TextPart("))
-  expect(body.slice(0, body.indexOf("\n}\n"))).toContain("stripGoalCompletionMarker")
+  const textPart = body.slice(0, body.indexOf("\n}\n"))
+  expect(textPart).toContain("createMemo(() => props.part.text)")
+  expect(textPart).not.toContain("stripGoalCompletionMarker")
 })
 
 test("labels normal, yolo, and goal modes", () => {

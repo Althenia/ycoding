@@ -10,8 +10,8 @@ import { Tool } from "./tool"
 export const name = "goal"
 
 export const Input = Schema.Struct({
-  action: Schema.Literals(["get", "set", "update", "complete", "stop", "clear"]).annotate({
-    description: "Goal action: get current goal, set new goal, update existing goal text/status, complete goal, or stop/clear goal",
+  action: Schema.Literals(["get", "set", "update", "report", "complete", "stop", "clear"]).annotate({
+    description: "Goal action: get, update, report iteration progress, complete, or stop/clear the current goal",
   }),
   text: Schema.String.pipe(Schema.optional).annotate({
     description: "Goal text for set/update actions",
@@ -21,6 +21,9 @@ export const Input = Schema.Struct({
   }),
   status: Schema.Literals(["active", "completed", "stopped"]).pipe(Schema.optional).annotate({
     description: "Desired status for update action",
+  }),
+  noProgress: Schema.Boolean.pipe(Schema.optional).annotate({
+    description: "Agent decision for report: true when this iteration made no progress, false when it made progress",
   }),
 })
 
@@ -43,7 +46,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Manage the current autonomous goal for this session. Goals are enabled by the user only (via /goal command or UI) but the goal text is owned by the agent. After enable, the agent synthesizes the goal from the user prompt/history and maintains it: evaluate the latest user prompt/steer against the durable goal, and if misaligned update the goal via update to follow the agent's goal target so system goal stays aligned with agent goal. Use get to inspect, update to change text/status, complete to mark done, stop/clear to remove. Do not use set to create a goal; it will be rejected. When goal is stopped or completed it disappears from the sidebar.",
+              "Manage the current autonomous goal for this session. Goals are enabled by the user only (via /goal command or UI) but the goal text is owned by the agent. After enable, synthesize and maintain the goal from user prompts/history; update it when the user's direction changes. During goal mode, call report exactly once before ending each autonomous iteration and supply your own noProgress decision. Active background subagents or shells are unfinished work, not automatic no progress. Use complete only after the goal is achieved and verified; completion is agent-owned. Use get to inspect, update to change text/status, complete to mark done, stop/clear to remove. Do not use set to create a goal; it will be rejected.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [{ type: "text", text: output.message }],
@@ -77,6 +80,25 @@ export const Plugin = {
                           }),
                         )
                       }
+                      if (input.action === "report") {
+                        if (input.noProgress === undefined)
+                          return yield* Effect.fail(new ToolFailure({ message: "report requires noProgress" }))
+                        const state = yield* autonomy.get(context.sessionID).pipe(
+                          Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)),
+                        )
+                        if (!state.goal || state.goal.status !== "active")
+                          return yield* Effect.fail(new ToolFailure({ message: "No active goal to report" }))
+                        const reported = yield* autonomy.report({
+                          sessionID: context.sessionID,
+                          noProgress: input.noProgress,
+                        })
+                        const goal = reported.goal!
+                        return {
+                          action: "report",
+                          goal,
+                          message: `Goal iteration ${goal.iteration} reported: ${input.noProgress ? "no progress" : "progress"}; status ${goal.status}.`,
+                        }
+                      }
                       if (input.action === "update") {
                         const stateBefore = yield* autonomy.get(context.sessionID).pipe(
                           Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)),
@@ -84,11 +106,7 @@ export const Plugin = {
                         const existing = stateBefore.goal
                         if (!existing) return yield* Effect.fail(new ToolFailure({ message: "No existing goal to update. Use set." }))
                         if (input.status === "completed") {
-                          const advanced = yield* autonomy.advance({
-                            sessionID: context.sessionID,
-                            progress: existing.text,
-                            completed: true,
-                          })
+                          const advanced = yield* autonomy.complete(context.sessionID)
                           const goal = advanced.goal!
                           return { action: "update", goal, message: `Goal marked completed: ${goal.text}` }
                         }
@@ -124,11 +142,7 @@ export const Plugin = {
                         )
                         const existing = stateBefore.goal
                         if (!existing || existing.status !== "active") return yield* Effect.fail(new ToolFailure({ message: "No active goal to complete" }))
-                        const advanced = yield* autonomy.advance({
-                          sessionID: context.sessionID,
-                          progress: existing.text,
-                          completed: true,
-                        })
+                        const advanced = yield* autonomy.complete(context.sessionID)
                         const goal = advanced.goal!
                         return { action: "complete", goal, message: `Goal completed: ${goal.text}. It will disappear from sidebar.` }
                       }

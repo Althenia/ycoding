@@ -1,6 +1,19 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, Show, type ParentProps } from "solid-js"
 import { useTheme } from "../context/theme"
 import { Spinner } from "./spinner"
+
+export function createStartupReady(ready: () => boolean) {
+  const [started, setStarted] = createSignal(ready())
+  createEffect(() => {
+    if (ready()) setStarted(true)
+  })
+  return started
+}
+
+export function StartupGate(props: ParentProps<{ ready: () => boolean }>) {
+  const ready = createStartupReady(props.ready)
+  return <Show when={ready()}>{props.children}</Show>
+}
 
 export function StartupLoading(props: { ready: () => boolean }) {
   const { themeV2 } = useTheme().contextual("elevated")

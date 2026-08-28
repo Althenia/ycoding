@@ -43,7 +43,7 @@ import { PluginRouteMissing } from "./component/plugin-route-missing"
 import { EditorContextProvider } from "./context/editor"
 import { useEvent } from "./context/event"
 import { ClientProvider, useClient } from "./context/client"
-import { StartupLoading } from "./component/startup-loading"
+import { createStartupReady, StartupLoading } from "./component/startup-loading"
 import { DevToolsSidebar } from "./component/devtools-sidebar"
 import { DevTools } from "./devtools"
 import { Reconnecting } from "./component/reconnecting"
@@ -424,6 +424,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
   const promptRef = usePromptRef()
   const pluginRuntime = usePluginRuntime()
   const plugins = usePlugin()
+  const pluginsStarted = createStartupReady(plugins.ready)
   const clipboard = useClipboard()
 
   createEffect(() => {
@@ -1083,7 +1084,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
       </Show>
       <box flexGrow={1} minHeight={0} flexDirection="row">
         <box flexGrow={1} minWidth={0} flexDirection="column">
-          <Show when={plugins.ready()}>
+          <Show when={pluginsStarted()}>
             <box flexGrow={1} minHeight={0} flexDirection="column">
               <Switch>
                 <Match when={route.data.type === "home"}>
@@ -1117,7 +1118,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         </Show>
       </box>
       <Show when={!startup.skipInitialLoading}>
-        <StartupLoading ready={plugins.ready} />
+        <StartupLoading ready={pluginsStarted} />
       </Show>
       <Show when={showReconnecting()}>
         <Reconnecting />

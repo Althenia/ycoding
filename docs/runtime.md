@@ -110,7 +110,7 @@ Direct OpenAI Responses requests authenticated with a public API key use GPT-5.6
 
 OpenAI Responses assistant `phase` metadata is preserved through durable message projection and replayed as `commentary` or `final_answer` on later requests. This applies to direct OpenAI and the ChatGPT Codex Responses route when the backend reports a phase.
 
-The ChatGPT/Codex Responses route preserves trusted chronological `Message.system(...)` updates as native `system` input instead of lowering them into escaped user wrappers. This keeps authoritative live Session state at its intended role on the key-only backend. Automatic TeamView injection is omitted on that route because TeamView contains child-generated text; agents query it through `subagent_control list` without elevating that text to system authority.
+The ChatGPT/Codex Responses route preserves trusted chronological `Message.system(...)` updates as native `system` input instead of lowering them into escaped user wrappers. Direct public OpenAI Responses and GitHub Copilot Responses do the same for GPT-5.6-and-later model IDs, independently of implicit or explicit prompt-cache placement; earlier model IDs retain the escaped user-wrapper fallback. Automatic TeamView injection is omitted on the Codex route because TeamView contains child-generated text; agents query it through `subagent_control list` without elevating that text to system authority.
 
 Direct GPT-5.6 Responses requests enable server-side context management with a `200000`-token compaction threshold. When OpenAI returns an encrypted compaction item on a stateless request, YCoding retains the opaque state for the same model, includes it in the next input, and omits the earlier input items from that request. Stored-response continuation remains separate and still requires explicit provider storage.
 
@@ -120,6 +120,7 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 
 - **Steer** inputs promote at the next safe step boundary and require the active drain to continue.
 - **Queue** inputs remain pending until the session would otherwise become idle.
+- A prompt is admitted before a requested provider, model, or variant switch is applied. The exact admission is then resumed after the switch record commits, so the composer becomes reusable without waiting for the prior run and the new selection is observed only when the runner prepares a safe request boundary.
 - Promoting new user input resets the selected agent's step allowance.
 - Durable pending user and synthetic inputs are projected back into the resident transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
 - Outbound user bubbles render lifecycle receipts from durable state only: a clock while the admitted input remains pending, one subdued check after promotion, and two info-colored checks after a physical model request consumed that exact message. Assistant, synthetic, and system rows do not render these receipts. Historical promoted messages without a consumption event remain in the sent state; assistant activity is not treated as proof of consumption.
@@ -147,19 +148,19 @@ Session autonomy is durable and supports:
 
 The expanded AUTONOMY sidebar renders Guardrails as `auto · YOLO 3` only when the effective YOLO level is 3. Normal, YOLO 0-2, and active goal below YOLO 3 render Guardrails as `enforced`.
 
-Goal state stores the goal text, status, iteration, no-progress count, maximum no-progress count, and last progress digest.
+Goal state stores the goal text, status, iteration, no-progress count, and maximum no-progress count. Historical stored progress digests remain decodable but do not decide current progress.
 
 While a goal is active, each newly admitted user prompt re-synthesizes the durable goal from that prompt and the current conversation. Exact prompt retries do not re-synthesize the goal; synthetic continuations do not change it.
 
 Terminal goal states are:
 
-- `completed` — the model emitted the recognized goal-completion marker and the turn settled;
+- `completed` — the agent explicitly called the goal tool's `complete` action after verification;
 - `stopped` — the user or runtime left goal mode;
-- `exhausted` — repeated identical progress reached the configured no-progress bound.
+- `exhausted` — explicit agent `report` actions marked no progress until the configured bound was reached.
 
-An active goal does not advance or complete while a direct durable child task is `starting`, `running`, `waiting`, or `cancelling`. Terminal child states (`cancelled`, `completed`, `failed`, and `lost`) do not block the next parent wake, including the existing durable child-notification wake path.
+The agent calls goal `report` exactly once per autonomous iteration with its own no-progress decision. Each accepted report increments the iteration once; progress resets the no-progress counter, no progress increments it once, and the configured bound exhausts the goal. Assistant-text equality, empty assistant text, completion markers, and terminal execution do not mutate progress or complete a goal.
 
-A tool-only turn with no assistant text spends an iteration but does not increment the no-progress counter. The TUI refreshes autonomy when session execution reaches a terminal event so displayed progress is not one iteration stale. Its top-right session status combines active YOLO or goal mode with the operational state; while retrying, it shows a failure marker, completed failure count, next retry number, and seconds until that retry. While main-session working is active, its decorative dot trail advances every 160 ms and uses the same semantic color as the adjacent status label.
+An active direct durable child task or running background shell blocks automatic goal continuation. Such work is unfinished rather than automatic no progress; its existing terminal notification wakes the parent, and the agent reports the next iteration after observing that notification. This prevents a parent goal from spinning while background work remains active. The TUI refreshes autonomy when session execution reaches a terminal event so displayed progress is current. Its top-right session status combines active YOLO or goal mode with the operational state; while retrying, it shows a failure marker, completed failure count, next retry number, and seconds until that retry. While main-session working is active, its decorative dot trail advances every 160 ms and uses the same semantic color as the adjacent status label.
 
 ## Session guardrails
 
@@ -300,7 +301,7 @@ The SQLite `session_file_change` ledger is a rebuildable projection. Its dedicat
 
 ### Resident transcript
 
-Implemented: opening or refreshing a Session fetches its complete current projected transcript in one canonical ascending-order request. The TUI hydrates completed compaction lifecycles from their durable projected messages and applies boundary pruning in one reactive publication, so covered rows never become resident between fetch and pruning, including after a TUI or server restart. It releases resident message rows through each completed compaction boundary; a later completed boundary advances the release point. This affects only resident memory and rendering: durable history and the canonical fetch remain complete, and reconnect or navigation reapplies the same boundary pruning. The transcript renders only the latest visible compaction lifecycle or historical marker. A completed latest lifecycle renders a compact metrics panel with cumulative tokens saved plus that compression's removed-token, reduction, item-count, and timestamp values; durable summary prose is not rendered as transcript chat content. Historical V1 summary messages still decode as markers, and migration can derive an initial context baseline from valid historical replacement state, but new selective compaction does not create destructive summary replacement.
+Implemented: opening or refreshing a Session fetches its complete current projected transcript in one canonical ascending-order request. A resident message changed by live admission or promotion remains protected until a canonical response contains that message, so a stale list response cannot make a newly admitted or just-promoted user row disappear. The TUI hydrates completed compaction lifecycles from their durable projected messages and applies boundary pruning in one reactive publication, so covered rows never become resident between fetch and pruning, including after a TUI or server restart. It releases resident message rows through each completed compaction boundary; a later completed boundary advances the release point. This affects only resident memory and rendering: durable history and the canonical fetch remain complete, and reconnect or navigation reapplies the same boundary pruning. The transcript renders only the latest visible compaction lifecycle or historical marker. A completed latest lifecycle renders a compact metrics panel with cumulative tokens saved plus that compression's removed-token, reduction, item-count, and timestamp values; durable summary prose is not rendered as transcript chat content. Historical V1 summary messages still decode as markers, and migration can derive an initial context baseline from valid historical replacement state, but new selective compaction does not create destructive summary replacement.
 
 ### Rendering guarantees
 
@@ -513,6 +514,8 @@ The TUI is the only release surface and currently includes:
 - cache, context, memory, cost, provider quota, and guardrail diagnostics;
 - theme and keymap customization;
 - complete resident transcript loading;
+- one-time startup loading that never remounts resident Session content during later route-specific plugin, tool, or MCP refreshes;
+- toast overlays anchored to the physical terminal top-right, including above a docked Session rail;
 - dedicated shell output view with kill/back actions;
 - rail sidebar with priority-based expanded-state management.
 

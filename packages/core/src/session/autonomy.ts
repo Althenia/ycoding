@@ -114,6 +114,11 @@ export interface Interface {
     maxNoProgress?: number
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
+  readonly report: (input: {
+    sessionID: SessionSchema.ID
+    noProgress: boolean
+  }) => Effect.Effect<State, NotFoundError>
+  readonly complete: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly advance: (input: {
     sessionID: SessionSchema.ID
     progress: string
@@ -155,23 +160,7 @@ export const read = (value: unknown): State => {
   return defaultState
 }
 
-export const CompletionMarker = "<goal-complete/>"
 export const AutomaticAnswer = "Continue with the safest reasonable default."
-
-/**
- * Source of the marker as models actually emit it. Providers routinely reformat a self-closing tag
- * to `<goal-complete />`, and a turn that ended goal work but missed the exact spelling would
- * otherwise continue the loop. Rendering mirrors this pattern so no variant leaks
- * into the transcript; a TUI test pins the two together.
- */
-export const CompletionPattern = "<goal-complete\\s*/>"
-const completion = new RegExp(CompletionPattern)
-
-export const progressDigest = (value: string) => Hash.sha256(value.trim())
-
-export function isCompleted(progress: string) {
-  return completion.test(progress)
-}
 
 export function requestsUserInput(value: string) {
   const text = value.trim()
@@ -198,8 +187,10 @@ export function continuationPrompt(goal: Goal, input: { readonly latestAssistant
     ...proxy,
     "Use the conversation and current repository state to choose the next useful action.",
     "Answer routine blockers yourself using the safest reasonable default.",
-    `When the goal is actually achieved, include exactly ${CompletionMarker} in the final response.`,
-    "Do not claim completion without verification evidence.",
+    "Before ending this autonomous iteration, call goal report exactly once with your explicit no-progress decision.",
+    "An active background subagent or shell is unfinished work, not automatic no progress; continue useful independent work or finish this iteration and wait for its automatic notification.",
+    "When the goal is actually achieved and verified, call goal complete. Completion remains your explicit decision.",
+    "Do not claim completion without verification evidence or the goal complete action.",
   ].join("\n")
 }
 
@@ -391,15 +382,13 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     clearGoal,
     set,
     stop: (sessionID) => clearGoal(sessionID),
-    advance: ({ sessionID, progress, completed = false }) =>
+    report: ({ sessionID, noProgress: reportedNoProgress }) =>
       mutate(sessionID, (state) => {
         const goal = state.goal
         if (!goal || goal.status !== "active") return undefined
-        const digest = progress.trim() ? progressDigest(progress) : undefined
         const iteration = goal.iteration + 1
-        const noProgress =
-          digest === undefined ? goal.noProgress : goal.lastProgressDigest === digest ? goal.noProgress + 1 : 0
-        const status: GoalStatus = completed ? "completed" : noProgress >= goal.maxNoProgress ? "exhausted" : "active"
+        const noProgress = reportedNoProgress ? goal.noProgress + 1 : 0
+        const status: GoalStatus = noProgress >= goal.maxNoProgress ? "exhausted" : "active"
         return {
           mode: "normal",
           yolo: state.yolo,
@@ -408,10 +397,23 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
             status,
             iteration,
             noProgress,
-            ...(digest === undefined ? {} : { lastProgressDigest: digest }),
           },
         }
       }),
+    complete: (sessionID) =>
+      mutate(sessionID, (state) => {
+        const goal = state.goal
+        if (!goal || goal.status !== "active") return undefined
+        return { ...state, goal: { ...goal, status: "completed" as const } }
+      }),
+    advance: ({ sessionID, completed = false }) =>
+      completed
+        ? mutate(sessionID, (state) => {
+            const goal = state.goal
+            if (!goal || goal.status !== "active") return undefined
+            return { ...state, goal: { ...goal, status: "completed" as const } }
+          })
+        : load(sessionID),
   }
 }
 

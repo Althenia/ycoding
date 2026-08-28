@@ -2765,6 +2765,79 @@ test("renders admitted prompts immediately and tracks them until promoted", asyn
   }
 })
 
+test("does not remove a resident promoted user message when canonical projection is stale", async () => {
+  const events = createEventStream()
+  const sessionID = "session-race"
+  const messageID = "msg-user-race"
+  let requests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname !== `/api/session/${sessionID}/message`) return
+    requests++
+    if (requests === 1) return json({ data: [], cursor: {} })
+    return json({ data: [{ id: messageID, type: "user", text: "stay visible", time: { created: 1 } }], cursor: {} })
+  }, events)
+  let sync!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    sync = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    emitEvent(events, {
+      id: "evt-race-admitted",
+      created: 1,
+      type: "session.input.admitted",
+      durable: durable(sessionID),
+      data: {
+        sessionID,
+        inputID: messageID,
+        input: { type: "user", data: { text: "stay visible" }, delivery: "steer" },
+      },
+    })
+    emitEvent(events, {
+      id: "evt-race-promoted",
+      created: 2,
+      type: "session.input.promoted",
+      durable: durable(sessionID, 1),
+      data: { sessionID, inputID: messageID },
+    })
+    await wait(
+      () =>
+        sync.session.message.get(sessionID, messageID) !== undefined &&
+        sync.session.input.list(sessionID).length === 0,
+    )
+    expect(sync.session.message.get(sessionID, messageID)).toBeDefined()
+
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.message.get(sessionID, messageID)).toBeDefined()
+
+    sync.session.message.invalidate(sessionID)
+    await sync.session.message.sync(sessionID)
+    expect(sync.session.message.get(sessionID, messageID)).toMatchObject({ type: "user", text: "stay visible" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("restores a pending steer after leaving and reopening a child session", async () => {
   const events = createEventStream()
   const childID = "session-child"

@@ -3,8 +3,6 @@ import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
 import { TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { railPlacement, railWidth } from "../routes/session/rail"
-import { useRoute } from "../context/route"
 import { errorMessage } from "../util/error"
 export type ToastOptions = {
   title?: string
@@ -18,13 +16,7 @@ export function Toast() {
   const toast = useToast()
   const { themeV2 } = useTheme().contextual("overlay")
   const dimensions = useTerminalDimensions()
-  const route = useRoute()
-  // Only the session route renders the docked rail. Reserving the rail's width on any other route
-  // floats the toast away from the right margin by a rail that is not on screen.
-  const right = () =>
-    route.data.type === "session" && railPlacement(dimensions().width) === "docked"
-      ? railWidth(dimensions().width) + 2
-      : 2
+  const right = () => Math.min(2, Math.max(0, dimensions().width - 1))
   const width = () => Math.max(1, Math.min(60, dimensions().width - right()))
   const label = () => {
     const variant = toast.currentToast?.variant

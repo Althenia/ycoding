@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { Database } from "@ycoding-ai/core/database/database"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
@@ -7,6 +7,7 @@ import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { GoalTool } from "@ycoding-ai/core/tool/goal"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(Database.layer({ path: ":memory:" }))
@@ -34,6 +35,15 @@ const setup = Effect.gen(function* () {
   return SessionAutonomy.make({ db })
 })
 
+it.effect("exposes one explicit agent no-progress report action", () =>
+  Effect.sync(() => {
+    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "report", noProgress: true })).toEqual({
+      action: "report",
+      noProgress: true,
+    })
+  }),
+)
+
 it.effect("persists modes in the current autonomy column", () =>
   Effect.gen(function* () {
     const service = yield* setup
@@ -59,7 +69,7 @@ it.effect("snapshots autonomy state with a durable ABA fence", () =>
       digest: "7bca8b42480222ddfa0cf4adc95073d9b40726221d52a79b4c55ef354dec7b52",
     })
 
-    expect(yield* service.advance({ sessionID, progress: "ignored" })).toEqual(initial.state)
+    expect(yield* service.report({ sessionID, noProgress: false })).toEqual(initial.state)
     expect(yield* service.snapshot(sessionID)).toEqual(initial)
 
     yield* service.setMode({ sessionID, mode: "yolo" })
@@ -82,7 +92,7 @@ it.effect("serializes concurrent state-dependent autonomy advances", () =>
     yield* service.setGoal({ sessionID, text: "Ship the fix" })
 
     yield* Effect.all(
-      [service.advance({ sessionID, progress: "first" }), service.advance({ sessionID, progress: "second" })],
+      [service.report({ sessionID, noProgress: false }), service.report({ sessionID, noProgress: false })],
       { concurrency: "unbounded" },
     )
 
@@ -109,7 +119,7 @@ it.effect("resets a completed goal to active with identical or new text", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 2 })
-    yield* service.advance({ sessionID, progress: "done", completed: true })
+    yield* service.complete(sessionID)
 
     expect(yield* service.setGoal({ sessionID, text: "Ship the fix" })).toEqual({
       mode: "normal",
@@ -123,7 +133,7 @@ it.effect("resets a completed goal to active with identical or new text", () =>
         maxNoProgress: 3,
       },
     })
-    yield* service.advance({ sessionID, progress: "done", completed: true })
+    yield* service.complete(sessionID)
 
     expect(yield* service.setGoal({ sessionID, text: "Ship the follow-up" })).toEqual({
       mode: "normal",
@@ -140,32 +150,32 @@ it.effect("resets a completed goal to active with identical or new text", () =>
   }),
 )
 
-it.effect("ends goal continuation by completion and repeated no-progress", () =>
+it.effect("changes no-progress only through explicit reports and exhausts at the configured bound", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 3 })
 
-    expect((yield* service.advance({ sessionID, progress: "step one" })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID, noProgress: false })).goal).toMatchObject({
       status: "active",
       iteration: 1,
       noProgress: 0,
     })
-    expect((yield* service.advance({ sessionID, progress: "step one" })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
       status: "active",
       iteration: 2,
       noProgress: 1,
     })
-    expect((yield* service.advance({ sessionID, progress: "step one" })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
       status: "active",
       iteration: 3,
       noProgress: 2,
     })
-    const exhausted = yield* service.advance({ sessionID, progress: "step one" })
+    const exhausted = yield* service.report({ sessionID, noProgress: true })
     expect(exhausted).toMatchObject({ mode: "normal", goal: { status: "exhausted", iteration: 4, noProgress: 3 } })
 
     yield* service.setGoal({ sessionID, text: "Finish" })
-    const completed = yield* service.advance({ sessionID, progress: "done", completed: true })
-    expect(completed).toMatchObject({ mode: "normal", goal: { status: "completed", iteration: 1 } })
+    const completed = yield* service.complete(sessionID)
+    expect(completed).toMatchObject({ mode: "normal", goal: { status: "completed", iteration: 0 } })
   }),
 )
 
@@ -175,7 +185,7 @@ it.effect("keeps a progressing goal active beyond fifty-one iterations", () =>
     yield* service.setGoal({ sessionID, text: "Ship the fix" })
 
     const states = yield* Effect.forEach(Array.from({ length: 51 }), (_, index) =>
-      service.advance({ sessionID, progress: `step ${index}` }),
+      service.report({ sessionID, noProgress: false }),
     )
 
     expect(states.at(-1)).toMatchObject({
@@ -224,7 +234,7 @@ it.effect("preserves an already terminal goal status across mode switches", () =
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship it" })
-    yield* service.advance({ sessionID, progress: "done", completed: true })
+    yield* service.complete(sessionID)
     expect(yield* service.setMode({ sessionID, mode: "yolo" })).toMatchObject({
       mode: "normal",
       yolo: 2,
@@ -233,46 +243,30 @@ it.effect("preserves an already terminal goal status across mode switches", () =
   }),
 )
 
-it.effect("treats a text-free turn as neither progress nor repetition", () =>
+it.effect("increments or resets no-progress from the agent-supplied decision", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 2 })
 
-    // Turns that end on tool calls carry no assistant text; absence of text is not a repeat.
-    expect((yield* service.advance({ sessionID, progress: "" })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
       status: "active",
       iteration: 1,
-      noProgress: 0,
+      noProgress: 1,
     })
-    expect((yield* service.advance({ sessionID, progress: "   " })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID, noProgress: false })).goal).toMatchObject({
       status: "active",
       iteration: 2,
       noProgress: 0,
     })
-    expect((yield* service.advance({ sessionID, progress: "\n\t" })).goal).toMatchObject({
-      status: "active",
-      iteration: 3,
-      noProgress: 0,
-    })
-  }),
-)
-
-it.effect("still detects repeated assistant text across a text-free turn", () =>
-  Effect.gen(function* () {
-    const service = yield* setup
-    yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 2 })
-
-    expect((yield* service.advance({ sessionID, progress: "same" })).goal).toMatchObject({ noProgress: 0 })
-    expect((yield* service.advance({ sessionID, progress: "" })).goal).toMatchObject({ noProgress: 0 })
-    expect((yield* service.advance({ sessionID, progress: "same" })).goal).toMatchObject({ noProgress: 1 })
-    expect((yield* service.advance({ sessionID, progress: "same" })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({ noProgress: 1 })
+    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
       status: "exhausted",
       noProgress: 2,
     })
   }),
 )
 
-it.effect("creates continuation instructions and recognizes only the explicit completion marker", () =>
+it.effect("creates continuation instructions that require an agent-owned report and completion decision", () =>
   Effect.sync(() => {
     const goal: SessionAutonomy.Goal = {
       text: "Ship the fix",
@@ -284,13 +278,9 @@ it.effect("creates continuation instructions and recognizes only the explicit co
     const prompt = SessionAutonomy.continuationPrompt(goal)
     expect(prompt).toContain("Goal: Ship the fix")
     expect(prompt).toContain("Continuation: 3")
-    expect(SessionAutonomy.isCompleted("work complete")).toBe(false)
-    expect(SessionAutonomy.isCompleted(`verified ${SessionAutonomy.CompletionMarker}`)).toBe(true)
-    // Models normalize self-closing tags, so the detector tolerates the spacing they emit.
-    expect(SessionAutonomy.isCompleted("verified <goal-complete />")).toBe(true)
-    expect(SessionAutonomy.isCompleted("verified `<goal-complete/>`")).toBe(true)
-    expect(SessionAutonomy.isCompleted("<goal-completed/>")).toBe(false)
-    expect(SessionAutonomy.isCompleted("<goal-complete>")).toBe(false)
+    expect(prompt).toContain("goal report")
+    expect(prompt).toContain("background subagent or shell")
+    expect(prompt).toContain("goal complete")
   }),
 )
 

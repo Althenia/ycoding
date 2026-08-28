@@ -21,6 +21,7 @@ import { SessionPending } from "./pending"
 import { SessionTaskTable } from "./sql"
 import { and, eq, inArray } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
+import { Shell } from "../shell"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -69,14 +70,14 @@ export const layer = Layer.effect(
         ),
         Effect.asVoid,
       )
-    // Scores the turn that just settled. This runs before the terminal execution event because that
-    // event is the only signal a client gets that the loop moved: reading autonomy any earlier
-    // returns the previous iteration and still reports goal mode after the run has already ended.
-    const advanceGoal = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
+    const continuedGoal = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
       const state = yield* autonomy
         .get(sessionID)
         .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
       if (!state.goal || state.goal.status !== "active") return undefined
+      // Iteration zero means the agent ended without the required goal report. Do not create an
+      // automatic continuation from terminal text or execution settlement.
+      if (state.goal.iteration === 0) return undefined
       const activeChild = yield* db
         .select({ sessionID: SessionTaskTable.session_id })
         .from(SessionTaskTable)
@@ -90,26 +91,19 @@ export const layer = Layer.effect(
         .get()
         .pipe(Effect.orDie)
       if (activeChild) return undefined
-      const messages = yield* store.context(sessionID)
-      const assistant = messages.findLast((message) => message.type === "assistant")
-      const progress =
-        assistant?.content
-          .filter((item) => item.type === "text")
-          .map((item) => item.text)
-          .join("\n") ?? ""
-      const completed = SessionAutonomy.isCompleted(progress)
-      const advanced = yield* autonomy.advance({
-        sessionID,
-        progress,
-        completed,
-      })
-      if (!advanced.goal || advanced.goal.status !== "active") return undefined
-      return { goal: advanced.goal, progress, yolo: SessionAutonomy.yoloLevel(advanced) }
+      const session = yield* store.get(sessionID)
+      if (!session) return undefined
+      const activeShell = yield* Effect.gen(function* () {
+        const shell = yield* Shell.Service
+        return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
+      }).pipe(Effect.provide(locations.get(session.location)))
+      if (activeShell) return undefined
+      return { goal: state.goal, yolo: SessionAutonomy.yoloLevel(state) }
     })
 
     const admitGoalContinuation = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
-      advanced: { readonly goal: SessionAutonomy.Goal; readonly progress: string; readonly yolo: number },
+      advanced: { readonly goal: SessionAutonomy.Goal; readonly yolo: number },
     ) {
       const id = SessionMessage.ID.make(
         `msg_goal_${Hash.sha256(`${sessionID}\0${advanced.goal.iteration}`).slice(0, 24)}`,
@@ -117,7 +111,7 @@ export const layer = Layer.effect(
       const input = SessionPending.Message.make({
         type: "synthetic",
         data: {
-          text: SessionAutonomy.continuationPrompt(advanced.goal, { latestAssistantText: advanced.progress }),
+          text: SessionAutonomy.continuationPrompt(advanced.goal),
           description: "Autonomous goal continuation",
           metadata: { autonomy: { yolo: advanced.yolo, goal: true, iteration: advanced.goal.iteration } },
         },
@@ -218,9 +212,9 @@ export const layer = Layer.effect(
           const outcome = terminal(exit, reason)
           const advanced =
             outcome.type === "succeeded"
-              ? yield* advanceGoal(sessionID).pipe(
+              ? yield* continuedGoal(sessionID).pipe(
                   Effect.catchCause((cause) =>
-                    Effect.logWarning("Failed to advance the autonomous goal", cause).pipe(
+                    Effect.logWarning("Failed to continue the autonomous goal", cause).pipe(
                       Effect.annotateLogs({ sessionID }),
                       Effect.as(undefined),
                     ),
