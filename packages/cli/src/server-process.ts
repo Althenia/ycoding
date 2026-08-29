@@ -13,7 +13,6 @@ import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
 import { DatabaseRecovery } from "./services/database-recovery"
 import { ServiceConfig } from "./services/service-config"
-import { Updater } from "./services/updater"
 
 export type Mode = "default" | "service" | "stdio"
 
@@ -26,7 +25,6 @@ export type Options = {
 // The process effect lives until server shutdown; tracing it would parent every request to one process-lifetime trace.
 export const run = Effect.fnUntraced(function* (options: Options) {
   const providedRaw = processEffect(options).pipe(
-    Effect.provide(Updater.layer),
     Effect.provide(
       LayerNode.compile(LayerNode.group([Global.node, AppProcess.node]), [
         [
@@ -150,8 +148,6 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
       const url = HttpServer.formatAddress(server.address)
       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
       if (options.mode === "default" && !environmentPassword) console.log(`server password ${password}`)
-      const updater = yield* Updater.Service
-      yield* updater.check().pipe(Effect.schedule(Schedule.spaced("10 minutes")), Effect.forkScoped)
       return yield* options.mode === "service"
         ? server.shutdown
         : options.mode === "stdio"

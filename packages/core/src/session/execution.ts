@@ -75,9 +75,6 @@ export const layer = Layer.effect(
         .get(sessionID)
         .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
       if (!state.goal || state.goal.status !== "active") return undefined
-      // Iteration zero means the agent ended without the required goal report. Do not create an
-      // automatic continuation from terminal text or execution settlement.
-      if (state.goal.iteration === 0) return undefined
       const activeChild = yield* db
         .select({ sessionID: SessionTaskTable.session_id })
         .from(SessionTaskTable)
@@ -98,7 +95,9 @@ export const layer = Layer.effect(
         return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
       }).pipe(Effect.provide(locations.get(session.location)))
       if (activeShell) return undefined
-      return { goal: state.goal, yolo: SessionAutonomy.yoloLevel(state) }
+      const advanced = yield* autonomy.advance({ sessionID, progress: "" })
+      if (!advanced.goal || advanced.goal.status !== "active") return undefined
+      return { goal: advanced.goal, yolo: SessionAutonomy.yoloLevel(advanced) }
     })
 
     const admitGoalContinuation = Effect.fnUntraced(function* (

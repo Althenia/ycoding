@@ -148,7 +148,7 @@ Session autonomy is durable and supports:
 
 The expanded AUTONOMY sidebar renders Guardrails as `auto · YOLO 3` only when the effective YOLO level is 3. Normal, YOLO 0-2, and active goal below YOLO 3 render Guardrails as `enforced`.
 
-Goal state stores the goal text, status, iteration, no-progress count, and maximum no-progress count. Historical stored progress digests remain decodable but do not decide current progress.
+Goal state stores the goal text, status, automatic continuation iteration, consumed no-progress attempt count, and maximum no-progress attempt count. Historical stored progress digests remain decodable but do not decide current progress.
 
 While a goal is active, each newly admitted user prompt re-synthesizes the durable goal from that prompt and the current conversation. Exact prompt retries do not re-synthesize the goal; synthetic continuations do not change it.
 
@@ -156,11 +156,11 @@ Terminal goal states are:
 
 - `completed` — the agent explicitly called the goal tool's `complete` action after verification;
 - `stopped` — the user or runtime left goal mode;
-- `exhausted` — explicit agent `report` actions marked no progress until the configured bound was reached.
+- `exhausted` — explicit agent `report` actions consumed the configured no-progress attempt budget.
 
-The agent calls goal `report` exactly once per autonomous iteration with its own no-progress decision. Each accepted report increments the iteration once; progress resets the no-progress counter, no progress increments it once, and the configured bound exhausts the goal. Assistant-text equality, empty assistant text, completion markers, and terminal execution do not mutate progress or complete a goal.
+The agent does not report ordinary progress. It calls goal `report` only after encountering a blocker, attempting reasonable self-resolution, and remaining unable to progress. Every accepted report consumes one no-progress attempt; the configured bound exhausts the goal, and later progress does not reset the consumed budget. A successful settled drain with an active goal advances the durable iteration and admits the next continuation without requiring a report. Assistant text, empty assistant output, completion markers, and terminal execution do not infer no progress or complete a goal.
 
-An active direct durable child task or running background shell blocks automatic goal continuation. Such work is unfinished rather than automatic no progress; its existing terminal notification wakes the parent, and the agent reports the next iteration after observing that notification. This prevents a parent goal from spinning while background work remains active. The TUI refreshes autonomy when session execution reaches a terminal event so displayed progress is current. Its top-right session status combines active YOLO or goal mode with the operational state; while retrying, it shows a failure marker, completed failure count, next retry number, and seconds until that retry. While main-session working is active, its decorative dot trail advances every 160 ms and uses the same semantic color as the adjacent status label.
+An active direct durable child task or running background shell blocks automatic goal continuation. Such work is unfinished rather than automatic no progress; its existing terminal notification wakes the parent so goal work can resume without consuming a no-progress attempt. This prevents a parent goal from spinning while background work remains active. The TUI refreshes autonomy when session execution reaches a terminal event so displayed progress is current. Its top-right session status combines active YOLO or goal mode with the operational state; while retrying, it shows a failure marker, completed failure count, next retry number, and seconds until that retry. While main-session working is active, its decorative dot trail advances every 160 ms and uses the same semantic color as the adjacent status label.
 
 ## Session guardrails
 

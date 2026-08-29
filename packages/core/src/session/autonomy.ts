@@ -114,10 +114,7 @@ export interface Interface {
     maxNoProgress?: number
   }) => Effect.Effect<State, NotFoundError>
   readonly stop: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
-  readonly report: (input: {
-    sessionID: SessionSchema.ID
-    noProgress: boolean
-  }) => Effect.Effect<State, NotFoundError>
+  readonly report: (input: { sessionID: SessionSchema.ID }) => Effect.Effect<State, NotFoundError>
   readonly complete: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly advance: (input: {
     sessionID: SessionSchema.ID
@@ -187,7 +184,8 @@ export function continuationPrompt(goal: Goal, input: { readonly latestAssistant
     ...proxy,
     "Use the conversation and current repository state to choose the next useful action.",
     "Answer routine blockers yourself using the safest reasonable default.",
-    "Before ending this autonomous iteration, call goal report exactly once with your explicit no-progress decision.",
+    "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
+    "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
     "An active background subagent or shell is unfinished work, not automatic no progress; continue useful independent work or finish this iteration and wait for its automatic notification.",
     "When the goal is actually achieved and verified, call goal complete. Completion remains your explicit decision.",
     "Do not claim completion without verification evidence or the goal complete action.",
@@ -382,12 +380,11 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     clearGoal,
     set,
     stop: (sessionID) => clearGoal(sessionID),
-    report: ({ sessionID, noProgress: reportedNoProgress }) =>
+    report: ({ sessionID }) =>
       mutate(sessionID, (state) => {
         const goal = state.goal
         if (!goal || goal.status !== "active") return undefined
-        const iteration = goal.iteration + 1
-        const noProgress = reportedNoProgress ? goal.noProgress + 1 : 0
+        const noProgress = goal.noProgress + 1
         const status: GoalStatus = noProgress >= goal.maxNoProgress ? "exhausted" : "active"
         return {
           mode: "normal",
@@ -395,7 +392,6 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
           goal: {
             ...goal,
             status,
-            iteration,
             noProgress,
           },
         }
@@ -407,13 +403,12 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         return { ...state, goal: { ...goal, status: "completed" as const } }
       }),
     advance: ({ sessionID, completed = false }) =>
-      completed
-        ? mutate(sessionID, (state) => {
-            const goal = state.goal
-            if (!goal || goal.status !== "active") return undefined
-            return { ...state, goal: { ...goal, status: "completed" as const } }
-          })
-        : load(sessionID),
+      mutate(sessionID, (state) => {
+        const goal = state.goal
+        if (!goal || goal.status !== "active") return undefined
+        if (completed) return { ...state, goal: { ...goal, status: "completed" as const } }
+        return { ...state, goal: { ...goal, iteration: goal.iteration + 1 } }
+      }),
   }
 }
 

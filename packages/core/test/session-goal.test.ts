@@ -310,30 +310,26 @@ it.effect("returns no synthesized goal for provider failure or empty output", ()
   }),
 )
 
-it.effect("keeps agent-reported goal iteration and no-progress exhaustion behavior", () =>
+it.effect("uses agent reports only as no-progress retry attempts", () =>
   Effect.gen(function* () {
     const service = yield* SessionAutonomy.Service
     const sessionID = SessionV2.ID.make("ses_goal_iteration")
     yield* insertSession(sessionID)
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 3 })
 
-    expect((yield* service.report({ sessionID, noProgress: false })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
       status: "active",
-      iteration: 1,
-    })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
-      status: "active",
-      iteration: 2,
+      iteration: 0,
       noProgress: 1,
     })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
       status: "active",
-      iteration: 3,
+      iteration: 0,
       noProgress: 2,
     })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
       status: "exhausted",
-      iteration: 4,
+      iteration: 0,
       noProgress: 3,
     })
   }),

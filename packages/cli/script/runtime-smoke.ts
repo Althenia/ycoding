@@ -464,7 +464,6 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     XDG_STATE_HOME: state,
     YCODING_PASSWORD: PASSWORD,
     YCODING_DISABLE_CHANNEL_DB: "1",
-    YCODING_DISABLE_AUTOUPDATE: "1",
   }
   const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {
     stdin: "pipe",

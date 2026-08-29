@@ -231,7 +231,7 @@ const table = sqliteTable("session", {
 
 - Keep autonomy state durable on the Session. Valid modes are `normal`, `yolo`, and `goal`.
 - Goal mode must terminate explicitly as `completed`, `stopped`, or `exhausted`; leaving goal mode must not silently discard the final goal state.
-- No-progress accounting uses the normalized progress digest. A tool-only turn with no assistant text spends an iteration without counting as repeated progress.
+- Goal reports are reserved for unresolved blockers after reasonable self-resolution; each accepted report consumes one no-progress attempt. Successful active-goal settlement advances continuation without a report and does not reset the no-progress budget.
 - Subagents are durable child Sessions and always launch in the background. Do not add a synchronous result path disguised by the deprecated `background` input.
 - Preserve parent-child ownership, permission ceilings, explicit agent selection, and the configured nesting bound.
 - Session guardrails apply to the root Session family independently from tool permissions. `yolo` levels `1-2` and `goal`/`permission auto-approval` never auto-answer guardrail reviews; only `yolo 3` auto-approves guardrail reviews.

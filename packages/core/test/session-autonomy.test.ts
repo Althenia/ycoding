@@ -37,9 +37,8 @@ const setup = Effect.gen(function* () {
 
 it.effect("exposes one explicit agent no-progress report action", () =>
   Effect.sync(() => {
-    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "report", noProgress: true })).toEqual({
+    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "report", noProgress: false })).toEqual({
       action: "report",
-      noProgress: true,
     })
   }),
 )
@@ -69,7 +68,7 @@ it.effect("snapshots autonomy state with a durable ABA fence", () =>
       digest: "7bca8b42480222ddfa0cf4adc95073d9b40726221d52a79b4c55ef354dec7b52",
     })
 
-    expect(yield* service.report({ sessionID, noProgress: false })).toEqual(initial.state)
+    expect(yield* service.report({ sessionID })).toEqual(initial.state)
     expect(yield* service.snapshot(sessionID)).toEqual(initial)
 
     yield* service.setMode({ sessionID, mode: "yolo" })
@@ -86,18 +85,18 @@ it.effect("snapshots autonomy state with a durable ABA fence", () =>
   }),
 )
 
-it.effect("serializes concurrent state-dependent autonomy advances", () =>
+it.effect("serializes concurrent no-progress reports", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship the fix" })
 
     yield* Effect.all(
-      [service.report({ sessionID, noProgress: false }), service.report({ sessionID, noProgress: false })],
+      [service.report({ sessionID }), service.report({ sessionID })],
       { concurrency: "unbounded" },
     )
 
     expect(yield* service.snapshot(sessionID)).toMatchObject({
-      state: { mode: "normal", yolo: 0, goal: { iteration: 2, status: "active" } },
+      state: { mode: "normal", yolo: 0, goal: { iteration: 0, noProgress: 2, status: "active" } },
       sequence: 3,
     })
   }),
@@ -150,28 +149,23 @@ it.effect("resets a completed goal to active with identical or new text", () =>
   }),
 )
 
-it.effect("changes no-progress only through explicit reports and exhausts at the configured bound", () =>
+it.effect("uses every report as one no-progress retry attempt", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 3 })
 
-    expect((yield* service.report({ sessionID, noProgress: false })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
       status: "active",
-      iteration: 1,
-      noProgress: 0,
-    })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
-      status: "active",
-      iteration: 2,
+      iteration: 0,
       noProgress: 1,
     })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
       status: "active",
-      iteration: 3,
+      iteration: 0,
       noProgress: 2,
     })
-    const exhausted = yield* service.report({ sessionID, noProgress: true })
-    expect(exhausted).toMatchObject({ mode: "normal", goal: { status: "exhausted", iteration: 4, noProgress: 3 } })
+    const exhausted = yield* service.report({ sessionID })
+    expect(exhausted).toMatchObject({ mode: "normal", goal: { status: "exhausted", iteration: 0, noProgress: 3 } })
 
     yield* service.setGoal({ sessionID, text: "Finish" })
     const completed = yield* service.complete(sessionID)
@@ -185,7 +179,7 @@ it.effect("keeps a progressing goal active beyond fifty-one iterations", () =>
     yield* service.setGoal({ sessionID, text: "Ship the fix" })
 
     const states = yield* Effect.forEach(Array.from({ length: 51 }), (_, index) =>
-      service.report({ sessionID, noProgress: false }),
+      service.advance({ sessionID, progress: `step ${index}` }),
     )
 
     expect(states.at(-1)).toMatchObject({
@@ -243,30 +237,30 @@ it.effect("preserves an already terminal goal status across mode switches", () =
   }),
 )
 
-it.effect("increments or resets no-progress from the agent-supplied decision", () =>
+it.effect("does not spend or reset the no-progress budget when ordinary progress advances", () =>
   Effect.gen(function* () {
     const service = yield* setup
     yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 2 })
 
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
+      status: "active",
+      iteration: 0,
+      noProgress: 1,
+    })
+    expect((yield* service.advance({ sessionID, progress: "Implemented the fix" })).goal).toMatchObject({
       status: "active",
       iteration: 1,
       noProgress: 1,
     })
-    expect((yield* service.report({ sessionID, noProgress: false })).goal).toMatchObject({
-      status: "active",
-      iteration: 2,
-      noProgress: 0,
-    })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({ noProgress: 1 })
-    expect((yield* service.report({ sessionID, noProgress: true })).goal).toMatchObject({
+    expect((yield* service.report({ sessionID })).goal).toMatchObject({
       status: "exhausted",
+      iteration: 1,
       noProgress: 2,
     })
   }),
 )
 
-it.effect("creates continuation instructions that require an agent-owned report and completion decision", () =>
+it.effect("creates continuation instructions that reserve reports for unresolved blockers", () =>
   Effect.sync(() => {
     const goal: SessionAutonomy.Goal = {
       text: "Ship the fix",
@@ -278,7 +272,9 @@ it.effect("creates continuation instructions that require an agent-owned report 
     const prompt = SessionAutonomy.continuationPrompt(goal)
     expect(prompt).toContain("Goal: Ship the fix")
     expect(prompt).toContain("Continuation: 3")
-    expect(prompt).toContain("goal report")
+    expect(prompt).toContain("Only call goal report after you encounter a blocker")
+    expect(prompt).toContain("Do not call goal report for ordinary progress")
+    expect(prompt).toContain("consumes one no-progress retry attempt")
     expect(prompt).toContain("background subagent or shell")
     expect(prompt).toContain("goal complete")
   }),

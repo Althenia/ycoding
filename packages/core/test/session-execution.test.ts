@@ -202,7 +202,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("stops goal continuations only after three explicit no-progress reports", () =>
+  it.effect("stops goal continuations after three unresolved-blocker reports", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionV2.ID.make("ses_goal_loop")
@@ -215,7 +215,7 @@ describe("SessionExecution lifecycle", () => {
       const context = yield* buildExecution(scope, () =>
         Effect.gen(function* () {
           drains += 1
-          yield* autonomy.report({ sessionID, noProgress: drains > 1 }).pipe(Effect.orDie)
+          yield* autonomy.report({ sessionID }).pipe(Effect.orDie)
           yield* recordAssistant(database, sessionID, drains, [{ type: "text", text: "Still investigating." }])
         }),
       )
@@ -224,13 +224,13 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID)
       yield* execution.awaitIdle(sessionID)
 
-      expect(drains).toBe(4)
+      expect(drains).toBe(3)
       expect(yield* autonomy.get(sessionID)).toMatchObject({
         mode: "normal",
-        goal: { status: "exhausted", iteration: 4, noProgress: 3 },
+        goal: { status: "exhausted", iteration: 2, noProgress: 3 },
       })
       expect(yield* admittedInputs(database)).toEqual(
-        Array.from({ length: 3 }, (_, index) => ({
+        Array.from({ length: 2 }, (_, index) => ({
           inputID: `msg_goal_${Hash.sha256(`${sessionID}\0${index + 1}`).slice(0, 24)}`,
           delivery: "steer",
         })),
@@ -239,7 +239,7 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("does not infer goal progress or completion from terminal assistant text", () =>
+  it.effect("continues without reports or marker inference until the agent explicitly completes the goal", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionV2.ID.make("ses_goal_completed")
@@ -252,9 +252,9 @@ describe("SessionExecution lifecycle", () => {
       const context = yield* buildExecution(scope, () =>
         Effect.gen(function* () {
           drains += 1
+          if (drains === 3) yield* autonomy.complete(sessionID).pipe(Effect.orDie)
           yield* recordAssistant(database, sessionID, drains, [
-            { type: "text", text: "Ran the suite." },
-            { type: "text", text: "All green. <goal-complete/>" },
+            { type: "text", text: "Made useful progress. <goal-complete/>" },
           ])
         }),
       )
@@ -263,17 +263,22 @@ describe("SessionExecution lifecycle", () => {
       yield* execution.resume(sessionID)
       yield* execution.awaitIdle(sessionID)
 
-      expect(drains).toBe(1)
+      expect(drains).toBe(3)
       expect(yield* autonomy.get(sessionID)).toMatchObject({
         mode: "normal",
-        goal: { status: "active", iteration: 0, noProgress: 0 },
+        goal: { status: "completed", iteration: 2, noProgress: 0 },
       })
-      expect(yield* admittedInputs(database)).toEqual([])
+      expect(yield* admittedInputs(database)).toEqual(
+        Array.from({ length: 2 }, (_, index) => ({
+          inputID: `msg_goal_${Hash.sha256(`${sessionID}\0${index + 1}`).slice(0, 24)}`,
+          delivery: "steer",
+        })),
+      )
       yield* Scope.close(scope, Exit.void)
     }),
   )
 
-  it.effect("does not spin a reported parent goal while its background shell is still running", () =>
+  it.effect("does not spin a parent goal while its background shell is still running", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionV2.ID.make("ses_goal_background_shell")
@@ -288,7 +293,6 @@ describe("SessionExecution lifecycle", () => {
         () =>
           Effect.gen(function* () {
             drains += 1
-            yield* autonomy.report({ sessionID, noProgress: false }).pipe(Effect.orDie)
           }),
         undefined,
         noopCompactionExecution(),
@@ -313,7 +317,7 @@ describe("SessionExecution lifecycle", () => {
 
       expect(drains).toBe(1)
       expect(yield* autonomy.get(sessionID)).toMatchObject({
-        goal: { status: "active", iteration: 1, noProgress: 0 },
+        goal: { status: "active", iteration: 0, noProgress: 0 },
       })
       expect(yield* admittedInputs(database)).toEqual([])
       yield* Scope.close(scope, Exit.void)
