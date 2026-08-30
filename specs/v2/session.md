@@ -81,7 +81,7 @@ After local settlement, continuation reloads projected history and begins a new 
 
 ## Retry Is Narrow And Observable
 
-Core retries typed rate-limit, provider-internal, and transport failures only before non-whitespace text or reasoning or any tool evidence exists. Empty text or reasoning starts and empty deltas do not cross this boundary. The initial request plus at most nine retries use exponential backoff, increased when the provider supplies a longer retry delay within the runtime ceiling. Anthropic AI SDK socket disconnects and abnormal WebSocket close code 1006 normalize to transport failures and use this policy.
+Core retries typed rate-limit, provider-internal, and transport failures only before non-whitespace text or reasoning or any tool evidence exists. Empty text or reasoning starts and empty deltas do not cross this boundary. The initial request plus at most nine retries use exponential backoff, increased when the provider supplies a longer retry delay within the runtime ceiling. Anthropic AI SDK socket disconnects and abnormal WebSocket close code 1006 normalize to transport failures and use this policy. A WebSocket lifecycle heartbeat delayed beyond 50 seconds also fails and evicts the active transport, so a retry opens a fresh WebSocket connection; fixed routes never fall back to HTTP/SSE.
 
 Each retry is a new Physical Attempt within the same logical Step, reuses its assistant message ID, and does not consume another unit of the selected agent's Step allowance. The logical Step publishes one started event and one terminal event across all its attempts. `session.retry.scheduled` records the next attempt and absolute retry time. A later Step start or terminal failure clears projected retry state. Surviving retry history never triggers post-crash recovery by itself.
 
@@ -156,6 +156,8 @@ There is no separate finite Session-history endpoint. Request/response consumers
 Task order is deterministic: `waiting`, `starting`, `running`, `cancelling`, then the terminal group (`cancelled`, `completed`, `failed`, `lost`); records in each group sort by durable `time.updated` descending and Session ID ascending. Cursors carry the parent Session ID, this rank, durable update time, Session ID, and direction. The server rejects malformed cursors and cursors for another parent with `InvalidCursorError`.
 
 The page read verifies the parent Session and calculates aggregates and rows in one database transaction. Paging neither removes child Sessions nor deletes task, message, event, permission-ceiling, ownership, nesting, or background-execution state. The full internal task list remains available for the independently bounded model-facing TeamView.
+
+The optional `subagent` tool timeout is a positive millisecond value no greater than 86,400,000 and defaults to 3,600,000 when omitted. On expiry, the runner interrupts the child, settles the durable task as failed, and delivers the parent failure notification.
 
 For each parent, the TUI retains only the current page's at-most-10 task metadata rows and replaces them on previous or next navigation. Exact summary totals remain independent from resident rows. Sibling navigation first locates an absent current child by loading pages lazily, then loads an adjacent page only when navigation crosses the current page boundary; this changes only volatile TUI residency and never durable child state.
 

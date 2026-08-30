@@ -17,7 +17,7 @@ Prompt-cache promotion remains a bounded runtime optimization, but a recreated r
 
 Terminal-response silence recovery is a bounded correctness path, not an efficiency retry: one valid settled silent response may create one additional logical `step` request. That request sends canonical durable history as a full request with tools disabled and no stored Responses continuation; it can therefore receive an existing tool-prefix or provider-cache invalidation label. It never counts as a physical retry or `fallback`.
 
-HTTP response-body read failures retain transport classification. Before observable assistant output, the Session runner applies the existing bounded physical-attempt schedule to those failures; after observable output, it preserves the failed Step instead of replaying provider work. Codex HTTP/SSE and WebSocket are fixed separate routes and never fall back to each other.
+HTTP response-body read failures retain transport classification. Before observable assistant output, the Session runner applies the existing bounded physical-attempt schedule to those failures; after observable output, it preserves the failed Step instead of replaying provider work. A WebSocket lifecycle heartbeat delayed beyond 50 seconds fails and evicts the active transport; a retry opens a fresh WebSocket connection. Codex HTTP/SSE and WebSocket are fixed separate routes and never fall back to each other.
 
 ## Defaults
 

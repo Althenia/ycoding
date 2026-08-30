@@ -30,6 +30,9 @@ type WebSocketConstructorWithHeaders = new (
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/LLM/WebSocketExecutor") {}
 
+const LIFECYCLE_HEARTBEAT_MS = 25_000
+const LIFECYCLE_SUSPEND_THRESHOLD_MS = LIFECYCLE_HEARTBEAT_MS * 2
+
 const transportError = (
   method: string,
   message: string,
@@ -166,8 +169,16 @@ export const fromWebSocket = (
       )
     }
     let closed = false
+    let lifecycleInterval: ReturnType<typeof setInterval> | undefined
+    const stopLifecycle = () => {
+      if (lifecycleInterval === undefined) return
+      clearInterval(lifecycleInterval)
+      lifecycleInterval = undefined
+    }
     const onError = (event: Event) => {
       closed = true
+      stopLifecycle()
+      removeListeners()
       Queue.failCauseUnsafe(
         messages,
         Cause.fail(
@@ -177,6 +188,8 @@ export const fromWebSocket = (
     }
     const onClose = (event: CloseEvent) => {
       closed = true
+      stopLifecycle()
+      removeListeners()
       if (event.code === 1000 || event.code === 1005) return Queue.endUnsafe(messages)
       Queue.failCauseUnsafe(
         messages,
@@ -185,28 +198,51 @@ export const fromWebSocket = (
         ),
       )
     }
-    let pingInterval: ReturnType<typeof setInterval> | undefined
-    const cleanup = Effect.sync(() => {
-      closed = true
+    const removeListeners = () => {
       ws.removeEventListener("message", onMessage)
       ws.removeEventListener("error", onError)
       ws.removeEventListener("close", onClose)
-      if (pingInterval !== undefined) clearInterval(pingInterval)
+    }
+    const cleanup = Effect.sync(() => {
+      closed = true
+      stopLifecycle()
+      removeListeners()
     }).pipe(Effect.andThen(Queue.shutdown(messages)))
 
     ws.addEventListener("message", onMessage)
     ws.addEventListener("error", onError)
     ws.addEventListener("close", onClose)
-    // Keep idle wss alive through proxies that close after ~60s idle.
-    if (typeof (ws as unknown as { ping?: () => void }).ping === "function") {
-      pingInterval = setInterval(() => {
+    let lastHeartbeatAt = Date.now()
+    lifecycleInterval = setInterval(() => {
+      const now = Date.now()
+      const elapsed = now - lastHeartbeatAt
+      lastHeartbeatAt = now
+      if (elapsed > LIFECYCLE_SUSPEND_THRESHOLD_MS) {
+        closed = true
+        stopLifecycle()
+        removeListeners()
+        Queue.failCauseUnsafe(
+          messages,
+          Cause.fail(
+            transportError("message", `WebSocket lifecycle heartbeat delayed by ${elapsed}ms`, {
+              url: input.url,
+              kind: "lifecycle",
+            }),
+          ),
+        )
+        if (ws.readyState !== globalThis.WebSocket.CLOSED && ws.readyState !== globalThis.WebSocket.CLOSING)
+          ws.close(1000)
+        return
+      }
+      // Keep idle wss alive through proxies that close after ~60s idle.
+      if (typeof (ws as unknown as { ping?: () => void }).ping === "function") {
         try {
           ;(ws as unknown as { ping: () => void }).ping()
         } catch {}
-      }, 25_000)
-      if (typeof (pingInterval as unknown as { unref?: () => void }).unref === "function") {
-        ;(pingInterval as unknown as { unref: () => void }).unref!()
       }
+    }, LIFECYCLE_HEARTBEAT_MS)
+    if (typeof (lifecycleInterval as unknown as { unref?: () => void }).unref === "function") {
+      ;(lifecycleInterval as unknown as { unref: () => void }).unref!()
     }
 
     return {

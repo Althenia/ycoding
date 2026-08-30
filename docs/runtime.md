@@ -39,7 +39,7 @@ One step is one logical LLM request. Retryable pre-output failures reuse the sam
 
 Every started logical Step closes with exactly one durable terminal event. A provider stream that omits required step settlement fails a started assistant as `provider.invalid-output`; a non-LLM stream failure also closes a started assistant with its normalized Session error before the original cause propagates. A valid settled terminal response containing no non-whitespace assistant text and no local-tool continuation receives one bounded text-only recovery Step. Recovery disables tools, omits synthetic max-step text, disables stored Responses continuation, and fails rather than creating a third provider request when it is silent, tool-only, malformed, or provider-failed; the recovery request does not physically retry provider failures.
 
-Retryable pre-output transport, rate-limit, and provider-internal failures reuse one logical request and retry up to ten total physical attempts. Empty text or reasoning starts and empty deltas are not observable provider output, so they do not prevent that retry; non-whitespace text or reasoning and any tool evidence establish the no-replay boundary. HTTP response-body read failures, including Anthropic AI SDK socket disconnects, retain transport classification and use this schedule when they occur before observable output; abnormal WebSocket close code 1006 is also a transport failure. Native response-stream failures are reduced to a bounded category before entering logs, durable Session errors, or the transcript; raw runtime errors, request URLs, stacks, headers, and bodies are not retained. When an `openai-codex-responses` HTTP body read fails before the no-replay boundary, the next existing physical retry disables Fetch connection reuse and opens a fresh TCP connection. This is one-shot retry context: normal requests keep pooling, the route remains HTTP/SSE, and there is no WebSocket fallback. Exponential delays start at two seconds and cap at 120 seconds; a provider `retry-after` is a minimum delay only when it is within that same ceiling. Authentication and existing ineligible failure classes do not retry. Status-less provider messages with a recognized code prefix, including OpenAI `server_error:`, retain their provider-internal classification and use this bounded schedule instead of immediately ending the Session response.
+Retryable pre-output transport, rate-limit, and provider-internal failures reuse one logical request and retry up to ten total physical attempts. Empty text or reasoning starts and empty deltas are not observable provider output, so they do not prevent that retry; non-whitespace text or reasoning and any tool evidence establish the no-replay boundary. HTTP response-body read failures, including Anthropic AI SDK socket disconnects, retain transport classification and use this schedule when they occur before observable output; abnormal WebSocket close code 1006 is also a transport failure. A WebSocket lifecycle heartbeat delayed beyond 50 seconds fails the active transport and evicts that connection, so a retry opens a fresh WebSocket connection; fixed Codex WebSocket routes do not fall back to HTTP/SSE. Native response-stream failures are reduced to a bounded category before entering logs, durable Session errors, or the transcript; raw runtime errors, request URLs, stacks, headers, and bodies are not retained. When an `openai-codex-responses` HTTP body read fails before the no-replay boundary, the next existing physical retry disables Fetch connection reuse and opens a fresh TCP connection. This is one-shot retry context: normal requests keep pooling, the route remains HTTP/SSE, and there is no WebSocket fallback. Exponential delays start at two seconds and cap at 120 seconds; a provider `retry-after` is a minimum delay only when it is within that same ceiling. Authentication and existing ineligible failure classes do not retry. Status-less provider messages with a recognized code prefix, including OpenAI `server_error:`, retain their provider-internal classification and use this bounded schedule instead of immediately ending the Session response.
 
 The durable provider-request ledger stores identifiers, model and route identity, stable prompt/cache digests, attempt counts, normalized tokens, cost, continuation mode, and invalidation reason. It does not store prompt, message, tool-result, or response text.
 
@@ -83,6 +83,8 @@ Provider-assisted checkpoint generation has one total `compaction.timeout_second
 Historical destructive summary replacement is decode-only and migration-only: valid V1 replacement events may establish a revision-zero baseline and historical markers may render. New compaction never creates replacement events or deletes canonical history; no active `conversation_summarize` source or tool remains.
 
 ### Shell resource control
+
+Shell `timeout` is finite: omission or `0` uses 600,000 ms. A foreground command still running after 300,000 ms moves to the background without being stopped; its eventual settlement is delivered as the existing completion notification.
 
 Shell commands may inherit `shell_memory_limit_mb` or override it with the tool's `memory_limit_mb` input. Zero means unlimited. A finite limit supplies Go and Node runtime memory hints, then monitors aggregate resident memory for the POSIX command process group. If sampled usage exceeds the limit, the existing scoped process-group kill path terminates the command once and records the distinct `memory-limit` terminal status; timeout, normal exit, interruption, and memory enforcement still compete through one first-terminal-state-wins boundary.
 
@@ -209,6 +211,7 @@ Current behavior:
 - TeamView is model-facing coordination data, not user-facing narration. Parent transcripts do not render child launch, running, or completion activity; the sidebar and session picker expose that state. The parent keeps launch, running, completed, failed, and total bookkeeping silent unless the user explicitly asks for subagent status.
 - A child failure may still be reported when it blocks the requested outcome, but not as routine orchestration bookkeeping.
 - Running children receive a status, blocker, and ETA request every ten minutes.
+- An optional child `timeout` accepts at most 86,400,000 ms and defaults to 3,600,000 ms when omitted. On expiry, the runtime interrupts the child, settles its durable task as failed, and delivers the existing parent failure notification.
 - A child question reported through orchestration receives the safe default answer immediately when its managed Session family is in `yolo` or active `goal` mode. The task remains running, and no parent-question notification or sound is emitted.
 - The effective permission policy limits which subagents are available.
 - Configured and managed subagents materialize the Location's registered tool catalog through their ordered permission rules and inherited parent ceiling. Empty managed-agent rules resolve to safe defaults with shell requiring approval; final `subagent` and `subagent_control` denies prevent nested orchestration.
@@ -289,6 +292,8 @@ Versions preserve content digests, provenance, parent versions, state transition
 
 Automatic creation is governed by per-kind and accounting caps. Plugin automatic creation is currently disabled by a zero automatic cap.
 
+Artifact learning is non-punitive: after the primary task is complete and validated, an artifact may capture a safer reusable rule from a validated repeated mistake, failed approach, or repository gotcha. One-off failures and transient task state are not artifact material.
+
 ### Integration
 
 Adapters expose active artifacts to the existing agent, command, skill, and plugin discovery paths. The TUI exposes a project-artifact dialog and project-artifact tools use the validated store instead of writing directly to source directories.
@@ -306,6 +311,8 @@ Implemented: opening or refreshing a Session fetches its complete current projec
 ### Rendering guarantees
 
 Transcript rows are reduced from resident messages. A row whose backing message or assistant part has been evicted is not mounted, so it consumes no blank terminal block during navigation, resume, or reconnect.
+
+Tool and subagent activity rows update elapsed time only while their underlying lifecycle is active. Their timers stop when a tool or child task reaches a terminal state, preserving the terminal duration without a continuing redraw.
 
 The transcript bottom-follows a completed compaction metrics row at the chronological tail exactly like any other new chat row. The latest job-keyed compaction lifecycle row occupies its canonical compaction-message position as soon as that message is resident, including while the job is pending or running, so later user and assistant chat progresses below a background advisor compaction. A newer visible compaction replaces the previous compaction row instead of accumulating historical metrics panels. An event-only provisional lifecycle remains one tail placeholder until message hydration; hydration repositions the same keyed row without duplication, and terminal settlement updates that row in place. Main and child Session routes retain separate viewport state: returning to a Session restores its prior non-tail position and message navigation, while a Session left at the tail resumes tail following. Repeated navigation does not duplicate rows.
 
@@ -457,7 +464,7 @@ The rail supports these section keys: `session`, `context`, `todo`, `goal`, `aut
 
 ### Default expanded sections
 
-The initial expansion order is `session`, `context`, optional `goal`, optional `autonomy`, then `todo`; the rail retains the four most recently listed entries. Thus `todo` is always initially expanded, and `session` is omitted when both optional sections are present. Sections that carry a summary on their header row (`subagents`, `shells`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) are collapsed by default to conserve vertical space.
+Only `session`, `context`, and `todo` are expanded by default. Attention can open another section, and a user can manually toggle any section; all other sections begin collapsed.
 
 ### Expansion cap
 

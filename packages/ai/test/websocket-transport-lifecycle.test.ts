@@ -182,6 +182,89 @@ describe("WebSocket JSON transport lifecycle", () => {
     }),
   )
 
+  it.effect("fails and evicts an active connection after a delayed lifecycle heartbeat", () => {
+    const timers: Array<() => void> = []
+    const now = { value: 0 }
+    const opened = { value: 0 }
+    const closed = { value: 0 }
+    const originalSetInterval = setInterval
+    const originalNow = Date.now
+    Object.defineProperty(globalThis, "setInterval", {
+      configurable: true,
+      value: (callback: () => void) => {
+        timers.push(callback)
+        return 1
+      },
+    })
+    Object.defineProperty(Date, "now", { configurable: true, value: () => now.value })
+
+    return Effect.gen(function* () {
+      const client = clientWith((input) =>
+        Effect.gen(function* () {
+          opened.value += 1
+          const state = { value: globalThis.WebSocket.OPEN }
+          const socket = new EventTarget()
+          Object.defineProperties(socket, {
+            readyState: { get: () => state.value },
+            ping: { value: () => undefined },
+            send: {
+              value: () => {
+                if (opened.value !== 2) return
+                const message = new Event("message")
+                Object.defineProperty(message, "data", { value: response("fresh-response") })
+                socket.dispatchEvent(message)
+              },
+            },
+            close: {
+              value: () => {
+                closed.value += 1
+                state.value = globalThis.WebSocket.CLOSED
+              },
+            },
+          })
+          return yield* WebSocketExecutor.fromWebSocket(
+            // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- the lifecycle adapter uses only the WebSocket members defined above.
+            socket as globalThis.WebSocket,
+            input,
+          )
+        }),
+      )
+      const request = LLM.request({
+        model,
+        messages: [Message.user("suspend")],
+        providerOptions: metadata("suspend"),
+      })
+      const active = yield* LLMClient.generate(request).pipe(Effect.provide(client), Effect.forkChild)
+      while (timers.length === 0) yield* Effect.yieldNow
+
+      now.value = 75_000
+      timers[0]!()
+      yield* Effect.yieldNow
+      expect(closed.value).toBe(1)
+
+      const error = yield* Fiber.join(active).pipe(Effect.flip)
+      expect(error).toBeInstanceOf(LLMError)
+      if (!(error instanceof LLMError)) return
+      expect(error.method).toBe("message")
+      expect(error.reason).toMatchObject({
+        _tag: "Transport",
+        kind: "lifecycle",
+        message: "WebSocket lifecycle heartbeat delayed by 75000ms",
+      })
+
+      yield* LLMClient.generate(request).pipe(Effect.provide(client))
+      expect(opened.value).toBe(2)
+      expect(closed.value).toBe(1)
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          Object.defineProperty(globalThis, "setInterval", { configurable: true, value: originalSetInterval })
+          Object.defineProperty(Date, "now", { configurable: true, value: originalNow })
+        }),
+      ),
+    )
+  })
+
   it.effect("closes a retained connection when idle eviction runs", () =>
     Effect.gen(function* () {
       const closed = { value: false }

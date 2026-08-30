@@ -157,6 +157,8 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 
 ### Shell memory limits
 
+The model-facing shell `timeout` input is not a configuration field. It accepts milliseconds up to 600,000; omission or `0` selects the finite 600,000 ms timeout. A foreground command that remains active after 300,000 ms is moved to the background without being terminated.
+
 `shell_memory_limit_mb` sets the Location-wide default for non-interactive shell commands. The shell tool's `memory_limit_mb` input overrides it for one command; zero explicitly selects unlimited memory. Omission uses the configured default, and omission with no default remains unlimited.
 
 A finite limit supplies `GOMEMLIMIT=<limit>MiB` to Go runtimes, including compatible `tsgo` builds, and appends `--max-old-space-size=<limit>` to `NODE_OPTIONS` for Node processes. Bun does not expose an inherited heap-size option equivalent to Node's, so Bun itself is governed by the sampled process-tree ceiling while child Go or Node runtimes receive their soft hints.

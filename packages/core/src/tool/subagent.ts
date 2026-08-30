@@ -9,6 +9,7 @@ import { Config } from "../config"
 import { PluginRuntime } from "../plugin/runtime"
 import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { PermissionV2 } from "../permission"
+import { PositiveInt } from "../schema"
 import { SessionGuardrail } from "../session/guardrail"
 import { SessionSchema } from "../session/schema"
 import { SessionMessage } from "../session/message"
@@ -22,6 +23,8 @@ import { Tool } from "./tool"
 export const name = "subagent"
 
 const NO_TEXT = "Subagent completed without a text response."
+export const DEFAULT_TIMEOUT_MS = 60 * 60_000
+export const MAX_TIMEOUT_MS = 24 * 60 * 60_000
 export const progressPrompt = "Report current status, blockers, and ETA."
 const backgroundCompletionGuidance =
   "Completion notifications are delivered automatically. Do not poll status or wait with sleep or no-op commands."
@@ -40,6 +43,9 @@ export const Input = Schema.Struct({
   }),
   model: ModelV2.Ref.pipe(Schema.optional).annotate({
     description: "Optional canonical provider, model, and variant override for this child",
+  }),
+  timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS)).pipe(Schema.optional).annotate({
+    description: `Optional child runtime timeout in milliseconds (maximum: ${MAX_TIMEOUT_MS}); omission uses ${DEFAULT_TIMEOUT_MS}`,
   }),
 })
 
@@ -189,6 +195,18 @@ export const Plugin = {
                     Effect.mapError((error) => new ToolFailure({ message: error.message, error })),
                     Effect.onError(() => reservation.release),
                   )
+                const settleFailure = (cause: Cause.Cause<unknown>) => {
+                  const error = Cause.pretty(cause)
+                  return orchestration
+                    .settle(child.sessionID, {
+                      type: "failed",
+                      error,
+                      excerpt: error.slice(0, 16 * 1024),
+                    })
+                    .pipe(Effect.ignore)
+                }
+                const abortLaunchedTask = (cause: Cause.Cause<unknown>) =>
+                  runtime.session.interrupt(child.sessionID).pipe(Effect.exit, Effect.andThen(settleFailure(cause)))
 
                 yield* projectArtifactSource
                   .activate({
@@ -212,8 +230,12 @@ export const Plugin = {
 
                 yield* context.progress({
                   structured: { sessionID: child.sessionID, status: "running" },
-                })
+                }).pipe(
+                  Effect.tapCause(abortLaunchedTask),
+                  Effect.onError(() => reservation.release),
+                )
 
+                const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
                 const run = Effect.scoped(
                   Effect.gen(function* () {
                     yield* repeatProgress(
@@ -232,34 +254,34 @@ export const Plugin = {
                       excerpt: text.slice(0, 16 * 1024),
                     })
                     return text
-                  }),
+                  }).pipe(
+                    Effect.onInterrupt(() => runtime.session.interrupt(child.sessionID)),
+                    Effect.timeoutOrElse({
+                      duration: timeout,
+                      orElse: () => Effect.fail(new Error(`Subagent timed out after ${timeout} ms.`)),
+                    }),
+                  ),
                 ).pipe(
                   Effect.tapCause((cause) =>
-                    Cause.hasInterruptsOnly(cause)
-                      ? Effect.void
-                      : orchestration
-                          .settle(child.sessionID, {
-                            type: "failed",
-                            error: Cause.pretty(cause),
-                            excerpt: Cause.pretty(cause).slice(0, 16 * 1024),
-                          })
-                          .pipe(Effect.ignore),
+                    Cause.hasInterruptsOnly(cause) ? Effect.void : settleFailure(cause),
                   ),
-                  Effect.onInterrupt(() => runtime.session.interrupt(child.sessionID)),
                   Effect.ensuring(reservation.release),
                 )
 
-                const info = yield* runtime.job
-                  .start({
+                const info = yield* Effect.gen(function* () {
+                  const started = yield* runtime.job.start({
                     id: child.sessionID,
                     type: name,
                     title: input.description,
                     metadata: {},
                     run,
                   })
-                  .pipe(Effect.onError(() => reservation.release))
-
-                yield* runtime.job.background(info.id)
+                  yield* runtime.job.background(started.id)
+                  return started
+                }).pipe(
+                  Effect.tapCause(abortLaunchedTask),
+                  Effect.onError(() => reservation.release),
+                )
                 return {
                   sessionID: child.sessionID,
                   status: "running" as const,

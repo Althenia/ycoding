@@ -83,7 +83,10 @@ export function ToolLifecycleStatus(props: { lifecycle: ToolLifecycleInput }) {
   createEffect(() => {
     if (props.lifecycle.status !== "streaming" && props.lifecycle.status !== "running") return
     setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    const timer = setInterval(() => {
+      if (props.lifecycle.status !== "streaming" && props.lifecycle.status !== "running") return clearInterval(timer)
+      setNow(Date.now())
+    }, 1_000)
     onCleanup(() => clearInterval(timer))
   })
   const presentation = createMemo(() => toolLifecyclePresentation({ ...props.lifecycle, now: now() }))
@@ -139,7 +142,10 @@ export function SessionActivityRow(props: {
   createEffect(() => {
     if (props.row.type !== "subagent" || !subagentActive()) return
     setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    const timer = setInterval(() => {
+      if (!subagentActive()) return clearInterval(timer)
+      setNow(Date.now())
+    }, 1_000)
     onCleanup(() => clearInterval(timer))
   })
   // A todo stays in_progress after the Session goes idle, so the row's own status cannot drive the
@@ -242,7 +248,10 @@ export function SessionToolActivityRow(props: {
   createEffect(() => {
     if (props.lifecycle?.status !== "streaming" && props.lifecycle?.status !== "running") return
     setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    const timer = setInterval(() => {
+      if (props.lifecycle?.status !== "streaming" && props.lifecycle?.status !== "running") return clearInterval(timer)
+      setNow(Date.now())
+    }, 1_000)
     onCleanup(() => clearInterval(timer))
   })
   const lifecycle = createMemo(() =>

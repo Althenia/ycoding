@@ -10,42 +10,24 @@ import {
 } from "../src/routes/session/rail"
 
 describe("rail default expansion", () => {
-  test("expands the sections that carry no header summary", () => {
+  test("expands only session context and todo by default", () => {
     expect(defaultExpanded({})).toEqual([
       "session",
       "context",
       "todo",
-      "goal",
-      "autonomy",
-      "subagents",
-      "shells",
-      "mcp",
-      "plugins",
-      "guardrails",
-      "lsp",
-      "skills",
     ])
   })
 
-  test("adds goal and autonomy while they are active", () => {
+  test("does not expand additional sections for active goal and autonomy", () => {
     expect(defaultExpanded({ goal: true, autonomy: true })).toEqual([
       "session",
       "context",
       "todo",
-      "goal",
-      "autonomy",
-      "subagents",
-      "shells",
-      "mcp",
-      "plugins",
-      "guardrails",
-      "lsp",
-      "skills",
     ])
   })
 
-  test("keeps every default section expanded", () => {
-    expect(defaultExpanded({ goal: true, autonomy: true })).toHaveLength(12)
+  test("does not expand additional sections for shell surface or all-expanded inputs", () => {
+    expect(defaultExpanded({ shellSurface: true, allExpanded: true })).toEqual(["session", "context", "todo"])
   })
 })
 
