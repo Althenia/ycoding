@@ -49,6 +49,77 @@ function withEnv<A, E, R>(vars: Record<string, string | undefined>, effect: () =
 const decode = Schema.decodeUnknownSync(Config.Info)
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect("discovers authenticated OpenAI-compatible models and overlays standard catalog metadata", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        let authorization = ""
+        const server = Bun.serve({
+          port: 0,
+          fetch(request) {
+            authorization = request.headers.get("authorization") ?? ""
+            if (new URL(request.url).pathname !== "/v1/models") return new Response("not found", { status: 404 })
+            return Response.json({
+              object: "list",
+              data: [
+                {
+                  id: "remote-model",
+                  object: "model",
+                  owned_by: "remote",
+                  name: "Remote Model",
+                  capabilities: { tools: true, input: ["text"], output: ["text"] },
+                  variants: [{ id: "high", body: { reasoning: { mode: "high" } } }],
+                },
+              ],
+            })
+          },
+        })
+        return { server, authorization: () => authorization }
+      }),
+      ({ server, authorization }) =>
+        Effect.gen(function* () {
+          const catalog = yield* Catalog.Service
+          yield* catalog.transform((draft) =>
+            draft.model.update(ProviderV2.ID.openrouter, ModelV2.ID.make("remote-model"), (model) => {
+              model.name = "Remote Model"
+              model.limit = { context: 200_000, output: 20_000 }
+              model.capabilities = { tools: false, input: ["text", "image"], output: ["text"] }
+            }),
+          )
+          const config = Config.Service.of({
+            entries: () =>
+              Effect.succeed([
+                new Config.Document({
+                  type: "document",
+                  info: decode({
+                    providers: {
+                      discovered: {
+                        package: "aisdk:@ai-sdk/openai-compatible",
+                        settings: { baseURL: `http://127.0.0.1:${server.port}/v1`, apiKey: "secret" },
+                        catalog: { source: "openai-models" },
+                      },
+                    },
+                  }),
+                }),
+              ]),
+          })
+
+          yield* addPlugin(config)
+
+          expect(authorization()).toBe("Bearer secret")
+          const model = required(
+            yield* catalog.model.get(ProviderV2.ID.make("discovered"), ModelV2.ID.make("remote-model")),
+          )
+          expect(model).toMatchObject({
+            name: "Remote Model",
+            limit: { context: 200_000, output: 20_000 },
+            capabilities: { tools: true, input: ["text"], output: ["text"] },
+            variants: [{ id: "high", body: { reasoning: { mode: "high" } } }],
+          })
+        }),
+      ({ server }) => Effect.sync(() => server.stop(true)),
+    ),
+  )
+
   it.effect("keeps configured model variant bodies unchanged", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service

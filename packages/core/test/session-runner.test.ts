@@ -93,8 +93,7 @@ import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { Location } from "@ycoding-ai/core/location"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope, Stream } from "effect"
-import { FetchHttpClient } from "effect/unstable/http"
+import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -102,7 +101,6 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 import PROMPT_DEFAULT from "../src/session/runner/prompt/base.txt"
 
 const requests: LLMRequest[] = []
-const requestKeepalive: Array<boolean | undefined> = []
 const runnerDirectory = AbsolutePath.make(import.meta.dir)
 type TestStreamError = LLMError | Error
 let response: LLMEvent[] = []
@@ -126,9 +124,6 @@ const client = Layer.succeed(
       const observed = <E>(stream: Stream.Stream<LLMEvent, E>) =>
         Stream.unwrap(
           Effect.gen(function* () {
-            requestKeepalive.push(
-              Option.getOrUndefined(yield* Effect.serviceOption(FetchHttpClient.RequestInit))?.keepalive,
-            )
             yield* ProviderRequestObserver.observe({
               requestID: request.id ?? "request",
               routeID: request.model.route.id,
@@ -823,7 +818,6 @@ const setup = Effect.gen(function* () {
     discard: true,
   })
   requests.length = 0
-  requestKeepalive.length = 0
   authorizations.length = 0
   executions.length = 0
   response = reply.text("Fixture response", "text-fixture")
@@ -5428,7 +5422,6 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(run)
 
       expect(requests).toHaveLength(2)
-      expect(requestKeepalive).toEqual([undefined, undefined])
       const eventTypes = yield* recordedEventTypes(sessionID)
       expect(eventTypes).toContain("session.retry.scheduled.1")
       expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
@@ -5450,7 +5443,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("uses a fresh connection only when retrying a pre-output Codex stream read failure", () =>
+  it.effect("preserves logical request identity for pre-output Codex read retries", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = codexModel
@@ -5465,11 +5458,11 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(requests.every((request) => request.model.route.id === "openai-codex-responses")).toBe(true)
-      expect(requestKeepalive).toEqual([undefined, false])
+      expect(requests[1]?.id).toBe(requests[0]?.id)
     }),
   )
 
-  it.effect("keeps pooling when retrying a Codex transport failure outside response reading", () =>
+  it.effect("retries Codex transport failures outside response reading", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = codexModel
@@ -5483,7 +5476,6 @@ describe("SessionRunnerLLM", () => {
       yield* Fiber.join(run)
 
       expect(requests).toHaveLength(2)
-      expect(requestKeepalive).toEqual([undefined, undefined])
     }),
   )
 
@@ -5712,6 +5704,349 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("continues once in a new logical Step after a Codex read failure with tool evidence", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const prompt = "Recover the interrupted Codex tool response"
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.steps = 3
+        }),
+      )
+      currentModel = codexModel
+      yield* admit(session, prompt)
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolInputStart({ id: "tool-before-codex-read-failure", name: "echo" }),
+          LLMEvent.toolInputDelta({
+            id: "tool-before-codex-read-failure",
+            name: "echo",
+            text: '{"text":"partial',
+          }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.tool("call-codex-recovery", "echo", { text: "recovered" })),
+        Stream.fromIterable(reply.text("Recovered after tool continuation", "text-after-codex-recovery")),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(3)
+      expect(requests.every((request) => request.model.route.id === "openai-codex-responses")).toBe(true)
+      expect(new Set(requests.map((request) => request.id)).size).toBe(3)
+      expect(requests[1]?.tools.map((tool) => tool.name)).toContain("echo")
+      expect(requests[1]?.toolChoice).toBeUndefined()
+      expect(userTexts(requests[1])).toEqual([prompt])
+      expect(requests[1]?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool-call",
+                id: "tool-before-codex-read-failure",
+                name: "echo",
+              }),
+            ]),
+          }),
+          expect.objectContaining({
+            role: "tool",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool-result",
+                id: "tool-before-codex-read-failure",
+                result: expect.objectContaining({
+                  type: "error",
+                  value: expect.objectContaining({
+                    error: expect.objectContaining({ type: "provider.transport" }),
+                  }),
+                }),
+              }),
+            ]),
+          }),
+        ]),
+      )
+      expect(JSON.stringify(requests[1]?.messages)).not.toContain("MAXIMUM STEPS REACHED")
+      expect(requests[2]?.tools).toEqual([])
+      expect(requests[2]?.toolChoice).toMatchObject({ type: "none" })
+      expect(JSON.stringify(requests[2]?.messages)).toContain("MAXIMUM STEPS REACHED")
+      expect(executions).toEqual(["recovered"])
+
+      const assistants = (yield* session.context(sessionID)).filter(
+        (message): message is SessionMessage.Assistant => message.type === "assistant",
+      )
+      expect(assistants).toHaveLength(3)
+      expect(assistants[0]).toMatchObject({
+        finish: "error",
+        error: { type: "provider.transport" },
+        content: [
+          {
+            type: "tool",
+            id: "tool-before-codex-read-failure",
+            state: { status: "error", error: { type: "provider.transport" } },
+          },
+        ],
+      })
+      expect((yield* recordedStepSettlementEvents(sessionID, assistants[0].id)).map((event) => event.type)).toEqual([
+        "session.step.started.1",
+        "session.tool.failed.1",
+        "session.step.failed.1",
+      ])
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.input.consumed.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(3)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(2)
+
+      const providerRequests = yield* SessionProviderRequest.Service
+      expect(
+        (yield* providerRequests.list(sessionID)).map((record) => ({
+          request: record.request,
+          attempts: record.attempts,
+          continuation: record.continuation,
+        })),
+      ).toEqual([
+        { request: 1, attempts: 1, continuation: "full" },
+        { request: 2, attempts: 1, continuation: "full" },
+        { request: 3, attempts: 1, continuation: "full" },
+      ])
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 3, physical: 3, helpers: 0 })
+    }),
+  )
+
+  it.effect("applies the configured step limit to Codex transport recovery", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const agents = yield* AgentV2.Service
+      yield* agents.transform((editor) =>
+        editor.update(AgentV2.ID.make("build"), (agent) => {
+          agent.steps = 2
+        }),
+      )
+      currentModel = codexModel
+      yield* admit(session, "Recover at the configured final step")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-capped-codex-recovery" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-capped-codex-recovery", text: "Interrupted" }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.text("Recovered at the cap", "text-capped-codex-recovery")),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.tools).toEqual([])
+      expect(requests[1]?.toolChoice).toMatchObject({ type: "none" })
+      expect(nonVolatileMessages(requests[1]).at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("MAXIMUM STEPS REACHED") }],
+      })
+    }),
+  )
+
+  it.effect("does not chain a second Codex logical read recovery", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const recoveryFailure = streamReadFailure()
+      currentModel = codexModel
+      yield* admit(session, "Stop after a consecutive Codex recovery failure")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-codex-read-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-codex-read-failure", text: "First attempt" }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-codex-recovery-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-codex-recovery-failure", text: "Recovery attempt" }),
+        ]).pipe(Stream.concat(Stream.fail(recoveryFailure))),
+        Stream.fromIterable(reply.text("Must not run", "text-after-consecutive-codex-failure")),
+      ]
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) return
+      expect(Cause.squash(exit.cause)).toBe(recoveryFailure)
+      expect(requests).toHaveLength(2)
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
+      const providerRequests = yield* SessionProviderRequest.Service
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 2, helpers: 0 })
+    }),
+  )
+
+  it.effect("does not recover a Codex read failure combined with interruption", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const failure = streamReadFailure()
+      currentModel = codexModel
+      yield* admit(session, "Interrupt the failing Codex stream")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-interrupted-codex-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-interrupted-codex-failure", text: "Interrupted" }),
+        ]).pipe(Stream.concat(Stream.failCause(Cause.combine(Cause.fail(failure), Cause.interrupt())))),
+        Stream.fromIterable(reply.text("Must not run", "text-after-interrupted-codex-failure")),
+      ]
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) return
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true)
+      expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Interrupt the failing Codex stream" },
+        {
+          type: "assistant",
+          finish: "error",
+          error: { type: "aborted", message: "Step interrupted" },
+          content: [{ type: "reasoning", text: "Interrupted" }],
+        },
+      ])
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+    }),
+  )
+
+  it.effect("rearms Codex logical read recovery after a successful recovery Step", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = codexModel
+      yield* admit(session, "Recover distinct Codex failures")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-first-codex-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-first-codex-failure", text: "First failure" }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.tool("call-after-first-codex-recovery", "echo", { text: "continue" })),
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-second-codex-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-second-codex-failure", text: "Second failure" }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.text("Recovered twice", "text-after-second-codex-recovery")),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(4)
+      expect(new Set(requests.map((request) => request.id)).size).toBe(4)
+      expect(executions).toEqual(["continue"])
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(4)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(2)
+      const providerRequests = yield* SessionProviderRequest.Service
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 4, physical: 4, helpers: 0 })
+    }),
+  )
+
+  it.effect("promotes a pending steer before Codex logical read recovery", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const failingStreamStarted = yield* Deferred.make<void>()
+      const releaseFailure = yield* Deferred.make<void>()
+      currentModel = codexModel
+      yield* admit(session, "Initial Codex request")
+      responseStreams = [
+        Stream.unwrap(
+          Deferred.succeed(failingStreamStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseFailure)),
+            Effect.as(
+              Stream.fromIterable([
+                LLMEvent.stepStart({ index: 0 }),
+                LLMEvent.reasoningStart({ id: "reasoning-before-steered-codex-failure" }),
+                LLMEvent.reasoningDelta({ id: "reasoning-before-steered-codex-failure", text: "Interrupted" }),
+              ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+            ),
+          ),
+        ),
+        Stream.fromIterable(reply.text("Answered the steer", "text-after-steered-codex-failure")),
+      ]
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(failingStreamStarted)
+      yield* session.prompt({ sessionID, text: "Steered Codex request" })
+      yield* Deferred.succeed(releaseFailure, undefined)
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      expect(userTexts(requests[1])).toEqual(["Initial Codex request", "Steered Codex request"])
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("promotes a steer admitted during a failing Codex transport recovery", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const recoveryStarted = yield* Deferred.make<void>()
+      const releaseRecovery = yield* Deferred.make<void>()
+      currentModel = codexModel
+      yield* admit(session, "Initial Codex request")
+      responseStreams = [
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-initial-codex-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-initial-codex-failure", text: "Initial failure" }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.unwrap(
+          Deferred.succeed(recoveryStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRecovery)),
+            Effect.as(
+              Stream.fromIterable([
+                LLMEvent.stepStart({ index: 0 }),
+                LLMEvent.reasoningStart({ id: "reasoning-before-failing-codex-recovery" }),
+                LLMEvent.reasoningDelta({ id: "reasoning-before-failing-codex-recovery", text: "Recovery failure" }),
+              ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+            ),
+          ),
+        ),
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id: "reasoning-before-steered-codex-failure" }),
+          LLMEvent.reasoningDelta({ id: "reasoning-before-steered-codex-failure", text: "Steered failure" }),
+        ]).pipe(Stream.concat(Stream.fail(streamReadFailure()))),
+        Stream.fromIterable(reply.text("Recovered the steered request", "text-after-steered-codex-recovery")),
+      ]
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(recoveryStarted)
+      yield* session.prompt({ sessionID, text: "Steered during recovery" })
+      yield* Deferred.succeed(releaseRecovery, undefined)
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(4)
+      expect(userTexts(requests[1])).toEqual(["Initial Codex request"])
+      expect(userTexts(requests[2])).toEqual(["Initial Codex request", "Steered during recovery"])
+      expect(new Set(requests.map((request) => request.id)).size).toBe(4)
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.input.consumed.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(4)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(3)
+      expect(eventTypes.filter((type) => type === "session.step.ended.1")).toHaveLength(1)
+      expect(eventTypes.filter((type) => type === "session.retry.scheduled.1")).toHaveLength(0)
+      const providerRequests = yield* SessionProviderRequest.Service
+      expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 4, physical: 4, helpers: 0 })
     }),
   )
 

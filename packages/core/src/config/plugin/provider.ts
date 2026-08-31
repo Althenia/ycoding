@@ -7,6 +7,111 @@ import { Config } from "../../config"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 
+type DiscoveredModel = {
+  readonly id: string
+  readonly name?: string
+  readonly capabilities?: { readonly tools?: boolean; readonly input?: string[]; readonly output?: string[] }
+  readonly variants?: Array<{
+    readonly id: string
+    readonly settings?: Record<string, unknown>
+    readonly headers?: Record<string, string>
+    readonly body?: Record<string, unknown>
+  }>
+}
+
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
+
+function parseModels(value: unknown): DiscoveredModel[] {
+  const root = record(value)
+  if (root?.object !== "list" || !Array.isArray(root.data)) throw new Error("invalid OpenAI model catalog")
+  return root.data.map((candidate) => {
+    const item = record(candidate)
+    if (!item || typeof item.id !== "string" || !item.id) throw new Error("invalid OpenAI model record")
+    const capabilities = record(item.capabilities)
+    const variants = Array.isArray(item.variants)
+      ? item.variants.flatMap((candidate) => {
+          const variant = record(candidate)
+          if (!variant || typeof variant.id !== "string" || !variant.id) return []
+          return [
+            {
+              id: variant.id,
+              ...(record(variant.settings) ? { settings: variant.settings as Record<string, unknown> } : {}),
+              ...(record(variant.headers) ? { headers: variant.headers as Record<string, string> } : {}),
+              ...(record(variant.body) ? { body: variant.body as Record<string, unknown> } : {}),
+            },
+          ]
+        })
+      : undefined
+    return {
+      id: item.id,
+      ...(typeof item.name === "string" ? { name: item.name } : {}),
+      ...(capabilities
+        ? {
+            capabilities: {
+              ...(typeof capabilities.tools === "boolean" ? { tools: capabilities.tools } : {}),
+              ...(Array.isArray(capabilities.input) && capabilities.input.every((item) => typeof item === "string")
+                ? { input: capabilities.input as string[] }
+                : {}),
+              ...(Array.isArray(capabilities.output) && capabilities.output.every((item) => typeof item === "string")
+                ? { output: capabilities.output as string[] }
+                : {}),
+            },
+          }
+        : {}),
+      ...(variants ? { variants } : {}),
+    }
+  })
+}
+
+const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (entries: readonly Config.Entry[]) {
+  const configured = new Map<
+    string,
+    { settings: Record<string, unknown>; headers: Record<string, string>; source?: string }
+  >()
+  for (const entry of entries) {
+    if (entry.type !== "document") continue
+    for (const [id, provider] of Object.entries(entry.info.providers ?? {})) {
+      const previous = configured.get(id) ?? { settings: {}, headers: {} }
+      configured.set(id, {
+        settings: { ...previous.settings, ...(provider.settings ?? {}) },
+        headers: { ...previous.headers, ...(provider.headers ?? {}) },
+        source: provider.catalog?.source ?? previous.source,
+      })
+    }
+  }
+  const result = new Map<string, DiscoveredModel[]>()
+  yield* Effect.forEach(
+    [...configured.entries()].filter(([, provider]) => provider.source === "openai-models"),
+    ([id, provider]) =>
+      Effect.tryPromise({
+        try: async () => {
+          const baseURL = provider.settings.baseURL
+          if (typeof baseURL !== "string" || !baseURL) throw new Error("provider baseURL is required")
+          const headers = new Headers(provider.headers)
+          const apiKey = provider.settings.apiKey
+          if (!headers.has("authorization") && typeof apiKey === "string" && apiKey)
+            headers.set("authorization", `Bearer ${apiKey}`)
+          const response = await fetch(`${baseURL.replace(/\/$/, "")}/models`, {
+            headers,
+            signal: AbortSignal.timeout(5_000),
+          })
+          if (!response.ok) throw new Error(`model discovery failed with HTTP ${response.status}`)
+          result.set(id, parseModels(await response.json()))
+        },
+        catch: () => new Error("OpenAI model discovery failed"),
+      }).pipe(
+        Effect.catch(() =>
+          Effect.logWarning("OpenAI model discovery failed", { providerID: id }).pipe(Effect.asVoid),
+        ),
+      ),
+    { discard: true },
+  )
+  return result
+})
+
 let sharedEntries: readonly Config.Entry[] | undefined
 
 export const Plugin = define({
@@ -22,6 +127,7 @@ export const Plugin = define({
       set entries(value: readonly Config.Entry[]) {
         sharedEntries = value
       },
+      discovered: yield* discover(initial),
     }
     // Ensure this location starts with latest global entries (covers subagent locations created after a config change)
     loaded.entries = initial
@@ -56,6 +162,46 @@ export const Plugin = define({
       const configuredDefault = Config.latest(loaded.entries, "model")
       if (configuredDefault !== undefined)
         catalog.model.default.set(configuredDefault.providerID, configuredDefault.model)
+      for (const [providerID, models] of loaded.discovered) {
+        for (const discovered of models) {
+          const candidates = catalog.provider
+            .list()
+            .filter((record) => record.provider.id !== providerID)
+            .flatMap((record) =>
+              [...record.models.values()]
+                .filter(
+                  (model) =>
+                    model.id === discovered.id ||
+                    model.modelID === discovered.id ||
+                    (!!discovered.name && model.name === discovered.name),
+                )
+                .map((model) => ({ providerID: record.provider.id, model })),
+            )
+          const source =
+            candidates.find((candidate) => candidate.providerID === ProviderV2.ID.openrouter)?.model ??
+            candidates.find((candidate) => candidate.providerID === ProviderV2.ID.openai)?.model ??
+            candidates[0]?.model
+          catalog.model.update(ProviderV2.ID.make(providerID), ModelV2.ID.make(discovered.id), (model) => {
+            model.modelID = ModelV2.ID.make(discovered.id)
+            if (discovered.name) model.name = discovered.name
+            if (source?.family) model.family = source.family
+            if (source?.limit) model.limit = { ...source.limit }
+            if (source?.cost) model.cost = source.cost.map((cost) => ({ ...cost, cache: { ...cost.cache } }))
+            model.capabilities = {
+              tools: discovered.capabilities?.tools ?? source?.capabilities.tools ?? false,
+              input: [...(discovered.capabilities?.input ?? source?.capabilities.input ?? ["text"])],
+              output: [...(discovered.capabilities?.output ?? source?.capabilities.output ?? ["text"])],
+            }
+            if (discovered.variants)
+              model.variants = discovered.variants.map((variant) => ({
+                id: ModelV2.VariantID.make(variant.id),
+                ...(variant.settings ? { settings: { ...variant.settings } } : {}),
+                ...(variant.headers ? { headers: { ...variant.headers } } : {}),
+                ...(variant.body ? { body: { ...variant.body } } : {}),
+              }))
+          })
+        }
+      }
       for (const file of files) {
         for (const [id, item] of Object.entries(file.info.providers ?? {})) {
           const providerID = id
@@ -120,7 +266,16 @@ export const Plugin = define({
       Stream.filter((event) => event.type === "config.updated"),
       Stream.runForEach(() =>
         config.entries().pipe(
-          Effect.tap((entries) => Effect.sync(() => (loaded.entries = entries))),
+          Effect.tap((entries) =>
+            discover(entries).pipe(
+              Effect.tap((discovered) =>
+                Effect.sync(() => {
+                  loaded.entries = entries
+                  loaded.discovered = discovered
+                }),
+              ),
+            ),
+          ),
           Effect.andThen(ctx.integration.reload()),
           Effect.andThen(ctx.catalog.reload()),
         ),

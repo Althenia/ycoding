@@ -28,12 +28,40 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/LLM
 export const withFreshConnection = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const fetch = yield* FetchHttpClient.Fetch
       const requestInit = Option.getOrUndefined(yield* Effect.serviceOption(FetchHttpClient.RequestInit))
+      const isolatedFetch: typeof fetch = Object.assign(
+        (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          const headers = new globalThis.Headers(init?.headers)
+          headers.set("connection", "close")
+          return fetch(input, { ...init, headers })
+        },
+        { preconnect: fetch.preconnect },
+      )
       return stream.pipe(
         Stream.provideService(FetchHttpClient.RequestInit, { ...requestInit, keepalive: false }),
+        Stream.provideService(FetchHttpClient.Fetch, isolatedFetch),
       )
     }),
   )
+
+export const withFreshConnectionEffect = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fetch = yield* FetchHttpClient.Fetch
+    const requestInit = Option.getOrUndefined(yield* Effect.serviceOption(FetchHttpClient.RequestInit))
+    const isolatedFetch: typeof fetch = Object.assign(
+      (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        const headers = new globalThis.Headers(init?.headers)
+        headers.set("connection", "close")
+        return fetch(input, { ...init, headers })
+      },
+      { preconnect: fetch.preconnect },
+    )
+    return yield* effect.pipe(
+      Effect.provideService(FetchHttpClient.RequestInit, { ...requestInit, keepalive: false }),
+      Effect.provideService(FetchHttpClient.Fetch, isolatedFetch),
+    )
+  })
 
 const BODY_LIMIT = 16_384
 const REDACTED = "<redacted>"
