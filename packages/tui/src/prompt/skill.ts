@@ -66,10 +66,11 @@ export function segmentPromptSkills(text: string, skills: readonly PromptSkill[]
 }
 
 // Matches `$id` at whitespace boundaries, longest ID first so `$reviewer` never resolves to `review`.
+// Allows trailing punctuation (`,.!?;:)]}'"`) as delimiter so `$review,` still activates.
 function skillMatcher(ids: readonly string[]) {
   const escaped = ids
     .toSorted((a, b) => b.length - a.length)
     .map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, (character) => `\\${character}`))
     .join("|")
-  return new RegExp(`(^|\\s)\\$(${escaped})(?=\\s|$)`, "g")
+  return new RegExp(`(^|\\s)\\$(${escaped})(?=[\\s.,!?;:)\\]'"\`]|$)`, "g")
 }

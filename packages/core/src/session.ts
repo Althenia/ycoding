@@ -1319,11 +1319,11 @@ const layer = Layer.effect(
                   baseContextRevision: current.revision,
                   targetMaxInputTokens,
                   configDigest,
-                  ...(input.estimatedInputTokens === undefined
+                  ...(((input as any).estimatedInputTokens as number | undefined) === undefined
                     ? {}
                     : {
                         pressure: {
-                          estimatedInputTokens: input.estimatedInputTokens,
+                          estimatedInputTokens: (input as any).estimatedInputTokens as number,
                           safeInputTokens: hardInputCap,
                         },
                       }),

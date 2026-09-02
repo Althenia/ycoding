@@ -35,7 +35,7 @@ import { projectedPromptInput } from "../../prompt/codec"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, type JSX } from "@opentui/solid"
-import { errorMessage } from "../../util/error"
+import { errorFormat, errorMessage } from "../../util/error"
 import { useDialog } from "../../ui/dialog"
 import { DialogIntegration } from "../dialog-integration"
 import { DialogModel } from "../dialog-model"
@@ -371,7 +371,7 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
   const temporaryAttachments = new Map<string, ClipboardTemporary>()
-  let addingAttachment = false
+  let addingAttachment = 0
 
   async function releaseTemporaryAttachment(uri: string) {
     const temporary = temporaryAttachments.get(uri)
@@ -465,7 +465,7 @@ export function Prompt(props: PromptProps) {
         run: async (_input: string | undefined, event?: KeyEvent) => {
           event?.preventDefault()
           event?.stopPropagation()
-          const content = await clipboard.read?.()
+          const content = await clipboard?.read?.()
           if (content?.type === "file") {
             await pasteAttachment({
               filename: content.name,
@@ -876,7 +876,7 @@ export function Prompt(props: PromptProps) {
     // clipboard attachment insertion the extmark is created before the prompt
     // part is registered, so reconciling here would treat the new attachment as
     // removed and clean up its backing file.
-    if (addingAttachment) return
+    if (addingAttachment > 0) return
     const beforeFiles = new Map(
       (store.prompt.files ?? [])
         .filter((file) => temporaryAttachments.has(file.uri) && file.mention?.text)
@@ -977,13 +977,13 @@ export function Prompt(props: PromptProps) {
       })
       .sort((left, right) => right.start - left.start)
     if (staleRanges.length > 0) {
-      addingAttachment = true
+      addingAttachment++
       try {
         let text = input.plainText
         for (const range of staleRanges) text = text.slice(0, range.start) + text.slice(range.end)
         input.setText(text)
       } finally {
-        addingAttachment = false
+        addingAttachment--
       }
     }
     setStore(
@@ -1501,18 +1501,62 @@ export function Prompt(props: PromptProps) {
       model: payload.model,
       editor: payload.editor?.key,
     })
+    // Detect changes that history comparison misses: typed `$skill` (metadata vs store.prompt.skills)
+    // and model changes when local.model was undefined (fallback from session/first available).
+    if (retained && !retryRestored()) {
+      const retainedSkills = retained.payload.metadata?.skills ?? []
+      const currentSkills = metadata?.skills ?? []
+      const skillsChanged = JSON.stringify(retainedSkills) !== JSON.stringify(currentSkills)
+      const retainedModel = retained.payload.model
+      const payloadModel = payload.model
+      const modelPayloadChanged = JSON.stringify(retainedModel) !== JSON.stringify(payloadModel)
+      if (skillsChanged || modelPayloadChanged) {
+        const h = retained.payload.history
+        if (
+          h.text.trim() ||
+          h.pasted.length > 0 ||
+          (h.files?.length ?? 0) > 0 ||
+          (h.agents?.length ?? 0) > 0 ||
+          (h.skills?.length ?? 0) > 0
+        ) {
+          stash.push({ prompt: h })
+        }
+        setRetry(undefined)
+        setRetryRestored(false)
+        retained = undefined
+      }
+    }
     const restoredRetry =
       retryRestored() && retained && JSON.stringify(payload.history) === JSON.stringify(retained.payload.history)
-    const submission = restoredRetry
-      ? retained
-      : retainSessionSubmission(retained, key, metadata?.skills.length ?? 0, payload, props.sessionID)
+    let submission: any = (
+      restoredRetry ? retained : retainSessionSubmission(retained as any, key, metadata?.skills.length ?? 0, payload as any, props.sessionID)
+    ) as any
     if (!restoredRetry && submission!.key !== key) {
-      toast.show({
-        message: "Run Retry previous submission; current draft will be preserved in stash",
-        variant: "error",
-        duration: 5000,
-      })
-      return false
+      // Auto-stash old pending retry and allow new prompt through instead of blocking with
+      // "Run Retry previous submission...". This handles model/variant/skill/mode/editor changes
+      // where history alone didn't trigger a clear.
+      if (retained) {
+        const oldH = retained.payload.history
+        if (
+          oldH.text.trim() ||
+          oldH.pasted.length > 0 ||
+          (oldH.files?.length ?? 0) > 0 ||
+          (oldH.agents?.length ?? 0) > 0 ||
+          (oldH.skills?.length ?? 0) > 0
+        ) {
+          stash.push({ prompt: oldH })
+        }
+        setRetry(undefined)
+        setRetryRestored(false)
+        submission = retainSessionSubmission(undefined, key, metadata?.skills.length ?? 0, payload, props.sessionID)
+      } else {
+        toast.show({
+          message: "Run Retry previous submission; current draft will be preserved in stash",
+          variant: "error",
+          duration: 5000,
+        })
+        return false
+      }
     }
     setRetry(submission! as any) // @ts-ignore prompt retry type
     const sessionID = submission!.sessionID
@@ -1524,7 +1568,7 @@ export function Prompt(props: PromptProps) {
       finishMoveProgress = Boolean(move.progress())
       const location = data.location.default()
 
-      const created = await confirmSessionCreation(submission, (id) =>
+      const created = await confirmSessionCreation(submission!, (id) =>
         client.api.session.create({
           id,
           location: (directory ? { directory } : location) as any, // @ts-ignore location type
@@ -1622,8 +1666,8 @@ export function Prompt(props: PromptProps) {
       }
       const switchRequired =
         session?.model?.providerID !== submission!.payload.model.providerID ||
-        session.model.id !== submission!.payload.model.id ||
-        (session.model.variant ?? "default") !== (submission!.payload.model.variant ?? "default")
+        session?.model?.id !== submission!.payload.model.id ||
+        (session?.model?.variant ?? "default") !== (submission!.payload.model.variant ?? "default")
       if (session?.revert) {
         const error = await client.api.session.revert.commit({ sessionID }).then(
           () => undefined,
@@ -1687,7 +1731,7 @@ export function Prompt(props: PromptProps) {
         return submitPromptWithSkills({
           prompt: promptFn,
           skills: (submission!.payload.metadata?.skills ?? []).map(
-            (skill, index) => () =>
+            (skill: any, index: number) => () =>
               client.api.session.skill({
                 id: skillIDs[index],
                 sessionID,
@@ -1723,9 +1767,12 @@ export function Prompt(props: PromptProps) {
         )
       }
       if ("error" in result) {
+        const raw = errorMessage(result.error)
+        const message =
+          raw.trim() === "{" || raw.trim() === "{}" || raw.trim().length <= 2 ? errorFormat(result.error) : raw
         toast.show({
           title: "Failed to send prompt or activate skill",
-          message: errorMessage(result.error),
+          message,
           variant: "error",
         })
         return false
@@ -1737,7 +1784,7 @@ export function Prompt(props: PromptProps) {
     }
     if (temporaryAttachments.size > 0) {
       submission!.payload.history.files = submission!.payload.history.files?.filter(
-        (file) => !temporaryAttachments.has(file.uri),
+        (file: any) => !temporaryAttachments.has(file.uri),
       )
       await releaseTemporaryAttachments()
     }
@@ -1798,17 +1845,41 @@ export function Prompt(props: PromptProps) {
   async function pasteInputText(text: string) {
     const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
     const pastedContent = normalizedText.trim()
-    const filepath = pastedFilepath(pastedContent, terminalEnvironment.platform)
-    const isUrl = /^(https?):\/\//.test(filepath)
-    if (!isUrl) {
-      const attachment = await readLocalAttachment(filepath)
-      if (attachment) {
-        await pasteAttachment({
-          filename: attachment.name,
-          uri: attachment.uri,
-          mime: attachment.mime,
-        })
+    // Handle multiple newline-separated file paths (e.g. Finder multi-select copy of several images).
+    // Previously only the first path was considered, causing "several images" paste to attach only one.
+    const candidates = pastedContent
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => pastedFilepath(line, terminalEnvironment.platform))
+    if (candidates.length > 1) {
+      const attachments = await Promise.all(candidates.map((filepath) => readLocalAttachment(filepath)))
+      const valid = attachments.filter(Boolean) as Awaited<ReturnType<typeof readLocalAttachment>>[]
+      if (valid.length > 0 && valid.length === candidates.length) {
+        for (const attachment of valid) {
+          if (!attachment) continue
+          await pasteAttachment({
+            filename: attachment.name,
+            uri: attachment.uri,
+            mime: attachment.mime,
+          })
+        }
         return
+      }
+      // If not all candidates are valid files, fall through to text handling.
+    } else {
+      const filepath = pastedFilepath(pastedContent, terminalEnvironment.platform)
+      const isUrl = /^(https?):\/\//.test(filepath)
+      if (!isUrl) {
+        const attachment = await readLocalAttachment(filepath)
+        if (attachment) {
+          await pasteAttachment({
+            filename: attachment.name,
+            uri: attachment.uri,
+            mime: attachment.mime,
+          })
+          return
+        }
       }
     }
 
@@ -1847,7 +1918,7 @@ export function Prompt(props: PromptProps) {
     const extmarkEnd = extmarkStart + virtualText.length
     const textToInsert = virtualText + " "
 
-    addingAttachment = true
+    addingAttachment++
     try {
       input.insertText(textToInsert)
 
@@ -1878,7 +1949,7 @@ export function Prompt(props: PromptProps) {
       )
       if (file.temporary) temporaryAttachments.set(file.uri, file.temporary)
     } finally {
-      addingAttachment = false
+      addingAttachment--
     }
     syncExtmarksWithPromptParts()
     return
