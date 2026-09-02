@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import * as TestClock from "effect/testing/TestClock"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -8,6 +8,7 @@ import { Global } from "@ycoding-ai/core/global"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
+import { ProjectArtifactInstructions } from "../../src/project-artifact/instructions"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { readInitial, readUpdate } from "../lib/instructions"
@@ -35,6 +36,12 @@ const it = testEffect(
 )
 
 describe("InstructionBuiltIns", () => {
+  test("guides reusable artifact learning without recording one-off failures", () => {
+    expect(ProjectArtifactInstructions.content).toBe(
+      "At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. When correcting the immediate task, identify any validated repeated mistake, failed approach, or repository gotcha and the safer reusable rule it establishes; do not treat artifacts as punishment or record one-off failures. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths or URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact.",
+    )
+  })
+
   it.effect("loads location-scoped environment and host-local date instructions", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(timestamp)

@@ -16,9 +16,9 @@ import { Shell } from "../shell"
 import { Tool, type Content } from "./tool"
 
 export const name = "shell"
-export const DEFAULT_TIMEOUT_MS = 0
 export const AUTO_BACKGROUND_MS = 5 * 60 * 1_000
 export const MAX_TIMEOUT_MS = 10 * 60 * 1_000
+export const DEFAULT_TIMEOUT_MS = MAX_TIMEOUT_MS
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 
 const BACKGROUND_STARTED = "The command was moved to the background."
@@ -35,7 +35,7 @@ export const Input = Schema.Struct({
   timeout: NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
     .pipe(Schema.optional)
     .annotate({
-      description: `Optional process timeout in milliseconds. Zero or omission means unlimited. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. May not exceed ${MAX_TIMEOUT_MS}.`,
+      description: `Optional process timeout in milliseconds. Zero or omission uses the ${MAX_TIMEOUT_MS} ms maximum. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. May not exceed ${MAX_TIMEOUT_MS}.`,
     }),
   memory_limit_mb: ConfigShell.MemoryLimitMb.pipe(Schema.optional).annotate({
     description:
@@ -157,7 +157,7 @@ export const Plugin = {
         draft.add(
           name,
           Tool.make({
-            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds (zero or omission: unlimited; maximum: ${MAX_TIMEOUT_MS}). memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
+            description: `Execute one shell command string. By default, commands use the host user's filesystem, process, and network authority. shell_sandbox=optional uses an enforceable sandbox backend when available and warns otherwise; shell_sandbox=required rejects before approval or spawn when unavailable. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. An optional process timeout may be provided in milliseconds; zero or omission uses the ${MAX_TIMEOUT_MS} ms maximum. memory_limit_mb supplies Go and Node runtime hints and terminates the command process tree if sampled aggregate resident memory exceeds the limit; zero disables a configured default. Foreground commands still running after ${AUTO_BACKGROUND_MS} ms move to the background without stopping the process. Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows. Background mode (background=true) launches the command asynchronously and returns immediately; you are notified when it finishes.`,
             input: Input,
             output: Output,
             structured: StructuredOutput,
@@ -182,7 +182,7 @@ export const Plugin = {
                   callID: context.callID,
                 }
                 const target = yield* mutation.resolve({ path: input.workdir ?? ".", kind: "directory" })
-                const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
+                const timeout = input.timeout === 0 ? DEFAULT_TIMEOUT_MS : (input.timeout ?? DEFAULT_TIMEOUT_MS)
                 const prepared = yield* shell
                   .prepare({
                     command: input.command,

@@ -90,7 +90,7 @@ for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
   }
 }
 
-test("keeps a capped toast clear of the docked session rail", async () => {
+test("keeps a capped toast on the physical right edge above the docked session rail", async () => {
   const width = 220
   const rail = railWidth(width)
   const title = "New session - 2026-07-30T06:00"
@@ -143,8 +143,9 @@ test("keeps a capped toast clear of the docked session rail", async () => {
     const railStart = sessionRail?.x ?? -Infinity
     expect(toastWidth).toBe(60)
     expect(toast?.y).toBe(3)
-    expect(toastRight).toBe(railStart - 2)
-    expect(app.captureCharFrame()).toContain(title)
+    expect(toastRight).toBe(width - 2)
+    expect(toast?.x).toBeLessThan(railStart)
+    expect(toastRight).toBeGreaterThan(railStart)
   } finally {
     app.renderer.destroy()
   }
@@ -195,7 +196,7 @@ test("keeps the toast on the right margin when the route renders no rail", async
   }
 })
 
-test("renders the full docked session route without overwriting its rail", async () => {
+test("renders the full docked session route with a top-right toast over the rail", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT_WIDE,
     args: { sessionID: "ses_toast" },
@@ -205,7 +206,6 @@ test("renders the full docked session route without overwriting its rail", async
 
   try {
     expect(screen.frame()).toContain("Provider usage refreshed")
-    expect(screen.frame()).toContain("New session - 2026-07-30T06:00")
   } finally {
     await screen.dispose()
   }

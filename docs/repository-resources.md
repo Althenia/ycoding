@@ -49,6 +49,21 @@ Supported project resource domains are:
 
 There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
 
+## Built-in ntfy attention notifications
+
+The built-in provider-visible `ntfy` tool is configured in the Location's runtime configuration; it is not a repository resource file. Configure it as:
+
+```jsonc
+{
+  "ntfy": {
+    "enabled": true,
+    "topic": "project-attention",
+  },
+}
+```
+
+It is disabled when omitted. The tool returns a configuration failure without requesting permission or making an HTTP request unless `enabled` is exactly `true` and `topic` is present and non-blank. When enabled, it asks permission for the external write, then sends one plain-text message to the configured ntfy topic. Agents use it only when user attention is needed for a question, confirmation/approval, or a verified completed task; it is not for routine progress. During active goal mode, routine autonomous decisions, background progress, retries, and auto-resolvable questions do not warrant notification. Genuine attention triggers are exhausted goal attempts, a user-owned blocker, confirmation/approval that autonomy cannot resolve, or verified task completion. Agents should use the existing goal system and tool state visible to them; ntfy does not read or duplicate Session autonomy state.
+
 There is no supported project `.ycoding/tui.json`. Terminal preferences are global in `cli.json`.
 
 ## Discovery boundaries and priority

@@ -6,6 +6,9 @@ import path from "node:path"
 import { json } from "./fixture/tui-client"
 import { renderScreen } from "./screen/harness"
 import { materializeClipboardImage } from "../src/clipboard"
+import { testRender } from "@opentui/solid"
+import { createSignal, onMount } from "solid-js"
+import { StartupGate } from "../src/component/startup-loading"
 
 const sessionID = "ses_composer_live_fixes"
 const directory = "/tmp/ycoding/composer-live-fixes"
@@ -43,13 +46,21 @@ const permission = {
   metadata: {},
 }
 let submittedPrompt: string | undefined
+let submittedResume: boolean | undefined
 let failNextPrompt = false
+let modelSwitchGate: Promise<void> | undefined
+let releaseModelSwitch: (() => void) | undefined
+let modelSwitchStarted = false
 
 function submittedText(): string | undefined {
   return submittedPrompt
 }
 
-function isPromptBody(value: unknown): value is { id: string; text: string; delivery?: "steer" | "queue" } {
+function submittedResumeValue(): boolean | undefined {
+  return submittedResume
+}
+
+function isPromptBody(value: unknown): value is { id: string; text: string; delivery?: "steer" | "queue"; resume?: boolean } {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -74,6 +85,7 @@ async function route(url: URL, request: Request) {
       return json({ error: "simulated admission failure" }, { status: 500 })
     }
     submittedPrompt = body.text
+    submittedResume = body.resume
     return json({
       data: {
         id: body.id,
@@ -85,6 +97,11 @@ async function route(url: URL, request: Request) {
         delivery: body.delivery ?? "steer",
       },
     })
+  }
+  if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
+    modelSwitchStarted = true
+    if (modelSwitchGate) await modelSwitchGate
+    return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -163,7 +180,7 @@ async function route(url: URL, request: Request) {
           providerID: session.model.providerID,
           name: "GPT 5.6 Terra",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
-          variants: [{ id: session.model.variant }],
+          variants: [{ id: session.model.variant }, { id: "low" }],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -180,6 +197,40 @@ async function route(url: URL, request: Request) {
     })
   return undefined
 }
+
+test("keeps resident content mounted after one-time startup loading completes", async () => {
+  let setReady!: (ready: boolean) => void
+  let mounts = 0
+
+  function Resident() {
+    onMount(() => mounts++)
+    return <text>resident session content</text>
+  }
+
+  function Fixture() {
+    const [ready, update] = createSignal(false)
+    setReady = update
+    return (
+      <StartupGate ready={ready}>
+        <Resident />
+      </StartupGate>
+    )
+  }
+
+  const app = await testRender(() => <Fixture />)
+  app.renderer.start()
+  try {
+    expect(app.captureCharFrame()).not.toContain("resident session content")
+    setReady(true)
+    await app.waitForFrame((frame) => frame.includes("resident session content"))
+    setReady(false)
+    await Bun.sleep(20)
+    expect(app.captureCharFrame()).toContain("resident session content")
+    expect(mounts).toBe(1)
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 async function permissionRoute(url: URL, request: Request) {
   if (url.pathname === `/api/session/${sessionID}/permission`) return json({ location, data: [permission] })
@@ -349,6 +400,50 @@ test("submits virtualized large pastes at full length without blocking the compo
     if (submitted === undefined) throw new Error("large paste was not submitted")
     expect(submitted).toBe(pasted)
   } finally {
+    await screen.dispose()
+  }
+})
+
+test("admits a steer before an in-flight model variant switch and reuses the composer", async () => {
+  submittedPrompt = undefined
+  submittedResume = undefined
+  modelSwitchStarted = false
+  modelSwitchGate = new Promise<void>((resolve) => {
+    releaseModelSwitch = resolve
+  })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    let promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("/variants")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Select variant")
+    screen.input.pressKey("ARROW_DOWN")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+
+    promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("steer on the selected variant")
+    screen.input.pressEnter()
+    for (let attempt = 0; attempt < 100 && !modelSwitchStarted; attempt++) await Bun.sleep(10)
+
+    expect(modelSwitchStarted).toBe(true)
+    expect(submittedText()).toBe("steer on the selected variant")
+    expect(submittedResumeValue()).toBe(false)
+    releaseModelSwitch?.()
+    await waitForFrameText(screen, "Message YCoding…")
+
+    promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("second steer")
+    screen.input.pressEnter()
+    for (let attempt = 0; attempt < 100 && submittedText() !== "second steer"; attempt++) await Bun.sleep(10)
+    expect(submittedText()).toBe("second steer")
+  } finally {
+    releaseModelSwitch?.()
+    modelSwitchGate = undefined
+    releaseModelSwitch = undefined
     await screen.dispose()
   }
 })

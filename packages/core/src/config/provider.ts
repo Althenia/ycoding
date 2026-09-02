@@ -60,10 +60,15 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
   limit: Limit.pipe(Schema.optional),
 }) {}
 
+class CatalogSource extends Schema.Class<CatalogSource>("ConfigV2.Provider.Catalog")({
+  source: Schema.Literal("openai-models"),
+}) {}
+
 export class Info extends Schema.Class<Info>("ConfigV2.Provider")({
   name: Schema.String.pipe(Schema.optional),
   env: Schema.String.pipe(Schema.Array, Schema.optional),
   package: Schema.String.pipe(Schema.optional),
   ...Overlays,
+  catalog: CatalogSource.pipe(Schema.optional),
   models: Schema.Record(Schema.String, Model).pipe(Schema.optional),
 }) {}

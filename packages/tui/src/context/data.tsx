@@ -621,9 +621,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         const response = await client.api.message.list({ sessionID })
         if (messageSyncLoad.get(sessionID) !== token) return
         const active = new Set(store.session.input[sessionID] ?? [])
+        const canonicalIDs = new Set(response.map((message) => message.id))
         const touched = new Set(
           [...(messageMutations.get(sessionID)?.entries() ?? [])]
-            .filter(([, version]) => version > requestVersion)
+            .filter(([id, version]) => version > requestVersion || !canonicalIDs.has(id))
             .map(([id]) => id),
         )
         const reconciled = reconcileCanonicalMessages(response, store.session.message[sessionID] ?? [], touched, active)
@@ -634,6 +635,12 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             setCompaction(sessionID, lifecycle)
           })
           replaceMessages(sessionID, reconciled)
+          const mutations = messageMutations.get(sessionID)
+          response.forEach((message) => {
+            const version = mutations?.get(message.id)
+            if (version !== undefined && version <= requestVersion) mutations?.delete(message.id)
+          })
+          if (mutations?.size === 0) messageMutations.delete(sessionID)
         })
       } finally {
         if (messageSyncLoad.get(sessionID) === token) messageSyncLoad.delete(sessionID)

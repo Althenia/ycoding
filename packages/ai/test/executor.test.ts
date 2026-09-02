@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Ref, Stream } from "effect"
-import { Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { FetchHttpClient, Headers, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { LLM, LLMError } from "../src"
 import { LLMClient, RequestExecutor } from "../src/route"
 import * as OpenAIChat from "../src/protocols/openai-chat"
@@ -102,6 +102,158 @@ describe("RequestExecutor", () => {
 
       expect(ports).toHaveLength(4)
       expect(ports[1]).toBe(ports[0])
+      expect(ports[2]).not.toBe(ports[1])
+      expect(ports[3]).toBe(ports[0])
+    }),
+  )
+
+  it.live("isolates every scoped request and preserves headers", () =>
+    Effect.gen(function* () {
+      const ports: number[] = []
+      const received: Array<{ method: string; body: string; headers: globalThis.Headers }> = []
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            async fetch(request, server) {
+              const port = server.requestIP(request)?.port
+              if (port !== undefined) ports.push(port)
+              received.push({
+                method: request.method,
+                body: await request.text(),
+                headers: new globalThis.Headers(request.headers),
+              })
+              return new Response("ok")
+            },
+          }),
+        ),
+        (server) => Effect.sync(() => server.stop(true)),
+      )
+      const captured: globalThis.RequestInit[] = []
+      const fetch = Object.assign(
+        (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
+          captured.push(init ?? {})
+          return globalThis.fetch(input, init)
+        },
+        { preconnect: globalThis.fetch.preconnect },
+      )
+      const localRequest = HttpClientRequest.post(server.url).pipe(
+        HttpClientRequest.setHeaders(
+          Headers.fromInput({ connection: "keep-alive", "x-request-header": "request-value" }),
+        ),
+        HttpClientRequest.bodyText("request-body"),
+      )
+      const execute = (isolated = false) =>
+        Effect.gen(function* () {
+          const executor = yield* RequestExecutor.Service
+          const response = yield* executor.execute(localRequest)
+          yield* response.text
+        }).pipe(
+          Stream.fromEffect,
+          (stream) => (isolated ? RequestExecutor.withFreshConnection(stream) : stream),
+          Stream.runDrain,
+        )
+      const program = Effect.gen(function* () {
+        yield* execute()
+        yield* execute(true)
+        yield* execute(true)
+        yield* execute()
+      }).pipe(
+        Effect.provideService(FetchHttpClient.Fetch, fetch),
+        Effect.provideService(FetchHttpClient.RequestInit, {
+          credentials: "include",
+          headers: { "x-init-header": "init-value" },
+          keepalive: true,
+        }),
+        Effect.provide(RequestExecutor.fetchLayer),
+      )
+
+      yield* program
+
+      expect(ports).toHaveLength(4)
+      expect(ports[1]).not.toBe(ports[0])
+      expect(ports[2]).not.toBe(ports[1])
+      expect(ports[3]).toBe(ports[0])
+      expect(captured).toHaveLength(4)
+      expect(captured.map((init) => init.keepalive)).toEqual([true, false, false, true])
+      expect(captured.map((init) => new globalThis.Headers(init.headers).get("connection"))).toEqual([
+        "keep-alive",
+        "close",
+        "close",
+        "keep-alive",
+      ])
+      for (const init of captured) {
+        expect(init.method).toBe("POST")
+        expect(init.body).toEqual(new TextEncoder().encode("request-body"))
+        expect(init.credentials).toBe("include")
+        expect(init.signal).toBeInstanceOf(AbortSignal)
+        expect(new globalThis.Headers(init.headers).get("x-init-header")).toBe("init-value")
+        expect(new globalThis.Headers(init.headers).get("x-request-header")).toBe("request-value")
+      }
+      expect(received.map((request) => request.method)).toEqual(["POST", "POST", "POST", "POST"])
+      expect(received.map((request) => request.body)).toEqual([
+        "request-body",
+        "request-body",
+        "request-body",
+        "request-body",
+      ])
+      expect(received.map((request) => request.headers.get("x-init-header"))).toEqual([
+        "init-value",
+        "init-value",
+        "init-value",
+        "init-value",
+      ])
+      expect(received.map((request) => request.headers.get("x-request-header"))).toEqual([
+        "request-value",
+        "request-value",
+        "request-value",
+        "request-value",
+      ])
+    }),
+  )
+
+  it.live("automatically isolates configured Codex HTTP routes", () =>
+    Effect.gen(function* () {
+      const ports: number[] = []
+      const server = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: (request, server) => {
+              const port = server.requestIP(request)?.port
+              if (port !== undefined) ports.push(port)
+              return new Response(
+                sseRaw(
+                  `data: ${JSON.stringify(deltaChunk({ role: "assistant", content: "ok" }))}`,
+                  `data: ${JSON.stringify(deltaChunk({}, "stop"))}`,
+                  "data: [DONE]",
+                ),
+                { headers: { "content-type": "text/event-stream" } },
+              )
+            },
+          }),
+        ),
+        (server) => Effect.sync(() => server.stop(true)),
+      )
+      const baseURL = server.url.toString().replace(/\/$/, "")
+      const codexModel = OpenAIChat.route
+        .with({ id: "openai-codex-responses", endpoint: { baseURL } })
+        .model({ id: "codex-isolated" })
+      const pooledModel = OpenAIChat.route.with({ endpoint: { baseURL } }).model({ id: "ordinary-pooled" })
+      const generate = (model: typeof codexModel) => LLMClient.generate(LLM.request({ model, prompt: "hello" }))
+      const program = Effect.gen(function* () {
+        yield* generate(pooledModel)
+        yield* generate(codexModel)
+        yield* generate(codexModel)
+        yield* generate(pooledModel)
+      }).pipe(Effect.provide(LLMClient.configured().pipe(Layer.provide(RequestExecutor.fetchLayer))))
+
+      yield* program
+
+      expect(ports).toHaveLength(4)
+      expect(ports[1]).not.toBe(ports[0])
       expect(ports[2]).not.toBe(ports[1])
       expect(ports[3]).toBe(ports[0])
     }),

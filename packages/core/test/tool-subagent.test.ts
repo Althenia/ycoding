@@ -53,6 +53,7 @@ const childModel = ModelV2.Ref.make({ id: ModelV2.ID.make("child"), providerID: 
 const parentModel = ModelV2.Ref.make({ id: ModelV2.ID.make("parent"), providerID: ProviderV2.ID.make("test") })
 const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
 const executionWakes: SessionV2.ID[] = []
+const executionInterrupts: SessionV2.ID[] = []
 const notificationDeliveredOnWake: boolean[] = []
 
 const outputSessionID = (value: unknown) => Schema.decodeUnknownSync(SubagentTool.Output)(value).sessionID
@@ -115,7 +116,7 @@ const executionNode = makeGlobalNode({
               .pipe(Effect.orDie)
             if (rows.length > 0) notificationDeliveredOnWake.push(rows.every((row) => row.delivered))
           }),
-        interrupt: () => Effect.void,
+        interrupt: (sessionID) => Effect.sync(() => void executionInterrupts.push(sessionID)),
         awaitIdle: (sessionID) => complete(sessionID).pipe(Effect.exit, Effect.asVoid),
       })
     }),
@@ -142,6 +143,37 @@ const layer = AppNodeBuilder.build(
 )
 
 const it = testEffect(layer)
+
+const jobStartupFailureNode = makeGlobalNode({
+  service: Job.Service,
+  layer: Layer.mock(Job.Service, {
+    start: () => Effect.die(new Error("job startup failed")),
+  }),
+  deps: [],
+})
+
+const startupFailureIt = testEffect(
+  AppNodeBuilder.build(
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      Job.node,
+      ToolOutputStore.cleanupNode,
+      SessionV2.node,
+      SessionExecution.node,
+      SessionOrchestrationNotifier.node,
+      PluginHooks.node,
+      ToolHooks.node,
+      PluginRuntime.node,
+      PluginRuntime.providerNode,
+      LocationServiceMap.node,
+    ]),
+    [
+      [SessionExecution.node, executionNode],
+      [Job.node, jobStartupFailureNode],
+    ],
+  ),
+)
 
 const withSubagent = (location: Location.Ref) =>
   Effect.gen(function* () {
@@ -209,6 +241,32 @@ describe("SubagentTool", () => {
           prompt: "p".repeat(64 * 1024 + 1),
         }),
       ).toThrow()
+      expect(
+        Schema.decodeUnknownSync(SubagentTool.Input)({
+          agent: "reviewer",
+          description: "review",
+          prompt: "review",
+          timeout: 1,
+        }),
+      ).toMatchObject({ timeout: 1 })
+      expect(() =>
+        Schema.decodeUnknownSync(SubagentTool.Input)({
+          agent: "reviewer",
+          description: "review",
+          prompt: "review",
+          timeout: 0,
+        }),
+      ).toThrow()
+      expect(() =>
+        Schema.decodeUnknownSync(SubagentTool.Input)({
+          agent: "reviewer",
+          description: "review",
+          prompt: "review",
+          timeout: SubagentTool.MAX_TIMEOUT_MS + 1,
+        }),
+      ).toThrow()
+      expect(SubagentTool.DEFAULT_TIMEOUT_MS).toBeGreaterThan(0)
+      expect(SubagentTool.DEFAULT_TIMEOUT_MS).toBeLessThanOrEqual(SubagentTool.MAX_TIMEOUT_MS)
       expect(SubagentTool.description).toContain("Do not mention subagent status unless the user explicitly asks")
       expect(SubagentTool.description).toContain("Choose the model variant that matches the task difficulty")
       expect(SubagentTool.description).toContain(
@@ -475,19 +533,116 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.effect("sends progress prompts every ten minutes until interrupted", () =>
+  it.effect("stops ten-minute progress prompts when their owning scope closes", () =>
     Effect.gen(function* () {
       const prompts: string[] = []
-      const fiber = yield* SubagentTool.repeatProgress(
-        Effect.sync(() => prompts.push(SubagentTool.progressPrompt)),
-      ).pipe(Effect.forkScoped)
-
-      yield* TestClock.adjust("10 minutes")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* SubagentTool.repeatProgress(
+            Effect.sync(() => prompts.push(SubagentTool.progressPrompt)),
+          ).pipe(Effect.forkScoped)
+          yield* TestClock.adjust("10 minutes")
+        }),
+      )
       expect(prompts).toEqual(["Report current status, blockers, and ETA."])
-      yield* Fiber.interrupt(fiber)
       yield* TestClock.adjust("10 minutes")
       expect(prompts).toHaveLength(1)
     }),
+  )
+
+  it.live("interrupts and durably fails a child once when its bounded runtime expires", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* SessionV2.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          yield* waitForTool(registry, SubagentTool.name)
+          const events = yield* EventV2.Service
+          const admitted = yield* events.subscribe(SessionEvent.InputAdmitted).pipe(
+            Stream.filter((event) => event.data.sessionID === parent.id && event.data.input.type === "synthetic"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkScoped({ startImmediately: true }),
+          )
+
+          const settled = yield* settleTool(registry, {
+            sessionID: parent.id,
+            ...toolIdentity,
+            call: {
+              type: "tool-call",
+              id: "call-subagent-timeout",
+              name: SubagentTool.name,
+              input: { agent: "reviewer", description: "hold until timeout", prompt: "wait", timeout: 25 },
+            },
+          })
+          const childID = outputSessionID(settled.output?.structured)
+          const finished = yield* Job.Service.use((jobs) => jobs.wait({ id: childID }))
+
+          expect(finished.info).toMatchObject({ status: "error", error: expect.stringContaining("timed out") })
+          expect((yield* (yield* PluginRuntime.Service).orchestration.get(parent.id, childID)).state).toBe("failed")
+          expect(executionInterrupts.filter((sessionID) => sessionID === childID)).toHaveLength(1)
+          const notifications = yield* (yield* Database.Service).db
+            .select()
+            .from(SessionTaskNotificationTable)
+            .where(eq(SessionTaskNotificationTable.task_session_id, childID))
+            .all()
+          expect(notifications).toEqual([expect.objectContaining({ type: "failed" })])
+          expect(Array.from(yield* Fiber.join(admitted))).toHaveLength(1)
+        }),
+      ),
+    ),
+  )
+
+  startupFailureIt.live("durably fails a launched child when background job startup fails", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((dir) =>
+        Effect.gen(function* () {
+          const location = Location.Ref.make({ directory: AbsolutePath.make(dir.path) })
+          const sessions = yield* SessionV2.Service
+          const parent = yield* sessions.create({ location, model: parentModel })
+          yield* withSubagent(parent.location)
+          const locations = yield* LocationServiceMap.Service
+          const registry = yield* ToolRegistry.Service.pipe(Effect.provide(locations.get(parent.location)))
+          yield* waitForTool(registry, SubagentTool.name)
+
+          expect(
+            yield* Effect.exit(
+              settleTool(registry, {
+                sessionID: parent.id,
+                ...toolIdentity,
+                call: {
+                  type: "tool-call",
+                  id: "call-subagent-startup-failure",
+                  name: SubagentTool.name,
+                  input: { agent: "reviewer", description: "startup failure", prompt: "review" },
+                },
+              }),
+            ),
+          ).toMatchObject({ _tag: "Failure" })
+
+          const tasks = yield* (yield* PluginRuntime.Service).orchestration.list(parent.id)
+          expect(tasks).toHaveLength(1)
+          expect(tasks[0]?.state).toBe("failed")
+          expect(
+            yield* (yield* Database.Service).db
+              .select()
+              .from(SessionTaskNotificationTable)
+              .where(eq(SessionTaskNotificationTable.task_session_id, tasks[0]!.sessionID))
+              .all(),
+          ).toEqual([expect.objectContaining({ type: "failed" })])
+        }),
+      ),
+    ),
   )
 
   it.live("preflights explicit variants before persisting a child", () =>

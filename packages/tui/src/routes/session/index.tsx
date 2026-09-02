@@ -121,7 +121,6 @@ import {
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
   type SessionAutonomyResponse,
-  stripGoalCompletionMarker,
   yoloLevel,
 } from "../../util/session-autonomy"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
@@ -2811,8 +2810,7 @@ function TextPart(props: {
 }) {
   const ctx = use()
   const { themeV2, syntax } = useTheme()
-  // The goal-mode completion marker is a control token for the autonomy loop, not prose.
-  const text = createMemo(() => stripGoalCompletionMarker(props.part.text))
+  const text = createMemo(() => props.part.text)
   const imagePlaceholder = createMemo(() => /\[Image \d+\]/.test(text()))
   // OpenTUI 0.4.5 drops bare transcript image placeholders when finalized, so wrap only that
   // model-visible marker as inline code while retaining top-level rendering for its visual shape.

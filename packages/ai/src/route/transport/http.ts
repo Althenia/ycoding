@@ -7,6 +7,7 @@ import type { Transport, TransportPrepareInput } from "./index"
 import { TransportAttempt } from "./attempt"
 import * as ProviderShared from "../../protocols/shared"
 import { mergeJsonRecords, type LLMRequest } from "../../schema"
+import { RequestExecutor } from "../executor"
 
 export type JsonRequestInput<Body> = TransportPrepareInput<Body>
 
@@ -129,8 +130,25 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         framing: input.framing,
       })),
     ),
-  frames: (prepared, request, runtime) =>
-    TransportAttempt.trackStream(
+  frames: (prepared, request, runtime) => {
+    const isCodexIsolated = request.model.route.id === "openai-codex-responses"
+    const execute = runtime.http.execute(prepared.request).pipe(
+      Effect.map((response) => ({
+        status: response.status,
+        stream: prepared.framing.frame(
+          response.stream.pipe(
+            Stream.mapError((error) =>
+              ProviderShared.streamReadError(
+                `${request.model.provider}/${request.model.route.id}`,
+                error,
+              ),
+            ),
+          ),
+        ),
+      })),
+    )
+    const isolated = isCodexIsolated ? RequestExecutor.withFreshConnectionEffect(execute) : execute
+    return TransportAttempt.trackStream(
       {
         requestID: request.id ?? "request",
         routeID: request.model.route.id,
@@ -138,22 +156,9 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         attempt: 1,
         observer: runtime.observeAttempt,
       },
-      runtime.http.execute(prepared.request).pipe(
-        Effect.map((response) => ({
-          status: response.status,
-          stream: prepared.framing.frame(
-            response.stream.pipe(
-              Stream.mapError((error) =>
-                ProviderShared.streamReadError(
-                  `${request.model.provider}/${request.model.route.id}`,
-                  error,
-                ),
-              ),
-            ),
-          ),
-        })),
-      ),
-    ),
+      isolated,
+    )
+  },
 })
 
 export const sseJson = {

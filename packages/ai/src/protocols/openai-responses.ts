@@ -598,7 +598,9 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     return yield* ProviderShared.invalidRequest(
       `OpenAI Responses image detail original requires GPT-5.4 or later: ${request.model.id}`,
     )
-  const supportsBreakpoints = OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)
+  const supportsBreakpoints =
+    request.model.route.id !== "github-copilot-responses" &&
+    OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)
 
   const systemCacheHint = request.system.find((part) => part.cache !== undefined)?.cache
   const system: OpenAIResponsesInputItem[] =
@@ -627,7 +629,12 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
 
   for (const message of pruneMessagesForServerCompaction(request).slice(continuationInputStart)) {
     if (message.role === "system") {
-      if (["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id)) {
+      if (
+        ["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) ||
+        (["openai-responses", "openai-responses-websocket", "github-copilot-responses"].includes(
+          request.model.route.id,
+        ) && OpenAIOptions.isGpt56OrLater(request.model.id))
+      ) {
         const content = yield* ProviderShared.systemUpdateText("OpenAI Responses", message)
         input.push({
           role: "system",
@@ -781,7 +788,10 @@ const lowerOptions = Effect.fn("OpenAIResponses.lowerOptions")(function* (reques
   const verbosity = OpenAIOptions.textVerbosity(request)
   const instructions = OpenAIOptions.instructions(request)
   const serviceTier = OpenAIOptions.serviceTier(request)
-  const cacheCapability = OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id)
+  const cacheCapability =
+    request.model.route.id === "github-copilot-responses"
+      ? "key-only"
+      : OpenAIOptions.publicPromptCacheCapability(request.model.route.id, request.model.id)
   const configuredRetention = cacheCapability === "legacy" ? OpenAIOptions.promptCacheRetention(request) : undefined
   const retention =
     configuredRetention === "24h" && !OpenAIOptions.supportsExtendedPromptCacheRetention(request.model.id)

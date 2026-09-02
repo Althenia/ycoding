@@ -1114,7 +1114,11 @@ describe("ShellTool", () => {
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]().then(() => undefined)),
     ),
   )
-  ;[sessionID, SessionV2.ID.make("ses_shell_tool_child_test")].forEach((owner) =>
+  ;[
+    { owner: sessionID },
+    { owner: SessionV2.ID.make("ses_shell_tool_child_test") },
+    { owner: SessionV2.ID.make("ses_shell_tool_zero_timeout_test"), timeout: 0 },
+  ].forEach(({ owner, timeout }) =>
     fakeIt.effect(`automatically backgrounds one unchanged shell for ${owner}`, () =>
       Effect.acquireUseRelease(
         Effect.promise(() => tmpdir()),
@@ -1134,14 +1138,19 @@ describe("ShellTool", () => {
                   Stream.runHead,
                   Effect.forkIn(scope, { startImmediately: true }),
                 )
-                const waiting = yield* settleTool(registry, call({ command: "fake long command" }, callID, owner)).pipe(
-                  Effect.forkIn(scope, { startImmediately: true }),
-                )
+                const waiting = yield* settleTool(
+                  registry,
+                  call(
+                    timeout === undefined ? { command: "fake long command" } : { command: "fake long command", timeout },
+                    callID,
+                    owner,
+                  ),
+                ).pipe(Effect.forkIn(scope, { startImmediately: true }))
 
                 yield* waitForJob(jobs, callID)
                 yield* Effect.yieldNow
                 expect(fakeShellState.prepared).toMatchObject([
-                  { timeout: 0, metadata: { sessionID: owner, toolCallID: callID } },
+                  { timeout: ShellTool.MAX_TIMEOUT_MS, metadata: { sessionID: owner, toolCallID: callID } },
                 ])
                 expect(fakeShellState.creates).toBe(1)
 
@@ -1227,7 +1236,7 @@ describe("ShellTool", () => {
               call({ command: "fake explicit background", background: true }, "call-explicit-background"),
             )
             expect(settled.output?.structured).toMatchObject({ shellID: "sh_fake_1", truncated: false })
-            expect(fakeShellState.prepared).toMatchObject([{ timeout: 0 }])
+            expect(fakeShellState.prepared).toMatchObject([{ timeout: ShellTool.MAX_TIMEOUT_MS }])
 
             yield* TestClock.adjust(300_000)
             expect(admitted.pollUnsafe()).toBeUndefined()

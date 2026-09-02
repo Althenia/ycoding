@@ -38,8 +38,10 @@ function writeOsc52(text: string) {
 
 export async function read() {
   if (platform() === "darwin") {
+    // Use OS tmpdir (typically /var/folders/.../T) instead of hardcoded /private/tmp
+    // to respect sandbox/TMPDIR and avoid intermittent ENOENT on restricted /private/tmp.
     try {
-      return await materializeClipboardImage("/private/tmp", async (file) => {
+      return await materializeClipboardImage(tmpdir(), async (file) => {
         await exec("osascript", [
           "-e",
           'set imageData to the clipboard as "PNGf"',

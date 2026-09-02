@@ -18,8 +18,8 @@ export type RailSectionKey =
 export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
 
 /**
- * Sections that carry no summary on their header row, so collapsing them would hide information.
- * The remaining sections summarise themselves and stay collapsed until an attention event.
+ * Session context and todo are the persistent expanded rail sections. All other sections stay
+ * collapsed until an attention event or an explicit user toggle.
  */
 export function defaultExpanded(_input: {
   goal?: boolean
@@ -31,15 +31,6 @@ export function defaultExpanded(_input: {
     "session",
     "context",
     "todo",
-    "goal",
-    "autonomy",
-    "subagents",
-    "shells",
-    "mcp",
-    "plugins",
-    "guardrails",
-    "lsp",
-    "skills",
   ]
 }
 

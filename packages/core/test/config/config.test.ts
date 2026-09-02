@@ -6,6 +6,7 @@ import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { ConfigModel } from "@ycoding-ai/core/config/model"
+import { ConfigNtfy } from "@ycoding-ai/core/config/ntfy"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { ConfigProvider } from "@ycoding-ai/core/config/provider"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -513,6 +514,34 @@ describe("Config", () => {
         expect(decode({ shell_sandbox: mode }).shell_sandbox).toBe(mode)
       }
       expect(() => decode({ shell_sandbox: "pretend" })).toThrow()
+    }),
+  )
+
+  it.effect("decodes optional ntfy attention-notification settings", () =>
+    Effect.sync(() => {
+      const decode = Schema.decodeUnknownSync(Config.Info)
+
+      expect(decode({}).ntfy).toBeUndefined()
+      expect(decode({ ntfy: { enabled: true, topic: "attention" } }).ntfy).toEqual({
+        enabled: true,
+        topic: "attention",
+      })
+      expect(decode({ ntfy: { enabled: false } }).ntfy).toEqual({ enabled: false })
+      expect(
+        Config.latest(
+          [
+            new Config.Document({
+              type: "document",
+              info: new Config.Info({ ntfy: new ConfigNtfy.Info({ enabled: false, topic: "lower" }) }),
+            }),
+            new Config.Document({
+              type: "document",
+              info: new Config.Info({ ntfy: new ConfigNtfy.Info({ enabled: true, topic: "higher" }) }),
+            }),
+          ],
+          "ntfy",
+        ),
+      ).toEqual({ enabled: true, topic: "higher" })
     }),
   )
 
