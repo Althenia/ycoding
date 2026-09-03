@@ -58,11 +58,13 @@ const INLINE_HINT_ROUTES = new Set([
 ])
 const INLINE_HINT_CAP = 4
 const EXTENDED_TTL_SECONDS = 3600
+const COPILOT_KEY_ONLY_ROUTES = new Set(["github-copilot-chat", "github-copilot-responses"])
 
 const respectsInlineHints = (request: LLMRequest) =>
   RESPECTS_INLINE_HINTS.has(request.model.route.protocol) ||
   INLINE_HINT_ROUTES.has(request.model.route.id) ||
-  (OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id) &&
+  (!COPILOT_KEY_ONLY_ROUTES.has(request.model.route.id) &&
+    OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id) &&
     (["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) ||
       OpenAIOptions.promptCacheOptions(request) !== undefined))
 
@@ -392,7 +394,9 @@ export const applyCachePolicy = (request: LLMRequest): LLMRequest => {
   if (!respectsInlineHints(request)) return request
   const policy = resolve(request.cache)
   const auto = request.cache === undefined || request.cache === "auto"
-  const gpt56 = OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)
+  const gpt56 =
+    !COPILOT_KEY_ONLY_ROUTES.has(request.model.route.id) &&
+    OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id)
   if (!policy.tools && !policy.system && !policy.messages && !gpt56) return request
 
   // `auto` splits buckets by lifetime; an explicit policy is taken literally, so

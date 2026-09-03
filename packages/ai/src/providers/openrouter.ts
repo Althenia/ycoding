@@ -138,7 +138,7 @@ export const protocol: any = Protocol.make({
           openai: {
             ...rawOpenai,
             ...(promptCacheKey ? { promptCacheKey } : {}),
-            store: undefined,
+            store: false,
             previousResponseId: undefined,
             previous_response_id: undefined,
             prompt_cache_key: undefined,

@@ -8,6 +8,7 @@ import { Keymap } from "../src/context/keymap"
 import { modeChips } from "../src/component/prompt/mode-chips"
 import {
   Header,
+  headerModelLabel,
   pendingModelVariant,
   headerSegments,
   headerStatusLabel,
@@ -136,6 +137,26 @@ test("shows the selected model and variant only while the session still uses a d
       { pendingModel: "GPT-5.6 Terra", pendingVariant: "high" },
     ),
   ).toBeUndefined()
+})
+
+test("never displays the default variant sentinel", () => {
+  expect(headerSegments({ width: 160, model: "openai/GPT-5.6 Terra", variant: "default" }).map((segment) => segment.key)).toEqual([
+    "model",
+  ])
+  expect(headerSegments({ width: 160, model: "openai/GPT-5.6 Terra", variant: undefined }).map((segment) => segment.key)).toEqual([
+    "model",
+  ])
+  expect(
+    pendingModelVariant({ model: "openai/GPT-5.6 Terra", variant: "default" }, { pendingModel: "openai/GPT-5.6 Terra", pendingVariant: "xhigh" }),
+  ).toBe("→ openai/GPT-5.6 Terra · xhigh")
+  expect(
+    pendingModelVariant({ model: "openai/GPT-5.6 Terra", variant: undefined }, { pendingModel: "openai/GPT-5.6 Terra", pendingVariant: "default" }),
+  ).toBeUndefined()
+})
+
+test("labels provider-qualified models with the resolved name", () => {
+  expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra", name: "GPT-5.6 Terra" })).toBe("openai/GPT-5.6 Terra")
+  expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra" })).toBe("openai/Gpt 5 6 Terra")
 })
 
 function HeaderKeymap(props: Parameters<typeof Header>[0]) {

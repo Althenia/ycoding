@@ -171,14 +171,22 @@ export { MessageDecodeError, NotFoundError }
 export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictError>()("Session.PromptConflictError", {
   sessionID: SessionSchema.ID,
   messageID: SessionMessage.ID,
-}) {}
+}) {
+  override get message() {
+    return `Prompt message ID conflicts with an existing durable record: ${this.messageID} (retry with a fresh ID; your draft is preserved in the composer)`
+  }
+}
 export class SyntheticConflictError extends Schema.TaggedErrorClass<SyntheticConflictError>()(
   "Session.SyntheticConflictError",
   {
     sessionID: SessionSchema.ID,
     inputID: SessionMessage.ID,
   },
-) {}
+) {
+  override get message() {
+    return `Synthetic input conflicts with an existing durable record: ${this.inputID} (retry with a fresh ID)`
+  }
+}
 export class AttachmentError extends Schema.TaggedErrorClass<AttachmentError>()("Session.AttachmentError", {
   uri: Schema.String,
   message: Schema.String,
@@ -902,7 +910,15 @@ const layer = Layer.effect(
               }).pipe(Effect.orDie)
             }
             if (input.resume !== false) {
-              if (activeShells.has(admitted.sessionID)) return admitted
+              if (activeShells.has(admitted.sessionID)) {
+                // Admit-only during an active shell strands the prompt until
+                // the shell's ensuring wake fires; name it so "pending but
+                // idle" is diagnosable (TUI also shows a queued notice).
+                yield* Effect.logWarning("Session prompt queued during active shell; wake deferred", {
+                  inputID: admitted.id,
+                }).pipe(Effect.annotateLogs({ sessionID: admitted.sessionID }))
+                return admitted
+              }
               yield* execution.wake(admitted.sessionID)
             }
             return admitted

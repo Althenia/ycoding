@@ -35,7 +35,8 @@ import { projectedPromptInput } from "../../prompt/codec"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, type JSX } from "@opentui/solid"
-import { errorFormat, errorMessage } from "../../util/error"
+import { errorMessage } from "../../util/error"
+import { normalizeModelVariant } from "../../model-preference"
 import { useDialog } from "../../ui/dialog"
 import { DialogIntegration } from "../dialog-integration"
 import { DialogModel } from "../dialog-model"
@@ -1667,7 +1668,8 @@ export function Prompt(props: PromptProps) {
       const switchRequired =
         session?.model?.providerID !== submission!.payload.model.providerID ||
         session?.model?.id !== submission!.payload.model.id ||
-        (session?.model?.variant ?? "default") !== (submission!.payload.model.variant ?? "default")
+        normalizeModelVariant(session?.model?.variant) !==
+          normalizeModelVariant(submission!.payload.model.variant)
       if (session?.revert) {
         const error = await client.api.session.revert.commit({ sessionID }).then(
           () => undefined,
@@ -1706,17 +1708,24 @@ export function Prompt(props: PromptProps) {
       }
       const runPromptWithSkills = (promptID: string, skillIDs: string[]) => {
         let switched = false
+        let switchWarning: unknown
         const promptFn = async (
           resume: boolean,
           admitted?: Awaited<ReturnType<typeof client.api.session.prompt>>,
         ) => {
           const files = admitted ? projectedPromptInput(admitted.data as never).files : submission!.payload.files
           if (resume && switchRequired && !switched) {
-            await client.api.session.switchModel({
-              sessionID,
-              model: submission!.payload.model,
-            })
             switched = true
+            const switchError = await client.api.session
+              .switchModel({
+                sessionID,
+                model: submission!.payload.model,
+              })
+              .then(
+                () => undefined,
+                (error) => error,
+              )
+            if (switchError) switchWarning = switchError
           }
           return client.api.session.prompt({
             id: promptID,
@@ -1739,12 +1748,12 @@ export function Prompt(props: PromptProps) {
                 resume: false,
               }),
           ),
-        })
+        }).then(
+          (admitted) => ({ admitted, switchWarning }) as const,
+          (error) => ({ error }) as const,
+        )
       }
-      let result = await runPromptWithSkills(submission!.promptID, submission!.skillIDs).then(
-        (admitted) => ({ admitted }) as const,
-        (error) => ({ error }) as const,
-      )
+      let result = await runPromptWithSkills(submission!.promptID, submission!.skillIDs)
       if ("error" in result && errorMessage(result.error).includes("conflicts with an existing durable")) {
         // The retained promptID collided with an existing durable record (same ID, different content).
         // This happens when a previous admission was promoted and the retained submission is retried
@@ -1761,21 +1770,22 @@ export function Prompt(props: PromptProps) {
         // Re-key the retained submission so the next retry check doesn't immediately block it.
         // Keep the same session but allow the new IDs to be used.
         setRetry({ ...submission })
-        result = await runPromptWithSkills(freshPromptID, freshSkillIDs).then(
-          (admitted) => ({ admitted }) as const,
-          (error) => ({ error }) as const,
-        )
+        result = await runPromptWithSkills(freshPromptID, freshSkillIDs)
       }
       if ("error" in result) {
-        const raw = errorMessage(result.error)
-        const message =
-          raw.trim() === "{" || raw.trim() === "{}" || raw.trim().length <= 2 ? errorFormat(result.error) : raw
         toast.show({
           title: "Failed to send prompt or activate skill",
-          message,
+          message: errorMessage(result.error),
           variant: "error",
         })
         return false
+      }
+      if ("switchWarning" in result && result.switchWarning) {
+        toast.show({
+          title: "Model switch needs attention",
+          message: errorMessage(result.switchWarning),
+          variant: "warning",
+        })
       }
       const files = projectedPromptInput(result.admitted.data as never).files
       submission!.payload.files = files

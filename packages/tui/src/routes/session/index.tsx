@@ -266,6 +266,27 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (disabled() && composer.open) setComposer("open", false)
   })
 
+  const blockedReason = createMemo(() => {
+    if (reviewingGuardrail()) return "Composer paused: guardrail review"
+    if (permissions().length > 0) return "Composer paused: permission review"
+    if (forms().length > 0) return "Composer paused: form input"
+    return undefined
+  })
+  const queuedPending = createMemo(() => data.session.pending.list(route.sessionID))
+  const runningShells = createMemo(() => {
+    const target = location()
+    if (!target) return 0
+    return data.shell.list(target).filter((shell) => shell.status === "running").length
+  })
+  const queuedNotice = createMemo(() => {
+    const count = queuedPending().length
+    if (count === 0) return undefined
+    if (data.session.status(route.sessionID) !== "idle" && runningShells() === 0) return undefined
+    return runningShells() > 0
+      ? `Queued: ${count} prompt${count === 1 ? "" : "s"} waiting on running shell`
+      : `Queued: ${count} prompt${count === 1 ? "" : "s"} waiting`
+  })
+
   const pending = createMemo(() => {
     const completed = messages().findLast((x) => x.type === "assistant" && x.time.completed)?.id
     return messages().findLast((x) => x.type === "assistant" && !x.time.completed && (!completed || x.id > completed))
@@ -1485,6 +1506,20 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
               }
             >
               <PluginSlot name="session.composer.top" input={{ sessionID: route.sessionID }} />
+              <Show when={blockedReason()}>
+                {(reason) => (
+                  <box paddingLeft={1} flexShrink={0}>
+                    <text fg={themeV2.text.subdued}>{reason()}</text>
+                  </box>
+                )}
+              </Show>
+              <Show when={!blockedReason() && queuedNotice()}>
+                {(notice) => (
+                  <box paddingLeft={1} flexShrink={0}>
+                    <text fg={themeV2.text.subdued}>{notice()}</text>
+                  </box>
+                )}
+              </Show>
               <Composer
                 sessionID={route.sessionID}
                 open={composer.open}

@@ -152,7 +152,7 @@ Continuation reuse is invalidated on:
 - a step without a clean response ID;
 - provider-state rejection.
 
-When a continued request receives an invalid-request error before observable assistant output, YCoding clears the response ID and retries the same logical request once with full canonical history. The request ledger records one logical request, two physical attempts, and `fallback`. A second failure follows the normal provider error path and is not retried as continuation again.
+When a continued request receives a recognized stale-continuation invalid-request error before observable assistant output — an explicit `previous_response_id` rejection, or a bare `invalid_prompt` on a stored continuation — YCoding clears the response ID and retries the same logical request once with full canonical history. The request ledger records one logical request, two physical attempts, and `fallback`. A generic `Invalid request` without continuation-specific text, a context-overflow classification, and any second failure follow the normal provider error path and are not retried as continuation again.
 
 OpenAI server-side compaction is provider request semantics, not a prompt-cache hit and not a local `session_context_revision`. Local selective compaction can invalidate continuation and change the model-visible history without changing the canonical transcript; provider cache telemetry continues to report only provider-reported cache categories.
 

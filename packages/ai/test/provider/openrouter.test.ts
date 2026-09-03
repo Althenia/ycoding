@@ -159,4 +159,44 @@ describe("OpenRouter", () => {
       expect(prepared.body.input).toBeDefined()
     }),
   )
+
+  it.effect("replays stored reasoning as stateless input instead of item_reference", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenRouter.OpenRouterBody>(
+        LLM.request({
+          model: OpenRouter.configure({ apiKey: "test-key" }).model("meta/muse-spark-1.3-contributor"),
+          system: "Stable instructions.",
+          messages: [
+            Message.user("What changed?"),
+            Message.assistant([
+              {
+                type: "reasoning",
+                text: "Checked the previous diff.",
+                providerMetadata: { openai: { itemId: "rs_1", reasoningEncryptedContent: "encrypted-state" } },
+              },
+              { type: "text", text: "The parser changed." },
+            ]),
+            Message.user("Summarize it."),
+          ],
+        }),
+      )
+
+      // OpenRouter Responses is stateless and rejects `item_reference`; the
+      // shared Responses lowerer must see store:false so it replays the full
+      // reasoning item instead of emitting a stored id reference.
+      expect(prepared.body.input).toEqual([
+        { role: "system", content: "Stable instructions." },
+        { role: "user", content: [{ type: "input_text", text: "What changed?" }] },
+        {
+          type: "reasoning",
+          encrypted_content: "encrypted-state",
+          summary: [{ type: "summary_text", text: "Checked the previous diff." }],
+        },
+        { role: "assistant", content: [{ type: "output_text", text: "The parser changed." }] },
+        { role: "user", content: [{ type: "input_text", text: "Summarize it." }] },
+      ])
+      expect(prepared.body.store).toBeUndefined()
+      expect(prepared.body.previous_response_id).toBeUndefined()
+    }),
+  )
 })
