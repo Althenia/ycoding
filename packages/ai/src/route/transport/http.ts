@@ -131,7 +131,6 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
       })),
     ),
   frames: (prepared, request, runtime) => {
-    const isCodexIsolated = request.model.route.id === "openai-codex-responses"
     const execute = runtime.http.execute(prepared.request).pipe(
       Effect.map((response) => ({
         status: response.status,
@@ -147,7 +146,7 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
         ),
       })),
     )
-    const isolated = isCodexIsolated ? RequestExecutor.withFreshConnectionEffect(execute) : execute
+    const isolated = RequestExecutor.withFreshConnectionEffect(execute)
     return TransportAttempt.trackStream(
       {
         requestID: request.id ?? "request",

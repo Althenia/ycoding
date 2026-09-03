@@ -63,7 +63,7 @@ When a Session drain is active, selection waits for that drain to settle before 
 
 Before each Step, the runner reloads Session History, resolves the selected agent and model, prepares instructions, and materializes tools. Most Steps make one Physical Attempt. A typed pre-output retry may repeat the Physical Attempt within the same Step, and overflow-triggered compaction recovery may rebuild the same Step for one additional provider request.
 
-Every configured `LLMClient` Physical Attempt whose compiled route ID is `openai-codex-responses` uses an isolated HTTP/SSE connection, including first attempts and retries from Session or helper callers. Fixed Codex WebSocket and non-Codex routes retain their current transport and pooling behavior; connection isolation does not imply provider cache reuse or switch transports.
+Every configured `LLMClient` HTTP Physical Attempt uses an isolated HTTP/SSE connection, including first attempts and retries from Session or helper callers. Fixed WebSocket routes retain their current transport behavior; connection isolation does not imply provider cache reuse or switch transports.
 
 Each complete local tool call is durable before side effects begin. Local calls start eagerly and may run concurrently, but settlement publication remains serialized. Every local and hosted call reaches durable success or failure before the Step publishes its single terminal ended or failed event.
 

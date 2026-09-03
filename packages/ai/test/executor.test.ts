@@ -213,7 +213,7 @@ describe("RequestExecutor", () => {
     }),
   )
 
-  it.live("automatically isolates configured Codex HTTP routes", () =>
+  it.live("automatically isolates every HTTP route", () =>
     Effect.gen(function* () {
       const ports: number[] = []
       const server = yield* Effect.acquireRelease(
@@ -255,7 +255,7 @@ describe("RequestExecutor", () => {
       expect(ports).toHaveLength(4)
       expect(ports[1]).not.toBe(ports[0])
       expect(ports[2]).not.toBe(ports[1])
-      expect(ports[3]).toBe(ports[0])
+      expect(ports[3]).not.toBe(ports[2])
     }),
   )
 
