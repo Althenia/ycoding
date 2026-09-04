@@ -183,6 +183,7 @@ const layer = Layer.effect(
       const initialPrepared = yield* prepare(initialContext)
       const limits = initialContext.model.model.route.defaults.limits
       const compactionPolicy = SessionContextPressure.policy(yield* config.entries())
+      const lastProviderInput = SessionCacheDiagnostics.latestAssistant(initialContext.messages)?.tokens
       const candidate =
         limits?.context === undefined || limits.output === undefined
           ? { context: initialContext, prepared: initialPrepared, compacted: false }
@@ -196,6 +197,12 @@ const layer = Layer.effect(
               },
               candidate: { context: initialContext, prepared: initialPrepared },
               force: requestTrackerState.overflowRecovery === "pending",
+              ...(lastProviderInput === undefined
+                ? {}
+                : {
+                    lastProviderInputTokens:
+                      lastProviderInput.input + lastProviderInput.cache.read + lastProviderInput.cache.write,
+                  }),
               reload: ({ fullRebase }) =>
                 Effect.gen(function* () {
                   if (fullRebase) yield* continuation.clear(sessionID)

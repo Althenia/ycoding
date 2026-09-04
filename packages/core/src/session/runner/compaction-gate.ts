@@ -34,6 +34,11 @@ export interface Input<
   }
   readonly candidate: Candidate<Context, Prepared>
   readonly force?: boolean
+  // Last provider-reported input-side total (uncached input + cache read + cache
+  // write) for this Session, if any. The local chars/4 estimate undercounts
+  // provider-visible history (tool-result envelope stripping, tokenization drift),
+  // so a provider-measured over-cap request must also trip the mandatory gate.
+  readonly lastProviderInputTokens?: number
   readonly reload: (options: {
     readonly fullRebase: boolean
   }) => Effect.Effect<Candidate<Context, Prepared>, ReloadError, ReloadRequirements>
@@ -61,7 +66,9 @@ export const ensureWithinLimit = <
     const cap = SessionContextPressure.hardInputCapTokens(input.capabilities)
     if (cap <= 0) return { ...input.candidate, compacted: false }
     const initialEstimate = estimate(input.candidate)
-    if (!input.force && initialEstimate < cap) return { ...input.candidate, compacted: false }
+    const providerTotal = input.lastProviderInputTokens
+    if (!input.force && initialEstimate < cap && (providerTotal === undefined || providerTotal < cap))
+      return { ...input.candidate, compacted: false }
 
     const db = (yield* Database.Service).db
     const jobs = yield* SessionCompactionJob.Service
@@ -73,7 +80,11 @@ export const ensureWithinLimit = <
         Effect.gen(function* () {
           let gateOwnedAdmissions = 0
           let compacted = false
-          let currentEstimate = initialEstimate
+          // Seed with the provider-measured total when it exceeds the local
+          // estimate: it is the fresher over-cap evidence until a reload
+          // rebuilds the candidate. Later iterations use the rebuilt estimate.
+          let currentEstimate =
+            providerTotal === undefined ? initialEstimate : Math.max(initialEstimate, providerTotal)
           while (true) {
             if (gateOwnedAdmissions === 2) {
               const rebuilt = yield* input.reload({ fullRebase: false })
