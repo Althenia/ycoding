@@ -1406,4 +1406,29 @@ describe("volatile messages", () => {
       [new CacheHint({ type: "ephemeral" })],
     ])
   })
+
+  test("github-copilot GPT-5.6 follows the codex key-only path on a volatile suffix", () => {
+    const copilotModel = Model.update(openai56Model, {
+      route: openai56Model.route.with({ id: "github-copilot-responses" }),
+    })
+    const codexModel = Model.update(openai56Model, {
+      route: openai56Model.route.with({ id: "openai-codex-responses" }),
+    })
+    const build = (model: typeof copilotModel) =>
+      LLM.request({
+        model,
+        system: "Stable system",
+        messages: [Message.user("stable user history"), volatileUser("TeamView: child running")],
+        cache: "auto",
+        providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+      })
+
+    const copilot = applyCachePolicy(build(copilotModel))
+    const codex = applyCachePolicy(build(codexModel))
+
+    expect(copilot.providerOptions?.openai?.promptCacheOptions).toEqual(
+      codex.providerOptions?.openai?.promptCacheOptions,
+    )
+    expect(JSON.stringify(placement(copilot.messages))).toBe(JSON.stringify(placement(codex.messages)))
+  })
 })

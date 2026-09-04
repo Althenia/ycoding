@@ -46,4 +46,45 @@ describe("util.error", () => {
     expect(data.message).toBe("ResolveMessage: Cannot resolve module")
     expect(String(data.formatted)).toContain("ResolveMessage")
   })
+
+  test("bare-brace prompt error surfaces diagnostic, not bare brace", () => {
+    expect(errorMessage("{")).not.toBe("{")
+    expect(errorFormat("{")).not.toBe("{")
+  })
+
+  test("formats ModelSwitchBlockedError with token counts and no bare brace", () => {
+    const blocked = {
+      _tag: "ModelSwitchBlockedError",
+      status: "blocked",
+      currentModel: { providerID: "openai", id: "gpt-5.6-terra", variant: "high" },
+      targetModel: { providerID: "openai", id: "gpt-5.6-terra", variant: "low" },
+      currentContextTokens: 120000,
+      targetSafeInputTokens: 80000,
+      requiredReductionTokens: 40000,
+      maximumSafeSummaryBoundary: "msg_boundary_1",
+      reason: "context-window-exceeded",
+    }
+    const message = errorMessage(blocked)
+    expect(message).toContain("120000")
+    expect(message).toContain("80000")
+    expect(message).toContain("40000")
+    expect(message).toContain("msg_boundary_1")
+    expect(message).not.toContain("{")
+
+    const wrapped = new Error("{", { cause: { body: blocked } })
+    expect(errorMessage(wrapped)).toBe(message)
+  })
+
+  test("bare-brace wrapper does not bypass nested ConflictError message", () => {
+    const failure = new Error("{", {
+      cause: {
+        body: {
+          _tag: "ConflictError",
+          message: "Prompt message ID conflicts with an existing durable record: msg_123",
+          resource: "msg_123",
+        },
+      },
+    })
+    expect(errorMessage(failure)).toContain("conflicts with an existing durable")
+  })
 })

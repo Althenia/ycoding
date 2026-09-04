@@ -176,7 +176,14 @@ export const layer = Layer.effect(
           .where(eq(SessionTaskTable.session_id, sessionID))
           .get()
           .pipe(Effect.orDie)
-        if (task && task.state !== "running") return
+        if (task && task.state !== "running") {
+          // Silent early return used to strand admitted prompts with no
+          // trace; name the gate so "pending but idle" is diagnosable.
+          yield* Effect.logWarning("Session drain skipped for non-running managed task", {
+            state: task.state,
+          }).pipe(Effect.annotateLogs({ sessionID }))
+          return
+        }
         return yield* SessionRunner.Service.use((runner) => runner.drain({ sessionID, force })).pipe(
           Effect.provide(locations.get(session.location)),
           SessionCompactionExecution.bind(compactionExecution),

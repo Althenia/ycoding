@@ -107,8 +107,65 @@ function field(input: Record<string, unknown>, key: string) {
   return typeof input[key] === "string" ? input[key] : undefined
 }
 
+function modelRefText(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  const providerID = typeof value.providerID === "string" ? value.providerID : undefined
+  const id = typeof value.id === "string" ? value.id : undefined
+  if (!providerID || !id) return undefined
+  const variant = typeof value.variant === "string" && value.variant !== "default" ? `#${value.variant}` : ""
+  return `${providerID}/${id}${variant}`
+}
+
+function tokenCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined
+}
+
+function formatModelSwitchBlocked(input: unknown): string | undefined {
+  if (!isRecord(input)) return undefined
+  const data = input._tag === "ModelSwitchBlockedError" || input.name === "ModelSwitchBlockedError" ? input : undefined
+  if (!data) return undefined
+  const current = modelRefText(data.currentModel)
+  const target = modelRefText(data.targetModel)
+  const currentContextTokens = tokenCount(data.currentContextTokens)
+  const targetSafeInputTokens = tokenCount(data.targetSafeInputTokens)
+  const requiredReductionTokens = tokenCount(data.requiredReductionTokens)
+  const boundary = typeof data.maximumSafeSummaryBoundary === "string" ? data.maximumSafeSummaryBoundary : undefined
+  const parts = [
+    current && target ? `from ${current} to ${target}` : undefined,
+    currentContextTokens !== undefined && targetSafeInputTokens !== undefined
+      ? `context ${currentContextTokens} tokens exceeds target safe input ${targetSafeInputTokens} tokens`
+      : undefined,
+    requiredReductionTokens !== undefined ? `reduce by ${requiredReductionTokens} tokens` : undefined,
+    boundary ? `summary boundary ${boundary}` : undefined,
+  ].filter((part): part is string => typeof part === "string" && part.length > 0)
+  if (parts.length === 0) return "Model switch blocked: target context window exceeded"
+  return `Model switch blocked (${parts.join("; ")})`
+}
+
+function isBarePlaceholder(text: string): boolean {
+  const trimmed = text.trim()
+  return trimmed === "{" || trimmed === "{}"
+}
+
+function nestedCauseMessage(cause: unknown): string | undefined {
+  if (cause === undefined || cause === null) return undefined
+  if (typeof cause === "string") return cause || undefined
+  if (isRecord(cause) && "body" in cause) {
+    const message = errorMessage(cause.body)
+    if (message) return message
+  }
+  if (cause instanceof Error) return errorMessage(cause)
+  if (isRecord(cause) && typeof cause.message === "string" && cause.message) return cause.message
+  return undefined
+}
+
+function unwrapBarePlaceholder(text: string): string {
+  return isBarePlaceholder(text) ? "unknown error" : text
+}
+
 export function errorFormat(error: unknown): string {
   if (isMaxListenersNoise(error)) return ""
+  if (typeof error === "string" && isBarePlaceholder(error)) return "unknown error"
   if (error instanceof Error) {
     return error.stack ?? `${error.name}: ${error.message}`
   }
@@ -138,20 +195,27 @@ export function errorFormat(error: unknown): string {
 
 export function errorMessage(error: unknown): string {
   if (isMaxListenersNoise(error)) return ""
+  const blocked = formatModelSwitchBlocked(error)
+  if (blocked) return blocked
   if (error instanceof Error) {
-    if (error.message) return error.message
+    const nested = nestedCauseMessage(error.cause)
+    if (nested && !isBarePlaceholder(nested)) return nested
+    if (error.message && !isBarePlaceholder(error.message)) return error.message
+    if (nested) return nested
+    if (error.message) return unwrapBarePlaceholder(error.message)
     if (error.name) return error.name
   }
 
-  if (isRecord(error) && typeof error.message === "string" && error.message) {
+  if (isRecord(error) && typeof error.message === "string" && error.message && !isBarePlaceholder(error.message)) {
     return error.message
   }
 
   if (isRecord(error) && isRecord(error.data) && typeof error.data.message === "string" && error.data.message) {
-    return error.data.message
+    if (!isBarePlaceholder(error.data.message)) return error.data.message
   }
 
   const text = String(error)
+  if (isBarePlaceholder(text)) return "unknown error"
   if (text && text !== "[object Object]") return text
 
   const formatted = errorFormat(error)

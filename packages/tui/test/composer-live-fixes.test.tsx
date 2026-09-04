@@ -448,6 +448,56 @@ test("admits a steer before an in-flight model variant switch and reuses the com
   }
 })
 
+test("submits the prompt when a model switch is blocked and warns instead of failing", async () => {
+  const blocked = {
+    _tag: "ModelSwitchBlockedError",
+    status: "blocked",
+    currentModel: { providerID: "openai", id: "gpt-5.6-terra", variant: "high" },
+    targetModel: { providerID: "openai", id: "gpt-5.6-terra", variant: "low" },
+    currentContextTokens: 120000,
+    targetSafeInputTokens: 80000,
+    requiredReductionTokens: 40000,
+    maximumSafeSummaryBoundary: "msg_boundary_1",
+    reason: "context-window-exceeded",
+  }
+  async function blockedRoute(url: URL, request: Request) {
+    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST")
+      return json(blocked, { status: 409 })
+    return route(url, request)
+  }
+  submittedPrompt = undefined
+  submittedResume = undefined
+  modelSwitchGate = undefined
+  releaseModelSwitch = undefined
+  const screen = await renderScreen({
+    width: 100,
+    height: 69,
+    args: { sessionID },
+    route: blockedRoute,
+    settle: "Message YCoding…",
+  })
+  try {
+    let promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("/variants")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Select variant")
+    screen.input.pressKey("ARROW_DOWN")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+
+    promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("prompt survives blocked switch")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Model switch needs attention")
+    expect(submittedText()).toBe("prompt survives blocked switch")
+    expect(screen.frame()).not.toContain("Failed to send prompt or activate skill")
+  } finally {
+    await screen.dispose()
+  }
+})
+
 test("stacks the full-width subagent picker above the prompt with legible model metadata", async () => {
   const width = 220
   const screen = await renderScreen({ width, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })

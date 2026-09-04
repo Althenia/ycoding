@@ -28,7 +28,7 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "@ycoding-ai/core/shell"
 import { ID, Info } from "@ycoding-ai/schema/shell"
-import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Schema, Scope } from "effect"
+import { Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, LayerMap, Logger, Schema, Scope } from "effect"
 import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
@@ -166,15 +166,30 @@ describe("SessionExecution lifecycle", () => {
         })
         .run()
       const drained: SessionV2.ID[] = []
-      const scope = yield* Scope.make()
-      const context = yield* buildExecution(scope, ({ sessionID }) =>
-        Effect.sync(() => {
-          drained.push(sessionID)
-        }),
-      )
-      yield* Context.get(context, SessionExecution.Service).resume(childID)
+      const warnings: string[] = []
+      const logger = Logger.map(Logger.formatStructured, (entry) => {
+        const message = Array.isArray(entry.message) ? entry.message[0] : entry.message
+        if (typeof message === "string" && message.includes("non-running managed task"))
+          warnings.push(JSON.stringify(entry))
+      })
+      // The drain fiber is forked from a runtime built during layer
+      // construction, so the logger must be provided around the build —
+      // providing it only around `resume` never reaches the fork.
+      yield* Effect.gen(function* () {
+        const scope = yield* Scope.make()
+        const context = yield* buildExecution(scope, ({ sessionID }) =>
+          Effect.sync(() => {
+            drained.push(sessionID)
+          }),
+        )
+        yield* Context.get(context, SessionExecution.Service).resume(childID)
+        yield* Scope.close(scope, Exit.void)
+      }).pipe(Effect.provide(Logger.layer([logger])))
       expect(drained).toEqual([])
-      yield* Scope.close(scope, Exit.void)
+      // The silent gate used to strand admitted prompts with no trace.
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("waiting")
+      expect(warnings[0]).toContain(childID)
     }),
   )
 

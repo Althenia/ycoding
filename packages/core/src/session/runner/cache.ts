@@ -203,8 +203,14 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
         sessionID: providerSessionID,
       }
     : { promptCacheKey, sessionID: providerSessionID }
-  const openaiCacheCapability = OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID)
+  const isCopilotGpt56 =
+    (input.routeID === "github-copilot-chat" || input.routeID === "github-copilot-responses") &&
+    OpenAIOptions.isGpt56OrLater(input.apiModelID)
+  const openaiCacheCapability = isCopilotGpt56
+    ? "key-only"
+    : OpenAIOptions.publicPromptCacheCapability(input.routeID, input.apiModelID)
   const breakpointOpenAI =
+    !isCopilotGpt56 &&
     OpenAIOptions.supportsPromptCacheBreakpoints(input.routeID, input.apiModelID) &&
     input.openaiMode !== undefined &&
     input.openaiMode !== "implicit" &&

@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { InputRenderable } from "@opentui/core"
+import type { Renderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
@@ -296,3 +297,86 @@ test("keeps the cursor index while options are temporarily empty", async () => {
     select.app.renderer.destroy()
   }
 })
+
+test("replacing model select keeps exactly one live filter input", async () => {
+  await using tmp = await tmpdir()
+  const state = path.join(tmp.path, "state")
+  await mkdir(state, { recursive: true })
+  const config = createTuiResolvedConfig()
+  const [{ ConfigProvider }, { ThemeProvider }, { Keymap }, { DialogProvider, useDialog }, { DialogSelect }, { ToastProvider }] =
+    await Promise.all([
+      import("../../../src/config"),
+      import("../../../src/context/theme"),
+      import("../../../src/context/keymap"),
+      import("../../../src/ui/dialog"),
+      import("../../../src/ui/dialog-select"),
+      import("../../../src/ui/toast"),
+    ])
+
+  let dialog: ReturnType<typeof useDialog> | undefined
+  function Fixture() {
+    const value = useDialog()
+    dialog = value
+    onMount(() =>
+      value.replace(() => (
+        <DialogSelect<string> title="Select model" options={[{ title: "Alpha", value: "alpha" }]} flat={true} />
+      )),
+    )
+    return null
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts directory={tmp.path} paths={{ home: tmp.path, state, worktree: tmp.path }}>
+        <ConfigProvider config={config}>
+          <Keymap.Provider>
+            <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+              <ToastProvider>
+                <DialogProvider>
+                  <Fixture />
+                </DialogProvider>
+              </ToastProvider>
+            </ThemeProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 80, height: 24, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Alpha"))
+  const before = liveInputs(app.renderer.root)
+  expect(before.length).toBe(1)
+  const original = before[0]!
+
+  dialog!.replace(() => (
+    <DialogSelect<string> title="Select variant" options={[{ title: "Beta", value: "beta" }]} flat={true} />
+  ))
+  await app.waitForFrame((frame) => frame.includes("Beta"))
+
+  try {
+    let destroyedFocus = false
+    const liveFocus = original.focus.bind(original)
+    original.focus = () => {
+      if (original.isDestroyed) destroyedFocus = true
+      return liveFocus()
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const after = liveInputs(app.renderer.root)
+    expect(after.length).toBe(1)
+    expect(after[0]!.isDestroyed).toBe(false)
+    expect(destroyedFocus).toBe(false)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+function liveInputs(root: Renderable): InputRenderable[] {
+  return descendants(root).filter(
+    (node): node is InputRenderable => node instanceof InputRenderable && !node.isDestroyed,
+  )
+}
+
+function descendants(root: Renderable): Renderable[] {
+  return root.getChildren().flatMap((child) => [child, ...descendants(child)])
+}

@@ -134,7 +134,13 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     ),
   )
 
-  let input: InputRenderable
+  let filterInput: InputRenderable | undefined
+  let disposed = false
+  let focusTimer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => {
+    disposed = true
+    if (focusTimer) clearTimeout(focusTimer)
+  })
 
   const actions = createMemo(() => props.actions ?? [])
   const shownActions = createMemo(() => actions().filter((item) => !item.hidden))
@@ -579,12 +585,15 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
             cursorColor={themeV2.text.feedback.info.default}
             focusedTextColor={themeV2.text.default}
             ref={(r) => {
-              input = r
-              input.traits = { status: "FILTER" }
-              setTimeout(() => {
-                if (!input) return
-                if (input.isDestroyed) return
-                input.focus()
+              filterInput = r
+              filterInput.traits = { status: "FILTER" }
+              if (focusTimer) clearTimeout(focusTimer)
+              const node = filterInput
+              focusTimer = setTimeout(() => {
+                if (disposed) return
+                if (filterInput !== node) return
+                if (node.isDestroyed) return
+                node.focus()
               }, 1)
             }}
             placeholder={props.placeholder ?? "Search"}

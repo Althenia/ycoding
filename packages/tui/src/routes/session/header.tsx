@@ -9,6 +9,7 @@ import { useTheme } from "../../context/theme"
 import { getGlyph } from "../../ui/glyph"
 import { Locale } from "../../util/locale"
 import { formatDuration } from "../../util/format"
+import { normalizeModelVariant } from "../../model-preference"
 import { BrandMark } from "../../component/logo"
 import { DOT_TRAIL_FRAMES, Spinner } from "../../component/spinner"
 
@@ -58,6 +59,12 @@ const SEGMENT_HINT: Partial<Record<SessionHeaderSegmentKey, { command: string; v
   variant: { command: "variant.cycle", verb: "cycle" },
 }
 
+export function headerModelLabel(input: { providerID?: string; modelID?: string; name?: string }) {
+  const id = input.modelID ?? input.name ?? ""
+  const resolvedName = input.name ?? Locale.titlecase(id.replaceAll("-", " "))
+  return input.providerID ? `${input.providerID}/${resolvedName}` : resolvedName
+}
+
 /**
  * Truncation ladder from the design contract: ellipsize identifiers and drop them whole rather than
  * shorten status labels; below 120 columns, only working drops its state word.
@@ -66,12 +73,13 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
   const path = input.width >= 120 ? truncatePath(input.path, input.width) : undefined
   const branch = input.width >= 100 ? input.branch : undefined
   const model = input.width >= 120 ? input.model : shortModel(input.model)
+  const variant = normalizeModelVariant(input.variant)
   const ordered: Array<[SessionHeaderSegmentKey, string | undefined]> = [
     ["path", path],
     ["branch", branch],
     ["agent", input.agent],
     ["model", model],
-    ["variant", input.variant],
+    ["variant", variant],
   ]
   return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
 }
@@ -81,8 +89,10 @@ export function pendingModelVariant(
   pending: Pick<SessionHeaderIdentity, "pendingModel" | "pendingVariant">,
 ) {
   if (!pending.pendingModel) return
-  if (current.model === pending.pendingModel && current.variant === pending.pendingVariant) return
-  return `→ ${pending.pendingModel}${pending.pendingVariant ? ` · ${pending.pendingVariant}` : ""}`
+  const currentVariant = normalizeModelVariant(current.variant)
+  const pendingVariant = normalizeModelVariant(pending.pendingVariant)
+  if (current.model === pending.pendingModel && currentVariant === pendingVariant) return
+  return `→ ${pending.pendingModel}${pendingVariant ? ` · ${pendingVariant}` : ""}`
 }
 
 function pendingAgent(current: string | undefined, pending: string | undefined) {
@@ -294,29 +304,26 @@ export function Header(
 }
 
 function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIdentity {
-  if (props.agent && props.model && props.variant) return props
+  if (props.agent && props.model && props.variant) return { ...props, variant: normalizeModelVariant(props.variant) }
   const route = useRoute().data
   const data = useData()
   if (route.type === "home") {
-    const model = data.location.model.list(data.location.default())?.find((item) => item.name === props.model || `${item.providerID}/${item.name}` === props.model)
-    return { ...props, variant: props.variant ?? model?.variants.at(0)?.id }
+    return { ...props, variant: normalizeModelVariant(props.variant) }
   }
-  if (route.type !== "session") return props
+  if (route.type !== "session") return { ...props, variant: normalizeModelVariant(props.variant) }
   const session = data.session.get(route.sessionID)
   const sessionModel = session?.model
-  if (!session || !sessionModel) return props
+  if (!session || !sessionModel) return { ...props, variant: normalizeModelVariant(props.variant) }
   const model = data.location
     .model
     .list(session.location)
     ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
-  const resolvedName = model?.name ?? Locale.titlecase(sessionModel.id.replaceAll("-", " "))
-  const providerID = model?.providerID ?? sessionModel.providerID
-  const modelLabel = providerID ? `${providerID}/${resolvedName}` : resolvedName
+  const modelLabel = headerModelLabel({ providerID: model?.providerID ?? sessionModel.providerID, modelID: sessionModel.id, name: model?.name })
   return {
     ...props,
     agent: props.agent ?? (session.agent ? Locale.titlecase(session.agent) : undefined),
     model: props.model ?? modelLabel,
-    variant: props.variant ?? sessionModel.variant,
+    variant: normalizeModelVariant(props.variant ?? sessionModel.variant),
     runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,
   }
 }

@@ -15,7 +15,7 @@ import { Keymap } from "../context/keymap"
 import { useTheme } from "../context/theme"
 import { useDialog } from "../ui/dialog"
 import { ModeChips } from "../component/prompt/mode-chips"
-import { Header } from "./session/header"
+import { Header, headerModelLabel } from "./session/header"
 import { useClient } from "../context/client"
 import { BrandMark } from "../component/logo"
 import { useToast } from "../ui/toast"
@@ -110,6 +110,14 @@ export function Home() {
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
   const homeLocation = createMemo(() => data.location.default())
+  const landingModel = createMemo(() => {
+    const current = local.model.current()
+    if (!current) return undefined
+    const info = data.location.model
+      .list(homeLocation())
+      ?.find((item) => item.providerID === current.providerID && item.id === current.modelID)
+    return headerModelLabel({ providerID: current.providerID, modelID: current.modelID, name: info?.name })
+  })
   const [branch, setBranch] = createSignal<string>()
   let sent = false
 
@@ -163,7 +171,7 @@ export function Home() {
         path={homeLocation().directory}
         branch={branch()}
         agent={local.agent.current()?.name}
-        model={local.model.parsed().model}
+        model={landingModel()}
         variant={local.model.variant.current()}
         state={{ type: "ready" }}
       />
