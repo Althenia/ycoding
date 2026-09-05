@@ -50,6 +50,7 @@ test("committed snapshot contains current OpenAI and Anthropic catalog pricing",
       models?: Record<
         string,
         {
+          limit?: { context?: number; output?: number }
           cost?: {
             input?: number
             output?: number
@@ -80,6 +81,7 @@ test("committed snapshot contains current OpenAI and Anthropic catalog pricing",
     }
   }
   const sol = snapshot.openai?.models?.["gpt-5.6-sol"]
+  const astra = snapshot.openai?.models?.["gpt-6-astra"]
   const opus = snapshot.anthropic?.models?.["claude-opus-5"]
   const fable = snapshot.anthropic?.models?.["claude-fable-5"]
 
@@ -110,6 +112,24 @@ test("committed snapshot contains current OpenAI and Anthropic catalog pricing",
     reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
     temperature: false,
     limit: { context: 1_000_000, output: 128_000 },
+  })
+  expect(astra).toMatchObject({
+    limit: { context: 1_050_000, output: 128_000 },
+    cost: {
+      input: 10,
+      output: 50,
+      cache_read: 1,
+      cache_write: 12.5,
+      tiers: [
+        {
+          input: 20,
+          output: 75,
+          cache_read: 2,
+          cache_write: 25,
+          tier: { type: "context", size: 272_000 },
+        },
+      ],
+    },
   })
 })
 

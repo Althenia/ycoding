@@ -149,6 +149,29 @@ describe("Session hard context gate", () => {
     }),
   )
 
+  it.effect("admits mandatory work when the last provider-reported full total reaches the cap", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("provider_full_total")
+      const reloads: boolean[] = []
+
+      const result = yield* runGate({
+        fixture,
+        candidate: candidate(10),
+        lastProviderInputTokens: 100,
+        lastProviderTotalTokens: 900,
+        reload: (fullRebase) =>
+          Effect.sync(() => {
+            reloads.push(fullRebase)
+            return candidate(10)
+          }),
+      })
+
+      expect(result.compacted).toBe(true)
+      expect(reloads).toEqual([true])
+      expect(yield* allJobs()).toMatchObject([{ status: "ended", trigger: "mandatory" }])
+    }),
+  )
+
   it.effect("does not admit compaction for encoded tool-result image bytes", () =>
     Effect.gen(function* () {
       const fixture = yield* setup("tool_image")
@@ -554,6 +577,7 @@ const runGate = (input: {
     readonly contextSafetyMarginTokens: number
   }
   readonly lastProviderInputTokens?: number
+  readonly lastProviderTotalTokens?: number
   readonly reload: (fullRebase: boolean) => Effect.Effect<Candidate>
 }) =>
   Effect.gen(function* () {
@@ -568,6 +592,7 @@ const runGate = (input: {
       },
       candidate: input.candidate,
       ...(input.lastProviderInputTokens === undefined ? {} : { lastProviderInputTokens: input.lastProviderInputTokens }),
+      ...(input.lastProviderTotalTokens === undefined ? {} : { lastProviderTotalTokens: input.lastProviderTotalTokens }),
       reload: ({ fullRebase }) => input.reload(fullRebase),
     }).pipe(SessionCompactionExecution.bind(execution))
   })

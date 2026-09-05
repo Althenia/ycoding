@@ -126,6 +126,8 @@ describe("OpenAI Chat route", () => {
       { id: "gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "gpt-5.6-mini", retentionSent: false, optionsSent: true },
       { id: "gpt-6", retentionSent: false, optionsSent: true },
+      { id: "gpt-6-astra", retentionSent: false, optionsSent: true },
+      { id: "gpt-daybreak-blue-latest", retentionSent: false, optionsSent: true },
       // OpenRouter routes through this protocol with a vendor-prefixed id.
       { id: "openai/gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "openai/gpt-5.5", retentionSent: true, optionsSent: false },

@@ -214,7 +214,15 @@ export const contextManagement = (request: LLMRequest): ReadonlyArray<OpenAICont
 // so the family name is matched at the start or immediately after a slash.
 const GPT_VERSION = /(?:^|\/)gpt-(\d+)(?:\.(\d+))?/
 
+const GPT56_ALIAS_MODELS = new Set(["gpt-daybreak-blue-latest"])
+
+const isGpt56Alias = (modelID: string) => {
+  const base = modelID.toLowerCase().split("/").at(-1) ?? ""
+  return GPT56_ALIAS_MODELS.has(base)
+}
+
 export const isGpt56OrLater = (modelID: string): boolean => {
+  if (isGpt56Alias(modelID)) return true
   const match = GPT_VERSION.exec(modelID.toLowerCase())
   if (!match) return false
   const major = Number(match[1])
@@ -223,6 +231,7 @@ export const isGpt56OrLater = (modelID: string): boolean => {
 }
 
 export const supportsOriginalImageDetail = (modelID: string): boolean => {
+  if (isGpt56Alias(modelID)) return true
   const match = GPT_VERSION.exec(modelID.toLowerCase())
   if (!match) return false
   const major = Number(match[1])

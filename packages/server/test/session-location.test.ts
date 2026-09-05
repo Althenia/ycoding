@@ -104,6 +104,7 @@ test("passes compact job IDs through and maps compaction conflicts by durable jo
   expect(handler).toContain('Effect.catchTag("Session.CompactionConflictError"')
   expect(handler).toContain("resource: error.jobID")
   expect(handler).toContain("${error.jobID}")
+  expect(handler).toContain("error.message")
   expect(handler).not.toContain("SessionPending")
   expect(handler).not.toContain("summary")
 })

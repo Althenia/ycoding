@@ -45,13 +45,14 @@ export const OpenRouterPlugin = define({
           typeof evt.options.apiKey === "string" && evt.options.apiKey.length > 0 ? evt.options.apiKey : undefined
         if (apiKey) {
           const upstream = typeof evt.options.fetch === "function" ? evt.options.fetch : fetch
+          const upstreamPreconnect = (upstream as typeof fetch & { preconnect?: unknown }).preconnect
           evt.options.fetch = Object.assign(
             async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
               const headers = new Headers(init?.headers)
               headers.set("Authorization", `Bearer ${apiKey}`)
               return upstream(input, { ...init, headers })
             },
-            { preconnect: upstream.preconnect ?? fetch.preconnect },
+            { preconnect: upstreamPreconnect ?? (fetch as typeof fetch & { preconnect?: unknown }).preconnect },
           )
         }
         const mod = yield* Effect.promise(() => import("@openrouter/ai-sdk-provider"))

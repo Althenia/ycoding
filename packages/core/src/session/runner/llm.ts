@@ -202,6 +202,12 @@ const layer = Layer.effect(
                 : {
                     lastProviderInputTokens:
                       lastProviderInput.input + lastProviderInput.cache.read + lastProviderInput.cache.write,
+                    lastProviderTotalTokens:
+                      lastProviderInput.input +
+                      lastProviderInput.output +
+                      lastProviderInput.reasoning +
+                      lastProviderInput.cache.read +
+                      lastProviderInput.cache.write,
                   }),
               reload: ({ fullRebase }) =>
                 Effect.gen(function* () {
