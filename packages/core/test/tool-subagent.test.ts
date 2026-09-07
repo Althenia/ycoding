@@ -1599,7 +1599,7 @@ describe("SubagentTool", () => {
     ),
   )
 
-  it.live("injects TeamView as a volatile trailing user outside Codex and omits it on Codex", () =>
+  it.live("does not inject a TeamView suffix into context messages", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
@@ -1649,11 +1649,7 @@ describe("SubagentTool", () => {
 
           expect(event.tools[SubagentTool.name]?.description).toContain("Available subagents:")
           expect(event.system.map((part) => part.text)).toEqual(["base system prompt"])
-          expect(event.messages).toHaveLength(2)
-          const last = event.messages.at(-1)
-          expect(last?.role).toBe("user")
-          expect(last?.content).toEqual([{ type: "text", text: team.text }])
-          expect(last?.volatile).toBe(true)
+          expect(event.messages).toEqual([Message.user("earlier history")])
 
           const codexEvent: SessionHooks["context"] = {
             ...event,

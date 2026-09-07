@@ -1,13 +1,12 @@
 export * as SubagentTool from "./subagent"
 
-import { Message, ToolFailure } from "@ycoding-ai/ai"
+import { ToolFailure } from "@ycoding-ai/ai"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { DescriptionText, PromptText } from "@ycoding-ai/schema/session-orchestration"
 import { Cause, Effect, Schedule, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { Config } from "../config"
 import { PluginRuntime } from "../plugin/runtime"
-import { OpenAICodex } from "../plugin/provider/openai-codex"
 import { PermissionV2 } from "../permission"
 import { PositiveInt } from "../schema"
 import { SessionGuardrail } from "../session/guardrail"
@@ -296,16 +295,6 @@ export const Plugin = {
 
     yield* ctx.session.hook("context", (event) =>
       Effect.gen(function* () {
-        const team = yield* orchestration
-          .teamView(event.sessionID)
-          .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed(undefined)))
-        // The TeamView changes on every child state update, so it is appended after all real
-        // history as a volatile message that never carries a cache breakpoint.
-        if (
-          !OpenAICodex.isRoute(event.routeID) &&
-          team?.view.children.some((child) => !SessionOrchestration.isTerminal(child.state))
-        )
-          event.messages.push(Message.make({ role: "user", content: team.text, volatile: true }))
         const tool = event.tools[name]
         if (!tool) return
         const selected = yield* agents.resolve(event.agent)

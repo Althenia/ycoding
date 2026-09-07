@@ -339,6 +339,29 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.execution.failed": () => clearCurrentRetry,
       "session.execution.interrupted": () => clearCurrentRetry,
       "session.instructions.updated": () => Effect.void,
+      "session.context.observed": (event) => {
+        const metadata = { contextSource: event.data.source }
+        if (event.data.source === "team-view")
+          return adapter.appendMessage(
+            SessionMessage.Synthetic.make({
+              id: SessionMessage.ID.fromEvent(event.id),
+              type: "synthetic",
+              text: event.data.text,
+              description: "TeamView update",
+              metadata,
+              time: { created: event.created },
+            }),
+          )
+        return adapter.appendMessage(
+          SessionMessage.System.make({
+            id: SessionMessage.ID.fromEvent(event.id),
+            type: "system",
+            text: event.data.text,
+            metadata,
+            time: { created: event.created },
+          }),
+        )
+      },
       "session.task.updated": () => Effect.void,
       "session.synthetic": (event) => {
         return adapter.appendMessage(

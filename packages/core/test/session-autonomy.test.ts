@@ -6,6 +6,7 @@ import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { goalReminder } from "@ycoding-ai/core/session/live-state"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { GoalTool } from "@ycoding-ai/core/tool/goal"
 import { testEffect } from "./lib/effect"
@@ -40,6 +41,27 @@ it.effect("exposes one explicit agent no-progress report action", () =>
     expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "report", noProgress: false })).toEqual({
       action: "report",
     })
+  }),
+)
+
+it.effect("renders terminal goals as visible Session-state reminders", () =>
+  Effect.sync(() => {
+    const state = (status: "completed" | "stopped" | "exhausted"): SessionAutonomy.State => ({
+      mode: "normal",
+      yolo: 0,
+      goal: {
+        text: "Finish the bounded task",
+        status,
+        iteration: 2,
+        noProgress: 1,
+        maxNoProgress: 3,
+      },
+    })
+    expect((["completed", "stopped", "exhausted"] as const).map((status) => goalReminder(state(status)))).toEqual([
+      "Autonomous goal is completed: Finish the bounded task",
+      "Autonomous goal is stopped: Finish the bounded task",
+      "Autonomous goal is exhausted: Finish the bounded task",
+    ])
   }),
 )
 

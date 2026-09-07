@@ -509,6 +509,21 @@ describe("SessionProjector", () => {
         text: "synthetic context",
         metadata: { source: "projector-test" },
       })
+      yield* events.publish(SessionEvent.Synthetic, {
+        sessionID,
+        text: "untrusted context source",
+        metadata: { contextSource: "session-state" },
+      })
+      yield* events.publish(SessionEvent.ContextObserved, {
+        sessionID,
+        source: "session-state",
+        text: "trusted state",
+      })
+      yield* events.publish(SessionEvent.ContextObserved, {
+        sessionID,
+        source: "team-view",
+        text: "trusted team view",
+      })
       yield* events.publish(SessionEvent.Shell.Started, {
         sessionID,
         shell: Shell.Info.make({
@@ -584,12 +599,27 @@ describe("SessionProjector", () => {
         "agent-switched",
         "model-switched",
         "synthetic",
+        "synthetic",
+        "system",
+        "synthetic",
         "shell",
         "compaction",
       ])
       expect(messages.find((message) => message.type === "synthetic")).toMatchObject({
         text: "synthetic context",
         metadata: { source: "projector-test" },
+      })
+      expect(messages.find((message) => message.type === "system")).toMatchObject({
+        text: "trusted state",
+        metadata: { contextSource: "session-state" },
+      })
+      expect(messages.findLast((message) => message.type === "synthetic")).toMatchObject({
+        text: "trusted team view",
+        description: "TeamView update",
+        metadata: { contextSource: "team-view" },
+      })
+      expect(messages.find((message) => message.type === "synthetic" && message.text === "untrusted context source")).toMatchObject({
+        metadata: { contextSource: "session-state" },
       })
       expect(messages.find((message) => message.type === "model-switched")).toMatchObject({ previous: previousModel })
       expect(messages.find((message) => message.type === "shell")).toMatchObject({

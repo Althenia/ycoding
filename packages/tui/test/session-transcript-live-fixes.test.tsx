@@ -806,6 +806,44 @@ test("does not mount TodoWrite tasks in the transcript", async () => {
   }
 }, 60_000)
 
+test("renders retained Session state and TeamView bodies in chronological transcript order", async () => {
+  const messages: SessionMessageInfo[] = [
+    { id: "msg_context_prompt", type: "user", text: "Coordinate the work", time: { created: 1 } },
+    {
+      id: "msg_context_state",
+      type: "system",
+      text: "Authoritative current Session state: normal mode",
+      metadata: { contextSource: "session-state" },
+      time: { created: 2 },
+    },
+    {
+      id: "msg_context_team",
+      type: "synthetic",
+      text: "TeamView: reviewer is running",
+      description: "TeamView update",
+      metadata: { contextSource: "team-view" },
+      time: { created: 3 },
+    },
+    { id: "msg_context_followup", type: "user", text: "Continue after the update", time: { created: 4 } },
+  ]
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Authoritative current Session state: normal mode",
+  })
+  try {
+    const frame = screen.frame()
+    expect(frame).toContain("Authoritative current Session state: normal mode")
+    expect(frame).toContain("TeamView: reviewer is running")
+    expect(frame.indexOf("Coordinate the work")).toBeLessThan(frame.indexOf("Authoritative current Session state"))
+    expect(frame.indexOf("Authoritative current Session state")).toBeLessThan(frame.indexOf("TeamView: reviewer"))
+    expect(frame.indexOf("TeamView: reviewer")).toBeLessThan(frame.indexOf("Continue after the update"))
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,

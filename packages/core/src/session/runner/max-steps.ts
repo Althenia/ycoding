@@ -14,3 +14,5 @@ Response must include:
 - Recommendations for what should be done next
 
 Any attempt to use tools is a critical violation. Respond with text ONLY.`
+
+export const MAX_STEPS_RESET_PROMPT = `The maximum-step constraint from an earlier user input no longer applies. A newly promoted user input reset the step allowance. Tools are available subject to the current Session permissions and agent policy.`

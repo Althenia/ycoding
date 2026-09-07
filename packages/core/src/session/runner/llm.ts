@@ -14,6 +14,7 @@ import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream 
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { EventTable } from "../../event/sql"
 import { PermissionV2 } from "../../permission"
 import { QuestionTool } from "../../tool/question"
 import { ToolOutputStore } from "../../tool-output-store"
@@ -46,10 +47,11 @@ import { SessionContinuation } from "./continuation"
 import { SessionProviderState } from "../provider-state"
 import { SessionRunnerRetry } from "./retry"
 import { SessionUsage } from "../usage"
-import { SessionAutonomy } from "../autonomy"
-import { SessionTable } from "../sql"
-import { eq } from "drizzle-orm"
-import { Message } from "@ycoding-ai/ai"
+import { SessionLiveState } from "../live-state"
+import { renderTeamView } from "../orchestration-view"
+import { SessionHistory } from "../history"
+import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
+import { and, eq, inArray, sql } from "drizzle-orm"
 
 type StepEnd = {
   readonly snapshot?: Snapshot.ID
@@ -64,6 +66,18 @@ type AttemptState = {
 }
 
 type RecoveryMode = "normal" | "terminal-response" | "transport"
+type ContextSource = "session-state" | "team-view" | "step-limit"
+type ObservationCandidate = {
+  readonly source: ContextSource
+  readonly text: string
+  readonly id: SessionMessage.ID
+}
+
+const isContextSource = (value: unknown): value is ContextSource =>
+  value === "session-state" || value === "team-view" || value === "step-limit"
+
+export const contextObservationBatches = <Value>(values: ReadonlyArray<Value>) =>
+  Array.from({ length: Math.ceil(values.length / 500) }, (_, index) => values.slice(index * 500, (index + 1) * 500))
 
 const layer = Layer.effect(
   Service,
@@ -83,6 +97,7 @@ const layer = Layer.effect(
     const providerRequests = yield* SessionProviderRequest.Service
     const cacheRuntime = yield* SessionCacheRuntime.Service
     const continuation = yield* SessionContinuation.Service
+    const liveState = yield* SessionLiveState.Service
     let executionGeneration = 0
     // Title generation is a side effect of the first step; it must not delay step continuation.
     // Tracked per process so repeated wakes before the second user message arrives don't
@@ -119,6 +134,113 @@ const layer = Layer.effect(
           (reason.defect instanceof PermissionV2.DeclinedError || reason.defect instanceof QuestionTool.CancelledError),
       )
 
+    const appendContextObservations = Effect.fn("SessionRunner.appendContextObservations")(function* (
+      selected: SessionContext.Selection,
+      step: number,
+      terminalResponseRecovery: boolean,
+    ) {
+      const history = yield* SessionHistory.entriesForRunner(db, selected.session.id, selected.instructions)
+      const candidates: ReadonlyArray<ObservationCandidate> = history.entries.flatMap<ObservationCandidate>((entry) => {
+        const source = entry.message.metadata?.contextSource
+        if (!isContextSource(source)) {
+          return []
+        }
+        if (source === "team-view") {
+          if (entry.message.type !== "synthetic" || entry.message.description !== "TeamView update") {
+            return []
+          }
+          return [{ source, text: entry.message.text, id: entry.message.id }]
+        }
+        if (entry.message.type !== "system") {
+          return []
+        }
+        return [{ source, text: entry.message.text, id: entry.message.id }]
+      })
+      const projected = yield* Effect.forEach(
+        contextObservationBatches(candidates),
+        (batch) =>
+          db
+            .select({ id: EventTable.id, data: EventTable.data })
+            .from(EventTable)
+            .where(
+              and(
+                eq(EventTable.aggregate_id, selected.session.id),
+                eq(
+                  EventTable.type,
+                  EventV2.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
+                ),
+                inArray(
+                  EventTable.id,
+                  batch.map((candidate) => EventV2.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))),
+                ),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie),
+      ).pipe(Effect.map((batches) => batches.flat()))
+      const trusted = new Set(
+        projected.flatMap((event) => {
+          if (event.data.source !== "session-state" && event.data.source !== "team-view" && event.data.source !== "step-limit")
+            return []
+          if (typeof event.data.text !== "string") return []
+          return [`${event.id}\0${event.data.source}\0${event.data.text}`]
+        }),
+      )
+      const observed = yield* db
+        .selectDistinct({ source: sql<string>`json_extract(${EventTable.data}, '$.source')` })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, selected.session.id),
+            eq(
+              EventTable.type,
+              EventV2.versionedType(SessionEvent.ContextObserved.type, SessionEvent.ContextObserved.durable.version),
+            ),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      const observedSources = new Set(observed.flatMap((event) => (isContextSource(event.source) ? [event.source] : [])))
+      const latest = candidates.toReversed().reduce((result, candidate) => {
+        const eventID = EventV2.ID.make(String(candidate.id).replace(/^msg_/, "evt_"))
+        if (trusted.has(`${eventID}\0${candidate.source}\0${candidate.text}`) && !result.has(candidate.source))
+          result.set(candidate.source, candidate.text)
+        return result
+      }, new Map<ContextSource, string>())
+      const state = yield* liveState.load(selected.session.id).pipe(Effect.orDie)
+      const inheritedTeam =
+        state.teamView === undefined
+          ? candidates.some((candidate) => candidate.source === "team-view")
+          : false
+      const stepLimitReached = selected.agent.info.steps !== undefined && step >= selected.agent.info.steps
+      const stepLimit = terminalResponseRecovery
+        ? undefined
+        : stepLimitReached
+          ? MAX_STEPS_PROMPT
+          : observedSources.has("step-limit") || candidates.some((candidate) => candidate.source === "step-limit")
+            ? MAX_STEPS_RESET_PROMPT
+            : undefined
+      const observations = [
+        { source: "session-state" as const, text: state.text },
+        ...(state.teamView
+          ? [{ source: "team-view" as const, text: state.teamView.text }]
+          : inheritedTeam || observedSources.has("team-view")
+            ? [{ source: "team-view" as const, text: renderTeamView([]).text }]
+            : []),
+        ...(stepLimit ? [{ source: "step-limit" as const, text: stepLimit }] : []),
+      ]
+      yield* Effect.forEach(
+        observations.filter((observation) => latest.get(observation.source) !== observation.text),
+        (observation) =>
+          events.publish(SessionEvent.ContextObserved, {
+            sessionID: selected.session.id,
+            source: observation.source,
+            text: observation.text,
+          }),
+        { discard: true },
+      )
+    })
+
     const attemptStep = Effect.fn("SessionRunner.attemptStep")(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionPending.Delivery | undefined,
@@ -146,39 +268,16 @@ const layer = Layer.effect(
           onPromotion?.()
         }
       }
+      yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
       const initialContext = yield* context.load(selected)
-      const goalMessages = (sessionID: SessionSchema.ID) =>
-        Effect.gen(function* () {
-          const row = yield* db
-            .select({ autonomy: SessionTable.autonomy })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, sessionID))
-            .get()
-            .pipe(Effect.orDie)
-          if (!row) return [] as ReadonlyArray<Message>
-          const state = SessionAutonomy.read(row.autonomy)
-          if (!state.goal || state.goal.status !== "active") return [] as ReadonlyArray<Message>
-          const text = [
-            `Active autonomous goal (iteration ${state.goal.iteration}, noProgress ${state.goal.noProgress}/${state.goal.maxNoProgress}): ${state.goal.text}`,
-            "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
-            "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
-            "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
-            "Call goal complete only after the goal is achieved and verified. Completion remains your explicit agent-owned decision.",
-          ].join("\n")
-          return [Message.make({ role: "system", content: text })] as ReadonlyArray<Message>
-        })
       const prepare = (loaded: SessionContext.Loaded, fullRebase = false) =>
-        Effect.gen(function* () {
-          const extra = yield* goalMessages(loaded.session.id)
-          return yield* modelRequests.prepare({
-            context: loaded,
-            step: currentStep,
-            execution,
-            disableContinuation:
-              fullRebase || requestTrackerState.continuationFallback === true || recoveryMode !== "normal",
-            terminalResponseRecovery: recoveryMode === "terminal-response",
-            ...(extra.length > 0 ? { messages: extra } : {}),
-          })
+        modelRequests.prepare({
+          context: loaded,
+          step: currentStep,
+          execution,
+          disableContinuation:
+            fullRebase || requestTrackerState.continuationFallback === true || recoveryMode !== "normal",
+          terminalResponseRecovery: recoveryMode === "terminal-response",
         })
       const initialPrepared = yield* prepare(initialContext)
       const limits = initialContext.model.model.route.defaults.limits
@@ -214,6 +313,7 @@ const layer = Layer.effect(
                   if (fullRebase) yield* continuation.clear(sessionID)
                   const selected = yield* context.select(sessionID)
                   yield* InstructionState.prepare(db, events, selected.instructions, selected.session.id)
+                  yield* appendContextObservations(selected, currentStep, recoveryMode === "terminal-response")
                   const loaded = yield* context.load(selected)
                   return { context: loaded, prepared: yield* prepare(loaded, fullRebase) }
                 }),
@@ -922,6 +1022,7 @@ export const node = makeLocationNode({
     EventV2.node,
     llmClient,
     SessionContext.node,
+    SessionLiveState.node,
     SessionModelRequest.node,
     SessionProviderRequest.node,
     SessionCacheRuntime.node,

@@ -5,7 +5,6 @@ import {
   Question,
   QuestionID,
   Task,
-  TeamView,
   truncateUtf8,
   ListAnchor,
   type Change,
@@ -32,10 +31,9 @@ import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { SessionPendingTable, SessionTable, SessionTaskTable } from "./sql"
+import { isTerminal, readTeamView, renderTeamView, taskFromRow } from "./orchestration-view"
 
-const TeamViewBytes = 32 * 1024
-const terminalStates = new Set<State>(["cancelled", "completed", "failed", "lost"])
-export const isTerminal = (state: State) => terminalStates.has(state)
+export { isTerminal, readTeamView, renderTeamView }
 const PageSize = 10
 type DatabaseService = Database.Interface["db"]
 export { truncateUtf8 }
@@ -219,37 +217,6 @@ export const identities = (parentID: SessionSchema.ID, messageID: SessionMessage
   }
 }
 
-export const renderTeamView = (tasks: ReadonlyArray<Task>, maxBytes = TeamViewBytes) => {
-  const sorted = tasks
-    .map(
-      (task): Task => ({
-        ...task,
-        description: truncateUtf8(task.description, 4 * 1024),
-        progress: task.progress ? { ...task.progress, text: truncateUtf8(task.progress.text, 4 * 1024) } : undefined,
-        question: task.question ? { ...task.question, text: truncateUtf8(task.question.text, 8 * 1024) } : undefined,
-      }),
-    )
-    .toSorted((a, b) => {
-      const state = Number(terminalStates.has(a.state)) - Number(terminalStates.has(b.state))
-      if (state !== 0) return state
-      if (a.time.updated !== b.time.updated) return b.time.updated - a.time.updated
-      return String(a.sessionID).localeCompare(String(b.sessionID))
-    })
-  const prefix =
-    "Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n"
-  const children = new Array<Task>()
-  for (const task of sorted) {
-    const view = TeamView.make({
-      children: [...children, task],
-      omitted: sorted.length - children.length - 1,
-    })
-    if (Buffer.byteLength(prefix + JSON.stringify(view)) > maxBytes) break
-    children.push(task)
-  }
-  const view = TeamView.make({ children, omitted: sorted.length - children.length })
-  return { view, text: prefix + JSON.stringify(view) }
-}
-
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("SessionOrchestration.NotFoundError", {
   parentID: SessionSchema.ID,
   childID: SessionSchema.ID,
@@ -415,25 +382,6 @@ export type AnswerError = ControlError | InvalidRequestError | QuestionNotFoundE
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionOrchestration") {}
 
-const taskFromRow = (row: typeof SessionTaskTable.$inferSelect): Task =>
-  Task.make({
-    sessionID: row.session_id,
-    parentID: row.parent_id,
-    description: row.description,
-    agent: AgentV2.ID.make(row.agent),
-    model: row.model,
-    background: row.background,
-    state: row.state,
-    progress:
-      row.progress === null || row.progress_time === null ? undefined : { text: row.progress, time: row.progress_time },
-    question:
-      row.question_id === null || row.question === null || row.question_time === null
-        ? undefined
-        : { id: row.question_id, text: row.question, data: row.question_data ?? undefined, time: row.question_time },
-    revision: row.revision,
-    time: { created: row.time_created, updated: row.time_updated },
-  })
-
 const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -578,7 +526,7 @@ const layer = Layer.effect(
         locks.withLock(input.childID)(
           Effect.gen(function* () {
             const row = yield* owned(input.parentID, input.childID)
-            if (row.state !== "running" && !terminalStates.has(row.state))
+            if (row.state !== "running" && !isTerminal(row.state))
               return yield* new ConflictError({ message: `Cannot send to task in ${row.state}` })
             yield* sessions
               .synthetic({
@@ -610,7 +558,7 @@ const layer = Layer.effect(
               )
               .get()
               .pipe(Effect.orDie)
-            if (terminalStates.has(row.state)) {
+            if (isTerminal(row.state)) {
               if (!pending) return taskFromRow(row)
               yield* publish(input.childID, { type: "started" })
             }
@@ -799,7 +747,7 @@ const layer = Layer.effect(
         ),
       ),
       teamView: Effect.fn("SessionOrchestration.teamView")(function* (parentID) {
-        return renderTeamView(yield* result.list(parentID))
+        return (yield* readTeamView(db, parentID)) ?? renderTeamView([])
       }),
       recover: Effect.gen(function* () {
         const active = yield* db
@@ -830,7 +778,7 @@ const layer = Layer.effect(
                   (latest.state !== "starting" &&
                     latest.state !== "running" &&
                     latest.state !== "cancelling" &&
-                    !terminalStates.has(latest.state))
+                    !isTerminal(latest.state))
                 )
                   return
                 if (latest.state === "cancelling") {
@@ -851,7 +799,7 @@ const layer = Layer.effect(
                   .limit(1)
                   .get()
                   .pipe(Effect.orDie)
-                if (terminalStates.has(latest.state)) {
+                if (isTerminal(latest.state)) {
                   if (!pending) return
                   yield* publish(latest.session_id, { type: "started" })
                   yield* execution.wake(latest.session_id)

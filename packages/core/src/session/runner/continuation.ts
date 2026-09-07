@@ -87,10 +87,9 @@ export const layer = () =>
           }
           const matches =
             row.continuation_fingerprint === fingerprint(candidate) ||
-            // Volatile context (liveState JSON, TeamView) is not part of provider-stored
-            // prefix and churns every step. Require stable fingerprint equality and
-            // tolerate volatile mismatches to keep `previous_response_id` reuse for
-            // mainchat which has frequent todo/orchestration updates.
+            // Plugin-provided volatile context is not part of the provider-stored prefix and
+            // may churn every step. Require stable fingerprint equality and tolerate volatile
+            // mismatches to keep `previous_response_id` reuse for mainchat.
             fingerprintWithoutVolatile(fromRow(row)) === fingerprintWithoutVolatile(candidate)
           if (!matches) return undefined
           return fromRow(row)
