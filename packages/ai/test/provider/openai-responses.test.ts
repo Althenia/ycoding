@@ -916,6 +916,8 @@ describe("OpenAI Responses route", () => {
       { id: "gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "gpt-5.6-mini", retentionSent: false, optionsSent: true },
       { id: "gpt-6", retentionSent: false, optionsSent: true },
+      { id: "gpt-6-astra", retentionSent: false, optionsSent: true },
+      { id: "gpt-daybreak-blue-latest", retentionSent: false, optionsSent: true },
       // Aggregators and gateways prefix the vendor onto the model id.
       { id: "openai/gpt-5.6", retentionSent: false, optionsSent: true },
       { id: "openai/gpt-5.5", retentionSent: true, optionsSent: false },

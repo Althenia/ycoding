@@ -25,6 +25,9 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/LLM/RequestExecutor") {}
 
+const preconnectOf = (value: typeof globalThis.fetch) =>
+  (value as typeof globalThis.fetch & { preconnect?: unknown }).preconnect
+
 export const withFreshConnection = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -36,7 +39,7 @@ export const withFreshConnection = <A, E, R>(stream: Stream.Stream<A, E, R>) =>
           headers.set("connection", "close")
           return fetch(input, { ...init, headers })
         },
-        { preconnect: fetch.preconnect },
+        { preconnect: preconnectOf(fetch) },
       )
       return stream.pipe(
         Stream.provideService(FetchHttpClient.RequestInit, { ...requestInit, keepalive: false }),
@@ -55,7 +58,7 @@ export const withFreshConnectionEffect = <A, E, R>(effect: Effect.Effect<A, E, R
         headers.set("connection", "close")
         return fetch(input, { ...init, headers })
       },
-      { preconnect: fetch.preconnect },
+      { preconnect: preconnectOf(fetch) },
     )
     return yield* effect.pipe(
       Effect.provideService(FetchHttpClient.RequestInit, { ...requestInit, keepalive: false }),

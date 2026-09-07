@@ -79,7 +79,7 @@ test("resolves omitted and configured pressure policy through ConfigCompaction.r
   expect(SessionContextPressure.contextSafetyMarginTokens(entries)).toBe(20)
 })
 
-test("classifies pressure against configured percentages of the hard input cap", () => {
+test("classifies pressure against configured percentages of the context window", () => {
   const policy = resolvedPolicy({ advisory: { consider_percent: 50, strongly_advised_percent: 75 } })
   const level = (contextWindow: number) => {
     const input = context({ context: contextWindow, policy })
@@ -102,22 +102,22 @@ test("classifies pressure against configured percentages of the hard input cap",
   expect(level(60)).toBe("mandatory")
 })
 
-test("applies the configured safety margin to the hard input cap", () => {
+test("applies the configured safety margin only to the hard input cap", () => {
   const classify = (margin: number) => {
     const policy = resolvedPolicy({ margin })
     return SessionContextPressure.modelLevel({ ...context({ context: 100, policy }), policy })
   }
 
   expect(classify(0)).toBe("normal")
-  expect(classify(20)).toBe("consider")
-  expect(classify(35)).toBe("advised")
+  expect(classify(20)).toBe("normal")
+  expect(classify(40)).toBe("mandatory")
 })
 
 test("classifies exact, exceeded, zero, and negative hard input caps as mandatory", () => {
-  const classify = (contextWindowTokens: number, maxOutputTokens = 0) =>
+  const classify = (contextWindowTokens: number, contextSafetyMarginTokens = 0) =>
     SessionContextPressure.level({
       ...context({ context: contextWindowTokens }),
-      capabilities: { contextWindowTokens, maxOutputTokens, contextSafetyMarginTokens: 0 },
+      capabilities: { contextWindowTokens, maxOutputTokens: 0, contextSafetyMarginTokens },
     })
 
   expect(classify(62)).toBe("mandatory")

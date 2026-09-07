@@ -713,7 +713,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
               Effect.catchTag("Session.CompactionConflictError", (error) =>
                 Effect.fail(
                   new ConflictError({
-                    message: `Compaction job ID conflicts with an existing durable record: ${error.jobID}`,
+                    message: `Compaction job ID conflicts with an existing durable record: ${error.jobID}: ${error.message}`,
                     resource: error.jobID,
                   }),
                 ),

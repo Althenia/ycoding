@@ -326,7 +326,9 @@ export function createClaudeCodeFetch(input: {
     return transformClaudeCodeResponse(response)
   }
   return Object.assign(wrapped, {
-    preconnect: input.fetch.preconnect ?? fetch.preconnect,
+    preconnect:
+      (input.fetch as typeof fetch & { preconnect?: unknown }).preconnect ??
+      (fetch as typeof fetch & { preconnect?: unknown }).preconnect,
   })
 }
 

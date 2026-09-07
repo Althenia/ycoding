@@ -103,7 +103,7 @@ describe("Session hard context gate", () => {
         maxOutputTokens: 16_000,
         contextSafetyMarginTokens: 4_096,
       }),
-    ).toBe(107_904)
+    ).toBe(123_904)
   })
 
   it.effect("returns below the cap without admission, waiting, or rebuilding", () =>
@@ -135,7 +135,30 @@ describe("Session hard context gate", () => {
       const result = yield* runGate({
         fixture,
         candidate: candidate(10),
-        lastProviderInputTokens: 800,
+        lastProviderInputTokens: 900,
+        reload: (fullRebase) =>
+          Effect.sync(() => {
+            reloads.push(fullRebase)
+            return candidate(10)
+          }),
+      })
+
+      expect(result.compacted).toBe(true)
+      expect(reloads).toEqual([true])
+      expect(yield* allJobs()).toMatchObject([{ status: "ended", trigger: "mandatory" }])
+    }),
+  )
+
+  it.effect("admits mandatory work when the last provider-reported full total reaches the cap", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("provider_full_total")
+      const reloads: boolean[] = []
+
+      const result = yield* runGate({
+        fixture,
+        candidate: candidate(10),
+        lastProviderInputTokens: 100,
+        lastProviderTotalTokens: 900,
         reload: (fullRebase) =>
           Effect.sync(() => {
             reloads.push(fullRebase)
@@ -193,7 +216,7 @@ describe("Session hard context gate", () => {
       const result = yield* runGate({
         fixture,
         candidate: candidate(10),
-        capabilities: { contextWindowTokens: 200, maxOutputTokens: 100, contextSafetyMarginTokens: 100 },
+        capabilities: { contextWindowTokens: 100, maxOutputTokens: 100, contextSafetyMarginTokens: 100 },
         reload: () => Effect.die("reload must not run"),
       })
 
@@ -225,7 +248,7 @@ describe("Session hard context gate", () => {
       const existing = yield* jobs.admit(
         admission(fixture, {
           trigger: "consider",
-          targetMaxInputTokens: 300,
+          targetMaxInputTokens: 500,
         }),
       )
       const reloads: boolean[] = []
@@ -269,7 +292,7 @@ describe("Session hard context gate", () => {
         {
           status: "ended",
           trigger: "mandatory",
-          targetMaxInputTokens: 560,
+          targetMaxInputTokens: 700,
           configDigest: ConfigCompaction.admissionDigest(disabledPolicy),
         },
       ])
@@ -284,7 +307,7 @@ describe("Session hard context gate", () => {
         )
         .get()
       expect(event?.data).toMatchObject({
-        pressure: { safeInputTokens: 800, estimatedInputTokens: expect.any(Number) },
+        pressure: { safeInputTokens: 900, estimatedInputTokens: expect.any(Number) },
       })
       const pressure = event?.data.pressure
       if (
@@ -293,7 +316,7 @@ describe("Session hard context gate", () => {
         "estimatedInputTokens" in pressure &&
         typeof pressure.estimatedInputTokens === "number"
       )
-        expect(pressure.estimatedInputTokens).toBeGreaterThanOrEqual(800)
+        expect(pressure.estimatedInputTokens).toBeGreaterThanOrEqual(900)
     }),
   )
 
@@ -429,8 +452,8 @@ describe("Session hard context gate", () => {
 
       expect((yield* runGate({ ...oversized, policy: disabledPolicy })).compacted).toBe(false)
       expect(yield* allJobs()).toMatchObject([
-        { status: "failed", targetMaxInputTokens: 400 },
-        { status: "failed", targetMaxInputTokens: 560 },
+        { status: "failed", targetMaxInputTokens: 500 },
+        { status: "failed", targetMaxInputTokens: 700 },
       ])
     }),
   )
@@ -554,6 +577,7 @@ const runGate = (input: {
     readonly contextSafetyMarginTokens: number
   }
   readonly lastProviderInputTokens?: number
+  readonly lastProviderTotalTokens?: number
   readonly reload: (fullRebase: boolean) => Effect.Effect<Candidate>
 }) =>
   Effect.gen(function* () {
@@ -568,6 +592,7 @@ const runGate = (input: {
       },
       candidate: input.candidate,
       ...(input.lastProviderInputTokens === undefined ? {} : { lastProviderInputTokens: input.lastProviderInputTokens }),
+      ...(input.lastProviderTotalTokens === undefined ? {} : { lastProviderTotalTokens: input.lastProviderTotalTokens }),
       reload: ({ fullRebase }) => input.reload(fullRebase),
     }).pipe(SessionCompactionExecution.bind(execution))
   })
@@ -638,7 +663,7 @@ function admission(
     trigger: "mandatory",
     requestedThrough: fixture.boundary,
     baseContextRevision: 0,
-    targetMaxInputTokens: 400,
+    targetMaxInputTokens: 500,
     configDigest: ConfigCompaction.admissionDigest(policy),
     ...overrides,
   }

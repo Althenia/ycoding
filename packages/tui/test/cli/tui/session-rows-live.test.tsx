@@ -76,6 +76,44 @@ async function mountRows(
   return { rows, data, events, client, destroy: () => app.renderer.destroy() }
 }
 
+test("projects live context observations once as resident chronological messages", async () => {
+  const sessionID = "ses_context_observations"
+  const mounted = await mountRows(sessionID)
+  try {
+    const state: YCodingEvent = {
+      id: "evt_context_state",
+      type: "session.context.observed",
+      created: 1,
+      location: { directory },
+      durable: { aggregateID: sessionID, seq: 1, version: 1 },
+      data: { sessionID, source: "session-state", text: "Current Session state" },
+    }
+    mounted.events.emit(state)
+    await wait(() => mounted.data.session.message.get(sessionID, "msg_context_state") !== undefined)
+    mounted.events.emit(state)
+    mounted.events.emit({
+      id: "evt_context_team",
+      type: "session.context.observed",
+      created: 2,
+      location: { directory },
+      durable: { aggregateID: sessionID, seq: 2, version: 1 },
+      data: { sessionID, source: "team-view", text: "TeamView current tasks" },
+    })
+    await wait(() => mounted.rows.some((row) => row.type === "message" && row.messageID === "msg_context_team"))
+    expect(mounted.data.session.message.get(sessionID, "msg_context_state")).toMatchObject({
+      type: "system", text: "Current Session state", metadata: { contextSource: "session-state" },
+    })
+    expect(mounted.data.session.message.get(sessionID, "msg_context_team")).toMatchObject({
+      type: "synthetic", text: "TeamView current tasks", description: "TeamView update",
+      metadata: { contextSource: "team-view" },
+    })
+    expect(mounted.rows.filter((row) => row.type === "message").map((row) => row.messageID))
+      .toEqual(["msg_context_state", "msg_context_team"])
+  } finally {
+    mounted.destroy()
+  }
+})
+
 test("reconciles V2 compaction rows by jobID through terminal lifecycle events", async () => {
   const sessionID = "session-v2-compaction-rows"
   const jobID = "cmp_lifecycle"

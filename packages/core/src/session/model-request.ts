@@ -27,7 +27,6 @@ import { SessionModelHeaders } from "./model-headers"
 import { SessionRunnerCache } from "./runner/cache"
 import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionRunnerModel } from "./runner/model"
-import { MAX_STEPS_PROMPT } from "./runner/max-steps"
 import PROMPT_DEFAULT from "./runner/prompt/base.txt"
 import { isProviderImage, toLLMMessages } from "./runner/to-llm-message"
 import { ImageAnalyzer } from "./runner/image-analyzer"
@@ -218,13 +217,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           toLLMMessages([message], resolved.ref, providerMetadataKey, materialized, attachmentMaterialization),
         )
         const history = loweredHistory.flat()
-        const messages = [
-          ...(stepLimitReached && !terminalResponseRecovery
-            ? [...history, Message.assistant(MAX_STEPS_PROMPT)]
-            : history),
-          ...(input.messages ?? []),
-          input.context.liveState.rendered,
-        ]
+        const messages = [...history, ...(input.messages ?? [])]
         const toolDefinitions = executableTools?.definitions ?? []
         const toolsByName = new Map(toolDefinitions.map((tool) => [tool.name, tool]))
         // Hooks may reshape available definitions but cannot advertise tools omitted by permissions or the Step limit.

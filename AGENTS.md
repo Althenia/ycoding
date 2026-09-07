@@ -236,7 +236,7 @@ const table = sqliteTable("session", {
 - Preserve parent-child ownership, permission ceilings, explicit agent selection, and the configured nesting bound.
 - Session guardrails apply to the root Session family independently from tool permissions. `yolo` levels `1-2` and `goal`/`permission auto-approval` never auto-answer guardrail reviews; only `yolo 3` auto-approves guardrail reviews.
 - Guardrail reviews expose one-time approval, session-scoped Always approval for exact matching asks and metadata within the root Session family and current Location process, or rejection.
-- TeamView is volatile context appended after stable history. It must not receive a cache breakpoint or destabilize the provider-cache prefix.
+- Runtime observations are append-only durable messages in chronological history. TeamView is user-authority synthetic context, while trusted Session state and step-limit notices are System messages; none is an assistant narration of routine bookkeeping.
 - TUI subagent indicators must rehydrate from durable state after reconnect or restart. Requiring the user to enter each child session to rebuild counts is a defect.
 
 ## Session skills and project artifacts

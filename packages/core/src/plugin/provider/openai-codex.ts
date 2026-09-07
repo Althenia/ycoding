@@ -42,6 +42,10 @@ const disallowed = new Set(["gpt-5.5-pro", "gpt-5.6"])
 export const eligible = (apiID: string) => {
   if (allowed.has(apiID)) return true
   if (disallowed.has(apiID)) return false
-  const match = apiID.match(/^gpt-(\d+\.\d+)/)
-  return match ? Number.parseFloat(match[1]) > 5.4 : false
+  const match = apiID.match(/^gpt-(\d+)(?:\.(\d+))?/)
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = match[2] ? Number(match[2]) : 0
+  if (major > 5) return true
+  return major === 5 && minor > 4
 }

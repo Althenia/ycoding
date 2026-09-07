@@ -1124,6 +1124,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             })
           })
           break
+        case "session.context.observed":
+          message.update(event.data.sessionID, (draft, index) => {
+            message.append(draft, index, {
+              id: messageIDFromEvent(event.id),
+              ...(event.data.source === "team-view"
+                ? { type: "synthetic" as const, description: "TeamView update" }
+                : { type: "system" as const }),
+              text: event.data.text,
+              metadata: { contextSource: event.data.source },
+              time: { created: event.created },
+            })
+          })
+          break
         case "session.synthetic":
           message.update(event.data.sessionID, (draft, index) => {
             message.append(draft, index, {

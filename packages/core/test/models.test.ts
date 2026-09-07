@@ -260,6 +260,48 @@ describe("ModelsDev Service", () => {
     }),
   )
 
+  it.live("synthesizes gpt-daybreak-blue-latest from gpt-5.6-sol", () =>
+    Effect.gen(function* () {
+      yield* writeCache({
+        openai: {
+          id: "openai",
+          name: "OpenAI",
+          env: ["OPENAI_API_KEY"],
+          npm: "@ai-sdk/openai",
+          models: {
+            "gpt-5.6-sol": {
+              id: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              family: "gpt-sol",
+              release_date: "2026-07-09",
+              attachment: true,
+              reasoning: true,
+              temperature: false,
+              tool_call: true,
+              limit: { context: 1_050_000, input: 922_000, output: 128_000 },
+              modalities: { input: ["text", "image", "pdf"], output: ["text"] },
+              cost: {
+                input: 5,
+                output: 30,
+                cache_read: 0.5,
+                cache_write: 6.25,
+              },
+            },
+          },
+        },
+      })
+      const state = yield* Ref.make(initialState)
+      const result = yield* provided(state, ModelsDev.Service.use((service) => service.get()))
+      const snapshot = result.find((entry) => entry.info.id === "openai")
+      const sol = snapshot?.models.find((model) => model.id === ModelV2.ID.make("gpt-5.6-sol"))
+      const daybreak = snapshot?.models.find((model) => model.id === ModelV2.ID.make("gpt-daybreak-blue-latest"))
+      expect(sol?.limit).toEqual({ context: 1_050_000, input: 922_000, output: 128_000 })
+      expect(daybreak?.modelID).toBe(ModelV2.ID.make("gpt-daybreak-blue-latest"))
+      expect(daybreak?.limit).toEqual(sol?.limit)
+      expect(daybreak?.cost).toEqual(sol?.cost)
+    }),
+  )
+
   it.live("get() returns empty catalog when disk empty, fetch disabled, and no bundled snapshot is injected", () =>
     Effect.gen(function* () {
       const state = yield* Ref.make(initialState)

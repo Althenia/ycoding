@@ -16,7 +16,9 @@ export const policy = (entries: readonly Config.Entry[]) =>
 
 export const contextSafetyMarginTokens = (entries: readonly Config.Entry[]) => policy(entries).contextSafetyMarginTokens
 
-/** Context pressure uses resolved advisory thresholds and becomes mandatory at the hard input cap. */
+/** Context pressure uses resolved advisory thresholds against the raw context
+ * window and becomes mandatory at the hard input cap (context - safety margin).
+ * maxOutputTokens is retained on capabilities for compatibility but ignored. */
 export type Level = "normal" | "consider" | "advised" | "mandatory"
 
 export type Usage = {
@@ -48,8 +50,9 @@ export const level = (
   if (estimate >= hardInputCap) return "mandatory"
   const resolved = input.policy ?? ConfigCompaction.resolve([])
   if (resolved.advisory === false) return "normal"
-  if (estimate * 100 >= hardInputCap * resolved.advisory.stronglyAdvisedPercent) return "advised"
-  if (estimate * 100 >= hardInputCap * resolved.advisory.considerPercent) return "consider"
+  const contextWindowTokens = input.capabilities.contextWindowTokens
+  if (estimate * 100 >= contextWindowTokens * resolved.advisory.stronglyAdvisedPercent) return "advised"
+  if (estimate * 100 >= contextWindowTokens * resolved.advisory.considerPercent) return "consider"
   return "normal"
 }
 

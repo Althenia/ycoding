@@ -295,6 +295,7 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   const subscriptions = [
     data.on("session.input.admitted", input),
     data.on("session.instructions.updated", message),
+    data.on("session.context.observed", message),
     data.on("session.synthetic", (event) => {
       if (event.data.sessionID === sessionID() && event.data.description?.trim())
         appendMessage(event.id.replace(/^evt_/, "msg_"))

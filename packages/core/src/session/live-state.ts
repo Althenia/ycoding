@@ -15,6 +15,7 @@ import { ContextManifest } from "./context-manifest"
 import { SessionErrors } from "./error"
 import { SessionEvent } from "./event"
 import { SessionGuardrail } from "./guardrail"
+import { readTeamView, renderTeamView } from "./orchestration-view"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionRunnerCache } from "./runner/cache"
 import {
@@ -28,6 +29,8 @@ import {
 
 export interface Snapshot {
   readonly rendered: Message
+  readonly text: string
+  readonly teamView?: ReturnType<typeof renderTeamView>
   readonly sources: Readonly<Record<ProtectedStateSource, Source>>
 }
 
@@ -68,6 +71,19 @@ export const sourceOrder = [
   "pending_work",
   "orchestration",
 ] as const satisfies ReadonlyArray<ProtectedStateSource>
+
+export const goalReminder = (autonomy: SessionAutonomy.State) => {
+  if (!autonomy.goal) return undefined
+  if (autonomy.goal.status !== "active")
+    return `Autonomous goal is ${autonomy.goal.status}: ${autonomy.goal.text}`
+  return [
+    `Active autonomous goal (iteration ${autonomy.goal.iteration}, noProgress ${autonomy.goal.noProgress}/${autonomy.goal.maxNoProgress}): ${autonomy.goal.text}`,
+    "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
+    "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
+    "Active background subagents or shells are unfinished work, not automatic no progress; continue useful independent work or finish the iteration and wait for automatic notification.",
+    "Call goal complete only after the goal is achieved and verified. Completion remains your explicit agent-owned decision.",
+  ].join("\n")
+}
 
 export function toProtectedState(sources: Snapshot["sources"]): ReadonlyArray<ContextManifest.ProtectedStateEntry> {
   return sourceOrder.map((source) => ({ source, revision: sources[source].sequence, digest: sources[source].digest }))
@@ -240,18 +256,26 @@ export const layer = Layer.effect(
       const current = yield* loadDatabase(sessionID)
       const guardrail = yield* guardrails.snapshot(sessionID)
       if (before.sequence !== guardrail.sequence || before.digest !== guardrail.digest) return yield* load(sessionID)
+      const text = [
+        "Authoritative current Session state (JSON):\n" +
+          SessionRunnerCache.canonicalJson({
+            todos: current.todos,
+            autonomy: current.autonomy,
+            permissionCeiling: current.permissionCeiling,
+          }),
+        goalReminder(current.autonomy),
+      ]
+        .filter((part): part is string => part !== undefined)
+        .join("\n\n")
+      const teamView = yield* readTeamView(db, sessionID)
       return {
         rendered: Message.make({
           role: "system",
-          content:
-            "Authoritative current Session state (JSON):\n" +
-            SessionRunnerCache.canonicalJson({
-              todos: current.todos,
-              autonomy: current.autonomy,
-              permissionCeiling: current.permissionCeiling,
-            }),
+          content: text,
           volatile: true,
         }),
+        text,
+        ...(teamView ? { teamView } : {}),
         sources: { ...current.sources, guardrails: guardrail },
       }
     })

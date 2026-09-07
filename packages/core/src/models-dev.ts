@@ -158,7 +158,33 @@ function normalize(input: Record<string, SourceProvider>): readonly Snapshot[] {
     }
     providers.push({ info, models, environment: [...item.env] })
   }
-  return ensureDeepseekFallback(providers, input)
+  return ensureDaybreakAlias(ensureDeepseekFallback(providers, input))
+}
+
+const DAYBREAK_ALIAS = "gpt-daybreak-blue-latest"
+
+function ensureDaybreakAlias(snapshots: readonly Snapshot[]): readonly Snapshot[] {
+  const openai = snapshots.find((snapshot) => snapshot.info.id === "openai")
+  if (!openai) return snapshots
+  const hasAlias = openai.models.some((model) => (model.id as string) === DAYBREAK_ALIAS)
+  if (hasAlias) return snapshots
+  const sol = openai.models.find((model) => (model.id as string) === "gpt-5.6-sol")
+  if (!sol) return snapshots
+  const alias: ModelV2.Info = {
+    ...sol,
+    id: ModelV2.ID.make(DAYBREAK_ALIAS),
+    modelID: ModelV2.ID.make(DAYBREAK_ALIAS),
+    name: "Daybreak Blue",
+    family: sol.family,
+    capabilities: { ...sol.capabilities, input: [...sol.capabilities.input], output: [...sol.capabilities.output] },
+    variants: [...sol.variants],
+    time: { ...sol.time },
+    cost: sol.cost.map((item) => ({ ...item, tier: item.tier && { ...item.tier }, cache: { ...item.cache } })),
+    limit: { ...sol.limit },
+  }
+  return snapshots.map((snapshot) =>
+    snapshot === openai ? { ...openai, models: [...openai.models, alias] } : snapshot,
+  )
 }
 
 const DEEPSEEK_DATED: ReadonlyArray<{

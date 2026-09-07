@@ -64,8 +64,8 @@ describe("resolveCapabilities", () => {
 describe("safeInputBudget", () => {
   const capabilities = { contextWindowTokens: 128_000, maxOutputTokens: 16_384, contextSafetyMarginTokens: 1_024 }
 
-  test("subtracts the model output limit and safety margin from the context window", () => {
-    expect(SessionContextBudget.safeInputBudget(capabilities)).toBe(128_000 - 16_384 - 1_024)
+  test("subtracts only the safety margin from the context window and ignores the output limit", () => {
+    expect(SessionContextBudget.safeInputBudget(capabilities)).toBe(128_000 - 1_024)
   })
 
   test("exposes zero and negative hard input caps without clamping", () => {
@@ -73,14 +73,14 @@ describe("safeInputBudget", () => {
       SessionContextBudget.safeInputBudget({
         contextWindowTokens: 100,
         maxOutputTokens: 80,
-        contextSafetyMarginTokens: 20,
+        contextSafetyMarginTokens: 100,
       }),
     ).toBe(0)
     expect(
       SessionContextBudget.safeInputBudget({
         contextWindowTokens: 100,
         maxOutputTokens: 80,
-        contextSafetyMarginTokens: 21,
+        contextSafetyMarginTokens: 101,
       }),
     ).toBe(-1)
   })

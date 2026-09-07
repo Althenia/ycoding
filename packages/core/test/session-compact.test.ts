@@ -39,9 +39,7 @@ const model = Model.make({
 })
 const compactionPolicy = ConfigCompaction.resolve([])
 const advisoryTargetMaxInputTokens = Math.floor(
-  ((10_000 - 1_000 - compactionPolicy.contextSafetyMarginTokens) *
-    (compactionPolicy.advisory === false ? 100 : compactionPolicy.advisory.considerPercent)) /
-    100,
+  (10_000 * (compactionPolicy.advisory === false ? 100 : compactionPolicy.advisory.considerPercent)) / 100,
 )
 const projects = Layer.succeed(
   ProjectV2.Service,

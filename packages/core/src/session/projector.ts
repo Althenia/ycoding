@@ -971,6 +971,7 @@ const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.InstructionsUpdated, (event) =>
       InstructionState.apply(db, event.data.sessionID, event.durable.seq, event.data.delta),
     )
+    yield* events.project(SessionEvent.ContextObserved, (event) => run(db, event))
     yield* events.project(SessionEvent.Task.Updated, (event) => projectTask(db, event))
     yield* events.project(SessionEvent.Synthetic, (event) => run(db, event))
     yield* events.project(SessionEvent.Skill.Activated, (event) => run(db, event))

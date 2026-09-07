@@ -39,6 +39,10 @@ export interface Input<
   // provider-visible history (tool-result envelope stripping, tokenization drift),
   // so a provider-measured over-cap request must also trip the mandatory gate.
   readonly lastProviderInputTokens?: number
+  // Full provider-reported total (input + output + reasoning + cache read +
+  // cache write) for this Session, if any. An output/reasoning-heavy step can
+  // exceed the raw context limit while the input-side total stays below the cap.
+  readonly lastProviderTotalTokens?: number
   readonly reload: (options: {
     readonly fullRebase: boolean
   }) => Effect.Effect<Candidate<Context, Prepared>, ReloadError, ReloadRequirements>
@@ -66,14 +70,22 @@ export const ensureWithinLimit = <
     const cap = SessionContextPressure.hardInputCapTokens(input.capabilities)
     if (cap <= 0) return { ...input.candidate, compacted: false }
     const initialEstimate = estimate(input.candidate)
-    const providerTotal = input.lastProviderInputTokens
-    if (!input.force && initialEstimate < cap && (providerTotal === undefined || providerTotal < cap))
+    const providerInputTotal = input.lastProviderInputTokens
+    const providerFullTotal = input.lastProviderTotalTokens
+    if (
+      !input.force &&
+      initialEstimate < cap &&
+      (providerInputTotal === undefined || providerInputTotal < cap) &&
+      (providerFullTotal === undefined || providerFullTotal < cap)
+    )
       return { ...input.candidate, compacted: false }
 
     const db = (yield* Database.Service).db
     const jobs = yield* SessionCompactionJob.Service
     const configDigest = ConfigCompaction.admissionDigest(input.policy)
-    const targetMaxInputTokens = Math.floor((cap * considerPercent(input.policy)) / 100)
+    const targetMaxInputTokens = Math.floor(
+      (input.capabilities.contextWindowTokens * considerPercent(input.policy)) / 100,
+    )
 
     const gated = yield* jobs
       .withAdmissionGate(input.sessionID, (admit) =>
@@ -83,8 +95,11 @@ export const ensureWithinLimit = <
           // Seed with the provider-measured total when it exceeds the local
           // estimate: it is the fresher over-cap evidence until a reload
           // rebuilds the candidate. Later iterations use the rebuilt estimate.
-          let currentEstimate =
-            providerTotal === undefined ? initialEstimate : Math.max(initialEstimate, providerTotal)
+          let currentEstimate = Math.max(
+            initialEstimate,
+            ...(providerInputTotal === undefined ? [] : [providerInputTotal]),
+            ...(providerFullTotal === undefined ? [] : [providerFullTotal]),
+          )
           while (true) {
             if (gateOwnedAdmissions === 2) {
               const rebuilt = yield* input.reload({ fullRebase: false })

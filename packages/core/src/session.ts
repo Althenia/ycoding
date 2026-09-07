@@ -1305,7 +1305,8 @@ const layer = Layer.effect(
           ),
         )
         const limits = resolved.model.route.defaults.limits
-        const hardInputCap = (limits?.context ?? 0) - (limits?.output ?? 0) - policy.contextSafetyMarginTokens
+        const contextWindowTokens = limits?.context ?? 0
+        const hardInputCap = contextWindowTokens - policy.contextSafetyMarginTokens
         if (hardInputCap <= 0)
           return yield* new CompactionConflictError({
             sessionID: input.sessionID,
@@ -1313,7 +1314,7 @@ const layer = Layer.effect(
             message: "Selected model has no positive compaction input budget",
           })
         const targetMaxInputTokens = policy.advisory
-          ? Math.floor((hardInputCap * policy.advisory.considerPercent) / 100)
+          ? Math.floor((contextWindowTokens * policy.advisory.considerPercent) / 100)
           : hardInputCap
         const trigger = input.trigger ?? "manual"
         const configDigest = ConfigCompaction.admissionDigest(policy)

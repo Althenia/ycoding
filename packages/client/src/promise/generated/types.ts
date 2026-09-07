@@ -716,6 +716,17 @@ export type SessionInstructionsUpdated = {
   data: { sessionID: string; delta: { [x: string]: string | "removed" } }
 }
 
+export type SessionContextObserved = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.context.observed"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; source: "session-state" | "team-view" | "step-limit"; text: string }
+}
+
 export type SessionSynthetic = {
   id: string
   created: number
@@ -2711,6 +2722,16 @@ export type SessionLogItem =
       created: number
       metadata?: { [x: string]: any }
       sourceEpoch: string
+      type: "session.context.observed"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; source: "session-state" | "team-view" | "step-limit"; text: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
       type: "session.task.updated"
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
@@ -3155,6 +3176,7 @@ export type V2Event =
   | SessionExecutionFailed
   | SessionExecutionInterrupted
   | SessionInstructionsUpdated
+  | SessionContextObserved
   | SessionTaskUpdated
   | SessionSynthetic
   | SessionSkillActivated

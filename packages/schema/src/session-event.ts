@@ -258,6 +258,17 @@ export const InstructionsUpdated = Event.durable({
 })
 export type InstructionsUpdated = typeof InstructionsUpdated.Type
 
+export const ContextObserved = Event.durable({
+  type: "session.context.observed",
+  ...options,
+  schema: {
+    ...Base,
+    source: Schema.Literals(["session-state", "team-view", "step-limit"]),
+    text: Schema.String,
+  },
+})
+export type ContextObserved = typeof ContextObserved.Type
+
 export namespace Task {
   export const Updated = Event.durable({
     type: "session.task.updated",
@@ -751,6 +762,7 @@ export const Definitions = Event.inventory(
   Execution.Failed,
   Execution.Interrupted,
   InstructionsUpdated,
+  ContextObserved,
   Task.Updated,
   Synthetic,
   Skill.Activated,
