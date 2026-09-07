@@ -83,7 +83,9 @@ export const ensureWithinLimit = <
     const db = (yield* Database.Service).db
     const jobs = yield* SessionCompactionJob.Service
     const configDigest = ConfigCompaction.admissionDigest(input.policy)
-    const targetMaxInputTokens = Math.floor((cap * considerPercent(input.policy)) / 100)
+    const targetMaxInputTokens = Math.floor(
+      (input.capabilities.contextWindowTokens * considerPercent(input.policy)) / 100,
+    )
 
     const gated = yield* jobs
       .withAdmissionGate(input.sessionID, (admit) =>

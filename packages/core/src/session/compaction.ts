@@ -17,7 +17,6 @@ import { ModelV2 } from "../model"
 import { Hash } from "../util/hash"
 import { Token } from "../util/token"
 import { SessionCompactionJob } from "./compaction-job"
-import { SessionContextBudget } from "./context-budget"
 import { ContextManifest } from "./context-manifest"
 import { SessionEvent } from "./event"
 import { SessionHelperPolicy } from "./helper-policy"
@@ -36,7 +35,6 @@ import { SessionSkillStatus } from "./skill-status"
 import { SessionSummaryToon } from "./summary-toon"
 import { SessionUsage } from "./usage"
 
-const OUTPUT_TOKEN_MAX = 32_000
 const SOURCE_TEXT_MAX_CHARS = 8_192
 const SOURCE_CAPSULE_MAX_CHARS = 384
 const SKILL_TEXT_MAX_CHARS = 2_048
@@ -1005,18 +1003,7 @@ function jsonObject(value: Schema.Json): value is { readonly [key: string]: Sche
 
 function selectedInputBudget(job: SessionCompactionJob.Job, model: Model, config: ConfigCompaction.Resolved) {
   const contextWindowTokens = model.route.defaults.limits?.context ?? 0
-  const routeOutputTokens = Math.min(model.route.defaults.limits?.output ?? 0, OUTPUT_TOKEN_MAX)
-  const configuredOutputTokens =
-    config.maxOutputTokens > 0 && routeOutputTokens > 0
-      ? Math.min(config.maxOutputTokens, routeOutputTokens)
-      : config.maxOutputTokens > 0
-        ? config.maxOutputTokens
-        : routeOutputTokens
-  const modelBudget = SessionContextBudget.safeInputBudget({
-    contextWindowTokens,
-    maxOutputTokens: Math.max(configuredOutputTokens, config.reservedOutputTokens),
-    contextSafetyMarginTokens: config.contextSafetyMarginTokens,
-  })
+  const modelBudget = contextWindowTokens - config.contextSafetyMarginTokens
   return Math.min(job.targetMaxInputTokens ?? 0, modelBudget)
 }
 

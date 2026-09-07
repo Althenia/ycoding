@@ -11,8 +11,9 @@ export type Capabilities = {
   readonly contextSafetyMarginTokens: number
 }
 
-// The registry supplies real context/output limits per model; the safety margin is a caller
-// reservation on top of the reserved output.
+// The registry supplies the real context limit per model; the safety margin is a
+// caller reservation. Output limits are intentionally excluded: advisory gates
+// measure against the raw context window and the hard cap is context - margin.
 export const resolveCapabilities = (
   models: readonly ModelV2.Info[],
   providerID: ProviderV2.ID,
@@ -29,7 +30,7 @@ export const resolveCapabilities = (
 }
 
 export const safeInputBudget = (capabilities: Capabilities) =>
-  capabilities.contextWindowTokens - capabilities.maxOutputTokens - capabilities.contextSafetyMarginTokens
+  capabilities.contextWindowTokens - capabilities.contextSafetyMarginTokens
 
 export type InputTokenComponents = {
   readonly systemInstructions?: number

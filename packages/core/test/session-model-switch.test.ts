@@ -460,7 +460,7 @@ describe("SessionV2.switchModel context validation", () => {
       if (outcome.status !== "blocked") throw new Error("Expected a blocked switch, got a switch")
       expect(outcome.currentModel).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
       expect(outcome.targetModel).toMatchObject({ id: "claude-haiku-4-5", providerID: "anthropic" })
-      expect(outcome.targetSafeInputTokens).toBe(64_000 - 8_192 - 4_096)
+      expect(outcome.targetSafeInputTokens).toBe(64_000 - 4_096)
       expect(outcome.currentContextTokens).toBeGreaterThan(outcome.targetSafeInputTokens)
       expect(outcome.requiredReductionTokens).toBe(outcome.currentContextTokens - outcome.targetSafeInputTokens)
       expect(outcome.reason).toBe("context-window-exceeded")
@@ -507,7 +507,7 @@ describe("SessionV2.switchModel context validation", () => {
 
       expect(outcome).toMatchObject({
         status: "blocked",
-        targetSafeInputTokens: 64_000 - 8_192 - 2_048,
+        targetSafeInputTokens: 64_000 - 2_048,
       })
     }),
   )
@@ -524,7 +524,7 @@ describe("SessionV2.switchModel context validation", () => {
 
       expect(outcome).toMatchObject({
         status: "blocked",
-        targetSafeInputTokens: 64_000 - 8_192 - 4_096,
+        targetSafeInputTokens: 64_000 - 4_096,
       })
     }),
   )
