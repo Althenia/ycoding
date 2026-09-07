@@ -844,7 +844,7 @@ test("renders retained Session state and TeamView bodies in chronological transc
   }
 }, 60_000)
 
-test("renders Session state and TeamView notices summary-only by default without mutating canonical messages", async () => {
+test("renders Session state and TeamView notices summary-only without mutating canonical messages", async () => {
   const sessionState =
     'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"todos":[{"content":"First task","status":"pending"},{"content":"Second task","status":"pending"},{"content":"Third task","status":"pending"},{"content":"Fourth task","status":"pending"},{"content":"Fifth task","status":"pending"},{"content":"Sixth task","status":"pending"}]}'
   const teamView =
@@ -870,54 +870,15 @@ test("renders Session state and TeamView notices summary-only by default without
     ...NARROW_VIEWPORT,
     args: { sessionID },
     route: routeFor(messages),
-    settle: "+ Session state · normal · YOLO 0 · 6 tasks",
+    settle: "Session state · normal · YOLO 0 · 6 tasks",
   })
   try {
-    expect(screen.frame()).toContain("+ Session state · normal · YOLO 0 · 6 tasks")
-    expect(screen.frame()).toContain("+ TeamView · 1 running · 1 completed · 1 omitted")
+    expect(screen.frame()).toContain("Session state · normal · YOLO 0 · 6 tasks")
+    expect(screen.frame()).toContain("TeamView · 1 running · 1 completed · 1 omitted")
     expect(screen.frame()).not.toContain("First task")
     expect(screen.frame()).not.toContain("Sixth task")
     expect(messages[0]).toMatchObject({ text: sessionState })
     expect(messages[1]).toMatchObject({ text: teamView })
-    await screen.mouse.click(4, screen.lines().findIndex((line) => line.includes("+ Session state")))
-    expect(screen.frame()).toContain("Field")
-  } finally {
-    await screen.dispose()
-  }
-}, 60_000)
-
-test("shows configured Session notice details and collapses them by keyboard", async () => {
-  const messages: SessionMessageInfo[] = [
-    {
-      id: "msg_context_state_configured",
-      type: "system",
-      text:
-        'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"goal","yolo":0},"todos":[{"content":"A very long task that must remain in the bounded detail view","status":"pending"},{"content":"Another very long task that must remain in the bounded detail view","status":"pending"},{"content":"A third very long task that must remain in the bounded detail view","status":"pending"},{"content":"A fourth very long task that must remain in the bounded detail view","status":"pending"},{"content":"A fifth very long task that must remain in the bounded detail view","status":"pending"},{"content":"A sixth very long task that must remain in the bounded detail view","status":"pending"}]}',
-      metadata: { contextSource: "session-state" },
-      time: { created: 2 },
-    },
-  ]
-  const screen = await renderMeasuredScreen({
-    ...NARROW_VIEWPORT,
-    route: routeFor(messages),
-    settle: "Field",
-    config: { animations: false, session: { context_details: true } },
-  })
-  try {
-    expect(screen.frame()).toContain("- Session state · goal · YOLO 0 · 6 tasks")
-    expect(screen.frame()).toContain("Field")
-    const detail = findScrollBoxes(screen.renderer.root).at(-1)
-    expect(detail).toBeDefined()
-    expect(detail?.viewport.height).toBeLessThanOrEqual(Math.floor(NARROW_VIEWPORT.height / 3))
-    const label = findTextBuffer(screen.renderer.root, "- Session state")
-    const focusable = label ? findFocusableAncestor(label) : undefined
-    expect(focusable).toBeDefined()
-    focusable?.focus()
-    screen.input.pressEnter()
-    await waitForFrame(screen.frame, "+ Session state · goal · YOLO 0 · 6 tasks")
-    expect(screen.frame()).not.toContain("Field")
-    screen.input.pressEnter()
-    await waitForFrame(screen.frame, "- Session state · goal · YOLO 0 · 6 tasks")
   } finally {
     await screen.dispose()
   }
@@ -1591,11 +1552,6 @@ function findMarkdown(root: Renderable): MarkdownRenderable | undefined {
   return root.getChildren().map(findMarkdown).find(Boolean)
 }
 
-function findScrollBoxes(root: Renderable): ScrollBoxRenderable[] {
-  const children = root.getChildren().flatMap(findScrollBoxes)
-  return root instanceof ScrollBoxRenderable ? [root, ...children] : children
-}
-
 async function waitForFrame(frame: () => string, text: string) {
   const deadline = Date.now() + 2_000
   while (Date.now() < deadline) {
@@ -1610,7 +1566,7 @@ async function renderMeasuredScreen(input: {
   height: number
   route: FetchHandler
   settle: string
-  config: { animations: boolean; session?: { context_details?: boolean } }
+  config: { animations: boolean }
 }) {
   const setup = await createTestRenderer({ width: input.width, height: input.height, useThread: false })
   const core = await import("@opentui/core")

@@ -147,7 +147,7 @@ The instance-wide live stream emits `session.diagnostics.updated` when a provide
 
 ### Runtime observations
 
-`session.context.observed.1` has `{ sessionID, source, text }`, where `source` is exactly `session-state`, `team-view`, or `step-limit`. It is a durable append-only event, not a mutation endpoint or a new persistence table. `session-state` and `step-limit` project as trusted System messages; `team-view` projects as a Synthetic user-authority message with description `TeamView update`. All project into canonical chronological transcript history. The TUI defaults Session-state and TeamView notices to compact summaries with expandable, height-bounded table details; this does not change canonical text or model input.
+`session.context.observed.1` has `{ sessionID, source, text }`, where `source` is exactly `session-state`, `team-view`, or `step-limit`. It is a durable append-only event, not a mutation endpoint or a new persistence table. `session-state` and `step-limit` project as trusted System messages; `team-view` projects as a Synthetic user-authority message with description `TeamView update`. All project into canonical chronological transcript history. The TUI renders Session-state and TeamView notices as compact summaries only; this does not change canonical text or model input.
 
 The runtime verifies observation provenance against the durable event, not caller-controlled Synthetic metadata. Public Synthetic inputs cannot gain System authority or suppress a trusted observation by copying its metadata.
 
