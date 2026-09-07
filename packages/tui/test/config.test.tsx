@@ -1,7 +1,20 @@
 /** @jsxImportSource @opentui/solid */
 import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
-import { resolve, ConfigProvider, useConfig, type Interface } from "../src/config"
+import { resolve, ConfigProvider, useConfig, Info, type Interface } from "../src/config"
+import { Schema } from "effect"
+
+test("decodes the optional runtime-context detail flag without changing other session settings", () => {
+  expect(Schema.decodeUnknownSync(Info)({}).session?.context_details).toBeUndefined()
+  for (const enabled of [false, true]) {
+    const config = resolve(
+      Schema.decodeUnknownSync(Info)({ session: { thinking: "hide", context_details: enabled } }),
+      { terminalSuspend: true },
+    )
+    expect(config.session).toEqual({ thinking: "hide", context_details: enabled })
+  }
+  expect(() => Schema.decodeUnknownSync(Info)({ session: { context_details: "true" } })).toThrow()
+})
 
 test("resolves nested config and keybind defaults", () => {
   const config = resolve(

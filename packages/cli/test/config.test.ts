@@ -62,6 +62,27 @@ test("updates current config without reading obsolete files", async () => {
   }
 })
 
+test("loads and persists the runtime-context detail flag from cli.json", async () => {
+  const directory = await Bun.$`mktemp -d`.text().then((value) => value.trim())
+  await Bun.write(path.join(directory, "cli.json"), JSON.stringify({ session: { context_details: true, thinking: "hide" } }))
+
+  try {
+    await run(directory, Effect.gen(function* () {
+      const service = yield* Config.Service
+      expect((yield* service.get()).session).toEqual({ context_details: true, thinking: "hide" })
+      yield* service.update((draft) => {
+        draft.session = { ...draft.session, context_details: false }
+      })
+      expect((yield* service.get()).session).toEqual({ context_details: false, thinking: "hide" })
+    }))
+    expect(await Bun.file(path.join(directory, "cli.json")).json()).toEqual({
+      session: { context_details: false, thinking: "hide" },
+    })
+  } finally {
+    await Bun.$`rm -rf ${directory}`
+  }
+})
+
 test("updates a config draft while preserving JSONC comments", async () => {
   const directory = await Bun.$`mktemp -d`.text().then((value) => value.trim())
   await Bun.write(path.join(directory, "cli.json"), "{\n  // Keep this comment\n  \"animations\": true\n}\n")

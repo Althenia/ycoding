@@ -821,6 +821,7 @@ Example:
     "sidebar": "auto",
     "scrollbar": true,
     "thinking": "show",
+    "context_details": false,
     "grouping": "auto",
   },
   "hints": { "onboarding": true },
@@ -867,6 +868,7 @@ All other `cli.json` fields are optional and remain `unset` until configured. Th
 | `session.sidebar`                                                  | `auto` \| `hide`                                  | unset                       | `auto` shows the sidebar when width permits.                                                        |
 | `session.scrollbar`                                                | boolean                                           | unset                       | Transcript scrollbar.                                                                               |
 | `session.thinking`                                                 | `show` \| `hide`                                  | unset                       | Default reasoning visibility.                                                                       |
+| `session.context_details`                                          | boolean                                           | unset (summary only)        | Expand runtime-context notice details by default; affects transcript presentation only.             |
 | `session.grouping`                                                 | `auto` \| `none`                                  | unset                       | Related transcript-item grouping.                                                                   |
 | `hints.onboarding`, `debug.devtools`, `debug.timing`, `animations` | boolean                                           | unset                       | Guidance, diagnostics, and animation switches.                                                      |
 | `mouse`                                                            | boolean                                           | `true`                      | Terminal mouse capture.                                                                             |

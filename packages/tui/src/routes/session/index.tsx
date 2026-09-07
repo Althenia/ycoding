@@ -115,6 +115,7 @@ import {
 } from "./rows"
 import { switchLabel } from "../../util/model"
 import { findMessageBoundary, messageNavigationSlack } from "./message-navigation"
+import { noticeMarkdown } from "./notice-table"
 import { stringWidth } from "../../util/string-width"
 import {
   autonomyModeLabel,
@@ -2189,9 +2190,10 @@ function SessionSwitchMessageV2(props: { message: SessionMessageInfo }) {
 
 function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   const ctx = use()
-  const { themeV2, syntax } = useTheme()
+  const { themeV2 } = useTheme()
   const metadata = () => (props.message.type === "synthetic" ? props.message.metadata : undefined)
   const source = () => stringValue(metadata()?.source)
+  const contextSource = () => stringValue(props.message.metadata?.contextSource)
   const subagentNotification = () => source() === "subagent_notification"
   const completion = () => source() === "subagent" || source() === "shell"
   const state = () => stringValue(metadata()?.state)
@@ -2202,6 +2204,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
       return props.message.metadata?.contextSource === "team-view" ? props.message.text : props.message.description ?? ""
     return ""
   }
+  const notice = createMemo(() => noticeMarkdown(contextSource(), text()))
   const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
   const status = () => {
     if (state() === "completed") return "finished"
@@ -2240,24 +2243,100 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
         </box>
       </Match>
       <Match when={true}>
-        <box flexDirection="column">
-          <InlineToolRow icon="◈" color={themeV2.text.subdued} pending="Notice" complete={true}>
-            Notice
-          </InlineToolRow>
-          <box paddingLeft={3} paddingTop={1}>
+        <Show when={notice().structured} fallback={<RawNoticeMarkdown content={text()} />}>
+          <NoticeMarkdown
+            content={notice().content}
+            label={notice().summary}
+            initiallyExpanded={ctx.config.session?.context_details ?? false}
+          />
+        </Show>
+      </Match>
+    </Switch>
+  )
+}
+
+function NoticeMarkdown(props: { content: string; label: string; initiallyExpanded?: boolean }) {
+  const ctx = use()
+  const { themeV2, syntax } = useTheme()
+  const renderer = useRenderer()
+  const dimensions = useTerminalDimensions()
+  const [expanded, setExpanded] = createSignal(props.initiallyExpanded ?? false)
+  let content: BoxRenderable | undefined
+  let scroll: ScrollBoxRenderable | undefined
+  const height = createMemo(() => Math.max(3, Math.floor(dimensions().height / 3)))
+  const toggle = () => {
+    if (renderer.getSelection()?.getSelectedText()) return
+    setExpanded((value) => !value)
+  }
+  const onKeyDown = (key: { name: string }) => {
+    if (key.name === "return" || key.name === "space") return toggle()
+    if (!expanded()) return
+    if (key.name === "up") return scroll?.scrollBy(-1)
+    if (key.name === "down") return scroll?.scrollBy(1)
+    if (key.name === "pageup") return scroll?.scrollBy(-height())
+    if (key.name === "pagedown") return scroll?.scrollBy(height())
+    if (key.name === "home") return scroll?.scrollTo(0)
+    if (key.name === "end" && scroll) return scroll.scrollTo(scroll.scrollHeight)
+  }
+  return (
+    <box flexDirection="column">
+      <InlineToolRow icon="◈" color={themeV2.text.subdued} pending="Notice" complete={true}>
+        Notice
+      </InlineToolRow>
+      <box
+        paddingLeft={3}
+        paddingTop={1}
+        flexDirection="column"
+        focusable
+        ref={(element: BoxRenderable) => (content = element)}
+        onMouseDown={() => content?.focus()}
+        onMouseUp={toggle}
+        onKeyDown={onKeyDown}
+      >
+        <text fg={themeV2.text.subdued}>
+          {Locale.truncateWidth(`${expanded() ? "-" : "+"} ${props.label}`, Math.max(0, ctx.width - 5))}
+        </text>
+        <Show when={expanded()}>
+          <scrollbox
+            maxHeight={height()}
+            ref={(element: ScrollBoxRenderable) => (scroll = element)}
+            scrollbarOptions={{ visible: false }}
+          >
             <markdown
               syntaxStyle={syntax()}
               streaming={false}
               internalBlockMode="top-level"
-              content={text()}
+              content={props.content}
               tableOptions={{ style: "grid" }}
               conceal={true}
               fg={themeV2.markdown.text}
             />
-          </box>
-        </box>
-      </Match>
-    </Switch>
+          </scrollbox>
+        </Show>
+      </box>
+    </box>
+  )
+}
+
+function RawNoticeMarkdown(props: { content: string }) {
+  const { themeV2, syntax } = useTheme()
+  return (
+    <box flexDirection="column">
+      <InlineToolRow icon="◈" color={themeV2.text.subdued} pending="Notice" complete={true}>
+        Notice
+      </InlineToolRow>
+      <box paddingLeft={3} paddingTop={1}>
+        <markdown
+          syntaxStyle={syntax()}
+          streaming={false}
+          internalBlockMode="top-level"
+          content={props.content}
+          tableOptions={{ style: "grid" }}
+          conceal={true}
+          fg={themeV2.markdown.text}
+        />
+      </box>
+    </box>
   )
 }
 
