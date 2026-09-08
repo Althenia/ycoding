@@ -17,12 +17,12 @@ describe("curl installer", () => {
     const first = await runInstaller(fixture)
 
     expect(first.exitCode).toBe(0)
-    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding"), "utf8")).toBe("#!/bin/sh\necho ycoding 0.1.1\n")
+    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding"), "utf8")).toBe("#!/bin/sh\necho ycoding 0.1.2\n")
     expect((await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).stat()).mode & 0o111).not.toBe(0)
     expect(await readFile(path.join(fixture.home, ".zshrc"), "utf8")).toBe(
       "# existing profile\nexport PATH=\"$HOME/.local/bin:$PATH\"\n",
     )
-    expect(first.stdout).toContain("Installed ycoding 0.1.1")
+    expect(first.stdout).toContain("Installed ycoding 0.1.2")
     expect(first.stdout).toContain("Restart your shell")
 
     const second = await runInstaller(fixture)
@@ -85,7 +85,7 @@ describe("curl installer", () => {
     const result = await runInstaller(fixture, { YCODING_VERSION: "" })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain("Installed ycoding 0.1.1")
+    expect(result.stdout).toContain("Installed ycoding 0.1.2")
   })
 
   test("prints a manual fallback for unsupported shells without creating a profile", async () => {
@@ -140,9 +140,9 @@ async function setup(platform: { system: string; machine: string } = { system: "
   const tmp = path.join(root, "tmp")
   await Promise.all([mkdir(home), mkdir(fixture), mkdir(bin), mkdir(tmp)])
   await writeFile(path.join(home, ".zshrc"), "# existing profile\n")
-  await writeFile(path.join(fixture, "ycoding"), "#!/bin/sh\necho ycoding 0.1.1\n")
+  await writeFile(path.join(fixture, "ycoding"), "#!/bin/sh\necho ycoding 0.1.2\n")
   await chmod(path.join(fixture, "ycoding"), 0o755)
-  const asset = "ycoding-0.1.1-darwin-arm64.tar.gz"
+  const asset = "ycoding-0.1.2-darwin-arm64.tar.gz"
   const archive = path.join(fixture, asset)
   const tar = Bun.spawnSync(["tar", "-C", fixture, "-czf", archive, "ycoding"])
   expect(tar.exitCode).toBe(0)
@@ -174,11 +174,11 @@ done
 [ "$proto" = true ] && [ "$proto_redir" = true ] || exit 45
 case "$url" in
   https://github.com/Althenia/ycoding/releases/latest)
-    printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v0.1.1' ;;
-  https://github.com/Althenia/ycoding/releases/download/v0.1.1/ycoding-0.1.1-checksums.txt)
+    printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v0.1.2' ;;
+  https://github.com/Althenia/ycoding/releases/download/v0.1.2/ycoding-0.1.2-checksums.txt)
     cp "$FIXTURE/checksums" "$output" ;;
-  https://github.com/Althenia/ycoding/releases/download/v0.1.1/ycoding-0.1.1-darwin-arm64.tar.gz)
-    cp "$FIXTURE/ycoding-0.1.1-darwin-arm64.tar.gz" "$output" ;;
+  https://github.com/Althenia/ycoding/releases/download/v0.1.2/ycoding-0.1.2-darwin-arm64.tar.gz)
+    cp "$FIXTURE/ycoding-0.1.2-darwin-arm64.tar.gz" "$output" ;;
   *)
     printf 'unexpected URL: %s\\n' "$url" >&2
     exit 42 ;;
@@ -199,7 +199,7 @@ async function runInstaller(
       PATH: fixture.path,
       TMPDIR: fixture.tmp,
       FIXTURE: fixture.fixture,
-      YCODING_VERSION: "0.1.1",
+      YCODING_VERSION: "0.1.2",
       ...environment,
     },
     stdout: "pipe",

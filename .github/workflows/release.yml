@@ -1,20 +1,20 @@
-name: release 0.1.1
+name: release 0.1.2
 
 on:
   push:
     tags:
-      - v0.1.1
+      - v0.1.2
   workflow_dispatch:
 
 concurrency:
-  group: release-0.1.1
+  group: release-0.1.2
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 env:
-  YCODING_VERSION: 0.1.1
+  YCODING_VERSION: 0.1.2
   YCODING_CHANNEL: latest
 
 jobs:
@@ -137,19 +137,19 @@ jobs:
           test -x unpacked/ycoding-darwin-arm64/ycoding
           test -x unpacked/ycoding-darwin-x64/ycoding
           test -x unpacked/ycoding-linux-x64/ycoding
-          tar -C unpacked/ycoding-darwin-arm64 -czf release/ycoding-0.1.1-darwin-arm64.tar.gz ycoding
-          tar -C unpacked/ycoding-darwin-x64 -czf release/ycoding-0.1.1-darwin-x64.tar.gz ycoding
-          tar -C unpacked/ycoding-linux-x64 -czf release/ycoding-0.1.1-linux-x64.tar.gz ycoding
-          (cd unpacked/ycoding-windows-x64 && zip ../../release/ycoding-0.1.1-windows-x64.zip ycoding.exe)
-          tar -tzvf release/ycoding-0.1.1-darwin-arm64.tar.gz | grep -q '^-rwx'
-          tar -tzvf release/ycoding-0.1.1-darwin-x64.tar.gz | grep -q '^-rwx'
-          tar -tzvf release/ycoding-0.1.1-linux-x64.tar.gz | grep -q '^-rwx'
-          (cd release && sha256sum ycoding-0.1.1-*.tar.gz ycoding-0.1.1-*.zip > ycoding-0.1.1-checksums.txt)
+          tar -C unpacked/ycoding-darwin-arm64 -czf release/ycoding-0.1.2-darwin-arm64.tar.gz ycoding
+          tar -C unpacked/ycoding-darwin-x64 -czf release/ycoding-0.1.2-darwin-x64.tar.gz ycoding
+          tar -C unpacked/ycoding-linux-x64 -czf release/ycoding-0.1.2-linux-x64.tar.gz ycoding
+          (cd unpacked/ycoding-windows-x64 && zip ../../release/ycoding-0.1.2-windows-x64.zip ycoding.exe)
+          tar -tzvf release/ycoding-0.1.2-darwin-arm64.tar.gz | grep -q '^-rwx'
+          tar -tzvf release/ycoding-0.1.2-darwin-x64.tar.gz | grep -q '^-rwx'
+          tar -tzvf release/ycoding-0.1.2-linux-x64.tar.gz | grep -q '^-rwx'
+          (cd release && sha256sum ycoding-0.1.2-*.tar.gz ycoding-0.1.2-*.zip > ycoding-0.1.2-checksums.txt)
 
       - name: Upload prepared release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-assets-0.1.1
+          name: release-assets-0.1.2
           path: release/
           if-no-files-found: error
           retention-days: 7
@@ -157,7 +157,7 @@ jobs:
   release:
     name: publish release
     needs: package
-    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.1'
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.2'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -166,7 +166,7 @@ jobs:
       - name: Download prepared release assets
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: release-assets-0.1.1
+          name: release-assets-0.1.2
           path: release
 
       - name: Create GitHub release
@@ -175,8 +175,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh release view v0.1.1 >/dev/null 2>&1 && {
-            echo "Release v0.1.1 already exists"
+          gh release view v0.1.2 >/dev/null 2>&1 && {
+            echo "Release v0.1.2 already exists"
             exit 1
           }
-          gh release create v0.1.1 release/* --verify-tag --generate-notes --title "YCoding 0.1.1"
+          version=0.1.2
+          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != "v0.1.2") | .tagName] | first // empty')"
+          range="${prev:+$prev...}v0.1.2"
+          {
+            echo "## What's Changed in YCoding 0.1.2"
+            echo ""
+            sed -n '/^## \[0\.1\.2\]/,/^---$/p' CHANGELOG.md | sed '/^## \[0\.1\.2\]/d; /^---$/d; /^## \[Unreleased\]/d; /./!d' | sed 's/^+/-/'
+            echo ""
+            echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
+          } > release-notes.md
+          gh release create v0.1.2 release/* --verify-tag --title "YCoding 0.1.2" --notes-file release-notes.md

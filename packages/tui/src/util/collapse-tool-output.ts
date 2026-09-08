@@ -1,6 +1,20 @@
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+function takeGraphemes(value: string, count: number): string {
+  const selected: string[] = []
+  let taken = 0
+  for (const item of graphemes.segment(value)) {
+    if (taken >= count) break
+    selected.push(item.segment)
+    taken += 1
+  }
+  return selected.join("")
+}
+
 export function collapseToolOutput(output: string, maxLines: number, maxChars: number) {
+  const segments = Array.from(output, (item) => item)
   const lines = output.split("\n")
-  if (lines.length <= maxLines && Array.from(output).length <= maxChars) {
+  if (lines.length <= maxLines && segments.length <= maxChars) {
     return { output, overflow: false }
   }
 
@@ -9,10 +23,7 @@ export function collapseToolOutput(output: string, maxLines: number, maxChars: n
   const preview = visible.join("\n")
   if (Array.from(preview).length > maxChars) {
     return {
-      output:
-        Array.from(preview)
-          .slice(0, Math.max(0, maxChars - 1))
-          .join("") + "…",
+      output: takeGraphemes(preview, Math.max(0, maxChars - 1)) + "…",
       overflow: true,
     }
   }
