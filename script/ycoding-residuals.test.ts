@@ -6,7 +6,7 @@ describe("YCoding brand residual scanner", () => {
     const findings = scanBrandResiduals([
       { path: "packages/tui/src/app.tsx", content: 'const title = "OpenCode TUI"' },
       {
-        path: "docs/upstream-differences.md",
+        path: "patches/example.patch",
         content: "Upstream: https://github.com/anomalyco/opencode",
       },
       {

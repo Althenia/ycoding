@@ -23,7 +23,7 @@ This exception does not permit old product branding in YCoding-owned CLI help, T
 
 ## Upstream attribution
 
-Historical origin and comparison links belong only in [`upstream-differences.md`](./upstream-differences.md) or in patch/vendor provenance that must identify its source. They are not product identity.
+Patch/vendor provenance must retain source attribution where required. Those references are not product identity.
 
 ## Compatibility policy
 

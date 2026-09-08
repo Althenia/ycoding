@@ -478,10 +478,15 @@ test("collapses file edit results into a summary block that expands to the diff 
     expect(screen.frame()).not.toContain("Old cache note")
     expect(screen.frame()).not.toContain("Current cache note")
 
-    const headerRow = screen.lines().findIndex((line) => line.includes("Edited 3 files"))
-    await screen.mouse.click(12, headerRow)
+    const fileRow = screen.lines().findIndex((line) => line.includes("docs/runtime.md"))
+    await screen.mouse.click(12, fileRow)
     const deadline = Date.now() + 2_000
-    while (Date.now() < deadline && !screen.frame().includes("+ Current cache note")) await Bun.sleep(20)
+    while (Date.now() < deadline && !screen.frame().includes("+ Current cache note")) {
+      const scroll = screen.scrollbox()
+      scroll?.scrollTo(scroll.scrollHeight)
+      await Bun.sleep(20)
+    }
+    if (!screen.frame().includes("+ Current cache note")) throw new Error("file diff did not expand")
 
     const expanded = transcriptLines(screen.lines())
     const removed = expanded.find((line) => line.includes("- Old cache note")) ?? ""

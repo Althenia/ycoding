@@ -24,7 +24,7 @@ describe("active session screen", () => {
     const screen = await renderScreen({
       ...DESIGN_VIEWPORT,
       args: { sessionID },
-      settle: "Claude Opus 5",
+      settle: "Two places record it.",
       route: (url) => {
         if (url.pathname === "/api/fs/list") return json({ location, data: [] })
         if (url.pathname === "/api/location") return json(location)
@@ -34,22 +34,24 @@ describe("active session screen", () => {
           return json({
             data: [
               {
-                id: "msg_assistant",
-                type: "assistant",
-                agent: "build",
-                model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" },
-                content: [{ type: "text", text: "Two places record it." }],
-                time: { created: 2, completed: 3 },
-              },
-              {
                 id: "msg_user",
                 type: "user",
                 text: "Where is provider cache telemetry recorded?",
                 time: { created: 1 },
               },
+              {
+                id: "msg_assistant",
+                type: "assistant",
+                agent: "build",
+                model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" },
+                content: [{ type: "text", text: "Two places record it." }],
+                finish: "stop",
+                time: { created: 2, completed: 3 },
+              },
             ],
             cursor: {},
           })
+        if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/permission`) return json({ data: [] })
         if (url.pathname === `/api/session/${sessionID}/subagent`) return json({ data: [] })
@@ -153,6 +155,7 @@ describe("active session screen", () => {
         return undefined
       },
     })
+    for (let attempt = 0; attempt < 100 && !screen.frame().includes("main"); attempt++) await Bun.sleep(20)
     const frame = screen.frame()
     const userLine = screen.lines().find((line) => line.includes("Where is provider cache telemetry recorded?"))
     const assistantLine = screen.lines().findIndex((line) => line.includes("Two places record it."))
@@ -160,7 +163,7 @@ describe("active session screen", () => {
     const userLineIndex = screen.lines().findIndex((line) => line.includes("Where is provider cache telemetry recorded?"))
     const sessionHeader = screen.lines().find((line) => line.includes("SESSION"))
     const composerFooter = screen.lines().findLast((line) => line.includes("commands"))
-    const headerRow = screen.lines().findIndex((line) => line.includes("y. ycoding") && line.includes("main"))
+    const headerRow = screen.lines().findIndex((line) => line.includes("▌▐") && line.includes("main"))
 
     expect(frame).toContain("~/Workspace/Personal/YCoding")
     expect(frame).toContain("main")
@@ -183,14 +186,14 @@ describe("active session screen", () => {
     expect(assistantIdentityLine).toBeLessThan(assistantLine)
     expect(userLine).not.toContain("┃")
     expect(sessionHeader).not.toContain("Provider cache audit")
-    // Spend is now a SPEND subgroup with per-model rows and a total, not a single `Spent` row.
-    for (const label of ["Input", "Output", "Used", "SPEND", "Total", "CACHE", "Hit ratio", "Reads", "Writes"])
+    // CONTEXT distinguishes provider identity from model ID before the aggregate spend/cache sections.
+    for (const label of ["CONTEXT", "Provider", "Model", "Context", "Cache", "SPEND", "Total", "CACHE", "Reads", "Writes"])
       expect(frame).toContain(label)
     expect(frame).not.toContain("Prefix")
     expect(frame).not.toContain("prefix stable")
     expect(frame).not.toContain("GUARDRAIL")
     expect(frame).not.toContain("LSP")
-    expect(frame).not.toContain("AUTONOMY")
+    expect(frame).toContain("AUTONOMY")
     expect(frame).not.toContain("SUBAGENTS")
 
     await screen.dispose()

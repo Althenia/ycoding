@@ -4,6 +4,11 @@ import { descriptor, go, header, logo, terminal, wordmark } from "../src/logo"
 
 const root = path.resolve(import.meta.dirname, "..")
 
+test("omits internal runtime generation labels from user-facing errors", async () => {
+  expect(await Bun.file(path.join(root, "src/plugin/context.tsx")).text()).not.toContain("Invalid V2 TUI plugin")
+  expect(await Bun.file(path.join(root, "src/routes/session/index.tsx")).text()).not.toContain("for V2 sessions")
+})
+
 test("uses the YCoding wordmark and compact YC mark", () => {
   expect(logo).toEqual({
     left: ["     ", "█   █", "▀█ █▀", "  █  "],

@@ -126,14 +126,46 @@ const compactedTranscript = [
     time: { created: 3 },
   },
 ] as SessionMessageInfo[]
-function routeFor(messages: SessionMessageInfo[]) {
+const afterCompactionTranscript = [
+  ...compactedTranscript,
+  {
+    id: "msg_assistant_after_compaction",
+    type: "assistant",
+    agent: "build",
+    model,
+    content: [
+      {
+        type: "tool",
+        id: "call_edit_after_compaction",
+        name: "edit",
+        state: {
+          status: "completed",
+          input: { path: "src/parent.ts" },
+          content: [],
+          structured: { files: [{ file: "src/parent.ts", patch: parentPatch, additions: 1, deletions: 1 }] },
+        },
+        time: { created: 4, ran: 4, completed: 5 },
+      },
+    ],
+    finish: "stop",
+    time: { created: 4, completed: 5 },
+  },
+] as SessionMessageInfo[]
+function routeFor(
+  messages: SessionMessageInfo[],
+  options: { fileChanges?: typeof sixPathFiles; fileChangeFailure?: boolean; onFileChange?: () => void } = {},
+) {
   return (url: URL) => {
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
     if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
-    if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: sixPathFiles })
+    if (url.pathname === `/api/session/${sessionID}/file-change`) {
+      options.onFileChange?.()
+      if (options.fileChangeFailure) return json({ message: "file changes unavailable" }, { status: 500 })
+      return json({ data: options.fileChanges ?? sixPathFiles })
+    }
     if (url.pathname === "/api/session/ses_child/message") return json({ data: childTranscript, cursor: {} })
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: [] })
@@ -187,6 +219,15 @@ async function waitForFrame(frame: () => string, text: string) {
   throw new Error(`screen did not settle on ${text}`)
 }
 
+async function waitFor(condition: () => boolean, label: string) {
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    if (condition()) return
+    await Bun.sleep(20)
+  }
+  throw new Error(`screen did not settle on ${label}`)
+}
+
 test("merges repeated edits to the same file into one row", async () => {
   const screen = await renderScreen({ ...DESIGN_VIEWPORT, args: { sessionID }, route: routeFor(aggregateTranscript), settle: "src/parent.ts" })
   try {
@@ -221,8 +262,66 @@ test("renders durable captured changes after transcript compaction", async () =>
   try {
     await waitForFrame(screen.frame, "Captured changes 6 files")
     expect(screen.frame()).toContain("Captured changes 6 files")
+    const header = screen.lines().findIndex((line) => line.includes("Captured changes 6 files"))
+    await screen.mouse.click(12, header)
+    await waitForFrame(screen.frame, sixPathFiles.at(-1)!.path)
     expect(sixPathFiles.every((file) => screen.lines().some((line) => line.includes(file.path)))).toBe(true)
     expect(screen.lines().filter((line) => sixPathFiles.some((file) => line.includes(file.path)))).toHaveLength(6)
+    const firstFile = screen.lines().findIndex((line) => line.includes(sixPathFiles[0]!.path))
+    await screen.mouse.click(12, firstFile)
+    await waitForFrame(screen.frame, "export const value = 'new'")
+    expect(screen.frame()).toContain("export const value = 'new'")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps the durable recovery empty when compaction recorded no changes", async () => {
+  let fileChangeRequested = false
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(compactedTranscript, { fileChanges: [], onFileChange: () => (fileChangeRequested = true) }),
+    settle: "File change summary",
+  })
+  try {
+    await waitFor(() => fileChangeRequested, "file changes")
+    expect(screen.frame()).not.toContain("Captured changes")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps the transcript usable when durable compaction recovery fails", async () => {
+  let fileChangeRequested = false
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(compactedTranscript, { fileChangeFailure: true, onFileChange: () => (fileChangeRequested = true) }),
+    settle: "File change summary",
+  })
+  try {
+    await waitFor(() => fileChangeRequested, "file changes")
+    expect(screen.frame()).not.toContain("Captured changes")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
+test("keeps post-compaction assistant summaries transcript-scoped", async () => {
+  let fileChangeRequested = false
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(afterCompactionTranscript, { onFileChange: () => (fileChangeRequested = true) }),
+    settle: "Captured changes 1 file",
+  })
+  try {
+    await waitForFrame(screen.frame, "Captured changes 1 file")
+    expect(screen.frame()).toContain("Captured changes 1 file")
+    expect(screen.frame()).not.toContain("Captured changes 6 files")
+    expect(screen.frame()).not.toContain("src/child.ts")
+    expect(fileChangeRequested).toBe(false)
   } finally {
     await screen.dispose()
   }

@@ -435,7 +435,7 @@ YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
 
 Implemented: local selective compaction is runtime-owned rather than a model tool. At configured `consider` pressure, the context hook durably admits and starts or joins one process-global background worker without waiting for settlement. It admits once more only if the same pressure cycle rises to `advised`, and rearms after returning to `normal`; failed admission remains retryable, while successful or deduplicated admission latches. `mandatory` never starts this soft path. Explicit `/compact` and the mandatory hard-limit gate remain synchronous settlement paths, and all three paths share one per-Session admission gate. Before creating helper state, the owner resolves its configured `efficiency.helper_models.compaction.main` or `.subagent` model. Each job reuses a deterministic taskless child Session with that model and the hidden built-in `compaction` agent, which remains `mode: primary`. The worker validates a bounded canonical TOON checkpoint containing objective, requirements, acceptance criteria, progress, pending work, decisions, blockers, skills, and a bounded fact capsule for every covered source item. Helper timeout or failure uses the local canonical fallback. Required semantic evidence that cannot fit fails closed; arbitrary covered bytes are not guaranteed to survive lossy compression. Activation creates a new immutable context revision without deleting canonical messages or transcript events.
 
-Historical V1 summary events remain decode and migration input only. No active `conversation_summarize` source or tool remains; custom tools must not depend on destructive summary replacement.
+Historical summary events remain decode and migration input only. No active `conversation_summarize` source or tool remains; custom tools must not depend on destructive summary replacement.
 
 Custom tools must be supplied through:
 
@@ -557,10 +557,10 @@ When adding a resource:
 
 The following inherited patterns are not current YCoding resource contracts:
 
-- legacy upstream configuration directories and filenames listed in [`ycoding-migration.md`](./ycoding-migration.md);
+- configuration namespaces belonging to other products;
 - project `.ycoding/tui.json`;
 - global `tui.json` or `kv.json`;
 - `.ycoding/tool/**` arbitrary tool loading;
 - `.ycoding/hooks/**` or top-level `hooks` configuration;
-- V1 plugin exports;
-- historical upstream schema or documentation URLs as YCoding authority.
+- removed legacy plugin exports;
+- other products' schema or documentation URLs as YCoding authority.

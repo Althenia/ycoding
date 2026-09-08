@@ -8,7 +8,7 @@ const viewports = [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE] as const
 const chrome = [15, 17, 21, 255] satisfies [number, number, number, number]
 const railSection = [37, 42, 51, 255] satisfies [number, number, number, number]
 const border = [59, 66, 77, 255] satisfies [number, number, number, number]
-const accent = [103, 215, 170, 255] satisfies [number, number, number, number]
+const accent = [103, 215, 164, 255] satisfies [number, number, number, number]
 const subdued = [152, 162, 179, 255] satisfies [number, number, number, number]
 
 const directory = "/tmp/ycoding/screen-colour-probe"
@@ -102,14 +102,14 @@ describe("screen chrome colour probes", () => {
     for (const viewport of viewports) {
       const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Claude Opus 5" })
       try {
-        await waitFor(screen, "Enter send")
+        await waitFor(screen, "Message YCoding…")
         const headerBand = screen.spans().lines[1]?.spans ?? []
         const footerBand = screen.spans().lines[viewport.height - 2]?.spans ?? []
         expect(headerBand).not.toHaveLength(0)
         expect(headerBand.every((span) => span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
         expect(footerBand).not.toHaveLength(0)
         expect(footerBand.every((span) => span.bg.toInts().every((value, index) => value === chrome[index]))).toBe(true)
-        expect(screen.colorOf("y. ycoding")).toEqual(accent)
+        expect(screen.colorOf("▌▐")).toEqual(accent)
         expect(screen.colorOf("ready")).toEqual(subdued)
         expect(screen.colorOf("subagents 0")).toEqual(subdued)
       } finally {

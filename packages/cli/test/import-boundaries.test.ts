@@ -84,7 +84,7 @@ describe("CLI frontend import boundaries", () => {
     expect(
       graph.filter((file) => {
         const match = /^packages\/([^/]+)\//.exec(file)
-        return match ? !retained.has(match[1]!) : false
+        return match ? !retained.has(match[1]) : false
       }),
     ).toEqual([])
     expect(
@@ -94,6 +94,9 @@ describe("CLI frontend import boundaries", () => {
           file !== "packages/cli/src/commands/handlers/tui.ts" &&
           file !== "packages/cli/src/commands/handlers/tui-serve.ts" &&
           file !== "packages/cli/src/commands/handlers/tui-shared.ts" &&
+          file !== "packages/cli/src/commands/handlers/run.ts" &&
+          file !== "packages/cli/src/commands/handlers/run-shared.ts" &&
+          file !== "packages/cli/src/commands/handlers/update.ts" &&
           file !== "packages/cli/src/commands/handlers/serve-shared.ts",
       ),
     ).toEqual([])

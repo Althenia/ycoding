@@ -271,7 +271,8 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     expectSafe(ordinaryExpanded)
 
     const expandedOrdinaryRow = screen.lines().findIndex((line) => line.includes("project_search"))
-    await screen.mouse.click(4, expandedOrdinaryRow)
+    // A repeated click on the same cell selects a word instead of toggling the tool row.
+    await screen.mouse.click(8, expandedOrdinaryRow)
     await waitForMissing(screen.frame, "query: cache telemetry")
     const collapsedErrorRow = screen.lines().findIndex((line) => line.includes("http_request"))
     await screen.mouse.click(4, collapsedErrorRow)

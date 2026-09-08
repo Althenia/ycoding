@@ -90,6 +90,7 @@ const route: FetchHandler = (url) => {
           time: { created: now - 60_000, updated: now },
         },
       ],
+      summary: { total: 2, active: 2, running: 1, waiting: 1 },
     })
   if (url.pathname === `/api/session/${sessionID}/skills`)
     return json({
@@ -173,7 +174,13 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
     })
     try {
       for (let attempt = 0; attempt < 100; attempt++) {
-        if (screen.frame().includes("Message YCoding…") && screen.frame().includes("subagents 2")) break
+        if (
+          screen.frame().includes("Message YCoding…") &&
+          screen.frame().includes("subagents 2") &&
+          screen.frame().includes("shells 3") &&
+          screen.frame().includes("All rail sections expanded. The rail scrolls independently of the transcript.")
+        )
+          break
         await Bun.sleep(20)
       }
       const lines = screen.frame().split("\n").slice(0, viewport.height)
@@ -191,7 +198,7 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         expect(lines.findIndex((line) => line.includes("Message YCoding…"))).toBe(61)
         // The session composer renders no hint row by explicit user instruction.
         expect(lines.some((line) => line.includes("Enter send"))).toBe(false)
-        expect(screen.colorOf("─")).toEqual([103, 215, 170, 255])
+        expect(screen.colorOf("─")).toEqual([103, 215, 164, 255])
         // Verify rail section order: SESSION, GOAL, AUTONOMY, CONTEXT, SUBAGENTS, SHELLS
         const rail = lines.join("\n")
         const sectionHeaders = ["SESSION", "GOAL", "AUTONOMY", "CONTEXT", "SUBAGENTS", "SHELLS"]
@@ -199,7 +206,9 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         expect(indexes.every((index) => index >= 0)).toBe(true)
         expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
         expect(rail).not.toContain("3 / 5")
-        expect(rail).toContain("manual")
+        // GOAL and AUTONOMY remain collapsed by default; their headers retain active-state summaries.
+        expect(rail).toMatch(/\+\s+GOAL\s+active/)
+        expect(rail).toMatch(/\+\s+AUTONOMY\s+Goal/)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

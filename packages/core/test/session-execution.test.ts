@@ -293,6 +293,40 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("uses only the newest assistant question for goal continuations", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_goal_latest_question")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+
+      let drains = 0
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () =>
+        Effect.gen(function* () {
+          drains += 1
+          const text = drains === 1 ? "Which database should I use?" : "The database is selected."
+          yield* recordAssistant(database, sessionID, drains, [{ type: "text", text }])
+          if (drains === 3) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
+        }),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(drains).toBe(3)
+      const continuations = yield* admittedInputTexts(database)
+      expect(continuations).toHaveLength(2)
+      expect(continuations[0]).toContain("The assistant is waiting for user input.")
+      expect(continuations[0]).toContain("Which database should I use?")
+      expect(continuations[1]).not.toContain("The assistant is waiting for user input.")
+      expect(continuations[1]).not.toContain("Which database should I use?")
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("does not spin a parent goal while its background shell is still running", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -605,6 +639,22 @@ function admittedInputs(database: Database.Service["Service"]) {
             inputID: row.data.inputID,
             delivery: (row.data.input as { delivery?: string } | undefined)?.delivery,
           })),
+      ),
+    )
+}
+
+function admittedInputTexts(database: Database.Service["Service"]) {
+  return database.db
+    .select({ type: EventTable.type, data: EventTable.data })
+    .from(EventTable)
+    .all()
+    .pipe(
+      Effect.orDie,
+      Effect.map((rows) =>
+        rows
+          .filter((row) => row.type.startsWith("session.input.admitted"))
+          .map((row) => (row.data.input as { data?: { text?: unknown } } | undefined)?.data?.text)
+          .filter((text): text is string => typeof text === "string"),
       ),
     )
 }

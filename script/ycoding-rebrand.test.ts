@@ -27,7 +27,7 @@ describe("YCoding rebrand policy", () => {
   test("preserves explicit upstream attribution and genuine external OpenCode provider identity", () => {
     expect(
       rewriteBrandText(
-        "docs/upstream-differences.md",
+        "patches/example.patch",
         "Upstream source: https://github.com/anomalyco/opencode and https://opencode.ai/docs",
       ),
     ).toBe("Upstream source: https://github.com/anomalyco/opencode and https://opencode.ai/docs")
@@ -44,17 +44,12 @@ describe("YCoding rebrand policy", () => {
 
   test("classifies active, upstream, compatibility, and external references", () => {
     expect(classifyLegacyReference("packages/tui/src/app.tsx", "OpenCode TUI")).toBe("replace")
-    expect(classifyLegacyReference("docs/upstream-differences.md", "https://github.com/anomalyco/opencode")).toBe(
-      "upstream",
-    )
+    expect(classifyLegacyReference("patches/example.patch", "https://github.com/anomalyco/opencode")).toBe("upstream")
     expect(classifyLegacyReference("docs/ycoding-migration.md", "legacy OPENCODE_CONFIG fallback")).toBe(
       "compatibility",
     )
     expect(
-      classifyLegacyReference(
-        "script/ycoding-rebrand.ts",
-        '.replace(/\\bOPENCODE_([A-Z0-9_]+)\\b/g, "YCODING_$1")',
-      ),
+      classifyLegacyReference("script/ycoding-rebrand.ts", '.replace(/\\bOPENCODE_([A-Z0-9_]+)\\b/g, "YCODING_$1")'),
     ).toBe("compatibility")
     expect(
       classifyLegacyReference("packages/core/src/plugin/provider/opencode.ts", 'Integration.ID.make("opencode")'),

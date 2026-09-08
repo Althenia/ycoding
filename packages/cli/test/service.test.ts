@@ -303,6 +303,7 @@ test("concurrent service processes elect one server without resuming suspended S
       healthy: true,
       version: info.version,
       pid: info.pid,
+      sourceEpoch: expect.stringMatching(/\S/),
     })
     const contender = Bun.spawn(command, { env, stderr: "pipe", stdout: "ignore" })
     try {
@@ -457,7 +458,10 @@ test("port contender recognizes an incumbent registered during the bind race", a
     fetch() {
       requests.count += 1
       if (requests.count === 2) recognizing.resolve()
-      return Response.json({ healthy: true, version: InstallationVersion, pid: process.pid }, { status: 503 })
+      return Response.json(
+        { healthy: true, version: InstallationVersion, pid: process.pid, sourceEpoch: "source_test" },
+        { status: 503 },
+      )
     },
   })
   const registration = path.join(root, "state", "ycoding", "service-local.json")

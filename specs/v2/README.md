@@ -17,7 +17,6 @@ Authority follows the concern:
 | Product direction and maintained behavior                   | [`docs/product-direction.md`](../../docs/product-direction.md) and [`docs/runtime.md`](../../docs/runtime.md) |
 | Package boundaries and dependency direction                 | [`docs/architecture.md`](../../docs/architecture.md)                                                          |
 | Contributor-critical regression guardrails                  | Root [`AGENTS.md`](../../AGENTS.md)                                                                           |
-| Upstream comparison                                         | [`docs/upstream-differences.md`](../../docs/upstream-differences.md)                                          |
 
 Current specifications explain cross-module contracts without copying exact types. Decision records explain why a design was selected. Historical documents describe earlier states and may use obsolete names.
 
@@ -54,4 +53,4 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 - Do not copy generated types into prose. Link to Schema or Protocol and explain the invariant.
 - Mark proposals as proposed until production code and tests exist.
 - Update root `docs/runtime.md` when a specification changes user-visible behavior.
-- Update `docs/upstream-differences.md` when the resulting behavior differs from upstream documentation.
+- Update the relevant maintained product document when behavior changes.

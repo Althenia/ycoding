@@ -2,7 +2,7 @@
 
 This directory is the canonical documentation home for YCoding.
 
-YCoding is a standalone, TUI-only, V2-only product. Current code, tests, Schema, Protocol, and these documents define behavior. Historical upstream material is comparison input only.
+YCoding is a standalone terminal coding agent. Current code, tests, Schema, Protocol, and these documents define behavior.
 
 ## Authority
 
@@ -14,9 +14,8 @@ Use this order when sources disagree:
 4. Terminal implementation in `packages/cli` and `packages/tui`.
 5. Current documentation in `docs` and accepted contracts in `specs/v2`.
 6. Package-level `AGENTS.md` guidance.
-7. Historical upstream documentation or source, only for attribution, migration input, or selective porting.
 
-A plan, deleted package, stale generated file, or upstream page does not override current code.
+A plan, deleted package, or stale generated file does not override current code.
 
 ## Index
 
@@ -31,7 +30,6 @@ A plan, deleted package, stale generated file, or upstream page does not overrid
 | [`repository-resources.md`](./repository-resources.md) | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules. |
 | [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md) | Operator configuration for agent permissions, custom guardrail sources, caps, replies, transient approval reuse, and provider quota sources. |
 | [`ycoding-migration.md`](./ycoding-migration.md)       | Canonical YCoding identifiers and external-provider exceptions.                                        |
-| [`upstream-differences.md`](./upstream-differences.md) | Historical upstream attribution and maintained divergence ledger.                                      |
 | [`../specs/v2/README.md`](../specs/v2/README.md)       | Detailed cross-module contracts and accepted decisions.                                                |
 | [`../AGENTS.md`](../AGENTS.md)                         | Mandatory contributor and coding-agent invariants.                                                     |
 
@@ -39,7 +37,7 @@ A plan, deleted package, stale generated file, or upstream page does not overrid
 
 Use `docs` for maintained product, contributor, and operator behavior. Use `specs/v2` for detailed cross-module contracts and accepted architectural decisions that are difficult to recover from one source file.
 
-Do not maintain a second hosted-documentation package in this repository. Do not add public documentation URLs until a real YCoding documentation endpoint exists.
+The static GitHub Pages site is generated from maintained documents in this directory; it is not a second documentation source or application package. The Pages workflow publishes the site to `https://althenia.github.io/ycoding/` after repository Pages settings are enabled. Build locally with `bun script/build-pages.ts`; output is restricted to `dist/pages`. The build generates `ycoding.schema.json` from the runtime configuration Schema and includes `script/install.sh`.
 
 Temporary implementation plans belong under an explicitly temporary planning directory and must not be cited as current behavior.
 
@@ -55,7 +53,6 @@ Temporary implementation plans belong under an explicitly temporary planning dir
 | Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration | `configuration.md`                                         |
 | Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery | `repository-resources.md`                                  |
 | Product identity, path, environment, or provider exception                         | `ycoding-migration.md`                                     |
-| Historical upstream divergence                                                     | `upstream-differences.md`                                  |
 | Contributor invariant or verification requirement                                  | root or package-level `AGENTS.md`                          |
 
 ## Status language

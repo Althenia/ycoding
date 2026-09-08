@@ -6,7 +6,7 @@ YCoding is a standalone, TUI-only coding agent. This document defines maintained
 
 ## Product identity
 
-YCoding owns its runtime, terminal experience, package names, configuration, storage, protocol, client, plugin API, and release artifact. Historical upstream material is comparison input only.
+YCoding owns its runtime, terminal experience, package names, configuration, storage, protocol, client, plugin API, and release artifact.
 
 The product goal is a dependable, highly customizable coding-agent runtime with durable execution state, explicit orchestration, and provider-efficient model usage.
 
@@ -18,9 +18,9 @@ The terminal application is the sole product and release surface.
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path. Do not restore desktop, browser, console, website, or hosted-application products.
 
-### 2. V2-only architecture
+### 2. Current runtime architecture
 
-YCoding does not carry V1 session, configuration, plugin, client, event, or TUI compatibility paths.
+YCoding does not restore removed session, configuration, plugin, client, event, or TUI compatibility paths.
 
 New changes extend current contracts. Do not restore removed adapters, duplicate legacy event shapes, or add fallback parsing for obsolete configuration without a documented durable-data migration requirement.
 
@@ -70,17 +70,11 @@ Priorities include stable prompt prefixes, provider-specific cache controls, acc
 
 OpenCode Zen and OpenCode Go remain named as such only because they are external provider identities.
 
-### 8. Selective upstream adoption
+### 8. Documentation and distribution
 
-Upstream changes are candidates, not authority.
+The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. The `0.1.0` release workflow builds and smoke-tests native artifacts before publishing; a manual workflow run prepares artifacts without publishing a release.
 
-Before porting a change:
-
-1. Identify the user-visible outcome.
-2. Compare it with current Session, Protocol, Plugin, TUI, Cache, and Artifact contracts.
-3. Port the smallest compatible behavior.
-4. Preserve YCoding tests and invariants.
-5. Record externally visible divergence in `docs/upstream-differences.md`.
+GitHub Pages publishes maintained YCoding documentation, the generated configuration JSON Schema, an example `ycoding.jsonc`, and the shell installer. The site is static documentation, not a separate application package. GitHub Pages must be enabled with GitHub Actions as its source before the public links become available.
 
 ## Compatibility policy
 
@@ -88,7 +82,6 @@ Before porting a change:
 - **Protocol and client:** generated Client output must match the assembled public `HttpApi`.
 - **Plugins:** current contracts only; breaking changes require Schema, API, tests, and documentation updates.
 - **Configuration:** current Schema is authoritative; obsolete keys are not accepted through hidden fallback paths.
-- **Upstream:** best effort only and never allowed to silently override YCoding behavior.
 - **External providers:** preserve provider-owned IDs, URLs, credentials, and names required for interoperability.
 
 ## Definition of complete

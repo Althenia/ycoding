@@ -19,9 +19,24 @@ const helpText = help.stdout.toString()
 const helpError = help.stderr.toString()
 if (help.exitCode !== 0) throw new Error(`TUI help failed (${help.exitCode}): ${helpError || helpText}`)
 if (!helpText.includes("YCoding TUI")) throw new Error("TUI help is missing the product description")
-for (const command of ["api", "auth", "debug", "mcp", "mini", "run", "service"]) {
+for (const command of ["run", "update"]) {
+  if (!new RegExp(`^  ${command}(?:\\s|$)`, "m").test(helpText))
+    throw new Error(`TUI help is missing command: ${command}`)
+}
+for (const command of ["api", "auth", "debug", "mcp", "mini", "service"]) {
   if (new RegExp(`^  ${command}(?:\\s|$)`, "m").test(helpText))
     throw new Error(`TUI help exposes excluded command: ${command}`)
+}
+for (const expected of [
+  { command: "run", text: "Run YCoding with a message", flag: "--model" },
+  { command: "update", text: "Update ycoding to a release", flag: "--version" },
+]) {
+  const result = Bun.spawnSync([binary, expected.command, "--help"], { stdout: "pipe", stderr: "pipe" })
+  const text = result.stdout.toString()
+  if (result.exitCode !== 0)
+    throw new Error(`${expected.command} help failed (${result.exitCode}): ${result.stderr.toString() || text}`)
+  if (!text.includes(expected.text) || !text.includes(expected.flag))
+    throw new Error(`${expected.command} help is missing its description or ${expected.flag}`)
 }
 
 const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {
@@ -40,8 +55,9 @@ const readiness = serverText
   .map((line) => line.trim())
   .find(Boolean)
 if (!readiness) throw new Error(`Hidden server produced no readiness line: ${serverError}`)
-const ready = JSON.parse(readiness) as { url?: unknown }
-if (typeof ready.url !== "string" || !ready.url.startsWith("http://127.0.0.1:"))
+const ready: unknown = JSON.parse(readiness)
+const url = typeof ready === "object" && ready !== null ? Reflect.get(ready, "url") : undefined
+if (typeof url !== "string" || !url.startsWith("http://127.0.0.1:"))
   throw new Error(`Invalid hidden server readiness: ${readiness}`)
 if (exitCode !== 0) throw new Error(`Hidden server exited with ${exitCode}: ${serverError}`)
 

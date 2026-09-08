@@ -23,7 +23,7 @@ import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 
 const viewports = [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE] as const
 const focusedActionFill = [121, 184, 255, 255] satisfies [number, number, number, number]
-const successFeedback = [103, 215, 170, 255] satisfies [number, number, number, number]
+const successFeedback = [103, 215, 164, 255] satisfies [number, number, number, number]
 
 function colorOf(app: Awaited<ReturnType<typeof testRender>>, text: string) {
   return spans(app).find((span) => span.text.includes(text))?.fg.toInts()

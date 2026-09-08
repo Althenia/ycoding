@@ -49,7 +49,7 @@ Before each physical Session-step attempt, the runner derives the exact previous
 
 The runner records the active context revision used to prepare each candidate and samples it again immediately before provider-request ownership. If compaction activated between those boundaries, the runner discards the stale candidate and prepares again. The stale candidate creates no provider-request ledger row and increments no physical-attempt count.
 
-The runtime reloads projected history before durable continuation. It does not delegate V2 orchestration to a legacy in-memory prompt loop.
+The runtime reloads projected history before durable continuation. It does not delegate Session orchestration to a legacy in-memory prompt loop.
 
 ### Helper model traffic
 
@@ -80,7 +80,7 @@ The Step runner estimates the safe input budget `context - compaction.context_sa
 
 Provider-assisted checkpoint generation has one total `compaction.timeout_seconds` budget across all internal helper calls, defaulting to 60 seconds; `0` disables the budget. Expiry or provider failure stops later helper calls and completes through the deterministic local checkpoint path rather than failing the job for the helper outcome. The automatic soft-pressure path does not wait for settlement; explicit manual callers and the mandatory gate do wait, and interruption of either waiter does not cancel the worker. The runner reloads after settlement but may send the rebuilt request above the advisory budget. `compaction.advisory: false` disables only automatic soft-pressure admission, not this gate.
 
-Historical destructive summary replacement is decode-only and migration-only: valid V1 replacement events may establish a revision-zero baseline and historical markers may render. New compaction never creates replacement events or deletes canonical history; no active `conversation_summarize` source or tool remains.
+Historical destructive summary replacement is decode-only and migration-only: valid historical replacement events may establish a revision-zero baseline and historical markers may render. New compaction never creates replacement events or deletes canonical history; no active `conversation_summarize` source or tool remains.
 
 ### Shell resource control
 
@@ -162,6 +162,8 @@ Goal state stores the goal text, status, automatic continuation iteration, consu
 
 While a goal is active, each newly admitted user prompt re-synthesizes the durable goal from that prompt and the current conversation. Exact prompt retries do not re-synthesize the goal; synthetic continuations do not change it.
 
+Each automatic goal continuation reads the latest projected assistant message. If its text asks for user input, the continuation includes that request and instructs the agent to answer on the user's behalf using the goal and safest reasonable default. A newer non-question response clears that context; an older question is not reused.
+
 Terminal goal states are:
 
 - `completed` — the agent explicitly called the goal tool's `complete` action after verification;
@@ -191,6 +193,8 @@ Current behavior:
 `once` is not reusable. A deny or a changed evaluation cannot reuse an `always` approval. The approval set is Location-service/process-memory only, is cleared with the service, and is never durable or global. Descendants share the root-family key.
 
 After a pending-review checkpoint of 500 ms, the TUI emits a root-owned notification titled with the root-family Session ownership and the message **Guardrail approval needed**. The root system notification is blurred-only, uses the `permission` sound, and is suppressed when the review resolves before the checkpoint. Permission approval does not bypass guardrails, and guardrail approval does not widen an agent permission denial.
+
+Permission and guardrail choices keep their labels on fixed terminal rows during keyboard navigation and mouse hover. Selection changes the highlight without moving labels or surrounding content; approval and rejection semantics are unchanged.
 
 Operator configuration is documented in [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md).
 
@@ -314,7 +318,7 @@ The SQLite `session_file_change` ledger is a rebuildable projection. Its dedicat
 
 ### Resident transcript
 
-Implemented: opening or refreshing a Session fetches its complete current projected transcript in one canonical ascending-order request. A resident message changed by live admission or promotion remains protected until a canonical response contains that message, so a stale list response cannot make a newly admitted or just-promoted user row disappear. The TUI hydrates completed compaction lifecycles from their durable projected messages and applies boundary pruning in one reactive publication, so covered rows never become resident between fetch and pruning, including after a TUI or server restart. It releases resident message rows through each completed compaction boundary; a later completed boundary advances the release point. This affects only resident memory and rendering: durable history and the canonical fetch remain complete, and reconnect or navigation reapplies the same boundary pruning. The transcript renders only the latest visible compaction lifecycle or historical marker. A completed latest lifecycle renders a compact metrics panel with cumulative tokens saved plus that compression's removed-token, reduction, item-count, and timestamp values; durable summary prose is not rendered as transcript chat content. Historical V1 summary messages still decode as markers, and migration can derive an initial context baseline from valid historical replacement state, but new selective compaction does not create destructive summary replacement.
+Implemented: opening or refreshing a Session fetches its complete current projected transcript in one canonical ascending-order request. A resident message changed by live admission or promotion remains protected until a canonical response contains that message, so a stale list response cannot make a newly admitted or just-promoted user row disappear. The TUI hydrates completed compaction lifecycles from their durable projected messages and applies boundary pruning in one reactive publication, so covered rows never become resident between fetch and pruning, including after a TUI or server restart. It releases resident message rows through each completed compaction boundary; a later completed boundary advances the release point. This affects only resident memory and rendering: durable history and the canonical fetch remain complete, and reconnect or navigation reapplies the same boundary pruning. The transcript renders only the latest visible compaction lifecycle or historical marker. A completed latest lifecycle renders a compact metrics panel with cumulative tokens saved plus that compression's removed-token, reduction, item-count, and timestamp values; durable summary prose is not rendered as transcript chat content. Historical summary messages still decode as markers, and migration can derive an initial context baseline from valid historical replacement state, but new selective compaction does not create destructive summary replacement.
 
 ### Rendering guarantees
 
@@ -326,7 +330,9 @@ The transcript bottom-follows a completed compaction metrics row at the chronolo
 
 Restored instruction and other notice text renders as Markdown. Active guardrail rows follow the projected transcript, including completed compaction markers, so current activity stays at the transcript tail. Child activity renders in the sidebar and session picker instead of the parent transcript. Todos render exclusively in the sidebar.
 
-The final change summary aggregates only parseable diffs captured by completed `edit` and `patch` tool parts from the parent and completed direct-child transcripts. Completed diffs with the same resolved path aggregate into one collapsed expandable row, preserving first-seen order and summed additions and deletions. It does not represent shell or `write`-tool mutations or every final workspace change.
+The final change summary normally aggregates only parseable diffs captured by completed `edit` and `patch` tool parts from the parent and completed direct-child transcripts. When completed compaction leaves no completed assistant resident, the TUI instead renders a collapsed recovery summary from the durable file-change ledger beside the compaction marker. The recovery ledger is not combined with transcript changes and stops once a completed assistant is resident. Completed diffs with the same resolved path aggregate into one collapsed expandable row, preserving first-seen order and summed additions and deletions. It does not represent shell or `write`-tool mutations or every final workspace change.
+
+Collapsed file-change headings align with their expanded diff text grid. Embedded headingless diffs omit a redundant frame, and patch rows use ASCII `+` and `-` markers for additions and removals.
 
 Timeline selection is preserved by option value rather than list index because new messages can reorder the list.
 
@@ -540,4 +546,4 @@ TUI-visible state must rehydrate from durable or canonical API state after proce
 
 - Session execution placement is process-local; clustering is not implemented.
 - Resident transcript memory excludes canonical message rows through completed compaction boundaries for each open Session.
-- V1 compatibility is intentionally absent.
+- Removed legacy runtime compatibility is intentionally absent.

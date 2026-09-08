@@ -128,6 +128,7 @@ async function route(url: URL) {
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
   if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (tasks.some((task) => url.pathname === `/api/session/${task.sessionID}/message`)) return json({ data: [], cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 2, active: 1, running: 1, waiting: 0 }, cursor: {} })
   if (url.pathname.startsWith("/api/session/") && url.pathname.endsWith("/diagnostics"))

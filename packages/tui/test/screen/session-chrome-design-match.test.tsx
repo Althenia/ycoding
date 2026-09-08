@@ -124,7 +124,7 @@ async function expectChrome(viewport: typeof DESIGN_VIEWPORT) {
     expect(lines[67]).toContain("subagents 0")
     expect(lines.slice(68).join("\n")).not.toContain(directory)
     const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
-    expect(header).toContain("Build · claude-opus-5 · max")
+    expect(header).toContain("Build · anthropic/Claude Opus 5 · max")
     expect(header?.indexOf("ready")).toBe(viewport.width - 3 - "ready".length)
   } finally {
     await screen.dispose()

@@ -65,9 +65,9 @@ test("captures the product blocked-subagent screen at reference dimensions", asy
     expect(rows[18]?.indexOf("?")).toBe(3)
     expect(rows[24]?.indexOf("Should I mark the pre-existing failures as expected, or fix them?")).toBe(6)
     expect(rows[1]).toContain("? awaiting input · 4m02s")
-    expect(rows[61]?.indexOf("Enter answer")).toBe(3)
-    expect(rows[61]?.indexOf("Esc leave blocked")).toBe(18)
-    expect(rows[61]?.indexOf("↑ parent")).toBe(39)
+    expect(rows[62]?.indexOf("Enter answer")).toBe(3)
+    expect(rows[62]).not.toContain("Esc leave blocked")
+    expect(rows[4]?.indexOf("↑ Provider cache audit")).toBe(3)
   }
 }, 60_000)
 
@@ -101,7 +101,8 @@ function route(url: URL) {
       ],
       cursor: {},
     })
-  if (url.pathname === `/api/session/${parentID}/subagent`) return json({ data: siblings })
+  if ([parentID, sessionID].some((id) => url.pathname === `/api/session/${id}/subagent`))
+    return json({ data: siblings, summary: { total: 3, active: 3, running: 2, waiting: 1 }, cursor: {} })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail`) return json({ data: guardrail() })
   if (url.pathname === `/api/session/${sessionID}/diagnostics`) return json({ data: diagnostics() })

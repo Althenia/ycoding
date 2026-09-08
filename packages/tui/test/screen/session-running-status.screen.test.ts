@@ -24,7 +24,7 @@ test("a running session never reports ready", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    settle: "working",
+    settle: "cooking",
     route: (url) => {
       if (url.pathname === "/api/location") return json(location)
       if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -58,7 +58,7 @@ test("a running session never reports ready", async () => {
 
   try {
     const header = screen.lines()[1]
-    expect(header).toContain("working")
+    expect(header).toContain("cooking")
     expect(header).not.toContain("ready")
   } finally {
     await screen.dispose()

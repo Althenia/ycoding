@@ -7,6 +7,8 @@ import { main } from "./main"
 
 const handlers = Runtime.handlers(TuiCommand, {
   $: () => import("./commands/handlers/tui"),
+  run: () => import("./commands/handlers/run"),
+  update: () => import("./commands/handlers/update"),
   serve: () => import("./commands/handlers/tui-serve"),
 })
 main(Runtime.run(TuiCommand, handlers, { version: InstallationVersion }))

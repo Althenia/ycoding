@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { Global } from "@ycoding-ai/core/global"
+import { mkdir, rm } from "node:fs/promises"
 import path from "node:path"
 import { json, type FetchHandler } from "../fixture/tui-client"
 import { captureRoute } from "./capture"
@@ -196,12 +197,15 @@ const sessionRoute: FetchHandler = (url, request) => {
               time: { created: now - 3_600, ran: now - 3_500, completed: now - 3_400 },
             },
           ],
+          finish: "stop",
           time: { created: Date.now() - 4_060 },
         },
         { id: "msg_user", type: "user", text: "Where is provider cache telemetry recorded?", time: { created: 1 } },
       ],
     })
   }
+  if (subagents.some((child) => url.pathname === `/api/session/${child.sessionID}/message`)) return json({ data: [], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`].includes(url.pathname))
     return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ data: guardrails })
@@ -294,10 +298,9 @@ const targets = [
     // difference into a capture crash that freezes the whole board.
     stable: ["SESSION", "CONTEXT", "TODO LIST", "SUBAGENTS", "SHELLS", "MCP"],
     transcript: [
-      ["ok", "Inspect cache telemetry callers", "done"],
+      ["◆", "todowrite", "done"],
+      ["ok", "grep", '"cache_read"', "done"],
       ["!!", "guardrail", "write outside workspace", "needs approval"],
-      ["◦", "subagent", "docs-sync", "running"],
-      ["..", "Fix shared cache accounting", "active"],
     ],
   },
   {
@@ -319,38 +322,50 @@ const targets = [
 test("captures composed routes at reference terminal dimensions", async () => {
   const output = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
   await mkdir(output, { recursive: true })
-
   for (const target of targets) {
-    const lines = await captureRoute({ ...target, height: HEIGHT })
-    expect(lines).toHaveLength(HEIGHT)
-    for (const line of lines) expect(line.length).toBeLessThanOrEqual(target.width)
-    await Bun.write(path.join(output, `${target.name}.txt`), lines.join("\n"))
-    for (const expected of "transcript" in target && target.transcript ? target.transcript : []) {
-      const status = expected.at(-1)
-      if (!status) continue
-      const line = lines.find((line) => expected.slice(0, -1).every((text) => line.slice(0, 143).includes(text)))
-      expect(line?.slice(0, 143)).toContain(status)
-    }
-    if (target.name === "session-189x69") {
-      expectAt(lines, 29, 92, "Where is provider cache telemetry recorded?")
-      expectAt(lines, 16, 3, "YCODING")
-      expectAt(lines, 23, 3, "ok")
-      expectAt(lines, 23, 10, "Inspect cache telemetry callers")
-      expectAt(lines, 26, 3, "ok")
-      expectAt(lines, 26, 10, "grep")
-      expectAt(lines, 26, 15, '"cache_read"')
-      expectAt(lines, 6, 3, "!!")
-      expectAt(lines, 6, 10, "guardrail")
-      expectAt(lines, 6, 20, "· write outside workspace")
-      expectAt(lines, 9, 3, "◦")
-      expectAt(lines, 9, 10, "subagent")
-      expectAt(lines, 9, 19, "docs-sync")
-      expectAt(lines, 12, 3, "..")
-      expectAt(lines, 12, 10, "Fix shared cache accounting")
-      expectAt(lines, 14, 51, "~ compacted · 42 messages → 1.2k tokens")
+    const restoreModelPreference = await selectModelVariant()
+    try {
+      const lines = await captureRoute({ ...target, height: HEIGHT })
+      expect(lines).toHaveLength(HEIGHT)
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(target.width)
+      await Bun.write(path.join(output, `${target.name}.txt`), lines.join("\n"))
+      for (const expected of "transcript" in target && target.transcript ? target.transcript : []) {
+        const status = expected.at(-1)
+        if (!status) continue
+        const line = lines.find((line) => expected.slice(0, -1).every((text) => line.slice(0, 143).includes(text)))
+        expect(line?.slice(0, 143)).toContain(status)
+      }
+      if (target.name === "session-189x69") {
+        expectAt(lines, 23, 92, "Where is provider cache telemetry recorded?")
+        expectAt(lines, 7, 3, "YCODING")
+        expectAt(lines, 18, 3, "ok")
+        expectAt(lines, 18, 10, "grep")
+        expectAt(lines, 18, 15, '"cache_read"')
+        expectAt(lines, 30, 3, "!!")
+        expectAt(lines, 30, 10, "guardrail")
+        expectAt(lines, 30, 20, "· write outside workspace")
+        expectAt(lines, 5, 51, "~ compacted · 42 messages → 1.2k tokens")
+        expect(lines.some((line) => line.includes("TODO LIST"))).toBe(true)
+        expect(lines.some((line) => line.includes("Verify baseline"))).toBe(true)
+        expect(lines.some((line) => line.includes("Fix cache accounting"))).toBe(true)
+        expect(lines.some((line) => line.includes("SUBAGENTS") && line.includes("1/2 running"))).toBe(true)
+      }
+    } finally {
+      await restoreModelPreference()
     }
   }
 }, 120_000)
+
+async function selectModelVariant() {
+  const file = path.join(Global.make().state, "model.json")
+  const previous = Bun.file(file)
+  const content = (await previous.exists()) ? await previous.text() : undefined
+  await Bun.write(file, JSON.stringify({ recent: [], favorite: [], variant: { "anthropic/claude-opus-5": "max" } }))
+  return async () => {
+    if (content === undefined) return rm(file, { force: true })
+    await Bun.write(file, content)
+  }
+}
 
 function expectAt(lines: string[], row: number, column: number, text: string) {
   expect(lines[row - 1]?.slice(column, column + text.length)).toBe(text)

@@ -358,7 +358,7 @@ async function loadPlugin(spec: string, directory: string, packages: PackageReso
   const entrypoint = local ? await resolveLocal(local) : await packages.resolve(spec)
   if (!entrypoint) return
   const mod: { readonly default?: unknown } = await import(entrypoint)
-  if (!isPlugin(mod.default)) throw new Error(`Invalid V2 TUI plugin module: ${spec}`)
+  if (!isPlugin(mod.default)) throw new Error(`Invalid TUI plugin module: ${spec}`)
   return mod.default
 }
 

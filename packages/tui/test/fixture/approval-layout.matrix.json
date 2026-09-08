@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "feature": "Stable permission and guardrail selection layout",
+  "scope": "change",
+  "changed_capabilities": ["approval.selection-layout"],
+  "required_families": ["approval"],
+  "cases": [
+    {
+      "id": "APR-001",
+      "title": "Keyboard and hover selection preserve every label row",
+      "family": "approval",
+      "layer": "widget",
+      "risk": "medium",
+      "variant": "regression",
+      "covers": ["approval.selection-layout"],
+      "preconditions": ["Real Prompt mounted as permission or guardrail at fixed width 50 or 100"],
+      "stimulus": [
+        "Navigate down through wraparound then up",
+        "Hover Allow once then Allow for this session",
+        "Press Enter"
+      ],
+      "oracles": [
+        {
+          "type": "render",
+          "expected": "Title, body, Choose and all option labels keep the same terminal line indices"
+        },
+        { "type": "side_effect", "expected": "Navigation emits no decision; Enter emits exactly always" }
+      ],
+      "negative": ["No label moves when highlight changes", "Hover does not submit"],
+      "determinism": ["Fixed renderer dimensions and theme", "Explicit frame rendering; no provider calls"],
+      "cleanup": ["Destroy renderer in finally"],
+      "platforms": ["macOS in-memory renderer", "Kitty keyboard", "legacy arrows and mouse in neighboring test"]
+    },
+    {
+      "id": "APR-002",
+      "title": "Escape retains rejection behavior after navigation",
+      "family": "approval",
+      "layer": "widget",
+      "risk": "medium",
+      "variant": "cancel",
+      "covers": ["approval.selection-layout"],
+      "preconditions": ["Same mounted Prompt and recorded decisions as APR-001"],
+      "stimulus": ["Press Escape using unambiguous Kitty encoding"],
+      "oracles": [
+        { "type": "side_effect", "expected": "Decision recorder gains exactly reject" },
+        { "type": "render", "expected": "All approval labels remain resident" }
+      ],
+      "negative": ["No additional approval is emitted"],
+      "determinism": ["Fixed input encoding avoids legacy Escape timeout", "Wait for decision observation"],
+      "cleanup": ["Destroy renderer in finally"],
+      "platforms": ["macOS in-memory renderer", "Kitty keyboard"]
+    }
+  ]
+}
