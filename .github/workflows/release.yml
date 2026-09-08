@@ -241,11 +241,13 @@ jobs:
         run: |
           set -euo pipefail
           version="$RELEASE_VERSION"
+          export RELEASE_TAG="v$version"
           gh release view "v$version" >/dev/null 2>&1 && {
             echo "Release v$version already exists"
             exit 1
           }
-          prev="$(gh release list --limit 100 --json tagName --jq --arg tag "v$version" '[.[] | select(.tagName != $tag) | .tagName] | first // empty')"
+          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.RELEASE_TAG) | .tagName] | first // empty' 2>/dev/null || true)"
+          prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"v$version\" and .draft == false) | .tag_name] | first // empty" 2>/dev/null || true)}"
           range="${prev:+$prev...}v$version"
           {
             cat "docs/releases/v$version.md"
