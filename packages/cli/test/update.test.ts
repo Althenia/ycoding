@@ -5,6 +5,7 @@ import path from "node:path"
 import { installRelease, latestRelease, releaseTarget, validVersion } from "../src/update/update"
 
 const temporary: string[] = []
+const fixtureVersion = process.env.YCODING_TEST_VERSION ?? "9.9.9"
 
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
@@ -12,7 +13,7 @@ afterEach(async () => {
 
 describe("release updater", () => {
   test("validates release versions and supported platforms", () => {
-    expect(validVersion("0.1.2")).toBe(true)
+    expect(validVersion(fixtureVersion)).toBe(true)
     expect(validVersion("1.2.3-beta.1")).toBe(true)
     expect(validVersion("01.2.3")).toBe(false)
     expect(validVersion("../../1.2.3")).toBe(false)
@@ -43,7 +44,7 @@ describe("release updater", () => {
     const urls: string[] = []
 
     const result = await installRelease({
-      version: "0.1.2",
+      version: fixtureVersion,
       executable: fixture.executable,
       platform: "darwin",
       arch: "arm64",
@@ -55,10 +56,10 @@ describe("release updater", () => {
       },
     })
 
-    expect(result).toEqual({ version: "0.1.2", asset: "ycoding-0.1.2-darwin-arm64.tar.gz" })
+    expect(result).toEqual({ version: fixtureVersion, asset: `ycoding-${fixtureVersion}-darwin-arm64.tar.gz` })
     expect(urls).toEqual([
-      "https://github.com/Althenia/ycoding/releases/download/v0.1.2/ycoding-0.1.2-checksums.txt",
-      "https://github.com/Althenia/ycoding/releases/download/v0.1.2/ycoding-0.1.2-darwin-arm64.tar.gz",
+      `https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/ycoding-${fixtureVersion}-checksums.txt`,
+      `https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/ycoding-${fixtureVersion}-darwin-arm64.tar.gz`,
     ])
     expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
     expect(await Array.fromAsync(new Bun.Glob(".ycoding-update-*").scan(fixture.root))).toEqual([])
@@ -69,7 +70,7 @@ describe("release updater", () => {
 
     expect(
       await installRelease({
-        version: "0.1.2",
+        version: fixtureVersion,
         executable: fixture.executable,
         platform: "darwin",
         arch: "arm64",
@@ -92,7 +93,7 @@ async function setup() {
   await mkdir(source)
   await writeFile(path.join(source, "ycoding"), "new executable\n")
   await chmod(path.join(source, "ycoding"), 0o755)
-  const asset = "ycoding-0.1.2-darwin-arm64.tar.gz"
+  const asset = `ycoding-${fixtureVersion}-darwin-arm64.tar.gz`
   const archiveFile = path.join(root, asset)
   const tar = Bun.spawnSync(["tar", "-C", source, "-czf", archiveFile, "ycoding"], {
     env: { ...process.env, COPYFILE_DISABLE: "1" },
