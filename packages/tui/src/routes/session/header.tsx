@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, useContext } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
+import type { SessionMessageAssistant } from "@ycoding-ai/client"
 import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
 import { LocalContext } from "../../context/local"
@@ -132,6 +133,21 @@ export function headerStatusLabel(state: SessionHeaderState, width: number, runn
   if (state.type === "provider-error") return "provider error"
   if (runningShells) return `${runningShells} shell${runningShells === 1 ? "" : "s"} running`
   return "ready"
+}
+
+export function sessionRetryHeaderState(
+  assistant: Pick<SessionMessageAssistant, "content" | "retry" | "time"> | undefined,
+  now = Date.now(),
+): SessionHeaderOperationalState | undefined {
+  const retry = assistant?.retry
+  if (!retry || assistant.time.completed !== undefined) return undefined
+  if (retry.at > now) return { type: "retry-scheduled", attempt: retry.attempt, at: retry.at }
+  const hasProgress =
+    assistant.content.length > 0 &&
+    assistant.content.some(
+      (part) => (part.type === "text" && part.text.length > 0) || part.type === "reasoning" || part.type === "tool",
+    )
+  return hasProgress ? undefined : { type: "retrying", attempt: retry.attempt }
 }
 
 export function Header(

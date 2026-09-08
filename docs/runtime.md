@@ -12,6 +12,14 @@ A prompt is durably admitted before execution is scheduled. The durable pending 
 
 Reusing a Session ID adopts the existing session. Reusing a prompt message ID is accepted only for an exact retry with matching session, content, and delivery mode; conflicting reuse fails.
 
+### Archive and unarchive
+
+The session list offers **archive/unarchive** for the selected Session (`ctrl+a` by default). Archive opens a confirmation; cancel returns to the list without changing the Session. Archived entries remain visible with an `Archived` label. Unarchive clears that state. Neither operation changes the last-activity timestamp or deletes history.
+
+Automatic retention deletion is **deferred**, not implemented for v0.1.1. Standalone and managed processes can share one SQLite database, while execution ownership and active-work tracking are process-local. A safe retention policy requires cross-process coordination before it can permanently delete archived families. Archiving does not start a deletion timer.
+
+SQLite can still reclaim pages freed by explicit deletion without deleting additional records; see [automatic SQLite space reclamation](./configuration.md#automatic-sqlite-space-reclamation) for startup conversion and disk-space constraints.
+
 ### Managed attachments
 
 Prompt inputs remain URI-shaped. Admission reads `data:` and local file URIs, normalizes supported images, enforces a 20 MiB byte limit, and imports the resulting bytes into the global content-addressed attachment store. An opaque existing reference is accepted only in the exact form `ycoding-attachment://sha256/<lowercase SHA-256>` and is reverified before admission.
@@ -404,6 +412,8 @@ Provider usage is a read-only Location service separate from Session-local token
 The Session command palette exposes a **Provider Usage** dialog when a provider selected by any Session in the current root family has visible quota data, including idle family members, or when local request diagnostics exist. Aggregate family request data renders under **Usage** as one compact, responsive table with Total and provider/model/variant rows. Columns unavailable for every row are omitted, partially unavailable cells stay blank, and reported zero values remain visible. When aggregate model data is absent, the dialog retains the detailed **This session** and **Subagents** sections. External provider quota windows remain separate, show freshness and stability, preserve Spark and other named lanes, and use stable ten-character ASCII progress bars for reported percentages.
 
 Provider failure rows render the provider's structured error message through the safe display sanitizer. Ordinary text remains visible, while structured or sensitive historical payloads render only an omission label; interrupted steps retain their existing presentation. The Session header renders only the generic `provider error` status and never repeats the detailed provider message.
+
+The header treats retry metadata as live-only: scheduled backoff shows completed failures, the next attempt, and countdown; an in-flight retry animates; terminal assistants never remain labeled retrying. Execution settlement clears transient retry projection without changing usage, cost, cache, or quota reporting.
 
 For GitHub Copilot models with a non-tiered registry cost, each local token bucket—raw input, raw output, cache read, and cache write—adds an AI-credit column calculated from that model's registry rate and the fixed `$0.01`-per-credit conversion. Other providers retain a single token column. No context-length price multiplier is applied: the presentation selects no context-tiered rate. Missing windows, resets, account tiers, and prices remain unreported rather than becoming zero or being inferred.
 

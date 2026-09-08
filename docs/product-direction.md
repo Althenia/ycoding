@@ -72,7 +72,7 @@ OpenCode Zen and OpenCode Go remain named as such only because they are external
 
 ### 8. Documentation and distribution
 
-The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. The `0.1.0` release workflow builds and smoke-tests native artifacts before publishing; a manual workflow run prepares artifacts without publishing a release.
+The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. The `0.1.1` release workflow builds and smoke-tests native artifacts before publishing; a manual workflow run prepares artifacts without publishing a release.
 
 GitHub Pages publishes maintained YCoding documentation, the generated configuration JSON Schema, an example `ycoding.jsonc`, and the shell installer. The site is static documentation, not a separate application package. GitHub Pages must be enabled with GitHub Actions as its source before the public links become available.
 

@@ -933,6 +933,12 @@ When a configured port is occupied, edit the channel-specific service file and c
 
 The matching registration file is stored in the YCoding state directory. It contains the service instance ID, version, URL, PID, and private password. Do not hand-edit a live registration file.
 
+## Automatic SQLite space reclamation
+
+Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. These operations reclaim unused pages; they do not delete records.
+
+The initial conversion requires a write lock and may need temporary free disk space up to twice the database size. It can delay startup. If SQLite cannot obtain the lock within the five-second busy timeout, or the conversion fails, startup fails rather than silently skipping conversion; existing records remain intact and the next start retries. Keep a backup before upgrading a large database and close other writers during the first start.
+
 ## Runtime environment variables
 
 Stable operator-facing variables:

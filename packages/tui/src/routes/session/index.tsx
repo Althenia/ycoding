@@ -127,7 +127,7 @@ import {
 } from "../../util/session-autonomy"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
-import { Header, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
+import { Header, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, inlineDiffGroups, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
 import { parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
@@ -433,22 +433,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   const autoApproved = new Set<string>()
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
-    const lastAssistant = messages().findLast(
-      (item): item is SessionMessageAssistant => item.type === "assistant",
-    ) as SessionMessageAssistant | undefined
-    const retry = lastAssistant?.retry
-    if (retry) {
-      if (retry.at > Date.now()) return { type: "retry-scheduled", attempt: retry.attempt, at: retry.at }
-      const hasProgress =
-        lastAssistant.content.length > 0 &&
-        lastAssistant.content.some(
-          (part) =>
-            (part.type === "text" && part.text.length > 0) ||
-            part.type === "reasoning" ||
-            part.type === "tool",
-        )
-      if (!hasProgress) return { type: "retrying", attempt: retry.attempt }
-    }
+    const lastAssistant = messages().findLast((item): item is SessionMessageAssistant => item.type === "assistant")
+    const retry = sessionRetryHeaderState(lastAssistant)
+    if (retry) return retry
     const parentID = session()?.parentID
     const child = parentID
       ? data.session.subagent.page(parentID)?.data.find((task) => task.sessionID === route.sessionID)

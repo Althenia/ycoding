@@ -11,16 +11,26 @@ test("standalone server exits when its owner is killed", async () => {
       ...process.env,
       YCODING_DB: path.join(directory, "ycoding.db"),
       YCODING_SERVER_USERNAME: "custom",
+      XDG_CACHE_HOME: path.join(directory, "cache"),
+      XDG_CONFIG_HOME: path.join(directory, "config"),
+      XDG_DATA_HOME: path.join(directory, "data"),
+      XDG_STATE_HOME: path.join(directory, "state"),
     },
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
   })
+  const stderr = new Response(owner.stderr).text()
   const line = await Promise.race([readLine(owner.stdout), Bun.sleep(30_000).then(() => undefined)])
   const [rawPID, url, status] = line?.split(" ") ?? []
   const pid = Number(rawPID)
 
   try {
+    if (!line) {
+      owner.kill("SIGKILL")
+      await owner.exited
+      throw new Error(`Standalone owner exited before readiness (${(await stderr).length} stderr characters captured)`)
+    }
     expect(pid).toBeGreaterThan(0)
     expect(url).toStartWith("http://127.0.0.1:")
     expect(status).toBe("200")
@@ -35,7 +45,7 @@ test("standalone server exits when its owner is killed", async () => {
     if (running(pid)) process.kill(pid, "SIGKILL")
     await fs.rm(directory, { recursive: true, force: true })
   }
-})
+}, 30_000)
 
 async function readLine(stream: ReadableStream<Uint8Array>) {
   const reader = stream.getReader()

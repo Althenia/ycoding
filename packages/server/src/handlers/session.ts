@@ -238,6 +238,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.archive",
+        Effect.fn(function* (ctx) {
+          yield* session.archive(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.unarchive",
+        Effect.fn(function* (ctx) {
+          yield* session.unarchive(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "session.subagent.list",
         Effect.fn(function* (ctx) {
           const parsed =

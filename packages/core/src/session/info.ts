@@ -56,6 +56,7 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
     time: {
       created: DateTime.makeUnsafe(row.time_created),
       updated: DateTime.makeUnsafe(row.time_updated),
+      archived: row.time_archived === null ? undefined : DateTime.makeUnsafe(row.time_archived),
     },
   })
 }

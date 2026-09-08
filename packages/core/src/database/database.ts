@@ -35,6 +35,14 @@ const databaseLayer = Layer.effect(
     yield* db.run("PRAGMA foreign_keys = ON")
     yield* db.run("PRAGMA wal_checkpoint(PASSIVE)")
     yield* DatabaseMigration.apply(db)
+    const autoVacuum = yield* db.get<{ auto_vacuum: number }>("PRAGMA auto_vacuum")
+    if (autoVacuum?.auto_vacuum === 0) {
+      // Existing databases need one transactional rebuild to add the pointer map required by
+      // incremental vacuum. Later startups reclaim a bounded number of free pages without rebuilding.
+      yield* db.run("PRAGMA auto_vacuum = INCREMENTAL")
+      yield* db.run("VACUUM")
+    }
+    if (autoVacuum?.auto_vacuum === 2) yield* db.run("PRAGMA incremental_vacuum(256)")
 
     return { db }
   }).pipe(Effect.orDie),

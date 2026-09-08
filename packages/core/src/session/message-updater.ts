@@ -320,6 +320,8 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
       "session.moved": () => Effect.void,
       "session.renamed": () => Effect.void,
       "session.deleted": () => Effect.void,
+      "session.archived": () => Effect.void,
+      "session.unarchived": () => Effect.void,
       "session.forked": () => Effect.void,
       "session.input.promoted": () => Effect.void,
       "session.input.admitted": () => Effect.void,

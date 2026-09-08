@@ -143,6 +143,8 @@ describe("public event manifest", () => {
       [
         "session.created.2",
         "session.deleted.2",
+        "session.archived.2",
+        "session.unarchived.2",
         "session.agent.selected.1",
         "session.model.selected.1",
         "session.project-artifacts-ended.1",

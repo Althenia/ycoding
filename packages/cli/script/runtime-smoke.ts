@@ -533,6 +533,20 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
+    phase = "archive round trip"
+    await client.session.archive({ sessionID: session.id })
+    const archived = await client.session.get({ sessionID: session.id })
+    if (archived.time.archived === undefined || archived.time.updated !== session.time.updated)
+      throw new Error("Archive did not preserve Session activity or record its archive time")
+    await client.session.archive({ sessionID: session.id })
+    if ((await client.session.get({ sessionID: session.id })).time.archived !== archived.time.archived)
+      throw new Error("Repeated archive changed the archive timestamp")
+    await client.session.unarchive({ sessionID: session.id })
+    await client.session.unarchive({ sessionID: session.id })
+    const unarchived = await client.session.get({ sessionID: session.id })
+    if (unarchived.time.archived !== undefined || unarchived.time.updated !== session.time.updated)
+      throw new Error("Unarchive did not clear archive state while preserving Session activity")
+
     phase = "first prompt"
     await client.session.prompt({ sessionID: session.id, text: "First turn" })
     await eventually(async () => ((await client.session.diagnostics({ sessionID: session.id }))?.tokens ? true : undefined))
@@ -805,7 +819,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     }
 
     console.log(
-      `Runtime smoke passed: auth, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`,
+      `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`,
     )
   } catch (error) {
     throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })

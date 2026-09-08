@@ -404,6 +404,36 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.archive", "/api/session/:sessionID/archive", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.archive",
+            summary: "Archive session",
+            description: "Archive a session without deleting its durable history.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.unarchive", "/api/session/:sessionID/archive", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.unarchive",
+            summary: "Unarchive session",
+            description: "Restore an archived session before retention cleanup deletes it.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.subagent.list", "/api/session/:parentID/subagent", {
         params: { parentID: Session.ID },
         query: SessionSubagentListQuery,

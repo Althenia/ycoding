@@ -1,6 +1,14 @@
 # V2 Session Contract
 
-Status: **Current semantic overview.** Protocol owns public operations, Schema owns public shapes and durable events, and Core owns execution and persistence behavior. [CONTEXT.md](../../CONTEXT.md) defines the canonical terms used here.
+Status: **Current semantic overview.** Protocol owns public operations, Schema owns public shapes and durable events, and Core owns execution and persistence behavior. See [runtime behavior](../../docs/runtime.md) for the maintained product overview.
+
+## Archive Is Reversible
+
+`Session.Info.time.archived` is optional and records the latest archive event time. `POST /api/session/:sessionID/archive` archives one existing Session; `DELETE /api/session/:sessionID/archive` unarchives it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`.
+
+State transitions publish version-2 `session.archived` or `session.unarchived` events containing only `{ sessionID }`. The projector sets or clears `time_archived` without changing `time_updated`. Archive does not delete history or remove the Session from the default list. Unarchive clears archive state; it cannot restore a Session already explicitly deleted.
+
+Automatic retention deletion is deferred for v0.1.1 pending cross-process safety. See [archive and unarchive](../../docs/runtime.md#archive-and-unarchive). Archiving does not start a deletion timer.
 
 ## Prompt Admission Precedes Execution
 

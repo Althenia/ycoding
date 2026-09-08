@@ -10,6 +10,7 @@ import {
   Header,
   headerModelLabel,
   pendingModelVariant,
+  sessionRetryHeaderState,
   headerSegments,
   headerStatusLabel,
   type SessionHeaderIdentity,
@@ -68,6 +69,22 @@ describe("header truncation ladder", () => {
 })
 
 describe("header status", () => {
+  test("derives live retry status across the scheduled deadline", () => {
+    const assistant = {
+      content: [],
+      retry: {
+        attempt: 2,
+        at: 2_000,
+        error: { type: "provider.transport" as const, message: "Disconnected" },
+      },
+      time: { created: 0 },
+    }
+    expect(sessionRetryHeaderState(assistant, 1_000)).toEqual({ type: "retry-scheduled", attempt: 2, at: 2_000 })
+    expect(sessionRetryHeaderState(assistant, 2_000)).toEqual({ type: "retrying", attempt: 2 })
+    expect(sessionRetryHeaderState({ ...assistant, time: { created: 0, completed: 500 } }, 1_000)).toBeUndefined()
+    expect(sessionRetryHeaderState(undefined, 1_000)).toBeUndefined()
+  })
+
   const cases: Array<[SessionHeaderState, number, string]> = [
     [{ type: "ready" }, 100, "ready"],
     [{ type: "working", elapsed: 4.14 }, 120, "cooking 4.1s"],
@@ -444,6 +461,29 @@ describe("header rendering", () => {
     expect(spans.find((span) => span.text.includes("retrying · attempt 2"))?.fg.toInts()).toEqual(
       theme.text.feedback.warning.default.toInts(),
     )
+    app.renderer.destroy()
+  })
+
+  test("renders a completed retried assistant as ready instead of currently retrying", async () => {
+    const app = await renderHeader(
+      160,
+      sessionRetryHeaderState(
+        {
+          content: [],
+          retry: {
+            attempt: 2,
+            at: 1_000,
+            error: { type: "provider.transport", message: "Disconnected" },
+          },
+          time: { created: 0, completed: 2_000 },
+        },
+        3_000,
+      ) ?? { type: "ready" },
+    )
+    const frame = app.captureCharFrame()
+
+    expect(frame).toContain("ready")
+    expect(frame).not.toContain("retrying")
     app.renderer.destroy()
   })
 
