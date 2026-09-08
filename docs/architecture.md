@@ -188,7 +188,7 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 
 ## Constraints
 
-- V1 paths are not part of the product.
+- Removed legacy runtime paths are not part of the product.
 - One logical model step has one explicit provider stream call except documented compaction recovery.
 - Session execution ownership remains process-local until clustering is implemented explicitly.
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.

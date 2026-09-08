@@ -16,7 +16,7 @@ import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
 import { renderScreen } from "../screen/harness"
 
 const variants = [
-  { variant: "success", title: "✓ Success", accent: [103, 215, 170, 255], borderAccent: [103, 215, 170, 255] },
+  { variant: "success", title: "✓ Success", accent: [103, 215, 164, 255], borderAccent: [103, 215, 164, 255] },
   { variant: "info", title: "⋯ Info", accent: [121, 184, 255, 255], borderAccent: [121, 184, 255, 255] },
   { variant: "warning", title: "! Warning", accent: [240, 190, 98, 255], borderAccent: [240, 190, 98, 255] },
   { variant: "error", title: "✗ Error", accent: [239, 125, 132, 255], borderAccent: [239, 125, 132, 255] },

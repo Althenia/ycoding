@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { type Renderable } from "@opentui/core"
+import { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { describe, expect, test } from "bun:test"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
@@ -21,6 +21,8 @@ import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "./viewport"
 
 const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+const mint = RGBA.fromHex("#67D7A4").toInts()
+const landingMark = ["██        ██", "██        ██", "██▄▄▄   ▄▄██", "██▀▀▀   ▀▀██", "██        ██", "     ██     "]
 
 const identity = {
   path: "~/Workspace/Personal/YCoding",
@@ -47,20 +49,6 @@ async function render(view: () => JSX.Element, size: { width: number; height: nu
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes(settle))
   return app
-}
-
-type ImageNode = Renderable & {
-  source: string
-  loadPromise: Promise<unknown>
-  image?: unknown
-}
-
-function findImage(node: Renderable): ImageNode | undefined {
-  if ("source" in node && "loadPromise" in node && "image" in node) return node as ImageNode
-  return node
-    .getChildren()
-    .flatMap((child) => findImage(child) ?? [])
-    .at(0)
 }
 
 describe("session footer identity", () => {
@@ -105,19 +93,23 @@ describe("session footer identity", () => {
 describe("header brand version", () => {
   for (const width of [120, DESIGN_VIEWPORT.width, DESIGN_VIEWPORT_WIDE.width]) {
     test(`renders the installation version beside the brand at ${width} columns`, async () => {
-      const app = await render(() => <Header {...identity} state={{ type: "ready" }} />, { width, height: 4 }, `v${InstallationVersion}`)
+      const app = await render(
+        () => <Header {...identity} state={{ type: "ready" }} />,
+        { width, height: 4 },
+        `v${InstallationVersion}`,
+      )
 
       try {
         const line = app.captureCharFrame().split("\n")[1] ?? ""
-        const image = findImage(app.renderer.root)
-        expect(String(image?.source)).toEndWith("ycoding-mark-256.png")
-        expect(image?.width).toBe(6)
-        expect(image?.height).toBe(1)
-        expect(image?.y).toBe(1)
+        expect(line.indexOf("▌▐")).toBe(1)
         expect(line).toContain(`v${InstallationVersion}`)
         expect(line).not.toContain("y. ycoding")
         // The brand plus version must not squeeze the identity run or the status out of the strip.
-        expect(line).toContain(headerSegments({ ...identity, width }).map((segment) => segment.label).join(" · "))
+        expect(line).toContain(
+          headerSegments({ ...identity, width })
+            .map((segment) => segment.label)
+            .join(" · "),
+        )
         const versionLabel = `v${InstallationVersion}`
         const firstSegment = headerSegments({ ...identity, width })[0]!.label
         expect(line.indexOf(firstSegment) - (line.indexOf(versionLabel) + versionLabel.length)).toBe(2)
@@ -128,6 +120,11 @@ describe("header brand version", () => {
           .captureSpans()
           .lines.flatMap((row) => row.spans)
           .find((span) => span.text.includes(`v${InstallationVersion}`))
+        const mark = app
+          .captureSpans()
+          .lines.flatMap((row) => row.spans)
+          .find((span) => span.text.includes("▌▐"))
+        expect(mark?.fg.toInts()).toEqual(mint)
         expect(version?.fg.toInts()).toEqual(theme.text.subdued.toInts())
       } finally {
         app.renderer.destroy()
@@ -137,17 +134,27 @@ describe("header brand version", () => {
 })
 
 describe("landing hero", () => {
-  test("mounts the native brand image and preserves the sized empty fallback", async () => {
-    const app = await render(() => <LandingHero />, { width: 80, height: 24 }, "terminal coding agent")
+  test("renders the canonical text brand mark at its full size", async () => {
+    const app = await render(() => <LandingHero />, { width: 80, height: 24 }, "What should we build?")
 
-    const image = findImage(app.renderer.root)
-    expect(image).toBeDefined()
-    expect(String(image?.source)).toEndWith("ycoding-mark-256.png")
-    image!.source = "/missing-ycoding-mark.png"
-    await app.waitForFrame(() => findImage(app.renderer.root) === undefined)
-    expect(findImage(app.renderer.root)).toBeUndefined()
-    expect(app.captureCharFrame()).not.toContain("█   █")
-    app.renderer.destroy()
+    try {
+      const lines = app.captureCharFrame().split("\n")
+      const first = lines.findIndex((line) => line.includes(landingMark[0]))
+      const left = lines[first]?.indexOf(landingMark[0]) ?? -1
+      expect(first).toBeGreaterThanOrEqual(0)
+      expect(left).toBeGreaterThanOrEqual(0)
+      expect(lines.slice(first, first + landingMark.length).map((line) => line.slice(left, left + 12))).toEqual(
+        landingMark,
+      )
+      const painted = app
+        .captureSpans()
+        .lines.flatMap((line) => line.spans)
+        .filter((span) => /[█▀▄]/.test(span.text))
+      expect(painted.length).toBeGreaterThan(0)
+      expect(painted.every((span) => span.fg.toInts().every((value, index) => value === mint[index]))).toBe(true)
+    } finally {
+      app.renderer.destroy()
+    }
   })
 })
 
@@ -189,9 +196,7 @@ describe("subagent economics band", () => {
       expect(lines[3]).not.toContain("Prefix")
       expect(lines[6]?.trim()).toBe("")
 
-      const rule = app
-        .captureSpans()
-        .lines[0]?.spans.find((span) => span.text.includes("─"))
+      const rule = app.captureSpans().lines[0]?.spans.find((span) => span.text.includes("─"))
       expect(rule?.fg.toInts()).toEqual(theme.border.default.toInts())
     } finally {
       app.renderer.destroy()

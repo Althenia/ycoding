@@ -1047,6 +1047,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
           if (store.session.info[event.data.sessionID])
             setStore("session", "info", event.data.sessionID, "title", event.data.title)
           break
+        case "session.archived":
+        case "session.unarchived":
+          if (store.session.info[event.data.sessionID])
+            setStore(
+              "session",
+              "info",
+              event.data.sessionID,
+              "time",
+              "archived",
+              event.type === "session.archived" ? event.created : undefined,
+            )
+          break
         case "session.moved":
           if (store.session.info[event.data.sessionID]) {
             setStore("session", "info", event.data.sessionID, "location", event.data.location)
@@ -1426,7 +1438,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         case "session.execution.interrupted":
           setSessionActive(event.data.sessionID, "idle")
           message.update(event.data.sessionID, (draft) => {
-            const currentAssistant = message.activeAssistant(draft)
+            const currentAssistant = draft.findLast(
+              (item): item is SessionMessageAssistant => item.type === "assistant",
+            )
             if (currentAssistant) currentAssistant.retry = undefined
           })
           break

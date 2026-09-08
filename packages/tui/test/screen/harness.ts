@@ -62,8 +62,11 @@ export async function renderScreen(input: {
 
   const deadline = Date.now() + 25_000
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    await Bun.sleep(50)
     if (setup.renderer.isDestroyed) break
+    if (!setup.captureCharFrame().includes(input.settle)) continue
+    // Commit pending layout and hit-grid work before callers inspect or click the frame.
+    await setup.renderOnce()
     if (setup.captureCharFrame().includes(input.settle)) break
   }
 

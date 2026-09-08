@@ -1,0 +1,192 @@
+name: release 0.1.2
+
+on:
+  push:
+    tags:
+      - v0.1.2
+  workflow_dispatch:
+
+concurrency:
+  group: release-0.1.2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  YCODING_VERSION: 0.1.2
+  YCODING_CHANNEL: latest
+
+jobs:
+  verify-source:
+    name: verify release source
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag is reachable from main
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Check workspace and types
+        run: |
+          bun run check:ycoding-workspace
+          bun run check:ycoding-brand
+          bun run typecheck
+          bun run lint:effect-patterns
+
+      - name: Verify CLI suites
+        working-directory: packages/cli
+        run: bun test --timeout 30000
+
+      - name: Verify transcript and approval suites
+        working-directory: packages/tui
+        run: bun test test/session-transcript-live-fixes.test.tsx test/cli/tui/permission-interaction.test.tsx test/cli/tui/permission.test.ts test/util/permission.test.ts test/branding.test.ts
+
+      - name: Verify goal continuation
+        working-directory: packages/core
+        run: bun test test/session-execution.test.ts test/session-autonomy.test.ts
+
+      - name: Verify installer and documentation
+        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/pages.test.ts"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: verify-source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-latest
+          - target: darwin-x64
+            runner: macos-15-intel
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: windows-x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+
+      - name: Build TUI artifact
+        run: bun run build:tui
+
+      - name: Validate TUI artifact
+        run: bun run smoke:tui
+
+      - name: Validate runtime artifact
+        run: bun run smoke:runtime
+
+      - name: Verify build metadata
+        run: |
+          set -euo pipefail
+          node -e 'const metadata = require("./dist/tui/tui-${{ matrix.target }}/package.json"); if (metadata.version !== process.env.YCODING_VERSION) process.exit(1)'
+
+      - name: Upload native executable
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ycoding-${{ matrix.target }}
+          path: dist/tui/tui-${{ matrix.target }}/bin/ycoding${{ runner.os == 'Windows' && '.exe' || '' }}
+          if-no-files-found: error
+          retention-days: 7
+
+  package:
+    name: package release assets
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download native executables
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: unpacked
+          pattern: ycoding-*
+
+      - name: Create release archives and checksums
+        run: |
+          set -euo pipefail
+          mkdir release
+          chmod +x unpacked/ycoding-darwin-arm64/ycoding unpacked/ycoding-darwin-x64/ycoding unpacked/ycoding-linux-x64/ycoding
+          test -x unpacked/ycoding-darwin-arm64/ycoding
+          test -x unpacked/ycoding-darwin-x64/ycoding
+          test -x unpacked/ycoding-linux-x64/ycoding
+          tar -C unpacked/ycoding-darwin-arm64 -czf release/ycoding-0.1.2-darwin-arm64.tar.gz ycoding
+          tar -C unpacked/ycoding-darwin-x64 -czf release/ycoding-0.1.2-darwin-x64.tar.gz ycoding
+          tar -C unpacked/ycoding-linux-x64 -czf release/ycoding-0.1.2-linux-x64.tar.gz ycoding
+          (cd unpacked/ycoding-windows-x64 && zip ../../release/ycoding-0.1.2-windows-x64.zip ycoding.exe)
+          tar -tzvf release/ycoding-0.1.2-darwin-arm64.tar.gz | grep -q '^-rwx'
+          tar -tzvf release/ycoding-0.1.2-darwin-x64.tar.gz | grep -q '^-rwx'
+          tar -tzvf release/ycoding-0.1.2-linux-x64.tar.gz | grep -q '^-rwx'
+          (cd release && sha256sum ycoding-0.1.2-*.tar.gz ycoding-0.1.2-*.zip > ycoding-0.1.2-checksums.txt)
+
+      - name: Upload prepared release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets-0.1.2
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: package
+    if: github.event_name == 'push' && github.ref == 'refs/tags/v0.1.2'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download prepared release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets-0.1.2
+          path: release
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release view v0.1.2 >/dev/null 2>&1 && {
+            echo "Release v0.1.2 already exists"
+            exit 1
+          }
+          version=0.1.2
+          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != "v0.1.2") | .tagName] | first // empty')"
+          range="${prev:+$prev...}v0.1.2"
+          {
+            echo "## What's Changed in YCoding 0.1.2"
+            echo ""
+            sed -n '/^## \[0\.1\.2\]/,/^---$/p' CHANGELOG.md | sed '/^## \[0\.1\.2\]/d; /^---$/d; /^## \[Unreleased\]/d; /./!d' | sed 's/^+/-/'
+            echo ""
+            echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
+          } > release-notes.md
+          gh release create v0.1.2 release/* --verify-tag --title "YCoding 0.1.2" --notes-file release-notes.md

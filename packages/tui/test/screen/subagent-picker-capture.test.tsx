@@ -128,7 +128,7 @@ test("renders populated subagents in the parent-session rail", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    settle: "SUBAGENTS",
+    settle: "Should I mark the pre-existing",
     route,
   })
 
@@ -146,7 +146,7 @@ test("keeps the parent header status informational while subagents are active", 
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
     args: { sessionID },
-    settle: "SUBAGENTS",
+    settle: "waiting · 2 subagents",
     route,
   })
 
@@ -270,6 +270,7 @@ function route(url: URL) {
       { id: "msg_assistant", type: "assistant", agent: "ycoding", model: { providerID: "anthropic", id: "claude-opus-5", variant: "max" }, content: [{ type: "text", text: "Dispatched two background subagents. They run independently and report back here." }], time: { created: 2, completed: 3 } },
       { id: "msg_user", type: "user", text: "Dispatch the background subagents.", time: { created: 1 } },
     ], cursor: {} })
+  if (children.some((child) => url.pathname === `/api/session/${child.id}/message`)) return json({ data: [], cursor: {} })
   if ([`/api/session/${sessionID}/pending`, `/api/session/${sessionID}/permission`, `/api/session/${sessionID}/form`, `/api/session/${sessionID}/todo`, `/api/session/${sessionID}/skills`, `/api/session/${sessionID}/guardrail/request`].includes(url.pathname)) return json({ data: [] })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: tasks, summary: { total: 4, active: 2, running: 1, waiting: 1 }, cursor: {} })

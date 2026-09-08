@@ -19,6 +19,7 @@ import selectiveCompactionHarness from "../src/database/migration/20260804120956
 import continuationGenerationFence from "../src/database/migration/20260804123002_continuation-generation-fence"
 import sessionAuthorityRevisions from "../src/database/migration/20260804142728_session-authority-revisions"
 import dropCompactionAdmissionMode from "../src/database/migration/20260806071025_drop-compaction-admission-mode"
+import sessionArchiveRetention from "../src/database/migration/20260908062843_session-archive-retention"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   Effect.runPromise(
@@ -47,6 +48,7 @@ const currentMigrations = [
   { id: "20260804142728_session-authority-revisions" },
   { id: "20260806071025_drop-compaction-admission-mode" },
   { id: "20260808031138_provider-request-cache-read-reported" },
+  { id: "20260908062843_session-archive-retention" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -136,7 +138,13 @@ function seedSession(db: EffectDrizzleSqlite.EffectSQLiteDatabase, sessionID: st
 
 function seedMessage(
   db: EffectDrizzleSqlite.EffectSQLiteDatabase,
-  input: { readonly id: string; readonly sessionID: string; readonly type: string; readonly seq: number; readonly data?: object },
+  input: {
+    readonly id: string
+    readonly sessionID: string
+    readonly type: string
+    readonly seq: number
+    readonly data?: object
+  },
 ) {
   return db.run(sql`
     INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data)
@@ -146,7 +154,13 @@ function seedMessage(
 
 function seedEvent(
   db: EffectDrizzleSqlite.EffectSQLiteDatabase,
-  input: { readonly id: string; readonly sessionID: string; readonly seq: number; readonly type: string; readonly data: object },
+  input: {
+    readonly id: string
+    readonly sessionID: string
+    readonly seq: number
+    readonly type: string
+    readonly data: object
+  },
 ) {
   return Effect.gen(function* () {
     yield* db.run(
@@ -161,14 +175,16 @@ function seedEvent(
 
 function applicationSchema(db: EffectDrizzleSqlite.EffectSQLiteDatabase) {
   return db
-    .all<{ type: string; name: string; table_name: string; sql: string }>(sql`
+    .all<{ type: string; name: string; table_name: string; sql: string }>(
+      sql`
       SELECT type, name, tbl_name AS table_name, sql
       FROM sqlite_master
       WHERE type IN ('table', 'index')
         AND name NOT LIKE 'sqlite_%'
         AND name NOT IN ('database_format', 'migration')
       ORDER BY type, name
-    `)
+    `,
+    )
     .pipe(
       Effect.map((rows) =>
         rows.map((row) => ({
@@ -185,7 +201,9 @@ function normalizeTableSql(sql: string) {
   const bodyEnd = value.lastIndexOf(")")
   if (bodyStart === -1 || bodyEnd < bodyStart) throw new Error(`Invalid CREATE TABLE statement: ${value}`)
   const suffix = normalizeSqlWhitespace(value.slice(bodyEnd + 1))
-  return `${normalizeSqlWhitespace(value.slice(0, bodyStart))} (${splitTableDefinitions(value.slice(bodyStart + 1, bodyEnd))
+  return `${normalizeSqlWhitespace(value.slice(0, bodyStart))} (${splitTableDefinitions(
+    value.slice(bodyStart + 1, bodyEnd),
+  )
     .map(normalizeSqlWhitespace)
     .toSorted()
     .join(", ")})${suffix ? ` ${suffix}` : ""}`
@@ -307,11 +325,7 @@ describe("DatabaseMigration", () => {
               AND name IN ('session', 'session_pending', 'session_message')
             ORDER BY name
           `),
-        ).toEqual([
-          { name: "session" },
-          { name: "session_message" },
-          { name: "session_pending" },
-        ])
+        ).toEqual([{ name: "session" }, { name: "session_message" }, { name: "session_pending" }])
         expect(
           yield* db.all<{ name: string }>(sql`
             SELECT name
@@ -332,6 +346,7 @@ describe("DatabaseMigration", () => {
         const columns = (yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)
         expect(columns).toContain("permission")
         expect(columns).toContain("autonomy")
+        expect(columns).toContain("time_archived")
         for (const removed of [
           "slug",
           "version",
@@ -342,11 +357,14 @@ describe("DatabaseMigration", () => {
           "summary_diffs",
           "metadata",
           "time_compacting",
-          "time_archived",
         ]) {
           expect(columns).not.toContain(removed)
         }
-        expect(yield* db.get(sql`SELECT name, "notnull", dflt_value FROM pragma_table_info('credential') WHERE name = 'generation'`)).toEqual({
+        expect(
+          yield* db.get(
+            sql`SELECT name, "notnull", dflt_value FROM pragma_table_info('credential') WHERE name = 'generation'`,
+          ),
+        ).toEqual({
           name: "generation",
           notnull: 1,
           dflt_value: "0",
@@ -447,10 +465,14 @@ describe("DatabaseMigration", () => {
         expect(yield* db.get(sql`SELECT * FROM session_message WHERE id = 'msg_upgrade_boundary'`)).toEqual(
           canonicalMessage,
         )
-        expect(yield* db.get(sql`SELECT cache_read_reported FROM session_provider_request WHERE id = 'prq_legacy'`)).toEqual({
+        expect(
+          yield* db.get(sql`SELECT cache_read_reported FROM session_provider_request WHERE id = 'prq_legacy'`),
+        ).toEqual({
           cache_read_reported: null,
         })
-        expect(yield* db.get(sql`SELECT status, revision, manifest_digest, error_code FROM session_context_state`)).toEqual({
+        expect(
+          yield* db.get(sql`SELECT status, revision, manifest_digest, error_code FROM session_context_state`),
+        ).toEqual({
           status: "active",
           revision: 0,
           manifest_digest: null,
@@ -477,7 +499,9 @@ describe("DatabaseMigration", () => {
         expect(yield* db.all(sql`SELECT id, type FROM session_pending ORDER BY admitted_seq`)).toEqual([
           { id: "msg_pending_user", type: "user" },
         ])
-        expect(yield* db.get(sql`SELECT generation FROM credential WHERE id = 'cred_legacy'`)).toEqual({ generation: 0 })
+        expect(yield* db.get(sql`SELECT generation FROM credential WHERE id = 'cred_legacy'`)).toEqual({
+          generation: 0,
+        })
         expect(
           yield* db.get(sql`
             SELECT name FROM sqlite_master
@@ -773,9 +797,7 @@ describe("DatabaseMigration", () => {
             ORDER BY name
           `),
         ).toEqual([])
-        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
-          { id: "20260725062914_drop-application-cache" },
-        ])
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([{ id: "20260725062914_drop-application-cache" }])
       }),
     )
   })
@@ -797,8 +819,28 @@ describe("DatabaseMigration", () => {
         const columns = (yield* db.all<{ name: string }>(sql`PRAGMA table_info(session)`)).map((column) => column.name)
         expect(columns).toEqual(["id", "title", "time_suspended"])
         expect(yield* db.get(sql`SELECT id, title FROM session`)).toEqual({ id: "ses_1", title: "kept" })
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([{ id: "20260801114207_drop-session-archived" }])
+      }),
+    )
+  })
+
+  test("restores a nullable session archive timestamp without changing existing rows", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql.raw(`CREATE TABLE session (id TEXT PRIMARY KEY, title TEXT NOT NULL)`))
+        yield* db.run(sql`INSERT INTO session (id, title) VALUES ('ses_1', 'kept')`)
+
+        yield* DatabaseMigration.applyOnly(db, [sessionArchiveRetention])
+        yield* DatabaseMigration.applyOnly(db, [sessionArchiveRetention])
+
+        expect(yield* db.get(sql`SELECT id, title, time_archived FROM session`)).toEqual({
+          id: "ses_1",
+          title: "kept",
+          time_archived: null,
+        })
         expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
-          { id: "20260801114207_drop-session-archived" },
+          { id: "20260908062843_session-archive-retention" },
         ])
       }),
     )
@@ -828,9 +870,7 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'retained_current'`),
         ).toEqual({ name: "retained_current" })
-        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([
-          { id: "20260726182810_retire-self-improvement" },
-        ])
+        expect(yield* db.all(sql`SELECT id FROM migration`)).toEqual([{ id: "20260726182810_retire-self-improvement" }])
       }),
     )
   })

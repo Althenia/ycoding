@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, mock, test } from "bun:test"
-import { MarkdownRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
+import { MarkdownRenderable, ScrollBoxRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type {
   SessionAutonomyState,
@@ -582,12 +582,16 @@ function routeFor(
   autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
   todos: SessionTodoInfo[] = [],
 ) {
+  const completedCompactionFileChanges = messages.some(
+    (message) => message.type === "compaction" && message.status === "completed",
+  )
   return (url: URL) => {
     if (url.pathname === "/api/fs/list") return json({ location, data: [] })
     if (url.pathname === "/api/location") return json(location)
     if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
     if (url.pathname === `/api/session/${sessionID}`) return json({ data: session })
     if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: messages, cursor: {} })
+    if (completedCompactionFileChanges && url.pathname === `/api/session/${sessionID}/file-change`) return json({ data: [] })
     if (url.pathname === `/api/session/${sessionID}/pending`) return json({ data: pending })
     if (url.pathname === `/api/session/${sessionID}/guardrail/request`) return json({ location, data: guardrails })
     if (url.pathname === `/api/session/${sessionID}/subagent`)
@@ -844,6 +848,46 @@ test("renders retained Session state and TeamView bodies in chronological transc
   }
 }, 60_000)
 
+test("renders Session state and TeamView notices summary-only without mutating canonical messages", async () => {
+  const sessionState =
+    'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"todos":[{"content":"First task","status":"pending"},{"content":"Second task","status":"pending"},{"content":"Third task","status":"pending"},{"content":"Fourth task","status":"pending"},{"content":"Fifth task","status":"pending"},{"content":"Sixth task","status":"pending"}]}'
+  const teamView =
+    'Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{"children":[{"state":"running"},{"state":"completed"}],"omitted":1}'
+  const messages: SessionMessageInfo[] = [
+    {
+      id: "msg_context_state_table",
+      type: "system",
+      text: sessionState,
+      metadata: { contextSource: "session-state" },
+      time: { created: 2 },
+    },
+    {
+      id: "msg_context_team_table",
+      type: "synthetic",
+      text: teamView,
+      description: "TeamView update",
+      metadata: { contextSource: "team-view" },
+      time: { created: 3 },
+    },
+  ]
+  const screen = await renderScreen({
+    ...NARROW_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(messages),
+    settle: "Session state · normal · YOLO 0 · 6 tasks",
+  })
+  try {
+    expect(screen.frame()).toContain("Session state · normal · YOLO 0 · 6 tasks")
+    expect(screen.frame()).toContain("TeamView · 1 running · 1 completed · 1 omitted")
+    expect(screen.frame()).not.toContain("First task")
+    expect(screen.frame()).not.toContain("Sixth task")
+    expect(messages[0]).toMatchObject({ text: sessionState })
+    expect(messages[1]).toMatchObject({ text: teamView })
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("keeps yolo-goal todos in the sidebar instead of the transcript", async () => {
   const screen = await renderScreen({
     ...DESIGN_VIEWPORT,
@@ -964,6 +1008,7 @@ test("restores main-session tail and non-tail view across repeated subagent navi
     const tailTop = Math.max(0, restored.scrollHeight - restored.viewport.height)
     restored.scrollTo(restored.scrollHeight)
     await waitForScrollTop(tailTop)
+    expect(restored.stickyScroll).toBe(true)
 
     await navigateToChild()
     await navigateToParent()
@@ -1148,7 +1193,11 @@ test("collapses file edit results before expanding the board diff grid", async (
     expect(screen.frame()).not.toContain("Old cache note")
 
     await screen.mouse.click(12, rowOf("docs/runtime.md"))
-    await waitForFrame(() => screen.frame(), "+ Current cache note")
+    await waitForFrame(() => {
+      const scroll = screen.scrollbox()
+      scroll?.scrollTo(scroll.scrollHeight)
+      return screen.frame()
+    }, "+ Current cache note")
     const expanded = screen.lines()
     const expandedRowOf = (text: string) =>
       expanded.findIndex((line) => line.includes(text) && line.indexOf(text) < railStart)
@@ -1220,8 +1269,15 @@ test("bounds a pasted multi-section Markdown user prompt without delaying later 
   try {
     const lines = () => screen.lines().map((line) => transcriptSlice(line, NARROW_VIEWPORT.width))
     const scroll = async (direction: "up" | "down") => {
-      for (let index = 0; index < 12; index++) await screen.mouse.scroll(8, 12, direction)
-      await Bun.sleep(100)
+      const deadline = Date.now() + 2_000
+      while (Date.now() < deadline) {
+        await screen.mouse.scroll(8, 12, direction, { delayMs: 10 })
+        const viewport = screen.scrollbox()
+        const target = direction === "up" ? 0 : Math.max(0, (viewport?.scrollHeight ?? 0) - (viewport?.viewport.height ?? 0))
+        const text = direction === "up" ? "## Section 01" : "Follow-up prompt remains visible"
+        if (viewport?.scrollTop === target && screen.frame().includes(text)) return
+      }
+      throw new Error(`transcript did not finish scrolling ${direction}`)
     }
 
     expect(lines().some((line) => line.includes("Follow-up prompt remains visible"))).toBe(true)

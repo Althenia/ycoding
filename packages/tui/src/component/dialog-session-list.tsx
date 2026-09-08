@@ -16,11 +16,13 @@ import { DialogSessionRename } from "./dialog-session-rename"
 import { Spinner } from "./spinner"
 import { errorMessage } from "../util/error"
 
-export function DialogSessionList(props: {
-  pinned?: readonly string[]
-  messageCounts?: Readonly<Record<string, number>>
-  now?: number
-} = {}) {
+export function DialogSessionList(
+  props: {
+    pinned?: readonly string[]
+    messageCounts?: Readonly<Record<string, number>>
+    now?: number
+  } = {},
+) {
   const dialog = useDialog()
   const route = useRoute()
   const data = useData()
@@ -104,16 +106,19 @@ export function DialogSessionList(props: {
     const option = (session: SessionInfo, category: string) => {
       const directory = session.location.directory
       const messageCount = props.messageCounts?.[session.id]
-      const footer = messageCount === undefined
-        ? directory !== data.location.info()?.project.directory
-          ? Locale.truncate(path.basename(directory), 20)
-          : ""
-        : `${messageCount.toLocaleString("en-US")} msgs`
+      const footer =
+        messageCount === undefined
+          ? directory !== data.location.info()?.project.directory
+            ? Locale.truncate(path.basename(directory), 20)
+            : ""
+          : `${messageCount.toLocaleString("en-US")} msgs`
       const slot = slotByID.get(session.id)
       const deleting = toDelete() === session.id
       return {
         title: deleting ? `Press ${shortcuts.get("session.delete")} again to confirm` : session.title,
-        description: relativeTime(session.time.updated, props.now ?? Date.now()),
+        description: session.time.archived
+          ? `Archived · ${relativeTime(session.time.updated, props.now ?? Date.now())}`
+          : relativeTime(session.time.updated, props.now ?? Date.now()),
         value: session.id,
         category,
         footer,
@@ -134,6 +139,58 @@ export function DialogSessionList(props: {
   })
 
   onMount(() => dialog.setSize("large"))
+
+  function archive(sessionID: string) {
+    void client.api.session.archive({ sessionID }).catch((error) => {
+      toast.show({
+        message: `Failed to archive session: ${errorMessage(error)}`,
+        variant: "error",
+        duration: 5000,
+      })
+    })
+  }
+
+  function unarchive(sessionID: string) {
+    void client.api.session.unarchive({ sessionID }).catch((error) => {
+      toast.show({
+        message: `Failed to unarchive session: ${errorMessage(error)}`,
+        variant: "error",
+        duration: 5000,
+      })
+    })
+  }
+
+  function toggleArchive(sessionID: string) {
+    const session = sessions().find((item) => item.id === sessionID)
+    if (session?.time.archived) {
+      unarchive(sessionID)
+      return
+    }
+    let open = true
+    const reopen = () => {
+      if (!open) return
+      open = false
+      dialog.replace(() => <DialogSessionList {...props} />)
+    }
+    dialog.replace(
+      () => (
+        <ArchiveConfirmation
+          sessionID={sessionID}
+          title={session?.title}
+          onCancel={reopen}
+          onConfirm={() => {
+            reopen()
+            archive(sessionID)
+          }}
+        />
+      ),
+      () => {
+        if (!open) return
+        open = false
+        setTimeout(() => dialog.replace(() => <DialogSessionList {...props} />), 0)
+      },
+    )
+  }
 
   return (
     <DialogSelect
@@ -161,6 +218,11 @@ export function DialogSessionList(props: {
         dialog.clear()
       }}
       actions={[
+        {
+          command: "session.archive",
+          title: "archive/unarchive",
+          onTrigger: (option: { value: string }) => toggleArchive(option.value),
+        },
         {
           command: "session.pin.toggle",
           title: "pin/unpin",
@@ -194,6 +256,68 @@ export function DialogSessionList(props: {
       footer={<text>⌃f pin</text>}
       footerHints={quickSwitchFooterHints()}
     />
+  )
+}
+
+function ArchiveConfirmation(props: {
+  sessionID: string
+  title?: string
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const { theme } = useTheme()
+  const [confirm, setConfirm] = createSignal(true)
+
+  Keymap.createLayer(() => ({
+    mode: "modal",
+    commands: [
+      {
+        bind: "return",
+        title: "Confirm archive",
+        group: "Dialog",
+        run: () => (confirm() ? props.onConfirm() : props.onCancel()),
+      },
+      {
+        bind: "left",
+        title: "Select cancel",
+        group: "Dialog",
+        run: () => setConfirm(false),
+      },
+      {
+        bind: "right",
+        title: "Select archive",
+        group: "Dialog",
+        run: () => setConfirm(true),
+      },
+      {
+        bind: "escape",
+        title: "Cancel archive",
+        group: "Dialog",
+        run: props.onCancel,
+      },
+    ],
+  }))
+
+  return (
+    <box paddingTop={1}>
+      <box paddingLeft={3}>
+        <text fg={theme.text}>Archive session</text>
+      </box>
+      <box paddingLeft={3} paddingRight={4} paddingTop={3}>
+        <text fg={theme.textMuted} wrapMode="word">
+          Archive “{props.title ?? props.sessionID}”? This is reversible: you can unarchive the session later. Archiving
+          does not automatically delete its history.
+        </text>
+      </box>
+      <box paddingTop={2}>
+        <box paddingLeft={6} backgroundColor={!confirm() ? theme.primary : undefined} onMouseUp={props.onCancel}>
+          <text fg={!confirm() ? theme.background : theme.textMuted}>Cancel</text>
+        </box>
+        <box paddingLeft={6} backgroundColor={confirm() ? theme.primary : undefined} onMouseUp={props.onConfirm}>
+          <text fg={confirm() ? theme.background : theme.textMuted}>Archive</text>
+        </box>
+      </box>
+    </box>
   )
 }
 

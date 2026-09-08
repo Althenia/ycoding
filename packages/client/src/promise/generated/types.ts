@@ -639,6 +639,28 @@ export type SessionDeleted = {
   data: { sessionID: string }
 }
 
+export type SessionArchived = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.archived"
+  durable: { aggregateID: string; seq: number; version: 2 }
+  location?: LocationRef
+  data: { sessionID: string }
+}
+
+export type SessionUnarchived = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.unarchived"
+  durable: { aggregateID: string; seq: number; version: 2 }
+  location?: LocationRef
+  data: { sessionID: string }
+}
+
 export type SessionForked = {
   id: string
   created: number
@@ -2337,7 +2359,7 @@ export type SessionInfo = {
   permissionCeiling?: PermissionV2Ruleset
   cost: MoneyUSD
   tokens: TokenUsageInfo
-  time: { created: number; updated: number }
+  time: { created: number; updated: number; archived?: number }
   title: string
   location: LocationRef
   subpath?: string
@@ -2623,6 +2645,26 @@ export type SessionLogItem =
       metadata?: { [x: string]: any }
       sourceEpoch: string
       type: "session.deleted"
+      durable: { aggregateID: string; seq: number; version: 2 }
+      location?: LocationRef
+      data: { sessionID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.archived"
+      durable: { aggregateID: string; seq: number; version: 2 }
+      location?: LocationRef
+      data: { sessionID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.unarchived"
       durable: { aggregateID: string; seq: number; version: 2 }
       location?: LocationRef
       data: { sessionID: string }
@@ -3167,6 +3209,8 @@ export type V2Event =
   | SessionUsageUpdated
   | SessionDiagnosticsUpdated
   | SessionDeleted
+  | SessionArchived
+  | SessionUnarchived
   | SessionForked
   | SessionInputPromoted
   | SessionInputAdmitted
@@ -3713,6 +3757,14 @@ export type SessionAutonomySetOutput = { data: SessionAutonomyState }["data"]
 export type SessionRemoveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionRemoveOutput = void
+
+export type SessionArchiveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionArchiveOutput = void
+
+export type SessionUnarchiveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionUnarchiveOutput = void
 
 export type SessionSubagentListInput = {
   readonly parentID: { readonly parentID: string }["parentID"]

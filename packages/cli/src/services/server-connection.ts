@@ -87,7 +87,7 @@ function connectError(endpoint: Endpoint, cause: unknown) {
   }
   if (cause instanceof ClientError && cause.reason === "Transport")
     return new Error(`Could not reach server at ${endpoint.url}`, { cause })
-  return new Error(`Server at ${endpoint.url} did not provide a compatible V2 health response`, { cause })
+  return new Error(`Server at ${endpoint.url} did not provide a compatible health response`, { cause })
 }
 
 export * as ServerConnection from "./server-connection"

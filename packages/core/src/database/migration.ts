@@ -36,6 +36,7 @@ export function apply(db: Database) {
       }
       if (tables.length > 0) return yield* Effect.fail(DatabaseFormat.unsupported())
 
+      yield* db.run("PRAGMA auto_vacuum = INCREMENTAL")
       yield* db.transaction((tx) =>
         Effect.gen(function* () {
           yield* schema.up(tx)

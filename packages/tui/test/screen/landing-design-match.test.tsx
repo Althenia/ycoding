@@ -49,10 +49,10 @@ async function selectModelVariant() {
 async function expectLandingDesign(viewport: typeof DESIGN_VIEWPORT) {
   const restoreModelPreference = await selectModelVariant()
   try {
-    const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Ling-3.0-flash" })
+      const screen = await renderScreen({ ...viewport, route: landingRoute, settle: "Ling-3.0-flash" })
     try {
       for (let attempt = 0; attempt < 100; attempt++) {
-        if (screen.frame().includes("Ling-3.0-flash")) break
+        if (screen.frame().includes("Ling-3.0-flash") && screen.frame().includes("max")) break
         await Bun.sleep(20)
       }
       const lines = screen.lines()

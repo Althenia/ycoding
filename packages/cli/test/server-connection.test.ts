@@ -19,6 +19,7 @@ test("resolution groups Effect-native lifecycle operations only for the managed 
         healthy: true,
         version: InstallationVersion,
         pid: process.pid,
+        sourceEpoch: "source_test",
       })
     },
   })

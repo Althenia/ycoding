@@ -1,18 +1,9 @@
 import { Argument, Flag } from "effect/unstable/cli"
 import { Spec } from "../framework/spec"
+import { RunCommand, ServerParams } from "./run"
+import { UpdateCommand } from "./update"
 
 declare const YCODING_CLI_NAME: string | undefined
-
-const ServerParams = {
-  standalone: Flag.boolean("standalone").pipe(
-    Flag.withDescription("Run with a private server instead of the background service"),
-    Flag.withDefault(false),
-  ),
-  server: Flag.string("server").pipe(
-    Flag.withDescription("Connect to a server URL instead of the background service"),
-    Flag.optional,
-  ),
-}
 
 export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING_CLI_NAME : "ycoding", {
   description: "YCoding terminal coding agent",
@@ -30,6 +21,10 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     session: Flag.string("session").pipe(
       Flag.withAlias("s"),
       Flag.withDescription("Session ID to continue"),
+      Flag.optional,
+    ),
+    model: Flag.string("model").pipe(
+      Flag.withDescription("Run a prompt directly with provider/model when a positional prompt is present"),
       Flag.optional,
     ),
   },
@@ -154,52 +149,8 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
         demo: Flag.boolean("demo").pipe(Flag.withDefault(false), Flag.withHidden),
       },
     }),
-    Spec.make("run", {
-      description: "Run YCoding with a message",
-      params: {
-        ...ServerParams,
-        message: Argument.string("message").pipe(
-          Argument.withDescription("Message to send"),
-          Argument.variadic({ min: 0 }),
-        ),
-        continue: Flag.boolean("continue").pipe(
-          Flag.withAlias("c"),
-          Flag.withDescription("Continue the last session"),
-          Flag.withDefault(false),
-        ),
-        session: Flag.string("session").pipe(
-          Flag.withAlias("s"),
-          Flag.withDescription("Session ID to continue"),
-          Flag.optional,
-        ),
-        fork: Flag.boolean("fork").pipe(
-          Flag.withDescription("Fork the session before continuing"),
-          Flag.withDefault(false),
-        ),
-        model: Flag.string("model").pipe(
-          Flag.withAlias("m"),
-          Flag.withDescription("Model to use in the format provider/model#variant"),
-          Flag.optional,
-        ),
-        agent: Flag.string("agent").pipe(Flag.withDescription("Agent to use"), Flag.optional),
-        format: Flag.choice("format", ["default", "json"]).pipe(
-          Flag.withDescription("Output format"),
-          Flag.withDefault("default"),
-        ),
-        file: Flag.string("file").pipe(
-          Flag.withAlias("f"),
-          Flag.withDescription("File to attach to the message"),
-          Flag.atMost(100),
-        ),
-        title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
-        thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
-        auto: Flag.boolean("auto").pipe(
-          Flag.withDescription("Auto-approve permissions that are not explicitly denied"),
-          Flag.withDefault(false),
-        ),
-        yolo: Flag.boolean("yolo").pipe(Flag.withDefault(false), Flag.withHidden),
-      },
-    }),
+    RunCommand,
+    UpdateCommand,
     Spec.make("service", {
       description: "Manage the background server",
       commands: [
@@ -223,7 +174,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     }),
     Spec.make("pair", { description: "Show server pairing information" }),
     Spec.make("serve", {
-      description: "Start the v2 API server",
+      description: "Start the API server",
       params: {
         hostname: Flag.string("hostname").pipe(Flag.optional),
         port: Flag.integer("port").pipe(Flag.optional),

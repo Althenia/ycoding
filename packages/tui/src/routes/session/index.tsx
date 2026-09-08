@@ -33,6 +33,7 @@ import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, 
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
   ModelInfo,
+  SessionEventFileChangeInfo,
   SessionMessageInfo,
   SessionMessageAssistant,
   SessionMessageAssistantReasoning,
@@ -115,6 +116,7 @@ import {
 } from "./rows"
 import { switchLabel } from "../../util/model"
 import { findMessageBoundary, messageNavigationSlack } from "./message-navigation"
+import { noticeSummary } from "./notice-summary"
 import { stringWidth } from "../../util/string-width"
 import {
   autonomyModeLabel,
@@ -125,7 +127,7 @@ import {
 } from "../../util/session-autonomy"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
-import { Header, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
+import { Header, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, inlineDiffGroups, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
 import { parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
@@ -220,6 +222,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       ...capturedChildIDs().flatMap((sessionID) => data.session.message.list(sessionID)),
     ]),
   )
+  const durableCapturedChanges = createMemo(() => {
+    const compacted = messages().some((message) => message.type === "compaction" && message.status === "completed")
+    const completedAssistant = messages().some((message) => message.type === "assistant" && message.time.completed)
+    if (!compacted || completedAssistant) return []
+    return durableCapturedChangeFiles(data.session.fileChange.list(route.sessionID))
+  })
   const location = createMemo(() => session()?.location)
   const currentLocation = useLocation()
 
@@ -425,22 +433,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
   const autoApproved = new Set<string>()
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
-    const lastAssistant = messages().findLast(
-      (item): item is SessionMessageAssistant => item.type === "assistant",
-    ) as SessionMessageAssistant | undefined
-    const retry = lastAssistant?.retry
-    if (retry) {
-      if (retry.at > Date.now()) return { type: "retry-scheduled", attempt: retry.attempt, at: retry.at }
-      const hasProgress =
-        lastAssistant.content.length > 0 &&
-        lastAssistant.content.some(
-          (part) =>
-            (part.type === "text" && part.text.length > 0) ||
-            part.type === "reasoning" ||
-            part.type === "tool",
-        )
-      if (!hasProgress) return { type: "retrying", attempt: retry.attempt }
-    }
+    const lastAssistant = messages().findLast((item): item is SessionMessageAssistant => item.type === "assistant")
+    const retry = sessionRetryHeaderState(lastAssistant)
+    if (retry) return retry
     const parentID = session()?.parentID
     const child = parentID
       ? data.session.subagent.page(parentID)?.data.find((task) => task.sessionID === route.sessionID)
@@ -611,6 +606,19 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     ),
   )
+  createEffect(
+    on(
+      [
+        () => route.sessionID,
+        () => messages().some((message) => message.type === "compaction" && message.status === "completed"),
+        () => messages().some((message) => message.type === "assistant" && message.time.completed),
+      ],
+      ([sessionID, compacted, completedAssistant]) => {
+        if (!compacted || completedAssistant) return
+        void data.session.fileChange.sync(sessionID).catch(() => undefined)
+      },
+    ),
+  )
   const boundaries = createMemo(() => messageBoundaryIDs(rows, messages()))
   const MAX_MOUNTED_ROWS = 400
   const mountedRows = createMemo(() =>
@@ -624,6 +632,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const hiddenCount = createMemo(() => rows.length - mountedRows().length)
   const [navigationMessage, setNavigationMessage] = createSignal<string>()
   const [navigationSlack, setNavigationSlack] = createSignal(0)
+  const [restoringViewport, setRestoringViewport] = createSignal(props.viewports?.get(mountedSessionID)?.follow === false)
 
   const clearMessageNavigation = () => {
     setNavigationSlack(0)
@@ -693,6 +702,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           setNavigationSlack(saved.navigationSlack)
           setNavigationMessage(saved.navigationMessage)
           scroll.scrollTo(saved.scrollTop)
+          setRestoringViewport(false)
           return
         }
         clearMessageNavigation()
@@ -720,7 +730,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   const dialog = useDialog()
   const renderer = useRenderer()
   const unavailable = (feature: string) => {
-    toast.show({ message: `${feature} is not implemented for V2 sessions yet`, variant: "error", duration: 5000 })
+    toast.show({ message: `${feature} is not implemented for sessions yet`, variant: "error", duration: 5000 })
     dialog.clear()
   }
 
@@ -1428,7 +1438,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 </box>
               </Show>
               <scrollbox
-                ref={(r) => (scroll = r)}
+                ref={(r) => {
+                  scroll = r
+                }}
                 viewportOptions={{
                   paddingRight: showScrollbar() ? 1 : 0,
                 }}
@@ -1440,7 +1452,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                     foregroundColor: themeV2.border.default,
                   },
                 }}
-                stickyScroll={rows.length > 0 && !navigationMessage()}
+                stickyScroll={rows.length > 0 && !navigationMessage() && !restoringViewport()}
                 stickyStart="bottom"
                 marginTop={session()?.parentID ? 1 : 0}
                 flexGrow={1}
@@ -1476,6 +1488,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                         row.messageID ===
                           messages().findLast((message) => message.type === "assistant" && message.time.completed)?.id
                           ? capturedChanges()
+                          : undefined
+                      }
+                      durableCapturedChanges={
+                        row.type === "compaction" ||
+                        (row.type === "message" && data.session.message.get(route.sessionID, row.messageID)?.type === "compaction")
+                          ? durableCapturedChanges()
                           : undefined
                       }
                     />
@@ -1689,6 +1707,7 @@ export function SessionRowView(props: {
   guardrail?: (requestID: string) => void
   subagent?: (sessionID: string) => void
   capturedChanges?: InlineDiffFile[]
+  durableCapturedChanges?: InlineDiffFile[]
 }) {
   // Rows can outlive a session eviction for one reactive frame. Resolve every message-backed row
   // before mounting its component so stale refs consume no space.
@@ -1732,14 +1751,28 @@ export function SessionRowView(props: {
           <Match when={props.row.type === "message" ? props.row : undefined}>
             {(row) => (
               <Show when={props.message(row().messageID)}>
-                {(message) => <SessionMessageView message={message()} />}
+                {(message) => (
+                  <>
+                    <SessionMessageView message={message()} />
+                    <Show when={message().type === "compaction" && props.durableCapturedChanges?.length}>
+                      <FileChangeBlock files={props.durableCapturedChanges!} label="Captured changes" collapsed />
+                    </Show>
+                  </>
+                )}
               </Show>
             )}
           </Match>
           <Match when={props.row.type === "compaction" ? props.row : undefined}>
             {(row) => (
               <Show when={props.compaction?.(row().jobID)}>
-                {(item) => <CompactionLifecycleMessage lifecycle={item()} compactions={props.compactions?.()} />}
+                {(item) => (
+                  <>
+                    <CompactionLifecycleMessage lifecycle={item()} compactions={props.compactions?.()} />
+                    <Show when={props.durableCapturedChanges?.length}>
+                      <FileChangeBlock files={props.durableCapturedChanges!} label="Captured changes" collapsed />
+                    </Show>
+                  </>
+                )}
               </Show>
             )}
           </Match>
@@ -2189,9 +2222,10 @@ function SessionSwitchMessageV2(props: { message: SessionMessageInfo }) {
 
 function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   const ctx = use()
-  const { themeV2, syntax } = useTheme()
+  const { themeV2 } = useTheme()
   const metadata = () => (props.message.type === "synthetic" ? props.message.metadata : undefined)
   const source = () => stringValue(metadata()?.source)
+  const contextSource = () => stringValue(props.message.metadata?.contextSource)
   const subagentNotification = () => source() === "subagent_notification"
   const completion = () => source() === "subagent" || source() === "shell"
   const state = () => stringValue(metadata()?.state)
@@ -2202,6 +2236,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
       return props.message.metadata?.contextSource === "team-view" ? props.message.text : props.message.description ?? ""
     return ""
   }
+  const notice = createMemo(() => noticeSummary(contextSource(), text()))
   const description = () => (source() === "shell" ? text().replace(/\s+/g, " ").trim() : text())
   const status = () => {
     if (state() === "completed") return "finished"
@@ -2240,24 +2275,48 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
         </box>
       </Match>
       <Match when={true}>
-        <box flexDirection="column">
-          <InlineToolRow icon="◈" color={themeV2.text.subdued} pending="Notice" complete={true}>
-            Notice
-          </InlineToolRow>
-          <box paddingLeft={3} paddingTop={1}>
-            <markdown
-              syntaxStyle={syntax()}
-              streaming={false}
-              internalBlockMode="top-level"
-              content={text()}
-              tableOptions={{ style: "grid" }}
-              conceal={true}
-              fg={themeV2.markdown.text}
-            />
-          </box>
-        </box>
+        <Show when={notice()} fallback={<RawNoticeMarkdown content={text()} />}>
+          {(summary) => <SummaryNoticeMessage summary={summary()} />}
+        </Show>
       </Match>
     </Switch>
+  )
+}
+
+function SummaryNoticeMessage(props: { summary: string }) {
+  const ctx = use()
+  const { themeV2 } = useTheme()
+  return (
+    <box flexDirection="column">
+      <InlineToolRow icon="◈" color={themeV2.text.subdued} pending="Notice" complete={true}>
+        Notice
+      </InlineToolRow>
+      <box paddingLeft={3} paddingTop={1}>
+        <text fg={themeV2.text.subdued}>{Locale.truncateWidth(props.summary, Math.max(0, ctx.width - 5))}</text>
+      </box>
+    </box>
+  )
+}
+
+function RawNoticeMarkdown(props: { content: string }) {
+  const { themeV2, syntax } = useTheme()
+  return (
+    <box flexDirection="column">
+      <InlineToolRow icon="◈" color={themeV2.text.subdued} pending="Notice" complete={true}>
+        Notice
+      </InlineToolRow>
+      <box paddingLeft={3} paddingTop={1}>
+        <markdown
+          syntaxStyle={syntax()}
+          streaming={false}
+          internalBlockMode="top-level"
+          content={props.content}
+          tableOptions={{ style: "grid" }}
+          conceal={true}
+          fg={themeV2.markdown.text}
+        />
+      </box>
+    </box>
   )
 }
 
@@ -3126,7 +3185,7 @@ function FileChangeBlock(props: { files: InlineDiffFile[]; label?: string; colla
       <box
         width="100%"
         flexDirection="row"
-        paddingLeft={1}
+        paddingLeft={6}
         onMouseUp={() => {
           if (renderer.getSelection()?.getSelectedText()) return
           setExpanded((value) => !value)
@@ -3306,6 +3365,13 @@ function capturedChangeFiles(messages: SessionMessageInfo[]): InlineDiffFile[] {
       if (presentation?.type === "diffs") return presentation.files
       return []
     })
+  })
+}
+
+function durableCapturedChangeFiles(files: SessionEventFileChangeInfo[]): InlineDiffFile[] {
+  return files.flatMap((file) => {
+    if (!parseInlineDiff(file.patch)) return []
+    return [{ diff: file.patch, path: file.path, additions: file.additions, deletions: file.deletions }]
   })
 }
 

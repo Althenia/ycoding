@@ -363,20 +363,27 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       }
 
       const continuation = text.includes("Continue autonomously toward the active user goal.")
-      const goalStart = text.includes("Begin autonomous goal") && (maxTokens === undefined || maxTokens > 100)
+      const proxy = text.includes("The assistant is waiting for user input.")
+      if (continuation && proxy && !text.includes("Goal completed:"))
+        return new Response(
+          toolCallResponse({
+            index,
+            callID: "call_runtime_smoke_goal_complete",
+            name: "goal",
+            arguments: { action: "complete" },
+            prompt: 200,
+            cached: 0,
+            cacheWrite: 0,
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        )
       if (text.includes("runtime-smoke-subagent-block")) await sleep(5_000)
-      const content = continuation
-        ? "Goal verified and complete. <goal-complete/>"
-        : goalStart
-          ? "Which database should I use?"
-          : index === 1
-            ? "First"
-            : "Second"
+      const content = continuation ? (proxy ? "Goal verified and complete." : "Which database should I use?") : index === 1 ? "First" : "Second"
       return new Response(
         streamResponse({
           index,
           content,
-          ...(continuation || goalStart ? { cached: 0, cacheWrite: 0, prompt: 200 } : {}),
+          ...(continuation ? { cached: 0, cacheWrite: 0, prompt: 200 } : {}),
         }),
         { headers: { "content-type": "text/event-stream" } },
       )
@@ -526,6 +533,20 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       model: { providerID: PROVIDER_ID, id: MODEL_ID },
       location: { directory: project },
     })
+    phase = "archive round trip"
+    await client.session.archive({ sessionID: session.id })
+    const archived = await client.session.get({ sessionID: session.id })
+    if (archived.time.archived === undefined || archived.time.updated !== session.time.updated)
+      throw new Error("Archive did not preserve Session activity or record its archive time")
+    await client.session.archive({ sessionID: session.id })
+    if ((await client.session.get({ sessionID: session.id })).time.archived !== archived.time.archived)
+      throw new Error("Repeated archive changed the archive timestamp")
+    await client.session.unarchive({ sessionID: session.id })
+    await client.session.unarchive({ sessionID: session.id })
+    const unarchived = await client.session.get({ sessionID: session.id })
+    if (unarchived.time.archived !== undefined || unarchived.time.updated !== session.time.updated)
+      throw new Error("Unarchive did not clear archive state while preserving Session activity")
+
     phase = "first prompt"
     await client.session.prompt({ sessionID: session.id, text: "First turn" })
     await eventually(async () => ((await client.session.diagnostics({ sessionID: session.id }))?.tokens ? true : undefined))
@@ -706,11 +727,11 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       location: { directory: project },
     })
     const yoloSet = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: 2 } })
-    if (yoloSet.yolo !== true) throw new Error(`YOLO mode was not persisted: ${yoloSet.yolo}`)
+    if (yoloSet.yolo !== 2) throw new Error(`YOLO level was not persisted: ${yoloSet.yolo}`)
     const yoloRead = await client.session.autonomy.get({ sessionID: yoloSession.id })
-    if (yoloRead.yolo !== true) throw new Error(`YOLO mode did not round-trip: ${yoloRead.yolo}`)
+    if (yoloRead.yolo !== 2) throw new Error(`YOLO level did not round-trip: ${yoloRead.yolo}`)
     const normal = await client.session.autonomy.set({ sessionID: yoloSession.id, payload: { yolo: 0 } })
-    if (normal.yolo !== false) throw new Error(`Normal mode was not restored: ${normal.yolo}`)
+    if (normal.yolo !== 0) throw new Error(`Normal level was not restored: ${normal.yolo}`)
 
     phase = "goal autonomous continuation"
     const goalSession = await client.session.create({
@@ -725,22 +746,20 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (goalSet.goal?.status !== "active")
       throw new Error("Goal mode was not activated")
     const canonicalGoal = goalSet.goal.text
-    await client.session.prompt({ sessionID: goalSession.id, text: "Begin autonomous goal" })
     const completedGoal = await eventually(async () => {
       const value = await client.session.autonomy.get({ sessionID: goalSession.id })
       return value.goal?.status === "completed" ? value : undefined
     }, 30_000)
     if (completedGoal.mode !== "normal") throw new Error(`Completed Goal did not return to normal mode: ${completedGoal.mode}`)
-    if (completedGoal.goal?.iteration !== 2)
-      throw new Error(`Expected two Goal iterations, got ${completedGoal.goal?.iteration ?? "missing"}`)
+    if (completedGoal.goal?.iteration !== 1)
+      throw new Error(`Expected one Goal continuation, got ${completedGoal.goal?.iteration ?? "missing"}`)
     const continuation = requests.find((request) =>
-      request.text.includes("Continue autonomously toward the active user goal."),
+      request.text.includes("Continue autonomously toward the active user goal.") &&
+      request.text.includes("The assistant is waiting for user input."),
     )
-    if (!continuation) throw new Error("Goal mode did not issue a synthetic continuation request")
+    if (!continuation) throw new Error("Goal mode did not issue a user-proxy continuation request")
     if (!continuation.text.includes(`Goal: ${canonicalGoal}`))
       throw new Error("Goal continuation omitted the canonical durable goal text")
-    if (!continuation.text.includes("The assistant is waiting for user input."))
-      throw new Error("Goal continuation did not recognize the assistant question")
     if (!continuation.text.includes("Answer it on the user's behalf"))
       throw new Error("Goal continuation did not include user-proxy instructions")
 
@@ -800,7 +819,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     }
 
     console.log(
-      `Runtime smoke passed: auth, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`,
+      `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`,
     )
   } catch (error) {
     throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })

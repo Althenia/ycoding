@@ -55,6 +55,7 @@ async function trackedTextFiles(root: string): Promise<BrandFile[]> {
 
   for (const relative of paths) {
     const file = Bun.file(path.join(root, relative))
+    if (!(await file.exists())) continue
     const bytes = new Uint8Array(await file.slice(0, 8192).arrayBuffer())
     if (bytes.includes(0)) continue
     files.push({ path: relative, content: await file.text() })

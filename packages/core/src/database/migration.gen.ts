@@ -18,5 +18,6 @@ export const migrations = (
     import("./migration/20260804142728_session-authority-revisions"),
     import("./migration/20260806071025_drop-compaction-admission-mode"),
     import("./migration/20260808031138_provider-request-cache-read-reported"),
+    import("./migration/20260908062843_session-archive-retention"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

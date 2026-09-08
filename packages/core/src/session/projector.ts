@@ -45,6 +45,8 @@ type MessageEvent =
       | typeof SessionEvent.Created.Type
       | typeof SessionEvent.Forked.Type
       | typeof SessionEvent.Deleted.Type
+      | typeof SessionEvent.Archived.Type
+      | typeof SessionEvent.Unarchived.Type
       | typeof SessionEvent.InstructionsUpdated.Type
       | typeof SessionEvent.Task.Updated.Type
       | typeof SessionEvent.ProviderRequestRecorded.Type
@@ -807,6 +809,22 @@ const layer = Layer.effectDiscard(
         yield* db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie)
         if (task) yield* incrementOrchestrationRevision(db, task.parentID)
       }),
+    )
+    yield* events.project(SessionEvent.Archived, (event) =>
+      db
+        .update(SessionTable)
+        .set({ time_archived: DateTime.toEpochMillis(event.created), time_updated: sql`${SessionTable.time_updated}` })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    yield* events.project(SessionEvent.Unarchived, (event) =>
+      db
+        .update(SessionTable)
+        .set({ time_archived: null, time_updated: sql`${SessionTable.time_updated}` })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
     )
     yield* events.project(SessionEvent.AgentSelected, (event) =>
       db

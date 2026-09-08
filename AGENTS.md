@@ -4,10 +4,10 @@
 
 - This repository is the YCoding product and source of truth.
 - The default branch is `main`.
-- The runtime is V2 only. Do not restore V1 session, configuration, plugin, SDK, package, event, or TUI compatibility paths unless the user explicitly requests a migration design.
+- Maintain one current runtime. Do not restore removed session, configuration, plugin, SDK, package, event, or TUI compatibility paths unless the user explicitly requests a migration design.
 - The TUI is the only product, release, and behavior surface. Do not restore desktop, web, console, or website packages.
 - Durable sessions, explicit autonomy, durable background subagents, session skills, project artifacts, Session-wide guardrails, provider-efficient caching, and normalized provider usage are current product contracts.
-- Historical upstream material is isolated in `docs/upstream-differences.md`. It never overrides current code, tests, Schema, Protocol, or root `docs`.
+- Historical upstream material never overrides current code, tests, Schema, Protocol, or root `docs`.
 
 Read [`docs/README.md`](./docs/README.md), [`docs/product-direction.md`](./docs/product-direction.md), and the relevant package-level `AGENTS.md` before changing cross-package behavior.
 
@@ -37,7 +37,6 @@ Update documentation in the same change when behavior changes.
 - Session, autonomy, subagent, skill, project-artifact, cache, or transcript behavior: update `docs/runtime.md`.
 - Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration: update `docs/configuration.md`.
 - Agent, command, skill, plugin, hook, tool, theme, instruction, or repository-resource discovery: update `docs/repository-resources.md`.
-- Externally visible behavior that differs from upstream: update `docs/upstream-differences.md`.
 - Public API or schema: update the relevant `specs/v2` contract and regenerate clients/OpenAPI through the owning command.
 - Contributor invariants or required verification: update this file or the relevant package `AGENTS.md`.
 
@@ -200,7 +199,7 @@ const table = sqliteTable("session", {
 - TUI-visible changes require a TUI render, component, integration, or smoke test that proves the actual displayed behavior.
 - Before claiming completion, inspect `git diff`, run the relevant tests, and report exact commands and outcomes.
 
-## V2 session core
+## Session core
 
 - Keep durable events minimal: record irreducible new facts and do not repeat state derivable by folding ordered aggregate history. Enrich projections and read models when consumers need self-contained views.
 - Keep durable prompt admission separate from model execution. `SessionV2.prompt(...)` admits one durable `session_pending` row before scheduling advisory `SessionExecution.wake(sessionID)` unless `resume: false` requests admit-only behavior.
@@ -208,10 +207,10 @@ const table = sqliteTable("session", {
 - Reusing a Session ID adopts the existing Session. Reusing a prompt message ID reconciles an exact retry only when Session, prompt, and delivery mode match; conflicting reuse fails.
 - Retry of an already-promoted input reconciles against the projected message and durable admitted event rather than a retained pending row.
 - Keep `SessionExecution` process-global and Session-ID based. Its local implementation owns the process-local Session coordinator and discovers placement through `SessionStore` plus `LocationServiceMap.get(session.location)` only when a drain starts; no layer should take a Session ID.
-- V2 interruption targets the active process-local ownership chain for that Session. Interruption of a known but idle or locally unowned Session is a no-op; the public API rejects an unknown Session.
+- Interruption targets the active process-local ownership chain for that Session. Interruption of a known but idle or locally unowned Session is a no-op; the public API rejects an unknown Session.
 - Keep `SessionRunner`, model resolution, tool registry, permissions, and filesystem Location-scoped. Omitted `Location.workspaceID` means implicit-local placement; explicit workspace identity remains reserved for future placement semantics.
 - Preserve one explicit `llm.stream(request)` call per physical attempt and reload projected history before durable continuation. Most steps have one physical attempt; overflow-triggered compaction recovery may rebuild one step for a second attempt.
-- Do not bridge through a legacy prompt loop or delegate V2 orchestration to an in-memory tool loop.
+- Do not bridge through a legacy prompt loop or delegate Session orchestration to an in-memory tool loop.
 - Keep local Session drains process-local until clustering is implemented. `SessionRunCoordinator` joins explicit same-Session resumes, coalesces prompt wakeups, and allows different Sessions to run concurrently.
 - Advisory wakes drain eligible durable inbox rows only. Post-crash continuation recovery requires an explicit design before it may retry provider work. A drain has no durable identity or transcript boundary.
 - Keep delivery vocabulary explicit. Prompts steer by default and promote at the next safe step boundary while the current drain requires continuation.

@@ -260,6 +260,8 @@ export interface Interface {
     NotFoundError | MessageDecodeError
   >
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly archive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly unarchive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
     limit?: number
@@ -715,6 +717,32 @@ const layer = Layer.effect(
         yield* events.publish(SessionEvent.Deleted, { sessionID })
         yield* events.remove(sessionID)
       }),
+      archive: Effect.fn("V2Session.archive")((sessionID) =>
+        db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const session = yield* result.get(sessionID)
+                if (session.time.archived) return
+                yield* events.publish(SessionEvent.Archived, { sessionID })
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
+      ),
+      unarchive: Effect.fn("V2Session.unarchive")((sessionID) =>
+        db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const session = yield* result.get(sessionID)
+                if (!session.time.archived) return
+                yield* events.publish(SessionEvent.Unarchived, { sessionID })
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
+      ),
       list: Effect.fn("V2Session.list")(function* (input = {}) {
         const direction = input.anchor?.direction ?? "next"
         const requestedOrder = input.order ?? "desc"

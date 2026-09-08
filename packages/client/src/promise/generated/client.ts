@@ -26,6 +26,10 @@ import type {
   SessionAutonomySetOutput,
   SessionRemoveInput,
   SessionRemoveOutput,
+  SessionArchiveInput,
+  SessionArchiveOutput,
+  SessionUnarchiveInput,
+  SessionUnarchiveOutput,
   SessionSubagentListInput,
   SessionSubagentListOutput,
   SessionSubagentLaunchInput,
@@ -609,6 +613,28 @@ export function make(options: ClientOptions) {
           {
             method: "DELETE",
             path: `/api/session/${encodeURIComponent(input.sessionID)}`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      archive: (input: SessionArchiveInput, requestOptions?: RequestOptions) =>
+        request<SessionArchiveOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/archive`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      unarchive: (input: SessionUnarchiveInput, requestOptions?: RequestOptions) =>
+        request<SessionUnarchiveOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/archive`,
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,

@@ -53,7 +53,7 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     try {
     if (viewport.width >= 120) {
       for (let attempt = 0; attempt < 100; attempt++) {
-        if (screen.lines().some((line) => line.includes("ready") && line.includes("main"))) break
+        if (screen.lines().some((line) => line.includes("ready") && line.includes("main") && line.includes("max"))) break
         await Bun.sleep(20)
       }
     }
@@ -79,8 +79,8 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
       expect(header).not.toContain("main")
     }
 
-    expect(frame).toContain("YCoding")
-    expect(frame).toContain("terminal coding agent")
+    expect(frame).toContain("What should we build?")
+    expect(frame).toContain("Describe a goal, paste an error, or press ^p for commands.")
     expect(frame).toContain("Message YCoding…")
     expect(frame).not.toContain("Ask anything")
 
@@ -114,8 +114,8 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
     expect(hints).toBe(-1)
 
     if (viewport.width === DESIGN_VIEWPORT.width) {
-      const heading = lines.findIndex((line) => line.includes("YCoding"))
-      const description = lines.findIndex((line) => line.includes("terminal coding agent"))
+      const heading = lines.findIndex((line) => line.includes("What should we build?"))
+      const description = lines.findIndex((line) => line.includes("Describe a goal, paste an error, or press ^p for commands."))
       const headerRow = lines.findIndex((line) => line.includes("ready"))
 
       expect(headerRow).toBe(1)
@@ -136,7 +136,7 @@ async function expectLandingScreen(viewport: typeof DESIGN_VIEWPORT) {
 
     // Every hero line is centred on the frame independently, not left-aligned in a block.
     // The native bitmap mark deliberately replaces the frozen text wordmark; it has no stable glyph frame.
-    for (const hero of ["YCoding", "terminal coding agent"]) {
+    for (const hero of ["What should we build?", "Describe a goal, paste an error, or press ^p for commands."]) {
       const line = lines.slice(0, rule).find((candidate) => candidate.trim() === hero)
       expect(line).toBeDefined()
       if (!line) continue

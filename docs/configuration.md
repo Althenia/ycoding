@@ -2,7 +2,7 @@
 
 Status: **implemented**
 
-This document is the canonical configuration reference for the current YCoding repository. It is derived from the live Schema and runtime discovery code. Historical upstream documentation is not authoritative for YCoding.
+This document is the canonical configuration reference for the current YCoding repository. It is derived from the live Schema and runtime discovery code.
 
 ## Configuration surfaces
 
@@ -91,7 +91,25 @@ Example:
 
 Missing environment variables become an empty string. A missing file reference invalidates that configuration document.
 
-YCoding does not currently publish a public schema endpoint. Do not point `$schema` at an upstream product URL or invent a YCoding URL.
+The configuration JSON Schema is generated from the runtime-owned `Config.Info` Schema during the GitHub Pages build. Its public endpoint is [`https://althenia.github.io/ycoding/ycoding.schema.json`](https://althenia.github.io/ycoding/ycoding.schema.json). Configure GitHub Pages with GitHub Actions as its source and run the repository Pages workflow before using the endpoint.
+
+After deployment, use the endpoint in `ycoding.jsonc` for editor validation:
+
+```jsonc
+{
+  "$schema": "https://althenia.github.io/ycoding/ycoding.schema.json",
+}
+```
+
+Use the generated YCoding schema endpoint rather than a different product's schema.
+
+## Terminal installation and commands
+
+After GitHub Pages and a native release are published, `curl -fsSL https://althenia.github.io/ycoding/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
+
+`ycoding` opens the interactive terminal interface. `ycoding --model <provider/model> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
+
+`ycoding update` checks GitHub Releases and replaces an installed binary only after verifying its archive checksum. Self-update supports macOS arm64/x64 and Linux x64, matching the shell installer. Development builds must be rebuilt locally; Windows users must exit YCoding and replace the executable from the release ZIP manually.
 
 ## Removed configuration keys
 
@@ -670,7 +688,7 @@ Status meanings:
 | `needs_client_registration` | OAuth requires an explicit client registration.                                                            |
 | `failed`                    | Startup, initialization, or initial tool discovery failed. Open the MCP dialog to inspect the exact error. |
 
-YCoding reads the `ycoding` configuration namespace only. It does not automatically read the legacy upstream namespace. Migrate required MCP definitions explicitly; exact legacy identifiers are listed in [`ycoding-migration.md`](./ycoding-migration.md).
+YCoding reads the `ycoding` configuration namespace only. Copy required MCP definitions explicitly into the current configuration format.
 
 ## Providers and models
 
@@ -914,6 +932,12 @@ This prevents branch builds of YCoding from colliding with another product proce
 When a configured port is occupied, edit the channel-specific service file and choose another integer from `1` to `65535`. `ycoding --standalone` is a temporary alternative that starts a private server instead of the managed service.
 
 The matching registration file is stored in the YCoding state directory. It contains the service instance ID, version, URL, PID, and private password. Do not hand-edit a live registration file.
+
+## Automatic SQLite space reclamation
+
+Database initialization automatically converts `auto_vacuum=NONE` databases to `INCREMENTAL` using a one-time SQLite `VACUUM`. Later initializations reclaim at most 256 free pages without rebuilding the database. An existing `FULL` auto-vacuum setting is preserved. These operations reclaim unused pages; they do not delete records.
+
+The initial conversion requires a write lock and may need temporary free disk space up to twice the database size. It can delay startup. If SQLite cannot obtain the lock within the five-second busy timeout, or the conversion fails, startup fails rather than silently skipping conversion; existing records remain intact and the next start retries. Keep a backup before upgrading a large database and close other writers during the first start.
 
 ## Runtime environment variables
 

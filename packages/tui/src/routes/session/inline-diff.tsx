@@ -119,7 +119,13 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
 
   return (
     <box flexDirection="column" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1} flexShrink={0}>
-      <box flexDirection="column" border={["left", "right", "top", "bottom"]} borderColor={themeV2.border.default}>
+      <box
+        flexDirection="column"
+        border={props.heading === false ? [] : ["left", "right", "top", "bottom"]}
+        borderColor={themeV2.border.default}
+        paddingLeft={props.heading === false ? 1 : 0}
+        paddingRight={props.heading === false ? 1 : 0}
+      >
         <Show when={props.heading !== false}>
           <box
             width="100%"
@@ -202,7 +208,7 @@ export function InlineDiff(props: InlineDiffGroup & { wrapMode?: "word" | "none"
                       {item.lineNum.slice(0, 6)}
                     </span>
                     {"  "}
-                    {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "−"} ${item.line.trimStart()}`}
+                    {item.kind === "context" ? item.line : `${item.kind === "added" ? "+" : "-"} ${item.line.trimStart()}`}
                   </text>
                 </box>
               )

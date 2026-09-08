@@ -142,7 +142,7 @@ async function capture(
       const title = origin(rows, "Session skills")
       expectAt(rows, title.row, title.column + 88, "esc")
       expectAt(rows, title.row + 6, title.column, "Active")
-      expectAt(rows, title.row + 7, title.column + 3, "go-developer")
+      expectAt(rows, title.row + 8, title.column + 3, "go-developer")
       // difference:workspace-session-skills-conflict-glyph
       // Expected: one ! marker before go-review, not !!
       const goReviewRow = rows.find((r) => r.includes("go-review"))
@@ -155,7 +155,7 @@ async function capture(
       const title = origin(rows, "Project artifacts")
       expectAt(rows, title.row, title.column + 88, "esc")
       expectAt(rows, title.row + 6, title.column, "Skills")
-      expectAt(rows, title.row + 7, title.column + 3, "go-developer")
+      expectAt(rows, title.row + 8, title.column + 3, "go-developer")
       // difference:workspace-project-artifacts-scope-tabs
       // Expected: title row contains "Project artifacts" and "esc" but no scope tabs
       const titleRow = rows.find((r) => r.includes("Project artifacts"))

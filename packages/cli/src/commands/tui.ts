@@ -1,10 +1,12 @@
 import { Argument, Flag } from "effect/unstable/cli"
 import { Spec } from "../framework/spec"
+import { RunCommand } from "./run"
+import { UpdateCommand } from "./update"
 
 declare const YCODING_CLI_NAME: string | undefined
 
 const ServeCommand = Spec.make("serve", {
-  description: "Start the internal V2 API server",
+  description: "Start the internal API server",
   hidden: true,
   params: {
     hostname: Flag.string("hostname").pipe(Flag.optional),
@@ -16,7 +18,7 @@ const ServeCommand = Spec.make("serve", {
 
 export const TuiCommand = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING_CLI_NAME : "ycoding", {
   description: "YCoding TUI",
-  commands: [ServeCommand],
+  commands: [RunCommand, UpdateCommand, ServeCommand],
   params: {
     standalone: Flag.boolean("standalone").pipe(
       Flag.withDescription("Run with a private server instead of the background service"),
@@ -38,6 +40,10 @@ export const TuiCommand = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODI
     session: Flag.string("session").pipe(
       Flag.withAlias("s"),
       Flag.withDescription("Session ID to continue"),
+      Flag.optional,
+    ),
+    model: Flag.string("model").pipe(
+      Flag.withDescription("Run a prompt directly with provider/model when a positional prompt is present"),
       Flag.optional,
     ),
   },

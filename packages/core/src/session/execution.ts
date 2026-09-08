@@ -104,13 +104,18 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       advanced: { readonly goal: SessionAutonomy.Goal; readonly yolo: number },
     ) {
+      const assistant = (yield* store.context(sessionID)).findLast((message) => message.type === "assistant")
+      const latestAssistantText = assistant?.content
+        .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
+        .map((part) => part.text)
+        .join("")
       const id = SessionMessage.ID.make(
         `msg_goal_${Hash.sha256(`${sessionID}\0${advanced.goal.iteration}`).slice(0, 24)}`,
       )
       const input = SessionPending.Message.make({
         type: "synthetic",
         data: {
-          text: SessionAutonomy.continuationPrompt(advanced.goal),
+          text: SessionAutonomy.continuationPrompt(advanced.goal, { latestAssistantText }),
           description: "Autonomous goal continuation",
           metadata: { autonomy: { yolo: advanced.yolo, goal: true, iteration: advanced.goal.iteration } },
         },

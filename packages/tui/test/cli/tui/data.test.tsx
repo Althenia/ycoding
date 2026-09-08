@@ -660,6 +660,69 @@ test("truncates committed revert messages without changing lifetime usage", asyn
   }
 })
 
+test("projects live archive and unarchive without changing session activity", async () => {
+  const events = createEventStream()
+  const calls = createFetch((url) => {
+    if (url.pathname === "/api/session/ses_test")
+      return json({
+        data: {
+          id: "ses_test",
+          projectID: "proj_test",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 100 },
+          title: "Test session",
+          location: { directory },
+        },
+      })
+    return undefined
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let client!: ReturnType<typeof useClient>
+  function Probe() {
+    data = useData()
+    client = useClient()
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  try {
+    await wait(() => client.connection.status() === "connected")
+    await data.session.sync("ses_test")
+    const updated = data.session.get("ses_test")?.time.updated
+    expect(data.session.get("ses_test")).toBeDefined()
+    emitEvent(events, {
+      id: "evt_archived",
+      created: 1_000,
+      type: "session.archived",
+      durable: durable("ses_test", 1, 2),
+      data: { sessionID: "ses_test" },
+    })
+    await wait(() => data.session.get("ses_test")?.time.archived === 1_000)
+    expect(data.session.get("ses_test")?.time.updated).toBe(updated)
+    emitEvent(events, {
+      id: "evt_unarchived",
+      created: 2_000,
+      type: "session.unarchived",
+      durable: durable("ses_test", 2, 2),
+      data: { sessionID: "ses_test" },
+    })
+    await wait(() => data.session.get("ses_test")?.time.archived === undefined)
+    expect(data.session.get("ses_test")?.time.updated).toBe(updated)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("updates session location when moved", async () => {
   const events = createEventStream()
   const destination = "/tmp/ycoding-moved"
@@ -1005,12 +1068,12 @@ test("classifies live tool rows independently of their call ID", async () => {
     })
 
     await wait(() => rows.length > 0)
-    expect(rows).toEqual([
-      {
-        type: "part",
-        ref: { messageID: "message-assistant", partID: "reasoning:0" },
-      },
-    ])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      type: "part",
+      ref: { messageID: "message-assistant", partID: "reasoning:0" },
+    })
+    expect(Reflect.get(rows[0] ?? {}, "key")).toBe("part:message-assistant:reasoning:0")
   } finally {
     app.renderer.destroy()
   }
@@ -1229,8 +1292,25 @@ test("tracks session status from active sessions and execution events", async ()
       },
     })
     emitEvent(events, {
-      id: "evt_step_ended",
+      id: "evt_live_retry_scheduled",
       created: 0,
+      type: "session.retry.scheduled",
+      durable: durable("session-live", 1),
+      data: {
+        sessionID: "session-live",
+        assistantMessageID: "message-live",
+        attempt: 2,
+        at: 2_000,
+        error: { type: "provider.transport", message: "Disconnected" },
+      },
+    })
+    await wait(() => {
+      const assistant = data.session.message.get("session-live", "message-live")
+      return assistant?.type === "assistant" && assistant.retry?.attempt === 2
+    })
+    emitEvent(events, {
+      id: "evt_step_ended",
+      created: 3_000,
       type: "session.step.ended",
       durable: durable("session-live", 1),
       data: {
@@ -1279,12 +1359,23 @@ test("tracks session status from active sessions and execution events", async ()
 
     emitEvent(events, {
       id: "evt_execution_succeeded",
-      created: 0,
+      created: 4_000,
       type: "session.execution.succeeded",
       durable: durable("session-live", 1),
       data: { sessionID: "session-live" },
     })
     await wait(() => data.session.status("session-live") === "idle")
+    const retried = data.session.message.get("session-live", "message-live")
+    expect(retried).not.toHaveProperty("retry")
+    expect(retried).toMatchObject({
+      cost: 0.75,
+      tokens: {
+        input: 10,
+        output: 4,
+        reasoning: 2,
+        cache: { read: 3, write: 1 },
+      },
+    })
 
     await data.session.sync("session-failed")
     emitEvent(events, {

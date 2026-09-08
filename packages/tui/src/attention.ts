@@ -72,7 +72,20 @@ function normalizeText(input: string | undefined, fallback: string, limit: numbe
     .replace(/[\u0000-\u0009\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, "")
     .trim()
   const normalized = text.length ? text : fallback
-  return Array.from(normalized).slice(0, limit).join("")
+  return takeGraphemes(normalized, limit)
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+function takeGraphemes(value: string, count: number): string {
+  const selected: string[] = []
+  let taken = 0
+  for (const item of graphemes.segment(value)) {
+    if (taken >= count) break
+    selected.push(item.segment)
+    taken += 1
+  }
+  return selected.join("")
 }
 
 function clampVolume(volume: number) {

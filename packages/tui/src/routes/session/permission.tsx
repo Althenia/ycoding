@@ -528,7 +528,9 @@ export function Prompt<const T extends Record<string, string>>(props: {
       </box>
       <box width="100%" paddingTop={2} paddingLeft={6} paddingRight={3}>
         <text>
-          <span style={{ fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }}>S</span>
+          <span style={{ fg: themeV2.text.action.primary.focused, bg: themeV2.background.action.primary.focused }}>
+            S
+          </span>
           <span style={{ fg: themeV2.text.subdued }}>earch</span>
         </text>
       </box>
@@ -552,7 +554,7 @@ export function Prompt<const T extends Record<string, string>>(props: {
         flexShrink={0}
       >
         <For each={keys}>
-          {(option, index) => (
+          {(option) => (
             <box
               id={`session.${kind}.action.${String(option)}`}
               ref={SimulationSemantics.bind(() => ({
@@ -572,31 +574,35 @@ export function Prompt<const T extends Record<string, string>>(props: {
                 props.onSelect(option)
               }}
             >
-              <Show
-                when={option === store.selected}
-                fallback={
-                  <>
-                    <box height={1} backgroundColor={themeV2.background.surface.offset} />
-                    <box id={`session.${kind}.action.${String(option)}.label`} width="100%" height={1} paddingLeft={6} paddingRight={3}>
-                      <text fg={option === "reject" ? themeV2.text.feedback.error.default : themeV2.text.default}>
-                        {props.options[option]}
-                      </text>
-                    </box>
-                  </>
+              <box
+                id={`session.${kind}.action.${String(option)}.${option === store.selected ? "band" : "label"}`}
+                width="100%"
+                height={1}
+                paddingLeft={6}
+                paddingRight={3}
+                backgroundColor={
+                  option === store.selected
+                    ? themeV2.background.action.primary.focused
+                    : themeV2.background.surface.offset
                 }
               >
-                <box
-                  id={`session.${kind}.action.${String(option)}.band`}
-                  width="100%"
-                  height={1}
-                  paddingLeft={6}
-                  paddingRight={3}
-                  backgroundColor={themeV2.background.action.primary.focused}
+                <text
+                  fg={
+                    option === store.selected
+                      ? themeV2.text.action.primary.focused
+                      : option === "reject"
+                        ? themeV2.text.feedback.error.default
+                        : themeV2.text.default
+                  }
                 >
-                  <text fg={themeV2.text.action.primary.focused}>{props.options[option]}</text>
-                </box>
-                <box id={`session.${kind}.action.${String(option)}.spacer`} height={1} backgroundColor={themeV2.background.surface.offset} />
-              </Show>
+                  {props.options[option]}
+                </text>
+              </box>
+              <box
+                id={`session.${kind}.action.${String(option)}.spacer`}
+                height={1}
+                backgroundColor={themeV2.background.surface.offset}
+              />
             </box>
           )}
         </For>

@@ -1,6 +1,6 @@
 # Contributing to YCoding
 
-YCoding is a TUI-only coding agent. Contributions must preserve the terminal product, V2 runtime, explicit package boundaries, and documented behavior.
+YCoding is a terminal coding agent. Contributions must preserve the current runtime, explicit package boundaries, and documented behavior.
 
 ## Before changing code
 
@@ -74,7 +74,6 @@ Update documentation in the same change when behavior or public contracts change
 - Product scope: `README.md` and `docs/product-direction.md`
 - Package ownership or dependency direction: `docs/architecture.md`
 - Runtime behavior: `docs/runtime.md`
-- Historical upstream differences: `docs/upstream-differences.md`
 - Public schema or API behavior: the relevant `specs/v2` document
 - Migration or legacy-name handling: `docs/ycoding-migration.md`
 

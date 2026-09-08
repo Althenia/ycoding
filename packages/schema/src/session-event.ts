@@ -177,6 +177,26 @@ export const Deleted = Event.durable({
 })
 export type Deleted = typeof Deleted.Type
 
+export const Archived = Event.durable({
+  type: "session.archived",
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: Base,
+})
+export type Archived = typeof Archived.Type
+
+export const Unarchived = Event.durable({
+  type: "session.unarchived",
+  durable: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: Base,
+})
+export type Unarchived = typeof Unarchived.Type
+
 export const Forked = Event.durable({
   type: "session.forked",
   durable: {
@@ -753,6 +773,8 @@ export const Definitions = Event.inventory(
   UsageUpdated,
   DiagnosticsUpdated,
   Deleted,
+  Archived,
+  Unarchived,
   Forked,
   InputPromoted,
   InputAdmitted,
