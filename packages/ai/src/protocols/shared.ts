@@ -323,21 +323,29 @@ export const streamReadError = (route: string, error: unknown) => {
 }
 
 /**
- * `framing` step for Server-Sent Events. Decodes UTF-8, runs the SSE channel
- * decoder, and drops empty / `[DONE]` keep-alive events so the downstream
- * `decodeChunk` sees one JSON string per element. The SSE channel emits a
- * `Retry` control event on its error channel; we drop it here (we don't
- * implement client-driven retries) so the public error channel stays
- * `LLMError`.
+ * Decode SSE data without reconnecting on `retry:` directives. `Sse.decode`
+ * turns those directives into terminal failures; catching them would discard
+ * subsequent response chunks. The parser callback lets us ignore only the
+ * directive while preserving the active stream and its read errors.
  */
 export const sseFraming = (bytes: Stream.Stream<Uint8Array, LLMError>): Stream.Stream<string, LLMError> =>
-  bytes.pipe(
-    Stream.decodeText(),
-    Stream.pipeThroughChannel(Sse.decode()),
-    Stream.catchTag("Retry", () => Stream.empty),
-    Stream.filter((event) => event.data.length > 0 && event.data !== "[DONE]"),
-    Stream.map((event) => event.data),
-  )
+  Stream.suspend(() => {
+    const frames: string[] = []
+    const parser = Sse.makeParser((event) => {
+      if (event._tag === "Event" && event.data.length > 0 && event.data !== "[DONE]") frames.push(event.data)
+    })
+    return bytes.pipe(
+      Stream.decodeText(),
+      // Feed complete normalized lines: the parser loses fields when one feed
+      // mixes CRLF and LF, and does not retain CRLF state across feeds.
+      Stream.splitLines,
+      Stream.map((line) => {
+        parser.feed(`${line}\n`)
+        return frames.splice(0)
+      }),
+      Stream.flatMap(Stream.fromIterable),
+    )
+  })
 
 /**
  * Canonical invalid-request constructor. Lift one-line `const invalid =
