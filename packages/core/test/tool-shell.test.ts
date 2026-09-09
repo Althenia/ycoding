@@ -368,8 +368,8 @@ const mixedOutputCommand = isWindows
   : "printf stdout; sleep 0.05; printf stderr >&2"
 const idleCommand = isWindows ? "Start-Sleep -Seconds 60" : "sleep 60"
 const memoryHogCommand = [
-  `"${process.execPath}" -e 'const retained = [Buffer.alloc(48 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
-  `"${process.execPath}" -e 'const retained = [Buffer.alloc(48 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
+  `"${process.execPath}" -e 'const retained = [Buffer.alloc(80 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
+  `"${process.execPath}" -e 'const retained = [Buffer.alloc(80 * 1024 * 1024, 1)]; setInterval(() => void retained.length, 1000)' &`,
   "wait",
 ].join(" ")
 const bodyExitCommand = isWindows
