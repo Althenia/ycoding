@@ -30,7 +30,7 @@ async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 
   return app
 }
 
-test("expands the default sections and collapses the summarised ones", async () => {
+test("keeps summarised sections collapsed until their header is clicked", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
   const app = await mount(() => (
     <RailProvider>
@@ -44,11 +44,19 @@ test("expands the default sections and collapses the summarised ones", async () 
   ))
   await app.waitForFrame((frame) => frame.includes("TODO"))
 
-  const frame = app.captureCharFrame()
-  expect(frame).toContain("todo body")
-  expect(frame).toContain("3 connected")
-  expect(frame).toContain("mcp body")
-  app.renderer.destroy()
+  try {
+    expect(app.captureCharFrame()).toContain("todo body")
+    expect(app.captureCharFrame()).toContain("3 connected")
+    expect(app.captureCharFrame()).not.toContain("mcp body")
+
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => frame.includes("mcp body"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => !frame.includes("mcp body"))
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("registers sidebar content in the rail design order", async () => {
@@ -120,6 +128,8 @@ test("renders guardrail auto-approval only at effective YOLO 3", async () => {
     try {
       const row = app.captureCharFrame().split("\n").find((line) => line.includes("Guardrails"))
       expect(row?.trimEnd(), item.name).toEndWith(item.expected)
+      const hard = app.captureCharFrame().split("\n").find((line) => line.includes("Hard reviews"))
+      expect(hard?.trimEnd(), item.name).toEndWith("human only")
     } finally {
       app.renderer.destroy()
     }
@@ -284,6 +294,10 @@ test("leaves one blank row after normal expanded SUBAGENTS content", async () =>
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
 
   try {
+    const header = app.captureCharFrame().split("\n").findIndex((line) => line.includes("SUBAGENTS"))
+    await app.mockMouse.click(2, header)
+    await app.waitForFrame((frame) => frame.includes("Completed task"))
+
     const lines = app.captureCharFrame().split("\n")
     const completed = lines.findIndex((line) => line.includes("Completed task"))
     const next = lines.findIndex((line) => line.includes("NEXT"))
@@ -304,7 +318,7 @@ test("applies one outer surface row around populated normal rail sections", asyn
       import("../src/feature-plugins/sidebar/shells"),
     ])
   const app = await mount(() => (
-    <RailProvider>
+    <RailProvider allExpanded>
       <SubagentRailContent tasks={[{ sessionID: "ses_subagent", description: "subagent row", state: "running", elapsed: "2m" }]} />
       <ShellRailContent groups={[{ owner: { label: "Main chat" }, shells: [{ id: "shell", status: "running" }] }]} terminalCount={0} />
       <RailSection section="mcp" title="MCP" summary="1/1 connected">
@@ -537,9 +551,9 @@ test("renders rail header glyphs and colors for expanded, collapsed, and attenti
     expect(expanded[0]?.plainText).toBe("\u2212")
     expect(expanded[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
     expect(expanded[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(collapsed[0]?.plainText).toBe("−")
-    expect(collapsed[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
-    expect(collapsed[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.success.default.toInts())
+    expect(collapsed[0]?.plainText).toBe("+")
+    expect(collapsed[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
+    expect(collapsed[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.info.default.toInts())
     expect(attentionExpanded[0]?.plainText).toBe("\u2212")
     expect(attentionExpanded[0]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
     expect(attentionExpanded[1]?.fg.toInts()).toEqual(themeV2()!.text.feedback.warning.default.toInts())
@@ -562,13 +576,13 @@ test("auto-expands on attention and re-collapses once it clears", async () => {
     </RailProvider>
   ))
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
-  expect(app.captureCharFrame()).toContain("subagent body")
+  expect(app.captureCharFrame()).not.toContain("subagent body")
 
   setWaiting(true)
   await app.waitForFrame((frame) => frame.includes("subagent body"))
 
   setWaiting(false)
-  await app.waitForFrame((frame) => frame.includes("subagent body"))
+  await app.waitForFrame((frame) => !frame.includes("subagent body"))
   app.renderer.destroy()
 })
 
@@ -655,13 +669,14 @@ function hasChildren(value: unknown): value is { getChildren(): readonly unknown
   return typeof value === "object" && value !== null && "getChildren" in value && typeof value.getChildren === "function"
 }
 
-test("an attention event preserves every expanded section", async () => {
+test("an attention event preserves default-expanded sections and releases its own section", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
+  const [contextAttention, setContextAttention] = createSignal(false)
   const [waiting, setWaiting] = createSignal(false)
   const app = await mount(
     () => (
       <RailProvider goal autonomy>
-        <RailSection section="context" title="CONTEXT">
+        <RailSection section="context" title="CONTEXT" attention={contextAttention()}>
           <text>context body</text>
         </RailSection>
         <RailSection section="goal" title="GOAL">
@@ -690,6 +705,19 @@ test("an attention event preserves every expanded section", async () => {
   expect(frame).toContain("goal body")
   expect(frame).toContain("todo body")
   expect(frame).toContain("subagent body")
+
+  setContextAttention(true)
+  await app.waitForFrame((value) => value.includes("context body"))
+  setContextAttention(false)
+  await app.waitForFrame((value) => value.includes("context body"))
+
+  setWaiting(false)
+  await app.waitForFrame((value) => !value.includes("subagent body"))
+  const cleared = app.captureCharFrame()
+  expect(cleared).toContain("context body")
+  expect(cleared).toContain("goal body")
+  expect(cleared).toContain("autonomy body")
+  expect(cleared).toContain("todo body")
   app.renderer.destroy()
 })
 
@@ -705,12 +733,12 @@ test("a user can toggle a collapsed section from its header", async () => {
   await app.waitForFrame((frame) => frame.includes("1 active"))
 
   try {
-    expect(app.captureCharFrame()).toContain("mcp body")
+    expect(app.captureCharFrame()).not.toContain("mcp body")
     const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
     await app.mockMouse.click(2, headingRow)
-    await app.waitForFrame((frame) => !frame.includes("mcp body"))
-    await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => frame.includes("mcp body"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => !frame.includes("mcp body"))
   } finally {
     app.renderer.destroy()
   }

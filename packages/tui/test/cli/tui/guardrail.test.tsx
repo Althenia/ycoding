@@ -62,7 +62,8 @@ test("attributes child reviews to their root family and exposes explicit guardra
   })
   const source = await Bun.file(new URL("../../../src/routes/session/guardrail.tsx", import.meta.url)).text()
   expect(source).toContain('kind="guardrail"')
-  expect(source).toContain('options={{ reject: "Deny", once: "Allow once", always: "Allow for this session" }}')
+  expect(source).toContain('{ reject: "Deny", once: "Allow once", always: "Allow for this session" }')
+  expect(source).toContain("props.request.hardReview")
   expect(source).toContain('const reply = (value: "once" | "always" | "reject") => {')
   expect(source).toContain("reply: value")
   expect(source).toContain('defaultOption="reject"')
@@ -128,6 +129,61 @@ test("renders a warning-framed guardrail approval", async () => {
   }
 })
 
+test("renders a hard review with one-time approval or rejection only", async () => {
+  const replyReceived = Promise.withResolvers<unknown>()
+  const transport = createFetch(async (url, request) => {
+    if (/^\/api\/session\/[^/]+\/guardrail\/request\/[^/]+\/reply$/.test(url.pathname)) {
+      replyReceived.resolve(await request.json())
+      return new Response(null, { status: 204 })
+    }
+    return undefined
+  })
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <Keymap.Provider>
+            <ClientProvider api={createApi(transport.fetch)}>
+              <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+                <ToastProvider>
+                  <prompt.GuardrailPrompt
+                    request={{
+                      id: "grq_hard_review",
+                      rootSessionID: "ses_root",
+                      sessionID: "ses_child",
+                      action: "shell",
+                      resources: ["rm -rf ."],
+                      ruleIDs: ["standard.review.broad-deletion"],
+                      reason: "Recursive deletion includes the current project",
+                      standard: true,
+                      hardReview: true,
+                    }}
+                  />
+                </ToastProvider>
+              </ThemeProvider>
+            </ClientProvider>
+          </Keymap.Provider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    { width: 96, height: 24, kittyKeyboard: true },
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Guardrail blocked"))
+
+  try {
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Allow once")
+    expect(frame).toContain("Deny")
+    expect(frame).not.toContain("Allow for this session")
+    app.mockInput.pressArrow("left")
+    app.mockInput.pressEnter()
+    expect(await replyReceived.promise).toEqual({ reply: "once" })
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("defaults guardrails to deny and ordinary permissions to allow once", async () => {
   const selectedBackground = async (kind: "guardrail" | "permission", defaultOption: "once" | "reject") => {
     const app = await testRender(
@@ -157,11 +213,13 @@ test("defaults guardrails to deny and ordinary permissions to allow once", async
 
     try {
       const selected = descendants(app.renderer.root).find(
-        (item): item is BoxRenderable => item instanceof BoxRenderable && item.id === `session.${kind}.action.${defaultOption}`,
+        (item): item is BoxRenderable =>
+          item instanceof BoxRenderable && item.id === `session.${kind}.action.${defaultOption}`,
       )
       const unselected = descendants(app.renderer.root).find(
         (item): item is BoxRenderable =>
-          item instanceof BoxRenderable && item.id === `session.${kind}.action.${defaultOption === "once" ? "reject" : "once"}`,
+          item instanceof BoxRenderable &&
+          item.id === `session.${kind}.action.${defaultOption === "once" ? "reject" : "once"}`,
       )
       expect(selected).toBeDefined()
       expect(unselected).toBeDefined()

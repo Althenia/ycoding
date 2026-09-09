@@ -206,9 +206,9 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         expect(indexes.every((index) => index >= 0)).toBe(true)
         expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
         expect(rail).not.toContain("3 / 5")
-        // GOAL and AUTONOMY remain collapsed by default; their headers retain active-state summaries.
-        expect(rail).toMatch(/\+\s+GOAL\s+active/)
-        expect(rail).toMatch(/\+\s+AUTONOMY\s+Goal/)
+        // An active goal expands the primary operational sections; their headers retain active-state summaries.
+        expect(rail).toMatch(/−\s+GOAL\s+active/)
+        expect(rail).toMatch(/−\s+AUTONOMY\s+Goal/)
       }
       if (viewport.width === DESIGN_VIEWPORT.width) {
         expect(lines.join("\n")).toContain("YCODING")

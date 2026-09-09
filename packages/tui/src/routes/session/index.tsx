@@ -61,6 +61,7 @@ import { openEditor } from "../../editor"
 import { useDialog } from "../../ui/dialog"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogSessionSkills } from "../../component/dialog-session-skills"
+import { DialogSessionTerminals } from "../../component/dialog-session-terminals"
 import { DialogProjectArtifacts } from "../../component/dialog-project-artifacts"
 import { DialogMessage } from "./dialog-message"
 import { DialogFork } from "./dialog-fork"
@@ -431,7 +432,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     data.on("session.execution.interrupted", settledAutonomy),
   ]
   onCleanup(() => autonomySubscriptions.forEach((unsubscribe) => unsubscribe()))
-  const autoApproved = new Set<string>()
   const operationalHeaderState = createMemo<SessionHeaderOperationalState>(() => {
     const lastAssistant = messages().findLast((item): item is SessionMessageAssistant => item.type === "assistant")
     const retry = sessionRetryHeaderState(lastAssistant)
@@ -504,6 +504,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     return agent?.name ?? (agent ? Locale.titlecase(agent.id) : undefined)
   })
   const parentID = createMemo(() => session()?.parentID)
+  const btw = createMemo(() => Boolean(session()?.parentID && session()?.agent === "btw"))
   const parent = createMemo(() => (parentID() ? data.session.get(parentID()!) : undefined))
   const siblings = createMemo(() => {
     const parent = parentID()
@@ -562,23 +563,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     return message.content.find((part) => part.type === "text")?.text
   })
   const blockedActivity = createMemo(() => currentTask()?.description)
-  createEffect(() => {
-    if (local.permission.mode !== "auto") return
-    permissions().forEach((request) => {
-      if (autoApproved.has(request.id)) return
-      autoApproved.add(request.id)
-      void client.api.permission
-        .reply({
-          sessionID: request.sessionID,
-          reply: "once",
-          requestID: request.id,
-        })
-        .catch((error) => {
-          autoApproved.delete(request.id)
-          toast.error(error)
-        })
-    })
-  })
   const editor = useEditorContext()
   const rows = createSessionRows(
     () => route.sessionID,
@@ -1306,6 +1290,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       },
     },
     {
+      title: "Inspect Session terminal",
+      id: "session.terminal.inspect",
+      group: "Session",
+      enabled: !!session(),
+      run: () => {
+        const owner = session()
+        if (!owner) return
+        dialog.replace(() => <DialogSessionTerminals sessionID={owner.id} location={owner.location} />)
+      },
+    },
+    {
       title: "Background blocking tools",
       id: "session.background",
       group: "Session",
@@ -1320,7 +1315,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       id: "session.child.first",
       group: "Session",
       run: () => {
-        if (disabled() || composer.open || session()?.parentID) {
+        if (disabled() || composer.open || (session()?.parentID && !btw())) {
           setComposer("open", false)
         } else {
           setComposer({ open: true, tab: "subagents" })
@@ -1568,7 +1563,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                     }}
                   </Show>
                 </Match>
-                <Match when={session()?.parentID}>{null}</Match>
+                <Match when={session()?.parentID && !btw()}>{null}</Match>
                 <Match when={!disabled() && !composer.open}>{sessionPrompt()}</Match>
               </Switch>
               <Show when={session()?.parentID && !blockedQuestion()}>
@@ -1629,6 +1624,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           autonomy={autonomy()}
           onAutonomyUpdated={acceptAutonomy}
           inset={{ left: 3, right: 4 }}
+          placeholders={btw() ? { normal: ["Message BTW…"] } : undefined}
           right={<pluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
         />
       </pluginRuntime.Slot>

@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "feature": "Session-owned terminal picker and inspector transport",
+  "scope": "change",
+  "changed_capabilities": [
+    "session.terminal-inspector-navigation",
+    "dialog.session-terminal-picker",
+    "streaming.terminal-ticket-transport",
+    "recovery.terminal-emulator-reconnect",
+    "cancellation.terminal-inspector-lifetime",
+    "security.terminal-session-ownership"
+  ],
+  "required_families": ["session", "dialog", "streaming", "recovery", "cancellation", "security"],
+  "cases": [
+    {
+      "id": "SES-PTY-001",
+      "title": "Session terminal inspector opens only after deliberate picker selection",
+      "family": "session",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "regression",
+      "covers": ["session.terminal-inspector-navigation"],
+      "preconditions": ["a Session route is active", "one owned PTY is returned"],
+      "stimulus": ["invoke the terminal inspector palette command", "select the owned PTY"],
+      "oracles": [
+        { "type": "state", "expected": "route changes to the selected PTY identity only after selection" },
+        {
+          "type": "side_effect",
+          "expected": "selection performs no Session interrupt, PTY write, resize, or termination"
+        }
+      ],
+      "negative": ["background PTY activity does not open or focus the inspector"],
+      "determinism": ["fixed Session and PTY ids", "recording Promise Client"],
+      "cleanup": ["close dialog and dispose renderer"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "DLG-PTY-001",
+      "title": "terminal picker excludes PTYs owned by another Session and safely retries list failure",
+      "family": "dialog",
+      "layer": "widget",
+      "risk": "critical",
+      "variant": "failure",
+      "covers": ["dialog.session-terminal-picker", "security.terminal-session-ownership"],
+      "preconditions": ["list response contains owned and foreign Session fixtures"],
+      "stimulus": ["open picker", "inject list failure", "retry the list"],
+      "oracles": [
+        { "type": "render", "expected": "only owned PTYs render and list failure has a retry action" },
+        { "type": "side_effect", "expected": "Promise Client list request includes the active Session id and Location" }
+      ],
+      "negative": ["foreign PTY and raw transport error details never render"],
+      "determinism": ["fail-first recording Promise Client", "fixed renderer size"],
+      "cleanup": ["abort list request and dispose renderer"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "STR-PTY-001",
+      "title": "ticketed control connection carries generation offset and writer fence",
+      "family": "streaming",
+      "layer": "integration",
+      "risk": "critical",
+      "variant": "security",
+      "covers": ["streaming.terminal-ticket-transport", "security.terminal-session-ownership"],
+      "preconditions": ["user control is synchronized at a known fence"],
+      "stimulus": ["connect at retained offset", "open ticketed WebSocket", "send one input frame"],
+      "oracles": [
+        {
+          "type": "side_effect",
+          "expected": "public connect-token input and socket query bind PTY, Session, Location, generation, offset, access, and fence"
+        },
+        { "type": "event", "expected": "binary server frame reaches the inspector exactly once" }
+      ],
+      "negative": ["input is not sent before the fenced control socket is open"],
+      "determinism": ["fake WebSocket", "fixed ticket and identities"],
+      "cleanup": ["close socket and abort ticket request"],
+      "platforms": ["all"]
+    },
+    {
+      "id": "REC-PTY-001",
+      "title": "socket reconnect resumes the resident emulator from its last ordered offset",
+      "family": "recovery",
+      "layer": "integration",
+      "risk": "critical",
+      "variant": "recovery",
+      "covers": ["recovery.terminal-emulator-reconnect"],
+      "preconditions": ["ordered output has advanced the resident emulator"],
+      "stimulus": ["disconnect the inspector socket", "reconnect without remounting the viewport"],
+      "oracles": [
+        { "type": "state", "expected": "next connection requests the same generation and last applied offset" },
+        { "type": "render", "expected": "prior cells remain while connection status recovers" }
+      ],
+      "negative": ["reconnect neither clears the emulator nor replays already applied bytes"],
+      "determinism": ["controllable connection handlers", "zero-delay reconnect fixture"],
+      "cleanup": ["dispose reconnect task and renderer"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "STR-PTY-002",
+      "title": "connect-token failure settles as a safe reconnectable transport failure",
+      "family": "streaming",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "failure",
+      "covers": ["streaming.terminal-ticket-transport"],
+      "preconditions": ["connect-token request rejects with sensitive diagnostic detail"],
+      "stimulus": ["start inspector connection", "reject token request"],
+      "oracles": [
+        { "type": "event", "expected": "one category-only connection failure reaches the inspector" },
+        { "type": "resource", "expected": "no WebSocket is opened" }
+      ],
+      "negative": ["raw error text and ticket material do not reach rendering"],
+      "determinism": ["rejecting Promise Client", "socket creation recorder"],
+      "cleanup": ["dispose failed connection owner"],
+      "platforms": ["all"]
+    },
+    {
+      "id": "CAN-PTY-001",
+      "title": "closing during ticket acquisition cancels transport without opening a late socket",
+      "family": "cancellation",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "cancel",
+      "covers": ["cancellation.terminal-inspector-lifetime"],
+      "preconditions": ["connect-token request is pending"],
+      "stimulus": ["dispose connection", "deliver late token response"],
+      "oracles": [
+        { "type": "resource", "expected": "request signal is aborted and no WebSocket remains" },
+        { "type": "side_effect", "expected": "late token response creates zero sockets" }
+      ],
+      "negative": ["cancel does not interrupt the Session or terminate the PTY"],
+      "determinism": ["deferred token promise", "socket creation recorder"],
+      "cleanup": ["settle deferred promise and assert zero live sockets"],
+      "platforms": ["all"]
+    },
+    {
+      "id": "SEC-PTY-002",
+      "title": "close-view retains inspector when returning user control fails",
+      "family": "security",
+      "layer": "widget",
+      "risk": "critical",
+      "variant": "failure",
+      "covers": ["security.terminal-session-ownership", "cancellation.terminal-inspector-lifetime"],
+      "preconditions": ["user owns the PTY fence", "pause control request will fail"],
+      "stimulus": ["activate Close view"],
+      "oracles": [
+        { "type": "state", "expected": "inspector remains open with user ownership unchanged" },
+        { "type": "render", "expected": "safe actionable control failure is visible" }
+      ],
+      "negative": [
+        "view does not close, resume agent control, interrupt Session, terminate PTY, or render raw error details"
+      ],
+      "determinism": ["rejecting control adapter", "fixed renderer size"],
+      "cleanup": ["dispose renderer and connection"],
+      "platforms": ["in-memory-renderer"]
+    }
+  ]
+}

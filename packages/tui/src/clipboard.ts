@@ -1,11 +1,8 @@
-import { execFile, spawn } from "node:child_process"
+import { spawn } from "node:child_process"
 import { mkdtemp, open, rm, writeFile } from "node:fs/promises"
 import { platform, release, tmpdir } from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { promisify } from "node:util"
-
-const exec = promisify(execFile)
 
 export type ClipboardTemporary = Readonly<{ path: string; cleanup(): Promise<void> }>
 export type ClipboardFile = Readonly<{
@@ -15,10 +12,14 @@ export type ClipboardFile = Readonly<{
   name: string
   temporary: ClipboardTemporary
 }>
+export type ClipboardReadOptions = Readonly<{ signal?: AbortSignal; timeoutMs?: number }>
 
-function command(command: string, args: string[] = [], input?: string) {
+function command(command: string, args: string[] = [], input?: string, signal?: AbortSignal) {
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn(command, args, { stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"] })
+    const child = spawn(command, args, {
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+      signal,
+    })
     const output: Buffer[] = []
     child.on("error", reject)
     child.stdout?.on("data", (chunk: Buffer) => output.push(chunk))
@@ -36,58 +37,93 @@ function writeOsc52(text: string) {
   process.stdout.write(process.env.TMUX || process.env.STY ? `\x1bPtmux;\x1b${sequence}\x1b\\` : sequence)
 }
 
-export async function read() {
+export async function read(options?: ClipboardReadOptions) {
+  const signal = options?.signal
+    ? AbortSignal.any([options.signal, AbortSignal.timeout(options.timeoutMs ?? 60_000)])
+    : AbortSignal.timeout(options?.timeoutMs ?? 60_000)
+  requireActive(signal)
   if (platform() === "darwin") {
     // Use OS tmpdir (typically /var/folders/.../T) instead of hardcoded /private/tmp
     // to respect sandbox/TMPDIR and avoid intermittent ENOENT on restricted /private/tmp.
     try {
-      return await materializeClipboardImage(tmpdir(), async (file) => {
-        await exec("osascript", [
-          "-e",
-          'set imageData to the clipboard as "PNGf"',
-          "-e",
-          `set fileRef to open for access POSIX file "${file}" with write permission`,
-          "-e",
-          "set eof fileRef to 0",
-          "-e",
-          "write imageData to fileRef",
-          "-e",
-          "close access fileRef",
-        ])
-      })
-    } catch {
+      return await materializeClipboardImage(
+        tmpdir(),
+        async (file) => {
+          await command(
+            "osascript",
+            [
+              "-e",
+              'set imageData to the clipboard as "PNGf"',
+              "-e",
+              `set fileRef to open for access POSIX file "${file}" with write permission`,
+              "-e",
+              "set eof fileRef to 0",
+              "-e",
+              "write imageData to fileRef",
+              "-e",
+              "close access fileRef",
+            ],
+            undefined,
+            signal,
+          )
+        },
+        { signal },
+      )
+    } catch (error) {
+      requireActive(signal, error)
       // Fall through to text clipboard.
     }
   }
 
   if (platform() === "win32" || release().includes("WSL")) {
     try {
-      return await materializeClipboardImage(tmpdir(), async (file) => {
-        const target = release().includes("WSL") ? (await command("wslpath", ["-w", file])).toString().trim() : file
-        const escaped = target.replaceAll("'", "''")
-        const script = `Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if (-not $img) { exit 1 }; $img.Save('${escaped}', [System.Drawing.Imaging.ImageFormat]::Png)`
-        await command("powershell.exe", ["-NonInteractive", "-NoProfile", "-command", script])
-      })
-    } catch {
+      return await materializeClipboardImage(
+        tmpdir(),
+        async (file) => {
+          const target = release().includes("WSL")
+            ? (await command("wslpath", ["-w", file], undefined, signal)).toString().trim()
+            : file
+          const escaped = target.replaceAll("'", "''")
+          const script = `Add-Type -AssemblyName System.Windows.Forms; $img = [System.Windows.Forms.Clipboard]::GetImage(); if (-not $img) { exit 1 }; $img.Save('${escaped}', [System.Drawing.Imaging.ImageFormat]::Png)`
+          await command("powershell.exe", ["-NonInteractive", "-NoProfile", "-command", script], undefined, signal)
+        },
+        { signal },
+      )
+    } catch (error) {
+      requireActive(signal, error)
       // Fall through to text clipboard.
     }
   }
 
   if (platform() === "linux") {
-    const image = await command("wl-paste", ["-t", "image/png"])
-      .catch(() => command("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"]))
-      .catch(() => Buffer.alloc(0))
+    const image = await command("wl-paste", ["-t", "image/png"], undefined, signal)
+      .catch((error) => {
+        requireActive(signal, error)
+        return command("xclip", ["-selection", "clipboard", "-t", "image/png", "-o"], undefined, signal)
+      })
+      .catch((error) => {
+        requireActive(signal, error)
+        return Buffer.alloc(0)
+      })
     if (image.length) {
-      return materializeClipboardImage(tmpdir(), (file) => writeFile(file, image))
+      return materializeClipboardImage(tmpdir(), (file) => writeFile(file, image), { signal })
     }
   }
 
+  requireActive(signal)
   const { default: clipboardy } = await import("clipboardy")
   const text = await clipboardy.read().catch(() => undefined)
+  requireActive(signal)
   if (text) return { type: "text" as const, text, mime: "text/plain" as const }
+  return undefined
 }
 
-export async function materializeClipboardImage(root: string, write: (file: string) => Promise<void>) {
+export async function materializeClipboardImage(
+  root: string,
+  write: (file: string) => Promise<void>,
+  options?: Pick<ClipboardReadOptions, "signal">,
+) {
+  requireActive(options?.signal)
   const directory = await mkdtemp(path.join(root, "ycoding-clipboard-"))
   const file = path.join(directory, "clipboard.png")
   const handle = await open(file, "wx", 0o600).catch(async (error) => {
@@ -103,6 +139,7 @@ export async function materializeClipboardImage(root: string, write: (file: stri
   }
   try {
     await write(file)
+    requireActive(options?.signal)
     return {
       type: "file" as const,
       uri: pathToFileURL(file).href,
@@ -114,6 +151,13 @@ export async function materializeClipboardImage(root: string, write: (file: stri
     await cleanup()
     throw error
   }
+}
+
+function requireActive(signal?: AbortSignal, cause?: unknown) {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  if (cause instanceof Error) throw cause
+  throw new Error("Clipboard acquisition cancelled")
 }
 
 export function copyCommand(
@@ -134,6 +178,7 @@ export function copyCommand(
       "[Console]::InputEncoding = [System.Text.Encoding]::UTF8; Set-Clipboard -Value ([Console]::In.ReadToEnd())",
     ]
   }
+  return undefined
 }
 
 let copyMethod: Promise<(text: string) => Promise<void>> | undefined

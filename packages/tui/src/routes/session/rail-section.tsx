@@ -61,6 +61,7 @@ export function RailProvider(
     attend: (key, needsAttention) => {
       if (needsAttention === attending().includes(key)) return
       if (needsAttention) {
+        if (order().includes(key)) return
         setAttending((current) => [...current, key])
         setOrder((current) => expandSection(current, key))
         return

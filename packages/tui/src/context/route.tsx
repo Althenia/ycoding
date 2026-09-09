@@ -27,7 +27,13 @@ export type ShellOutputRoute = {
   shellID: string
 }
 
-export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute
+export type TerminalInspectorRoute = {
+  type: "terminal-inspector"
+  sessionID: string
+  ptyID: string
+}
+
+export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute | TerminalInspectorRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   name: "Route",

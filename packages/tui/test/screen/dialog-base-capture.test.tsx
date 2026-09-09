@@ -12,7 +12,6 @@ import { DataProvider, useData } from "../../src/context/data"
 import { Keymap } from "../../src/context/keymap"
 import { LocalProvider } from "../../src/context/local"
 import { LocationProvider, useLocation } from "../../src/context/location"
-import { PermissionProvider } from "../../src/context/permission"
 import { RouteProvider } from "../../src/context/route"
 import { ThemeProvider } from "../../src/context/theme"
 import { DialogProvider, useDialog } from "../../src/ui/dialog"
@@ -103,7 +102,6 @@ function DialogProviders(props: { children: JSX.Element }) {
               <ToastProvider>
                 <RouteProvider initialRoute={{ type: "session", sessionID }}>
                   <ClientProvider api={createApi(transport.fetch)}>
-                    <PermissionProvider>
                       <DataProvider>
                         <LocationProvider>
                           <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
@@ -113,7 +111,6 @@ function DialogProviders(props: { children: JSX.Element }) {
                           </ThemeProvider>
                         </LocationProvider>
                       </DataProvider>
-                    </PermissionProvider>
                   </ClientProvider>
                 </RouteProvider>
               </ToastProvider>

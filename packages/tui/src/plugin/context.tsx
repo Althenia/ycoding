@@ -130,6 +130,8 @@ export function PluginProvider(props: ParentProps<{ packages: PackageResolver }>
             route.navigate(destination)
           },
           current() {
+            if (route.data.type === "terminal-inspector")
+              return { type: "session" as const, sessionID: route.data.sessionID }
             return route.data
           },
         },

@@ -27,7 +27,8 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
   const [submitting, setSubmitting] = createSignal(false)
   const presentation = () => guardrailPresentation(props.request)
   const resource = () => presentation().resources[0] ?? presentation().action
-  const needsContext = () => props.request.sessionID !== props.request.rootSessionID || presentation().resources.length > 1
+  const needsContext = () =>
+    props.request.sessionID !== props.request.rootSessionID || presentation().resources.length > 1
 
   const reply = (value: "once" | "always" | "reject") => {
     if (submitting()) return
@@ -50,8 +51,14 @@ export function GuardrailPrompt(props: { request: GuardrailRequest }) {
       instance={props.request.id}
       escapeKey="reject"
       defaultOption="reject"
-      options={{ reject: "Deny", once: "Allow once", always: "Allow for this session" }}
-      onSelect={(option) => reply(option)}
+      options={
+        props.request.hardReview
+          ? { reject: "Deny", once: "Allow once" }
+          : { reject: "Deny", once: "Allow once", always: "Allow for this session" }
+      }
+      onSelect={(option) => {
+        if (option === "once" || option === "always" || option === "reject") reply(option)
+      }}
       body={
         <box flexDirection="column">
           <box paddingLeft={3} paddingRight={3}>

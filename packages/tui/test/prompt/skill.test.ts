@@ -162,10 +162,29 @@ describe("prompt skills", () => {
       skills: [],
     })
 
-    expect(result).toBe(admitted)
+    expect(result).toEqual({ admitted })
     expect(calls).toEqual([
       { resume: false, admitted: undefined },
       { resume: true, admitted },
     ])
+  })
+
+  test("captures the durable admission before a failed wake settles", async () => {
+    const admitted = { files: [{ uri: `ycoding-attachment://sha256/${"b".repeat(64)}`, name: "clipboard.png" }] }
+    const captured: (typeof admitted)[] = []
+
+    const result = await submitPromptWithSkills({
+      prompt: async (resume) => {
+        if (resume) throw new Error("wake disconnected")
+        return admitted
+      },
+      skills: [],
+      onAdmitted: (receipt) => void captured.push(receipt),
+    })
+
+    expect(captured).toEqual([admitted])
+    expect(result.admitted).toBe(admitted)
+    expect(result.wakeError).toBeInstanceOf(Error)
+    expect(result.wakeError?.message).toBe("wake disconnected")
   })
 })

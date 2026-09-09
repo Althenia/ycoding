@@ -21,7 +21,6 @@ import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { useData } from "./data"
-import { usePermission } from "./permission"
 import { useLocation } from "./location"
 
 export type LocalTheme = {
@@ -66,7 +65,6 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
     const paths = useTuiPaths()
     const args = useArgs()
     const event = useEvent()
-    const permission = usePermission()
     const location = useLocation()
     const activeLocation = () => location.current ?? data.location.default()
 
@@ -498,7 +496,6 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
       model,
       agent,
       session,
-      permission,
     }
     return result
   },

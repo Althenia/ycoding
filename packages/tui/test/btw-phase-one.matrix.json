@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "feature": "BTW side-chat composer and reviewed parent export",
+  "scope": "change",
+  "changed_capabilities": [
+    "composer.btw-conversation",
+    "dialog.btw-parent-export",
+    "session.btw-routing",
+    "security.btw-read-only-agent"
+  ],
+  "required_families": ["composer", "dialog", "session", "security"],
+  "cases": [
+    {
+      "id": "CMP-001",
+      "title": "BTW alone mounts one ordinary composer in collapsed and expanded layouts",
+      "family": "composer",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "regression",
+      "covers": ["composer.btw-conversation"],
+      "preconditions": ["root, ordinary child, and BTW child fixtures are hydrated"],
+      "stimulus": ["render each Session route", "toggle the BTW expanded composer"],
+      "oracles": [
+        {"type": "render", "expected": "root is unchanged, ordinary child has no ordinary composer, and BTW has exactly one composer in each layout"},
+        {"type": "state", "expected": "BTW draft remains owned by the single focused composer"}
+      ],
+      "negative": ["ordinary managed child does not gain a composer", "BTW does not mount duplicate prompts"],
+      "determinism": ["fixed Session fixtures", "fixed 120x40 renderer"],
+      "cleanup": ["dispose every renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "SES-001",
+      "title": "repeated BTW conversation messages stay on the BTW child identity",
+      "family": "session",
+      "layer": "integration",
+      "risk": "critical",
+      "variant": "security",
+      "covers": ["session.btw-routing", "security.btw-read-only-agent"],
+      "preconditions": ["BTW child uses the read-only btw agent and a durable model selection"],
+      "stimulus": ["submit two ordinary composer messages"],
+      "oracles": [
+        {"type": "side_effect", "expected": "both exact admissions and wakes target only the BTW child with one stable id per message"},
+        {"type": "state", "expected": "session agent and model remain btw and the original model"}
+      ],
+      "negative": ["no parent prompt, agent switch, model switch, interrupt, or generate request occurs"],
+      "determinism": ["recording fixture transport", "fixed Session and model ids"],
+      "cleanup": ["dispose renderer and fixture server after request assertions"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "DLG-001",
+      "title": "cancelling reviewed parent export preserves the BTW draft and sends nothing",
+      "family": "dialog",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "cancel",
+      "covers": ["dialog.btw-parent-export"],
+      "preconditions": ["BTW composer contains a btw-send command and the immediate parent is resident"],
+      "stimulus": ["open an empty export preview and confirm", "open a populated export preview", "press Escape"],
+      "oracles": [
+        {"type": "render", "expected": "preview names the immediate parent and the original BTW draft is restored"},
+        {"type": "side_effect", "expected": "empty confirmation and cancellation leave the parent prompt count at zero"}
+      ],
+      "negative": ["no parent interrupt, generate, navigation, or draft clearing occurs"],
+      "determinism": ["fixed titles and input events", "recording fixture transport"],
+      "cleanup": ["close modal and dispose renderer"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "DLG-002",
+      "title": "confirmed reviewed export sends exact edited text as one parent steer",
+      "family": "dialog",
+      "layer": "integration",
+      "risk": "critical",
+      "variant": "happy",
+      "covers": ["dialog.btw-parent-export", "session.btw-routing"],
+      "preconditions": ["review preview is addressed to the immediate parent"],
+      "stimulus": ["edit preview text", "confirm once"],
+      "oracles": [
+        {"type": "side_effect", "expected": "one parent prompt carries the exact preview text, delivery steer, and a protocol message id"},
+        {"type": "render", "expected": "the route remains on BTW after success"}
+      ],
+      "negative": ["no summarization, parent interrupt, implicit navigation, or child prompt occurs"],
+      "determinism": ["fixed preview text", "recording fixture transport"],
+      "cleanup": ["dispose renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "SES-002",
+      "title": "failed reviewed export retries the immutable payload with the same id",
+      "family": "session",
+      "layer": "integration",
+      "risk": "critical",
+      "variant": "recovery",
+      "covers": ["dialog.btw-parent-export", "session.btw-routing"],
+      "preconditions": ["first parent admission returns a transport failure"],
+      "stimulus": ["confirm export", "confirm the retained preview again"],
+      "oracles": [
+        {"type": "side_effect", "expected": "both attempts use the same parent, text, delivery, and message id"},
+        {"type": "render", "expected": "failure keeps an editable retry dialog available"}
+      ],
+      "negative": ["no fresh-id replay or retargeting occurs"],
+      "determinism": ["fail-first fixture response", "recorded request bodies"],
+      "cleanup": ["dispose renderer after retry settlement"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "SEC-001",
+      "title": "BTW conversation cannot replace its read-only agent profile through local selection",
+      "family": "security",
+      "layer": "integration",
+      "risk": "critical",
+      "variant": "security",
+      "covers": ["security.btw-read-only-agent"],
+      "preconditions": ["local primary agent differs from the BTW child's durable agent"],
+      "stimulus": ["submit an ordinary message from the BTW composer"],
+      "oracles": [
+        {"type": "side_effect", "expected": "no session agent-switch request is sent"},
+        {"type": "state", "expected": "the BTW Session retains its read-only btw agent"}
+      ],
+      "negative": ["local primary-agent fallback does not widen BTW permissions"],
+      "determinism": ["fixed local and durable agents", "recording fixture transport"],
+      "cleanup": ["dispose renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    }
+  ]
+}

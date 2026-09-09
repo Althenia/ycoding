@@ -48,9 +48,25 @@ const permission = {
 let submittedPrompt: string | undefined
 let submittedResume: boolean | undefined
 let failNextPrompt = false
+let conflictNextPrompt = false
+let holdAdmissionUntilCancelled = false
+let admissionAbortObserved = false
 let modelSwitchGate: Promise<void> | undefined
 let releaseModelSwitch: (() => void) | undefined
 let modelSwitchStarted = false
+const promptRequests: Array<{
+  id: string
+  text: string
+  resume?: boolean
+  files?: Array<{ uri: string; name?: string }>
+}> = []
+let failNextWake = false
+let wakeGate: Promise<void> | undefined
+let releaseWake: (() => void) | undefined
+const skillRequests: Array<{ id: string; skill: string }> = []
+let failNextSkill = false
+let skillGate: Promise<void> | undefined
+let releaseSkill: (() => void) | undefined
 
 function submittedText(): string | undefined {
   return submittedPrompt
@@ -60,7 +76,13 @@ function submittedResumeValue(): boolean | undefined {
   return submittedResume
 }
 
-function isPromptBody(value: unknown): value is { id: string; text: string; delivery?: "steer" | "queue"; resume?: boolean } {
+function isPromptBody(value: unknown): value is {
+  id: string
+  text: string
+  delivery?: "steer" | "queue"
+  resume?: boolean
+  files?: Array<{ uri: string; name?: string }>
+} {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -72,6 +94,17 @@ function isPromptBody(value: unknown): value is { id: string; text: string; deli
   )
 }
 
+function isSkillBody(value: unknown): value is { id: string; skill: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "id" in value &&
+    typeof value.id === "string" &&
+    "skill" in value &&
+    typeof value.skill === "string"
+  )
+}
+
 async function route(url: URL, request: Request) {
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
@@ -80,12 +113,36 @@ async function route(url: URL, request: Request) {
   if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
     const body: unknown = await request.json()
     if (!isPromptBody(body)) return json({ error: "invalid prompt" }, { status: 400 })
+    promptRequests.push(body)
+    if (holdAdmissionUntilCancelled && !body.resume) {
+      return new Promise<Response>((_resolve, reject) => {
+        const cancel = () => {
+          admissionAbortObserved = true
+          reject(request.signal.reason)
+        }
+        if (request.signal.aborted) return cancel()
+        request.signal.addEventListener("abort", cancel, { once: true })
+      })
+    }
+    if (conflictNextPrompt) {
+      conflictNextPrompt = false
+      return json({ message: "Prompt message ID conflicts with an existing durable record" }, { status: 409 })
+    }
     if (failNextPrompt) {
       failNextPrompt = false
       return json({ error: "simulated admission failure" }, { status: 500 })
     }
+    if (body.resume && wakeGate) await wakeGate
+    if (body.resume && failNextWake) {
+      failNextWake = false
+      return json({ error: "simulated wake failure" }, { status: 500 })
+    }
     submittedPrompt = body.text
     submittedResume = body.resume
+    const files = body.files?.map((file) => ({
+      name: file.name,
+      content: { digest: file.uri.split("/").at(-1)?.padEnd(64, "c").slice(0, 64) ?? "c".repeat(64) },
+    }))
     return json({
       data: {
         id: body.id,
@@ -93,7 +150,7 @@ async function route(url: URL, request: Request) {
         admittedSeq: 1,
         timeCreated: Date.now(),
         type: "user",
-        data: { text: body.text },
+        data: { text: body.text, files },
         delivery: body.delivery ?? "steer",
       },
     })
@@ -101,6 +158,17 @@ async function route(url: URL, request: Request) {
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     modelSwitchStarted = true
     if (modelSwitchGate) await modelSwitchGate
+    return new Response(null, { status: 204 })
+  }
+  if (url.pathname === `/api/session/${sessionID}/skill` && request.method === "POST") {
+    const body: unknown = await request.json()
+    if (!isSkillBody(body)) return json({ error: "invalid skill" }, { status: 400 })
+    skillRequests.push(body)
+    if (skillGate) await skillGate
+    if (failNextSkill) {
+      failNextSkill = false
+      return json({ error: "simulated skill rejection" }, { status: 400 })
+    }
     return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
@@ -149,7 +217,6 @@ async function route(url: URL, request: Request) {
       "/api/mcp",
       "/api/integration",
       "/api/command",
-      "/api/skill",
       "/api/reference",
       "/api/permission/request",
       "/api/form/request",
@@ -190,10 +257,24 @@ async function route(url: URL, request: Request) {
       ],
     })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
+  if (url.pathname === "/api/skill")
+    return json({
+      location,
+      data: [{ id: "review", name: "Review", location: "project", content: "Review carefully" }],
+    })
   if (url.pathname === "/api/agent")
     return json({
       location,
-      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+      data: [
+        {
+          id: "build",
+          name: "Build",
+          request: { headers: {}, body: {} },
+          mode: "primary",
+          hidden: false,
+          permissions: [],
+        },
+      ],
     })
   return undefined
 }
@@ -301,9 +382,12 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
     expect(typed - composerRuleRow(screen.lines(), typed)).toBe(3)
 
     // Every paste stays below the prompt's large-paste virtualization threshold, producing one
-    // naturally wrapped logical line rather than explicit newline rows.
+    // naturally wrapped logical line rather than explicit newline rows. Await each deferred
+    // Textarea layout before dispatching the next synthetic paste; a real terminal cannot deliver
+    // several separate paste gestures in the same render frame.
     for (let chunk = 0; chunk < 5; chunk++) {
       await screen.input.pasteBracketedText(`wrap-${chunk}-${"x".repeat(130)}`)
+      await waitForFrameText(screen, `wrap-${chunk}-`)
     }
     await screen.input.pasteBracketedText("cap-tail")
     await waitForFrameText(screen, "cap-tail")
@@ -316,6 +400,7 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
 
     for (let chunk = 5; chunk < 11; chunk++) {
       await screen.input.pasteBracketedText(`wrap-${chunk}-${"y".repeat(130)}`)
+      await waitForFrameText(screen, `wrap-${chunk}-`)
     }
     await screen.input.pasteBracketedText("cursor-tail")
     await waitForFrameText(screen, "cursor-tail")
@@ -345,12 +430,12 @@ test("insets the input, caps natural wrapping at six rows, and keeps autocomplet
   }
 })
 
-test("drops a dead clipboard image after a failed send and keeps the typed text sendable", async () => {
+test("blocks a dead clipboard image until the user explicitly removes it and sends", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-clipboard-regression-"))
   const image = await materializeClipboardImage(root, async (file) => {
     await Bun.write(file, "png")
   })
-  failNextPrompt = true
+  failNextPrompt = false
   submittedPrompt = undefined
   const screen = await renderScreen({
     width: 100,
@@ -368,20 +453,222 @@ test("drops a dead clipboard image after a failed send and keeps the typed text 
     await screen.input.pasteBracketedText("keep this text")
     await waitForFrameText(screen, "keep this text")
 
-    screen.input.pressEnter()
-    await waitForFrameText(screen, "Failed to send prompt or activate skill")
     await Bun.file(image.temporary.path).delete()
     screen.input.pressEnter()
+    await waitForFrameText(screen, "Re-paste or press Enter again to remove and send")
+    expect(submittedPrompt).toBeUndefined()
+    expect(screen.frame()).toContain("keep this text")
+
+    screen.input.pressEnter()
     await waitForFrameText(screen, "Message YCoding…")
-    const submitted = submittedPrompt
-    if (submitted === undefined) throw new Error("typed text was not submitted")
-    if (submitted !== "keep this text") throw new Error(`unexpected submitted text: ${submitted}`)
-    expect(screen.frame()).toContain("Clipboard attachment unavailable")
+    expect(submittedText()).toBe("keep this text")
   } finally {
     await screen.dispose()
     await image.temporary.cleanup()
   }
 })
+
+test("shows cancellable clipboard progress and disposes a late image without touching the edited draft", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-clipboard-cancel-"))
+  const image = await materializeClipboardImage(root, async (file) => {
+    await Bun.write(file, "png")
+  })
+  let releaseRead!: () => void
+  const readGate = new Promise<void>((resolve) => (releaseRead = resolve))
+  const screen = await renderScreen({
+    width: 80,
+    height: 24,
+    args: { sessionID },
+    route,
+    clipboard: {
+      read: async () => {
+        await readGate
+        return image
+      },
+    },
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    const paste = screen.input.pasteBracketedText("")
+    await waitForFrameText(screen, "Reading clipboard…")
+    await screen.input.typeText("edited while reading 中文")
+    await waitForFrameText(screen, "edited while reading 中文")
+
+    screen.input.pressKey("ESCAPE")
+    await waitForFrameText(screen, "Cancelled · draft retained")
+    releaseRead()
+    await paste
+    await Bun.sleep(50)
+
+    expect(screen.frame()).toContain("edited while reading 中文")
+    expect(screen.frame()).not.toContain("[Image 1]")
+    expect(await Bun.file(image.temporary.path).exists()).toBe(false)
+  } finally {
+    releaseRead()
+    await screen.dispose()
+    await image.temporary.cleanup()
+  }
+}, 30_000)
+
+test("keeps the managed receipt and stable prompt ID when wake fails, then retries exactly", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-wake-retry-"))
+  const image = await materializeClipboardImage(root, async (file) => {
+    await Bun.write(file, "png")
+  })
+  promptRequests.length = 0
+  submittedPrompt = undefined
+  failNextWake = true
+  wakeGate = new Promise<void>((resolve) => (releaseWake = resolve))
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => image },
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText("")
+    await waitForFrameText(screen, "[Image 1]")
+    await screen.input.typeText("retry this image")
+    screen.input.pressEnter()
+
+    await waitForFrameText(screen, "Prompt admitted · waking session…")
+    expect(promptRequests).toHaveLength(2)
+    expect(promptRequests[0]?.resume).toBe(false)
+    expect(promptRequests[1]?.resume).toBe(true)
+    expect(promptRequests[1]?.files?.[0]?.uri).toStartWith("ycoding-attachment://sha256/")
+    expect(await Bun.file(image.temporary.path).exists()).toBe(false)
+
+    releaseWake?.()
+    await waitForFrameText(screen, "Prompt admitted but the wake failed")
+    expect(screen.frame()).toContain("retry this image")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+
+    expect(promptRequests).toHaveLength(4)
+    expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
+    expect(promptRequests[2]?.files?.[0]?.uri).toStartWith("ycoding-attachment://sha256/")
+    expect(promptRequests[3]?.resume).toBe(true)
+  } finally {
+    releaseWake?.()
+    wakeGate = undefined
+    releaseWake = undefined
+    failNextWake = false
+    await screen.dispose()
+    await image.temporary.cleanup()
+  }
+}, 30_000)
+
+test("shows skill progress and lets a plain next draft send after a rejected activation", async () => {
+  promptRequests.length = 0
+  skillRequests.length = 0
+  failNextSkill = true
+  skillGate = new Promise<void>((resolve) => (releaseSkill = resolve))
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("$review first")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Loading skill 1/1…")
+    expect(promptRequests).toHaveLength(0)
+
+    releaseSkill?.()
+    await waitForFrameText(screen, "Skill activation failed · draft retained")
+    expect(screen.frame()).toContain("$review first")
+    expect(skillRequests).toHaveLength(1)
+    for (let index = 0; index < "$review first".length; index++) screen.input.pressKey("BACKSPACE")
+    await screen.input.typeText("plain next")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+
+    expect(skillRequests).toHaveLength(1)
+    expect(promptRequests).toHaveLength(2)
+    expect(promptRequests.every((request) => request.text === "plain next")).toBe(true)
+    expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
+  } finally {
+    releaseSkill?.()
+    skillGate = undefined
+    releaseSkill = undefined
+    failNextSkill = false
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("never mints a fresh prompt ID after a durable conflict", async () => {
+  promptRequests.length = 0
+  conflictNextPrompt = true
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("stable conflict retry")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Checking whether sent · retry keeps the same prompt ID")
+    expect(promptRequests).toHaveLength(1)
+
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+    expect(promptRequests).toHaveLength(3)
+    expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
+    expect(promptRequests.map((request) => request.resume)).toEqual([false, false, true])
+  } finally {
+    conflictNextPrompt = false
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("cancels the owned Client admission request and keeps its stable retry identity", async () => {
+  promptRequests.length = 0
+  admissionAbortObserved = false
+  holdAdmissionUntilCancelled = true
+  const screen = await renderScreen({
+    width: 80,
+    height: 24,
+    args: { sessionID },
+    route,
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("cancel this admission")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Preparing attachments / sending…")
+
+    screen.input.pressKey("ESCAPE")
+    await waitForFrameText(screen, "Cancelled · draft retained")
+    expect(admissionAbortObserved).toBe(true)
+    expect(screen.frame()).toContain("cancel this admission")
+    expect(promptRequests).toHaveLength(1)
+
+    holdAdmissionUntilCancelled = false
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+    expect(promptRequests).toHaveLength(3)
+    expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
+  } finally {
+    holdAdmissionUntilCancelled = false
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("submits virtualized large pastes at full length without blocking the composer", async () => {
   const pasted = Array.from({ length: 12 }, (_, index) => `large-paste-line-${index}-${"x".repeat(80)}`).join("\n")
@@ -426,7 +713,10 @@ test("admits a steer before an in-flight model variant switch and reuses the com
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("steer on the selected variant")
     screen.input.pressEnter()
-    for (let attempt = 0; attempt < 100 && !modelSwitchStarted; attempt++) await Bun.sleep(10)
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (modelSwitchStarted) break
+      await Bun.sleep(10)
+    }
 
     expect(modelSwitchStarted).toBe(true)
     expect(submittedText()).toBe("steer on the selected variant")
@@ -523,7 +813,7 @@ test("stacks the full-width subagent picker above the prompt with legible model 
     expect(tabs).toBeLessThan(prompt)
     expect(lines[tabs]).not.toContain("Prompt")
     expect(lines[tabs]?.indexOf("Subagents")).toBe(3)
-    expect(lines[tabs]?.indexOf("Subagents")).toBeLessThan(lines[tabs]!.indexOf("Shell"))
+    expect(lines[tabs]?.indexOf("Subagents")).toBeLessThan(lines[tabs].indexOf("Shell"))
     expect(row).toBeGreaterThan(tabs)
     expect(frame).toContain("openai/gpt-5.6-terra#high")
     expect(frame).toContain("attached")

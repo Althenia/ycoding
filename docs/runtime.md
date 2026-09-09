@@ -92,6 +92,12 @@ Provider-assisted checkpoint generation has one total `compaction.timeout_second
 
 Historical destructive summary replacement is decode-only and migration-only: valid historical replacement events may establish a revision-zero baseline and historical markers may render. New compaction never creates replacement events or deletes canonical history; no active `conversation_summarize` source or tool remains.
 
+### Session-owned terminals
+
+The Session command palette opens a terminal picker restricted to the active Session's PTYs. Deliberate selection opens the native embedded terminal inspector without interrupting Session execution. Inspection is read-only until explicit user control acquisition; generation and writer fences prevent concurrent or stale writers. Returning control pauses input, and resuming agent control is a separate action. Closing the view detaches without terminating the PTY.
+
+The inspector retains its emulator across contiguous output reconnects. Input stays disabled until the control connection is open and its captured replay has been applied. Output gaps or generation mismatches disable input rather than claiming a restored screen. Fit-to-pane resize is explicit and available only during synchronized user control. Service shutdown emits an end frame and closes attached WebSockets with code 1012. See the [Session-owned PTY contract](../specs/v2/pty.md) for resource bounds and platform limitations; this is not native Warp/iTerm automation or desktop isolation.
+
 ### Shell resource control
 
 Shell `timeout` is finite: omission or `0` uses 600,000 ms. A foreground command still running after 300,000 ms moves to the background without being stopped; its eventual settlement is delivered as the existing completion notification.
@@ -138,6 +144,14 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 - Outbound user bubbles render lifecycle receipts from durable state only: a clock while the admitted input remains pending, one subdued check after promotion, and two info-colored checks after a physical model request consumed that exact message. Assistant, synthetic, and system rows do not render these receipts. Historical promoted messages without a consumption event remain in the sent state; assistant activity is not treated as proof of consumption.
 - Outbound user bubbles render a width-derived bounded preview of oversized prompt text. The canonical message retains the full prompt for message actions, including copy, editor, fork, and revert; the transcript never mounts the omitted text.
 
+### Composer preparation and recovery
+
+The composer displays one correlated preparation phase while reading the clipboard, creating a Session, activating skills, admitting attachments, or waking an admitted prompt. After ten seconds it also displays elapsed seconds. `Cancel pending action` and Escape cancel that local operation without interrupting Session execution; a newer draft is not cleared by an older submission's completion.
+
+Missing temporary clipboard images block the first send with re-paste/remove guidance. A second explicit Enter, or `Remove unavailable attachment and send`, removes the missing attachment and sends the retained text. Clipboard subprocesses are bounded and cancellable; temporary image files are uniquely owned and released after managed attachment receipts are retained.
+
+Admission and wake are separate. An unresolved admission or failed wake retains the original Session, prompt, and skill identities and any managed attachment receipts for exact retry. `Retry previous submission` restores the retained input; a changed draft cannot silently replace an unresolved send. `Discard previous submission recovery` discards local recovery state, not a durable admitted prompt. Skill activation failure prevents prompt admission and allows an intentional changed next prompt after that pre-admission attempt settles.
+
 ### Durable runtime observations
 
 `session.context.observed.1` is an append-only durable Session event with `{ sessionID, source, text }`. `source` is one of `session-state`, `team-view`, or `step-limit`. Its projection is chronological: `session-state` and `step-limit` become trusted System messages, and `team-view` becomes a Synthetic message with user authority and the description `TeamView update`. Session-state and TeamView notices render as compact summaries only. This is presentation only: stored event/message text and model-facing history remain unchanged.
@@ -166,7 +180,7 @@ Session autonomy is durable and supports:
 
 `yolo` (levels `1-3`) and active `goal` mode also govern managed descendants. Level `1` auto-answers questions and deterministic forms, level `2` also auto-approves `ask` permission decisions (`true` maps to `2`), and level `3` also auto-approves guardrail reviews. A child Session automatically inherits the maximum effective `yolo` level from its ancestor chain; `goal` active also auto-answers questions/forms and permissions even at `yolo 0`, but guardrail reviews require explicit `yolo 3`. Explicit permission denies remain denies. Auto-handled requests do not enter the pending request collections, so the TUI does not emit their approval or question notification sound.
 
-The expanded AUTONOMY sidebar renders Guardrails as `auto · YOLO 3` only when the effective YOLO level is 3. Normal, YOLO 0-2, and active goal below YOLO 3 render Guardrails as `enforced`.
+The expanded AUTONOMY sidebar renders Guardrails as `auto · YOLO 3` only when the effective YOLO level is 3. Normal, YOLO 0-2, and active goal below YOLO 3 render Guardrails as `enforced`. This automatic handling applies only to ordinary reviews. Hard reviews always require a fresh human `once` or `reject` decision; the sidebar separately labels them `human only`.
 
 Goal state stores the goal text, status, automatic continuation iteration, consumed no-progress attempt count, and maximum no-progress attempt count. Historical stored progress digests remain decodable but do not decide current progress.
 
@@ -191,8 +205,9 @@ Guardrails are a root-Session-family safety boundary independent of agent permis
 Current behavior:
 
 - recognized catastrophic shell commands are denied before process creation;
-- standard catastrophic denies are unoverrideable; otherwise the first matching custom source layer decides before standard review or allow behavior;
-- guardrail reviews remain reviews in `normal`, `yolo 1-2`, and `goal` modes; only `yolo 3` auto-approves guardrail reviews and TUI permission auto-approve never auto-approves guardrails;
+- standard catastrophic denies and built-in broad-deletion hard reviews are unoverrideable; otherwise the first matching custom source layer decides before ordinary standard review or allow behavior;
+- ordinary guardrail reviews remain reviews in `normal`, `yolo 1-2`, and `goal` modes; only `yolo 3` auto-approves ordinary reviews;
+- hard reviews require a fresh human one-time approval or rejection, even with YOLO 3, active goal, disabled optional guardrails, custom allow rules or an earlier reusable approval; `always` cannot settle a hard review;
 - direct Session shell, tool shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation use the same service boundary;
 - running shell, running subagent, and pending review caps are shared by the root Session family and release on settlement or interruption;
 - custom files are direct `guardrails/*.md` children of the global config directory and every discovered repository `Config.Directory`; nearer repository directories precede broader repositories, which precede the global directory;
@@ -219,6 +234,14 @@ Every Location activates the maintained built-in catalog. The default selectable
 `god`, `architech`, `TLDR`, and `yangi` use the historical `build`-equivalent permission defaults. `occam`, `omoikane`, `wittgenstein`, and `zeus` use the historical `general`-subagent-equivalent permission defaults. All eight execution agents explicitly allow `shell:*`; these profiles do not change the read-only `btw` advisor or the hidden `compaction`, `title`, `goal`, and `summary` utility agents.
 
 `btw` remains a visible read-only advisor. The hidden `compaction`, `title`, `goal`, and `summary` agents remain internal helpers. `build`, `plan`, `explore`, and `general` are not built-ins, and the disabled source definitions `analyze` and `brainstorm` are not registered.
+
+### BTW side chats
+
+Opening a BTW Session copies a recent parent-history snapshot directly; it does not call the parent's generation API to summarize that history.
+
+A BTW Session keeps the shared typed child transcript, child chrome, economics, and the read-only `btw` agent profile, while exposing one ordinary composer for continued user conversation. The composer remains singular when the expanded composer surface is opened. Ordinary managed subagent Sessions remain read-only except for their existing blocked-question answer surface.
+
+`Send to main chat` and `/btw-send` open the same editable text preview. The preview names the actual immediate parent and BTW source Session. Cancel leaves the original BTW composer draft unchanged, and whitespace-only previews do not send. Confirmation admits the preview text exactly once to that captured parent with `steer` delivery and a retained Protocol message ID; an ambiguous or failed retry reuses that ID and immutable text rather than replaying under a new ID. Export performs no model summarization, does not interrupt the parent, does not copy hidden transcript content, and stays in BTW unless the user separately chooses parent navigation.
 
 Current behavior:
 
@@ -482,7 +505,7 @@ A subagent is considered blocked when its orchestration task state is `waiting` 
 
 ## Rail priority and expanded-state behavior
 
-The rail sidebar uses a priority system to keep the number of simultaneously expanded sections bounded.
+The rail sidebar selects initial expanded sections from the active surface and preserves explicit section toggles until those surface inputs change.
 
 ### Section keys
 
@@ -490,17 +513,17 @@ The rail supports these section keys: `session`, `context`, `todo`, `goal`, `aut
 
 ### Default expanded sections
 
-Only `session`, `context`, and `todo` are expanded by default. Attention can open another section, and a user can manually toggle any section; all other sections begin collapsed.
+The ordinary defaults are `session`, `context`, and `todo`, with `goal` and `autonomy` additionally expanded when their provider inputs are active. The Shell composer prioritizes and expands `shells`, followed by `session`, active `goal`/`autonomy`, and `todo`. The `allExpanded` input opens the primary operational sections (`session`, `goal`, `autonomy`, `context`, `todo`, `subagents`, `shells`), not every auxiliary section. Attention can open another section, and a user can manually toggle any section.
 
-### Expansion cap
+### Independent expansion
 
-Expansion is capped at `MAX_EXPANDED = 4` sections. When the cap is reached, expanding a new section collapses the least recently expanded section. This prevents the rail from becoming a scroll wall where every section is half visible.
+There is no fixed expansion-count cap. Opening one section does not evict another expanded section.
 
 ### Attention-driven expansion
 
-The `RailSection` component accepts an `attention` boolean prop. An attention transition opens the section. When the attention clears, the implementation collapses that section; it does not preserve a manual expansion made while attention was active.
+The `RailSection` component accepts an `attention` boolean prop. An attention transition opens a collapsed section. Clearing attention re-collapses only a section opened by that attention transition; a section already expanded by default or by the user stays open. A manual re-expansion made during an attention-owned interval does not transfer ownership and still collapses when attention clears.
 
-Attention-triggered expansion respects the cap: if the cap is already reached, the least recently expanded default section is collapsed to make room.
+Attention-triggered expansion preserves other expanded sections.
 
 ### Attention triggers
 
