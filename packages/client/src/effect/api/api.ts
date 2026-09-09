@@ -1037,26 +1037,34 @@ export interface EventApi<E = never> {
 }
 
 type Endpoint22_0Request = Parameters<RawClient["server.pty"]["pty.list"]>[0]
-export type Endpoint22_0Input = { readonly location?: Endpoint22_0Request["query"]["location"] }
+export type Endpoint22_0Input = {
+  readonly location?: Endpoint22_0Request["query"]["location"]
+  readonly sessionID: Endpoint22_0Request["query"]["sessionID"]
+}
 export type Endpoint22_0Output = EffectValue<ReturnType<RawClient["server.pty"]["pty.list"]>>
-export type PtyListOperation<E = never> = (input?: Endpoint22_0Input) => Effect.Effect<Endpoint22_0Output, E>
+export type PtyListOperation<E = never> = (input: Endpoint22_0Input) => Effect.Effect<Endpoint22_0Output, E>
 
 type Endpoint22_1Request = Parameters<RawClient["server.pty"]["pty.create"]>[0]
 export type Endpoint22_1Input = {
   readonly location?: Endpoint22_1Request["query"]["location"]
+  readonly sessionID: Endpoint22_1Request["payload"]["sessionID"]
   readonly command?: Endpoint22_1Request["payload"]["command"]
   readonly args?: Endpoint22_1Request["payload"]["args"]
   readonly cwd?: Endpoint22_1Request["payload"]["cwd"]
   readonly title?: Endpoint22_1Request["payload"]["title"]
   readonly env?: Endpoint22_1Request["payload"]["env"]
+  readonly size?: Endpoint22_1Request["payload"]["size"]
+  readonly maxRuntimeSeconds?: Endpoint22_1Request["payload"]["maxRuntimeSeconds"]
+  readonly maxRetainedBytes?: Endpoint22_1Request["payload"]["maxRetainedBytes"]
 }
 export type Endpoint22_1Output = EffectValue<ReturnType<RawClient["server.pty"]["pty.create"]>>
-export type PtyCreateOperation<E = never> = (input?: Endpoint22_1Input) => Effect.Effect<Endpoint22_1Output, E>
+export type PtyCreateOperation<E = never> = (input: Endpoint22_1Input) => Effect.Effect<Endpoint22_1Output, E>
 
 type Endpoint22_2Request = Parameters<RawClient["server.pty"]["pty.get"]>[0]
 export type Endpoint22_2Input = {
   readonly ptyID: Endpoint22_2Request["params"]["ptyID"]
   readonly location?: Endpoint22_2Request["query"]["location"]
+  readonly sessionID: Endpoint22_2Request["query"]["sessionID"]
 }
 export type Endpoint22_2Output = EffectValue<ReturnType<RawClient["server.pty"]["pty.get"]>>
 export type PtyGetOperation<E = never> = (input: Endpoint22_2Input) => Effect.Effect<Endpoint22_2Output, E>
@@ -1065,6 +1073,10 @@ type Endpoint22_3Request = Parameters<RawClient["server.pty"]["pty.update"]>[0]
 export type Endpoint22_3Input = {
   readonly ptyID: Endpoint22_3Request["params"]["ptyID"]
   readonly location?: Endpoint22_3Request["query"]["location"]
+  readonly sessionID: Endpoint22_3Request["payload"]["sessionID"]
+  readonly generation: Endpoint22_3Request["payload"]["generation"]
+  readonly expectedFence: Endpoint22_3Request["payload"]["expectedFence"]
+  readonly actor: Endpoint22_3Request["payload"]["actor"]
   readonly title?: Endpoint22_3Request["payload"]["title"]
   readonly size?: Endpoint22_3Request["payload"]["size"]
 }
@@ -1075,9 +1087,35 @@ type Endpoint22_4Request = Parameters<RawClient["server.pty"]["pty.remove"]>[0]
 export type Endpoint22_4Input = {
   readonly ptyID: Endpoint22_4Request["params"]["ptyID"]
   readonly location?: Endpoint22_4Request["query"]["location"]
+  readonly sessionID: Endpoint22_4Request["query"]["sessionID"]
 }
 export type Endpoint22_4Output = EffectValue<ReturnType<RawClient["server.pty"]["pty.remove"]>>
 export type PtyRemoveOperation<E = never> = (input: Endpoint22_4Input) => Effect.Effect<Endpoint22_4Output, E>
+
+type Endpoint22_5Request = Parameters<RawClient["server.pty"]["pty.control"]>[0]
+export type Endpoint22_5Input = {
+  readonly ptyID: Endpoint22_5Request["params"]["ptyID"]
+  readonly location?: Endpoint22_5Request["query"]["location"]
+  readonly sessionID: Endpoint22_5Request["payload"]["sessionID"]
+  readonly generation: Endpoint22_5Request["payload"]["generation"]
+  readonly expectedFence: Endpoint22_5Request["payload"]["expectedFence"]
+  readonly action: Endpoint22_5Request["payload"]["action"]
+}
+export type Endpoint22_5Output = EffectValue<ReturnType<RawClient["server.pty"]["pty.control"]>>
+export type PtyControlOperation<E = never> = (input: Endpoint22_5Input) => Effect.Effect<Endpoint22_5Output, E>
+
+type Endpoint22_6Request = Parameters<RawClient["server.pty"]["pty.connectToken"]>[0]
+export type Endpoint22_6Input = {
+  readonly ptyID: Endpoint22_6Request["params"]["ptyID"]
+  readonly location?: Endpoint22_6Request["query"]["location"]
+  readonly "x-ycoding-ticket": Endpoint22_6Request["headers"]["x-ycoding-ticket"]
+  readonly sessionID: Endpoint22_6Request["payload"]["sessionID"]
+  readonly access: Endpoint22_6Request["payload"]["access"]
+  readonly generation: Endpoint22_6Request["payload"]["generation"]
+  readonly expectedFence?: Endpoint22_6Request["payload"]["expectedFence"]
+}
+export type Endpoint22_6Output = EffectValue<ReturnType<RawClient["server.pty"]["pty.connectToken"]>>
+export type PtyConnectTokenOperation<E = never> = (input: Endpoint22_6Input) => Effect.Effect<Endpoint22_6Output, E>
 
 export interface PtyApi<E = never> {
   readonly list: PtyListOperation<E>
@@ -1085,6 +1123,8 @@ export interface PtyApi<E = never> {
   readonly get: PtyGetOperation<E>
   readonly update: PtyUpdateOperation<E>
   readonly remove: PtyRemoveOperation<E>
+  readonly control: PtyControlOperation<E>
+  readonly connect: { readonly token: PtyConnectTokenOperation<E> }
 }
 
 type Endpoint23_0Request = Parameters<RawClient["server.shell"]["shell.list"]>[0]

@@ -28,6 +28,20 @@ describe("Guardrail schema", () => {
     })
   })
 
+  test("decodes a custom mandatory human-review rule", () => {
+    expect(
+      decodeRule({
+        id: "protect-aws-account-deletion",
+        source: "custom",
+        decision: "hard_review",
+        actions: ["shell"],
+        resources: ["aws account close-account*"],
+        reason: "AWS account deletion",
+        priority: 200,
+      }),
+    ).toMatchObject({ decision: "hard_review" })
+  })
+
   test("rejects empty action and resource sets", () => {
     expect(() =>
       decodeRule({

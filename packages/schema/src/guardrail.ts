@@ -23,7 +23,7 @@ export const RuleSource = Schema.Literals(["standard", "custom"]).annotate({
 })
 export type RuleSource = typeof RuleSource.Type
 
-export const RuleDecision = Schema.Literals(["allow", "ask", "deny"]).annotate({
+export const RuleDecision = Schema.Literals(["allow", "ask", "hard_review", "deny"]).annotate({
   identifier: "Guardrail.RuleDecision",
 })
 export type RuleDecision = typeof RuleDecision.Type
@@ -56,6 +56,7 @@ export class Request extends Schema.Class<Request>("Guardrail.Request")({
   ruleIDs: Schema.Array(Schema.String),
   reason: Schema.String,
   standard: Schema.Boolean,
+  hardReview: Schema.Boolean.pipe(optional),
   metadata: Schema.Record(Schema.String, Schema.Json).pipe(optional),
 }) {}
 

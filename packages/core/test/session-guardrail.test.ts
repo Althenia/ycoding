@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { SessionGuardrailMatch } from "@ycoding-ai/core/session/guardrail-match"
 
-const custom = (input: Partial<Guardrail.Rule> & Pick<Guardrail.Rule, "id" | "decision" | "actions" | "resources">): Guardrail.Rule => ({
+const custom = (
+  input: Partial<Guardrail.Rule> & Pick<Guardrail.Rule, "id" | "decision" | "actions" | "resources">,
+): Guardrail.Rule => ({
   source: "custom",
   reason: input.id,
   priority: 0,
@@ -12,6 +14,8 @@ const custom = (input: Partial<Guardrail.Rule> & Pick<Guardrail.Rule, "id" | "de
 const layer = (rules: Guardrail.Ruleset, invalidFiles: ReadonlyArray<string> = []) => ({ rules, invalidFiles })
 
 describe("SessionGuardrailMatch", () => {
+  const paths = { workdir: "/workspace/project", project: "/workspace/project", home: "/home/user" }
+
   test("hard denies catastrophic shell commands", () => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: ["rm -rf /"] })).toMatchObject({
       decision: "deny",
@@ -28,6 +32,79 @@ describe("SessionGuardrailMatch", () => {
     })
   })
 
+  test.each([
+    ["rm -rf .", "current project"],
+    ['/bin/rm -fr -- "/workspace/project"', "quoted project path"],
+    ["rm --recursive --force /workspace", "project ancestor"],
+    ['echo ready && rm -r -f "$PWD"', "compound command"],
+    ["rm -rf packages/one packages/two", "multiple recursive targets"],
+  ])("requires hard review for broad deletion via %s (%s)", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "ask",
+      hardReview: true,
+      standard: true,
+      ruleIDs: ["standard.review.broad-deletion"],
+    })
+  })
+
+  test("tracks a supported cd across newline-separated compound commands", () => {
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["cd ..\nrm -rf ."],
+        paths: { ...paths, workdir: "/workspace/project/src" },
+      }),
+    ).toMatchObject({ decision: "ask", hardReview: true, ruleIDs: ["standard.review.broad-deletion"] })
+  })
+
+  test.each([
+    "cd /tmp; rm -rf .",
+    "cd /tmp\nrm -rf .",
+    "cd /tmp || rm -rf .",
+    "cd /tmp | rm -rf .",
+    "cd /tmp & rm -rf .",
+  ])("keeps the original workdir reachable when a compound cd cannot guarantee relocation for %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "ask",
+      hardReview: true,
+      ruleIDs: ["standard.review.broad-deletion"],
+    })
+  })
+
+  test("uses the relocated workdir when && guarantees that deletion follows a successful cd", () => {
+    expect(
+      SessionGuardrailMatch.evaluate({ action: "shell", resources: ["cd /tmp && rm -rf ."], paths }),
+    ).toMatchObject({ decision: "allow", hardReview: false })
+  })
+
+  test.each([
+    "sudo rm --recursive --force /",
+    'rm -rf "$HOME"',
+    "rm -r -f /home/user",
+    "cd && rm -rf .",
+    "cd -- && rm -rf .",
+  ])("keeps recognized root and home deletion denied for %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "deny",
+      hardReview: false,
+      standard: true,
+      ruleIDs: ["standard.catastrophic.rm-root"],
+    })
+  })
+
+  test.each([
+    "rm -rf /workspace/project/build",
+    "rm -f /workspace/project/file.txt",
+    "rm -rf src/tmp",
+    "rm -- --recursive .",
+    "echo rm -rf .",
+  ])("allows safe narrow deletion form %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "allow",
+      hardReview: false,
+    })
+  })
+
   test("keeps catastrophic standard denies unoverrideable", () => {
     const result = SessionGuardrailMatch.evaluate({
       action: "shell",
@@ -39,6 +116,80 @@ describe("SessionGuardrailMatch", () => {
       standard: true,
       ruleIDs: ["standard.catastrophic.rm-root"],
     })
+  })
+
+  test("does not let a custom allow weaken standard hard review", () => {
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["rm -rf ."],
+        paths,
+        custom: [layer([custom({ id: "allow-all", decision: "allow", actions: ["shell"], resources: ["*"] })])],
+      }),
+    ).toMatchObject({
+      decision: "ask",
+      hardReview: true,
+      standard: true,
+      ruleIDs: ["standard.review.broad-deletion"],
+    })
+  })
+
+  test("lets custom hard review override ordinary allows across source layers while preserving an effective deny", () => {
+    const hard = custom({
+      id: "human-review-aws-close",
+      decision: "hard_review",
+      actions: ["shell"],
+      resources: ["aws account close-account*"],
+    })
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["aws account close-account --account-id 111122223333"],
+        custom: [
+          layer([custom({ id: "nearest-allow", decision: "allow", actions: ["shell"], resources: ["aws *"] })]),
+          layer([hard]),
+        ],
+      }),
+    ).toMatchObject({ decision: "ask", hardReview: true, standard: false, ruleIDs: [hard.id] })
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["aws account close-account --account-id 111122223333"],
+        custom: [
+          layer([custom({ id: "nearest-deny", decision: "deny", actions: ["shell"], resources: ["aws *"] })]),
+          layer([hard]),
+        ],
+      }),
+    ).toMatchObject({ decision: "deny", hardReview: false, ruleIDs: ["nearest-deny"] })
+  })
+
+  test("applies the synthetic AWS hard-review rule only to configured destructive operations", () => {
+    const rules = layer([
+      custom({
+        id: "protect-aws-account-deletion",
+        decision: "hard_review",
+        actions: ["shell"],
+        resources: ["aws organizations delete-organization*", "aws account close-account*"],
+      }),
+    ])
+    for (const resource of [
+      "aws organizations delete-organization",
+      "aws account close-account --account-id 111122223333",
+    ])
+      expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [resource], custom: [rules] })).toMatchObject(
+        {
+          decision: "ask",
+          hardReview: true,
+          ruleIDs: ["protect-aws-account-deletion"],
+        },
+      )
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["aws organizations describe-organization"],
+        custom: [rules],
+      }),
+    ).toMatchObject({ decision: "allow", hardReview: false })
   })
 
   test("takes the first matching custom source layer before broader repository and user layers", () => {

@@ -53,6 +53,36 @@ Review the target package.
     ).toMatchObject({ enabled: true, rule: { priority: 0 } })
   })
 
+  test("parses an AWS mandatory human-review rule", () => {
+    expect(
+      ConfigGuardrail.parse(
+        "/config/guardrails/aws-account-deletion.md",
+        `---
+id: protect-aws-account-deletion
+decision: hard_review
+actions: [shell]
+resources:
+  - "aws organizations delete-organization*"
+  - "aws account close-account*"
+reason: AWS organization or account deletion
+priority: 200
+---
+Verify the authenticated AWS account and require one-time human approval.
+`,
+      ),
+    ).toMatchObject({
+      enabled: true,
+      rule: {
+        id: "protect-aws-account-deletion",
+        decision: "hard_review",
+        actions: ["shell"],
+        resources: ["aws organizations delete-organization*", "aws account close-account*"],
+        reason: "AWS organization or account deletion",
+        priority: 200,
+      },
+    })
+  })
+
   test("rejects malformed enabled rules with the source path", () => {
     expect(() =>
       ConfigGuardrail.parse(
