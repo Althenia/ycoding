@@ -471,6 +471,16 @@ Permissions are evaluated in order. Each rule has:
 
 `effect` is `allow`, `deny`, or `ask`.
 
+The TUI has no separate auto-approve permission toggle. Automatic handling is controlled by durable Session autonomy:
+YOLO 1 handles questions/forms, YOLO 2 also handles `ask` permissions, and YOLO 3 also handles guardrail reviews.
+An active goal also handles questions/forms and `ask` permissions at YOLO 0, but does not auto-approve guardrail reviews
+below effective YOLO 3. Explicit denies and inherited permission ceilings remain enforced. Manual permission decisions,
+including approval for the current Session, remain available.
+
+For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session level before admitting the prompt. Omitting the flag preserves an adopted Session's autonomy; `--yolo 0` explicitly selects manual handling. A failed autonomy update prevents prompt admission.
+
+**CLI breaking change:** `run --auto` and the former boolean `--yolo` alias are removed. Supply an explicit level, for example `ycoding run --yolo 2 "Run the tests"`. The noninteractive client does not approve requests locally: any remaining permission, question, form or guardrail blocker is rejected or cancelled and the run exits unsuccessfully. Hard guardrail reviews always require a human decision and cannot be approved by this CLI path.
+
 Home-directory expansion applies to path resources for `external_directory`, `read`, and `edit`. It does not rewrite shell command text.
 
 Example:

@@ -4,7 +4,19 @@ import { runNonInteractivePrompt } from "../../src/run/noninteractive"
 
 type V2Event = EventSubscribeOutput
 type FormInfo = Extract<V2Event, { type: "form.created" }>["data"]["form"]
+type GuardrailInfo = Extract<V2Event, { type: "guardrail.asked" }>["data"]
 const location = { directory: "/work tree", workspaceID: "wrk_1" }
+const hardGuardrail: GuardrailInfo = {
+  id: "grq_1",
+  rootSessionID: "ses_1",
+  sessionID: "ses_1",
+  action: "write",
+  resources: ["secret.txt"],
+  ruleIDs: ["hard-review"],
+  reason: "Human review required",
+  standard: false,
+  hardReview: true,
+}
 
 function ok<T>(data: T) {
   return Promise.resolve(data)
@@ -21,6 +33,43 @@ function form(id: string, sessionID: string): FormInfo {
 
 function formCreated(info: FormInfo, eventLocation = location): V2Event {
   return { id: `evt_${info.id}`, created: 0, type: "form.created", location: eventLocation, data: { form: info } }
+}
+
+function permissionAsked(): V2Event {
+  return {
+    id: "evt_permission",
+    created: 0,
+    type: "permission.v2.asked",
+    data: { id: "per_1", sessionID: "ses_1", action: "shell", resources: ["git status"] },
+  }
+}
+
+function questionAsked(): V2Event {
+  return {
+    id: "evt_question",
+    created: 0,
+    type: "question.v2.asked",
+    data: {
+      id: "que_1",
+      sessionID: "ses_1",
+      questions: [
+        {
+          header: "Choice",
+          question: "Continue?",
+          options: [{ label: "Yes", description: "Continue execution" }],
+        },
+      ],
+    },
+  }
+}
+
+function guardrailAsked(): V2Event {
+  return {
+    id: "evt_guardrail",
+    created: 0,
+    type: "guardrail.asked",
+    data: hardGuardrail,
+  }
 }
 
 function prompted(inputID: string): V2Event {
@@ -157,6 +206,7 @@ async function run(input: {
   turn: (inputID: string) => V2Event[]
   files?: Array<{ url: string; filename: string; mime: string }>
   pendingForms?: FormInfo[]
+  pendingGuardrails?: GuardrailInfo[]
   attached?: boolean
   format?: "default" | "json"
   cancel?: (input: { sessionID: string; formID: string }) => Promise<void>
@@ -180,8 +230,12 @@ async function run(input: {
   })()
   spyOn(sdk.event, "subscribe").mockImplementation(() => stream)
   spyOn(sdk.permission, "list").mockImplementation(() => ok([]) as never)
+  spyOn(sdk.permission, "reply").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.question, "list").mockImplementation(() => ok([]) as never)
   spyOn(sdk.question, "reject").mockImplementation(() => ok(undefined) as never)
+  spyOn(sdk.guardrail.request, "list").mockImplementation(() => ok(input.pendingGuardrails ?? []) as never)
+  spyOn(sdk.guardrail.request, "reply").mockImplementation(() => ok(undefined) as never)
+  spyOn(sdk.session, "interrupt").mockImplementation(() => ok(undefined) as never)
   spyOn(sdk.form, "list").mockImplementation(
     (request) => ok(input.pendingForms?.filter((item) => item.sessionID === request.sessionID) ?? []) as never,
   )
@@ -208,7 +262,6 @@ async function run(input: {
     files: input.files ?? [],
     thinking: false,
     format: input.format ?? "default",
-    auto: false,
     attached: input.attached ?? false,
     renderTool: input.renderTool ?? (() => Promise.resolve()),
     renderToolError: input.renderToolError ?? (() => Promise.resolve()),
@@ -229,8 +282,8 @@ async function capture(input: Parameters<typeof run>[0]) {
     return true
   })
   try {
-    await run(input)
-    return { stdout: stdout.join(""), stderr: stderr.join("") }
+    const sdk = await run(input)
+    return { stdout: stdout.join(""), stderr: stderr.join(""), exitCode: process.exitCode, sdk }
   } finally {
     process.exitCode = exitCode ?? 0
     stdoutWrite.mockRestore()
@@ -260,7 +313,7 @@ describe("runNonInteractivePrompt", () => {
   })
 
   test("cancels session and global form blockers and exits on pre-promotion interrupt", async () => {
-    const sdk = await run({
+    const output = await capture({
       pendingForms: [form("frm_pending", "ses_1"), form("frm_pending_global", "global")],
       // No prompted event: the execution settles interrupted before promotion,
       // which must not leave the consume loop waiting forever.
@@ -272,29 +325,85 @@ describe("runNonInteractivePrompt", () => {
         "x-ycoding-workspace": "wrk_1",
       },
     }
-    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, globalOptions)
-    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
-    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_pending_global" }, globalOptions)
-    expect(sdk.form.request.list).toHaveBeenCalledWith({
+    expect(output.sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, globalOptions)
+    expect(output.sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
+    expect(output.sdk.form.cancel).toHaveBeenCalledWith(
+      { sessionID: "global", formID: "frm_pending_global" },
+      globalOptions,
+    )
+    expect(output.sdk.form.request.list).toHaveBeenCalledWith({
       location: { directory: "/work tree", workspace: "wrk_1" },
     })
-    expect(sdk.question.list).not.toHaveBeenCalled()
-    expect(sdk.question.reject).not.toHaveBeenCalled()
+    expect(output.stderr).toContain("form requested")
+    expect(output.exitCode).toBe(1)
   })
 
   test("attach mode cancels only session-owned forms", async () => {
-    const sdk = await run({
+    const output = await capture({
       attached: true,
       pendingForms: [form("frm_pending", "ses_1"), form("frm_pending_global", "global")],
       turn: (messageID) => [formCreated(form("frm_live", "global")), prompted(messageID), settled()],
     })
-    expect(sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
-    expect(sdk.form.request.list).not.toHaveBeenCalled()
-    expect(sdk.form.cancel).not.toHaveBeenCalledWith({ sessionID: "global", formID: "frm_live" }, expect.anything())
-    expect(sdk.form.cancel).not.toHaveBeenCalledWith(
+    expect(output.sdk.form.cancel).toHaveBeenCalledWith({ sessionID: "ses_1", formID: "frm_pending" })
+    expect(output.sdk.form.request.list).not.toHaveBeenCalled()
+    expect(output.sdk.form.cancel).not.toHaveBeenCalledWith(
+      { sessionID: "global", formID: "frm_live" },
+      expect.anything(),
+    )
+    expect(output.sdk.form.cancel).not.toHaveBeenCalledWith(
       { sessionID: "global", formID: "frm_pending_global" },
       expect.anything(),
     )
+  })
+
+  test("rejects a permission blocker without locally approving it", async () => {
+    const output = await capture({ turn: () => [permissionAsked(), settled("interrupted")] })
+
+    expect(output.sdk.permission.reply).toHaveBeenCalledWith({
+      sessionID: "ses_1",
+      requestID: "per_1",
+      reply: "reject",
+    })
+    expect(output.sdk.permission.reply).not.toHaveBeenCalledWith(expect.objectContaining({ reply: "once" }))
+    expect(output.stderr).toContain("permission requested")
+    expect(output.exitCode).toBe(1)
+  })
+
+  test("rejects a question blocker instead of choosing an answer locally", async () => {
+    const output = await capture({ turn: () => [questionAsked(), settled("interrupted")] })
+
+    expect(output.sdk.question.reject).toHaveBeenCalledWith({ sessionID: "ses_1", requestID: "que_1" })
+    expect(output.stderr).toContain("question requested")
+    expect(output.exitCode).toBe(1)
+  })
+
+  test("rejects a hard guardrail blocker without locally approving it", async () => {
+    const output = await capture({ turn: () => [guardrailAsked(), settled("interrupted")] })
+
+    expect(output.sdk.guardrail.request.reply).toHaveBeenCalledWith({
+      sessionID: "ses_1",
+      requestID: "grq_1",
+      reply: "reject",
+    })
+    expect(output.sdk.guardrail.request.reply).not.toHaveBeenCalledWith(expect.objectContaining({ reply: "once" }))
+    expect(output.stderr).toContain("guardrail review required")
+    expect(output.exitCode).toBe(1)
+  })
+
+  test("rejects an already-pending hard guardrail blocker after prompt admission", async () => {
+    const output = await capture({
+      pendingGuardrails: [hardGuardrail],
+      turn: (messageID) => [prompted(messageID), settled()],
+    })
+
+    expect(output.sdk.guardrail.request.list).toHaveBeenCalledWith({ sessionID: "ses_1" })
+    expect(output.sdk.guardrail.request.reply).toHaveBeenCalledWith({
+      sessionID: "ses_1",
+      requestID: "grq_1",
+      reply: "reject",
+    })
+    expect(output.stderr).toContain("guardrail review required")
+    expect(output.exitCode).toBe(1)
   })
 
   test("JSON output emits step_start before an unrelated step failure", async () => {

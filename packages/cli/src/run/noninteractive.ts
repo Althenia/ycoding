@@ -33,7 +33,6 @@ type Input = {
   variant?: string
   thinking: boolean
   format: "default" | "json"
-  auto: boolean
   /** True when the client is attached to a shared server rather than an exclusive in-process one. */
   attached: boolean
   renderTool: (part: SessionMessageAssistantTool) => Promise<void>
@@ -58,6 +57,8 @@ type ToolState = StartedPart & {
 
 type V2Event = EventSubscribeOutput
 type FormRequest = Extract<V2Event, { type: "form.created" }>["data"]["form"]
+type QuestionRequest = Extract<V2Event, { type: "question.v2.asked" }>["data"]
+type GuardrailRequest = Extract<V2Event, { type: "guardrail.asked" }>["data"]
 
 // MCP elicitations are temporarily owned by the "global" sentinel instead of a real
 // session. An exclusive local process may treat them as this run's blockers; an
@@ -76,8 +77,7 @@ export async function runNonInteractivePrompt(input: Input) {
   let submitted = false
   let promoted = false
   let emittedError = false
-  let permissionRejected = false
-  let formCancelled = false
+  let blockerRejected = false
   let interrupted = false
   let admission: AbortController | undefined
 
@@ -100,28 +100,54 @@ export async function runNonInteractivePrompt(input: Input) {
     UI.empty()
   }
 
-  const replyPermission = async (request: { id: string; action: string; resources: ReadonlyArray<string> }) => {
-    if (!input.auto) {
-      permissionRejected = true
-      UI.println(
-        UI.Style.TEXT_WARNING_BOLD + "!",
-        UI.Style.TEXT_NORMAL +
-          `permission requested: ${request.action} (${request.resources.join(", ")}); auto-rejecting`,
-      )
-    }
+  const stopForBlocker = async () => {
+    blockerRejected = true
+    process.exitCode = 1
+    await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
+  }
+
+  const rejectPermission = async (request: { id: string; action: string; resources: ReadonlyArray<string> }) => {
+    UI.println(
+      UI.Style.TEXT_WARNING_BOLD + "!",
+      UI.Style.TEXT_NORMAL +
+        `permission requested: ${request.action} (${request.resources.join(", ")}); rejecting non-interactive run`,
+    )
     await input.client.permission
       .reply({
         sessionID: input.sessionID,
         requestID: request.id,
-        reply: input.auto ? "once" : "reject",
+        reply: "reject",
       })
       .catch(() => {})
-    if (!input.auto) {
-      await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
-    }
+    await stopForBlocker()
+  }
+
+  const rejectQuestion = async (request: QuestionRequest) => {
+    UI.println(
+      UI.Style.TEXT_WARNING_BOLD + "!",
+      UI.Style.TEXT_NORMAL + `question requested; rejecting non-interactive run`,
+    )
+    await input.client.question.reject({ sessionID: input.sessionID, requestID: request.id }).catch(() => {})
+    await stopForBlocker()
+  }
+
+  const rejectGuardrail = async (request: GuardrailRequest) => {
+    UI.println(
+      UI.Style.TEXT_WARNING_BOLD + "!",
+      UI.Style.TEXT_NORMAL +
+        `guardrail review required: ${request.action} (${request.resources.join(", ")}); rejecting non-interactive run`,
+    )
+    await input.client.guardrail.request
+      .reply({ sessionID: request.rootSessionID, requestID: request.id, reply: "reject" })
+      .catch(() => {})
+    await stopForBlocker()
   }
 
   const cancelForm = async (request: Pick<FormRequest, "id" | "sessionID">) => {
+    UI.println(
+      UI.Style.TEXT_WARNING_BOLD + "!",
+      UI.Style.TEXT_NORMAL + `form requested; cancelling non-interactive run`,
+    )
     try {
       await input.client.form.cancel(
         { sessionID: request.sessionID, formID: request.id },
@@ -130,7 +156,7 @@ export async function runNonInteractivePrompt(input: Input) {
     } catch (error) {
       if (!formAlreadySettled(error)) throw error
     }
-    formCancelled = true
+    await stopForBlocker()
   }
 
   const consume = async () => {
@@ -146,7 +172,19 @@ export async function runNonInteractivePrompt(input: Input) {
       const event = next.value
 
       if (event.type === "permission.v2.asked" && submitted && event.data.sessionID === input.sessionID) {
-        await replyPermission(event.data)
+        await rejectPermission(event.data)
+        continue
+      }
+      if (event.type === "question.v2.asked" && submitted && event.data.sessionID === input.sessionID) {
+        await rejectQuestion(event.data)
+        continue
+      }
+      if (
+        event.type === "guardrail.asked" &&
+        submitted &&
+        (event.data.sessionID === input.sessionID || event.data.rootSessionID === input.sessionID)
+      ) {
+        await rejectGuardrail(event.data)
         continue
       }
       if (
@@ -172,7 +210,7 @@ export async function runNonInteractivePrompt(input: Input) {
       if (
         event.type === "session.execution.interrupted" &&
         event.data.reason === "user" &&
-        (interrupted || permissionRejected || formCancelled)
+        (interrupted || blockerRejected)
       ) {
         return
       }
@@ -411,14 +449,14 @@ export async function runNonInteractivePrompt(input: Input) {
         continue
       }
       if (event.type === "session.step.failed") {
-        if (interrupted || permissionRejected || formCancelled) continue
+        if (interrupted || blockerRejected) continue
         emittedError = true
         process.exitCode = 1
         if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
         continue
       }
       if (event.type === "session.execution.failed") {
-        if (!emittedError && !formCancelled) {
+        if (!emittedError && !blockerRejected) {
           emittedError = true
           process.exitCode = 1
           if (!emit("error", time, { error: event.data.error })) UI.error(event.data.error.message)
@@ -500,9 +538,11 @@ export async function runNonInteractivePrompt(input: Input) {
     if (!response) return
     if (interrupted) await input.client.session.interrupt({ sessionID: input.sessionID }).catch(() => {})
 
-    const [permissions, forms, globals] = await Promise.all([
+    const [permissions, questions, forms, guardrails, globals] = await Promise.all([
       input.client.permission.list({ sessionID: input.sessionID }).catch(() => undefined),
+      input.client.question.list({ sessionID: input.sessionID }).catch(() => undefined),
       input.client.form.list({ sessionID: input.sessionID }).catch(() => undefined),
+      input.client.guardrail.request.list({ sessionID: input.sessionID }).catch(() => undefined),
       input.attached
         ? Promise.resolve(undefined)
         : input.client.form.request
@@ -512,8 +552,12 @@ export async function runNonInteractivePrompt(input: Input) {
             .catch(() => undefined),
     ])
     await Promise.all([
-      ...(permissions ?? []).map(replyPermission),
+      ...(permissions ?? []).map(rejectPermission),
+      ...(questions ?? []).map(rejectQuestion),
       ...(forms ?? []).map(cancelForm),
+      ...(guardrails ?? [])
+        .filter((request) => request.sessionID === input.sessionID || request.rootSessionID === input.sessionID)
+        .map(rejectGuardrail),
       ...(globals && sameLocation(globals.location, input.location)
         ? globals.data.filter((form) => form.sessionID === GLOBAL_FORM_SESSION_ID).map(cancelForm)
         : []),
