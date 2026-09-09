@@ -30,6 +30,7 @@ import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
+import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { Location } from "@ycoding-ai/core/location"
 import { InstructionBuiltIns } from "@ycoding-ai/core/instructions/builtins"
 import { InstructionDiscovery } from "@ycoding-ai/core/instruction-discovery"
@@ -49,8 +50,8 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
-// provider-native/v6 retains every cacheable message boundary, which owns this stable namespace.
-const expectedPromptCacheKey = "8d3e4919c91105affdd6a7fb82a7624c101a613522110807a93fe10a3326cfbd"
+// provider-native/v8 owns this stable namespace for the recorded prompt.
+const expectedPromptCacheKey = "37a99799f1e7e76bea634e42c89228f923b9ce7b1b37792ff5cee024371c5474"
 if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")
   HttpRecorder.removeCassetteSync(cassetteName, { directory: cassetteDirectory })
@@ -63,6 +64,9 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
       "\n\n",
     )
     expected.prompt_cache_key = expectedPromptCacheKey
+    // Current requests append trusted Session state after the admitted user text.
+    expected.messages[1].content +=
+      '\n<system-update>\nAuthoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}\n</system-update>'
     const incomingBody = JSON.parse(incoming.body)
     expect(incoming.headers).toEqual(recorded.headers)
     expect(incomingBody.prompt_cache_key).toBe(expectedPromptCacheKey)
@@ -223,6 +227,7 @@ describe("SessionRunnerLLM recorded", () => {
         .run()
         .pipe(Effect.orDie)
       const session = yield* SessionV2.Service
+      yield* SessionContextState.initialize(db, sessionID, Date.now())
       const prompt = yield* session.prompt({
         sessionID,
         text: "Say hello in one short sentence.",
@@ -232,15 +237,20 @@ describe("SessionRunnerLLM recorded", () => {
       yield* session.resume(sessionID)
 
       const messages = yield* session.context(sessionID)
-      expect(messages).toHaveLength(2)
+      expect(messages).toHaveLength(3)
       expect(messages[0]).toMatchObject({
         id: prompt.id,
         type: "user",
         text: "Say hello in one short sentence.",
         time: { consumed: expect.anything() },
       })
-      expect(messages[1]).toMatchObject({ type: "assistant", agent: "build", finish: "stop" })
-      expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
+      expect(messages[1]).toMatchObject({
+        type: "system",
+        metadata: { contextSource: "session-state" },
+        text: 'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal","yolo":0},"permissionCeiling":[],"todos":[]}',
+      })
+      expect(messages[2]).toMatchObject({ type: "assistant", agent: "build", finish: "stop" })
+      expect(messages[2]?.type === "assistant" ? messages[2].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
       ])
       expect(
@@ -254,6 +264,7 @@ describe("SessionRunnerLLM recorded", () => {
         "session.input.admitted.1",
         "session.instructions.updated.2",
         "session.input.promoted.1",
+        "session.context.observed.1",
         "session.input.consumed.1",
         "session.step.started.1",
         "session.text.started.1",
