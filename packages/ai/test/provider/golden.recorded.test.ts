@@ -10,6 +10,7 @@ import { describeRecordedGoldenScenarios } from "../recorded-golden"
 
 const openAI = OpenAI.configure({
   apiKey: process.env.OPENAI_API_KEY ?? "fixture",
+  providerOptions: { openai: { store: false } },
 })
 const openAIChat = OpenAICompatible.configure({
   apiKey: process.env.OPENAI_API_KEY ?? "fixture",

@@ -3,7 +3,6 @@ import { Effect } from "effect"
 import { LLM, LLMEvent, LLMResponse } from "../../src"
 import { OpenAIChat } from "../../src/protocols/openai-chat"
 import * as OpenAICompatible from "../../src/providers/openai-compatible"
-import * as OpenRouter from "../../src/providers/openrouter"
 import { LLMClient } from "../../src/route"
 import { recordedTests } from "../recorded-test"
 import { expectWeatherToolLoop, goldenWeatherToolLoopRequest, runWeatherToolLoop } from "../recorded-scenarios"
@@ -11,9 +10,11 @@ import { expectWeatherToolLoop, goldenWeatherToolLoopRequest, runWeatherToolLoop
 const cases = [
   {
     name: "OpenRouter",
-    model: OpenRouter.configure({
+    model: OpenAICompatible.configure({
+      provider: "openrouter",
+      baseURL: "https://openrouter.ai/api/v1",
       apiKey: process.env.OPENROUTER_API_KEY ?? "fixture",
-      providerOptions: { openrouter: { reasoning: { max_tokens: 1024 } } },
+      http: { body: { reasoning: { max_tokens: 1024 } } },
     }).model("anthropic/claude-sonnet-4.6"),
     requires: ["OPENROUTER_API_KEY"],
     cassette: "openrouter-reasoning",
@@ -55,6 +56,7 @@ for (const item of cases) {
               system: "Think through the arithmetic, then reply with only the final integer.",
               prompt: "What is 173 multiplied by 219?",
               generation: { maxTokens: 1536, temperature: 0 },
+              http: item.name === "OpenRouter" ? { body: { cache_control: { type: "ephemeral" } } } : undefined,
             }),
           )
 

@@ -8,6 +8,7 @@ import { recordedTests } from "../recorded-test"
 
 const model = OpenAI.configure({
   apiKey: process.env.OPENAI_API_KEY ?? "fixture",
+  providerOptions: { openai: { store: false } },
 }).responses("gpt-4.1-mini")
 
 // OpenAI caches prefixes automatically once they cross the 1024-token threshold;
