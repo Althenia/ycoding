@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { ImageInput, LLM, LLMClient, Provider } from "@ycoding-ai/ai"
 import { Route, Protocol } from "@ycoding-ai/ai/route"
 import { Provider as ProviderSubpath } from "@ycoding-ai/ai/provider"
@@ -45,7 +46,18 @@ describe("public exports", () => {
     expect(CloudflareWorkersAI.configure).toBeFunction()
     expect(CloudflareWorkersAI.configure({ accountId: "fixture", apiKey: "fixture" }).model).toBeFunction()
     expect(OpenRouter.model).toBeFunction()
-    expect(OpenRouter.provider.model).toBe(OpenRouter.model)
+    const openRouterRequests = await Effect.runPromise(
+      Effect.all(
+        [
+          OpenRouter.configure({ apiKey: "fixture" }).model("openai/gpt-4o-mini"),
+          OpenRouter.model("openai/gpt-4o-mini", { apiKey: "fixture" }),
+        ].map((model) => LLMClient.prepare(LLM.request({ model, prompt: "Reply exactly: Hello!" }))),
+      ),
+    )
+    expect(openRouterRequests).toMatchObject([
+      { route: "openrouter-responses", body: { model: "openai/gpt-4o-mini" } },
+      { route: "openrouter-responses", body: { model: "openai/gpt-4o-mini" } },
+    ])
     expect(XAI.model).toBeFunction()
     expect(XAI.provider.model).toBe(XAI.model)
     expect(XAI.provider.responses).toBe(XAI.responses)

@@ -30,6 +30,7 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`repository-resources.md`](./repository-resources.md) | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules. |
 | [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md) | Operator configuration for agent permissions, custom guardrail sources, caps, replies, transient approval reuse, and provider quota sources. |
 | [`ycoding-migration.md`](./ycoding-migration.md)       | Canonical YCoding identifiers and external-provider exceptions.                                        |
+| [`releases/`](./releases/)                                                                     | Per-version release notes (`v<version>.md`); the file matching the tag ships as the GitHub release notes and asset. |
 | [`../specs/v2/README.md`](../specs/v2/README.md)       | Detailed cross-module contracts and accepted decisions.                                                |
 | [`../AGENTS.md`](../AGENTS.md)                         | Mandatory contributor and coding-agent invariants.                                                     |
 

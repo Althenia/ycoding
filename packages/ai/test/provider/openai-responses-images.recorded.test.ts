@@ -6,6 +6,7 @@ import { recordedTests } from "../recorded-test"
 
 const openai = OpenAI.configure({
   apiKey: process.env.OPENAI_API_KEY ?? "fixture",
+  providerOptions: { openai: { store: false } },
 })
 
 const recorded = recordedTests({
