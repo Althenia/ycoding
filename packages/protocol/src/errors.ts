@@ -205,6 +205,18 @@ export class PtyNotFoundError extends Schema.TaggedErrorClass<PtyNotFoundError>(
   { httpApiStatus: 404 },
 ) {}
 
+export class PtyConflictError extends Schema.TaggedErrorClass<PtyConflictError>()(
+  "PtyConflictError",
+  { ptyID: Schema.String, message: Schema.String },
+  { httpApiStatus: 409 },
+) {}
+
+export class PtyResourceLimitError extends Schema.TaggedErrorClass<PtyResourceLimitError>()(
+  "PtyResourceLimitError",
+  { resource: Schema.String, message: Schema.String },
+  { httpApiStatus: 429 },
+) {}
+
 export class ShellNotFoundError extends Schema.TaggedErrorClass<ShellNotFoundError>()(
   "ShellNotFoundError",
   {

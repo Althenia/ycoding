@@ -50,7 +50,6 @@ import { Reconnecting } from "./component/reconnecting"
 import { DataProvider, useData } from "./context/data"
 import { LocationProvider, useLocation } from "./context/location"
 import { LocalProvider, useLocal } from "./context/local"
-import { PermissionProvider } from "./context/permission"
 import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
@@ -66,6 +65,7 @@ import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
 import { Session, type SessionViewportStore } from "./routes/session"
 import { ShellOutput } from "./routes/shell-output"
+import { SessionTerminalInspector } from "./routes/terminal-inspector"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -167,8 +167,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const config = Config.resolve(yield* Effect.tryPromise(() => input.config.get()), {
     terminalSuspend: process.platform !== "win32",
   })
-  const options = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
-  const api = YCoding.make(options)
+  const clientOptions = { baseUrl: input.server.endpoint.url, headers: Service.headers(input.server.endpoint) }
+  const api = YCoding.make(clientOptions)
   const directory = yield* Effect.tryPromise(() => api.file.list({ location: { directory: process.cwd() } })).pipe(
     Effect.map((response) => response.location.directory),
     Effect.catch(() => Effect.tryPromise(() => api.location.get()).pipe(Effect.map((response) => response.directory))),
@@ -180,7 +180,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
         reconnect: async (signal: AbortSignal) => {
           const endpoint = await managed.reconnect(signal)
           const next = { baseUrl: endpoint.url, headers: Service.headers(endpoint) }
-          return { api: YCoding.make(next) }
+          return { api: YCoding.make(next), baseUrl: next.baseUrl }
         },
         restart: managed.restart,
       }
@@ -330,8 +330,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                         }
                                       >
                                         <PluginRuntimeProvider value={pluginRuntime}>
-                                          <ClientProvider api={api} service={service}>
-                                            <PermissionProvider>
+                                          <ClientProvider api={api} baseUrl={clientOptions.baseUrl} service={service}>
                                               <DataProvider>
                                                 <LocationProvider>
                                                   <ThemeProvider mode={mode}>
@@ -365,7 +364,6 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                   </ThemeProvider>
                                                 </LocationProvider>
                                               </DataProvider>
-                                            </PermissionProvider>
                                           </ClientProvider>
                                         </PluginRuntimeProvider>
                                       </RouteProvider>
@@ -968,16 +966,6 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           dialog.clear()
         },
       },
-      {
-        name: "permission.mode",
-        title:
-          local.permission.mode === "auto" ? "Disable auto-approve permissions" : "Enable auto-approve permissions",
-        category: "System",
-        run: () => {
-          local.permission.toggle()
-          dialog.clear()
-        },
-      },
     ].map(
       ({ name, category, ...command }) =>
         ({
@@ -1104,6 +1092,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                 </Match>
                 <Match when={route.data.type === "shell-output"}>
                   <ShellOutput />
+                </Match>
+                <Match when={route.data.type === "terminal-inspector"}>
+                  <SessionTerminalInspector />
                 </Match>
               </Switch>
             </box>

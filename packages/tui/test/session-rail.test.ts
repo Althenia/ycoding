@@ -18,16 +18,36 @@ describe("rail default expansion", () => {
     ])
   })
 
-  test("does not expand additional sections for active goal and autonomy", () => {
+  test("expands active goal and autonomy alongside the persistent sections", () => {
     expect(defaultExpanded({ goal: true, autonomy: true })).toEqual([
       "session",
       "context",
+      "goal",
+      "autonomy",
       "todo",
     ])
   })
 
-  test("does not expand additional sections for shell surface or all-expanded inputs", () => {
-    expect(defaultExpanded({ shellSurface: true, allExpanded: true })).toEqual(["session", "context", "todo"])
+  test("prioritizes SHELLS while its composer surface is active", () => {
+    expect(defaultExpanded({ shellSurface: true, goal: true, autonomy: true })).toEqual([
+      "shells",
+      "session",
+      "goal",
+      "autonomy",
+      "todo",
+    ])
+  })
+
+  test("expands the primary operational sections without broadening to unrelated ones", () => {
+    expect(defaultExpanded({ allExpanded: true })).toEqual([
+      "session",
+      "goal",
+      "autonomy",
+      "context",
+      "todo",
+      "subagents",
+      "shells",
+    ])
   })
 })
 

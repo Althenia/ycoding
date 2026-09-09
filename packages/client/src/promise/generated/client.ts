@@ -218,6 +218,10 @@ import type {
   PtyUpdateOutput,
   PtyRemoveInput,
   PtyRemoveOutput,
+  PtyControlInput,
+  PtyControlOutput,
+  PtyConnectTokenInput,
+  PtyConnectTokenOutput,
   ShellListInput,
   ShellListOutput,
   ShellCreateInput,
@@ -1797,33 +1801,37 @@ export function make(options: ClientOptions) {
         ),
     },
     pty: {
-      list: (input?: PtyListInput, requestOptions?: RequestOptions) =>
+      list: (input: PtyListInput, requestOptions?: RequestOptions) =>
         request<PtyListOutput>(
           {
             method: "GET",
             path: `/api/pty`,
-            query: { location: input?.["location"] },
+            query: { location: input["location"], sessionID: input["sessionID"] },
             successStatus: 200,
             declaredStatuses: [401, 400],
             empty: false,
           },
           requestOptions,
         ),
-      create: (input?: PtyCreateInput, requestOptions?: RequestOptions) =>
+      create: (input: PtyCreateInput, requestOptions?: RequestOptions) =>
         request<PtyCreateOutput>(
           {
             method: "POST",
             path: `/api/pty`,
-            query: { location: input?.["location"] },
+            query: { location: input["location"] },
             body: {
-              command: input?.["command"],
-              args: input?.["args"],
-              cwd: input?.["cwd"],
-              title: input?.["title"],
-              env: input?.["env"],
+              sessionID: input["sessionID"],
+              command: input["command"],
+              args: input["args"],
+              cwd: input["cwd"],
+              title: input["title"],
+              env: input["env"],
+              size: input["size"],
+              maxRuntimeSeconds: input["maxRuntimeSeconds"],
+              maxRetainedBytes: input["maxRetainedBytes"],
             },
             successStatus: 200,
-            declaredStatuses: [401, 400],
+            declaredStatuses: [404, 429, 401, 400],
             empty: false,
           },
           requestOptions,
@@ -1833,9 +1841,9 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/pty/${encodeURIComponent(input.ptyID)}`,
-            query: { location: input["location"] },
+            query: { location: input["location"], sessionID: input["sessionID"] },
             successStatus: 200,
-            declaredStatuses: [404, 401, 400],
+            declaredStatuses: [403, 404, 401, 400],
             empty: false,
           },
           requestOptions,
@@ -1846,9 +1854,16 @@ export function make(options: ClientOptions) {
             method: "PUT",
             path: `/api/pty/${encodeURIComponent(input.ptyID)}`,
             query: { location: input["location"] },
-            body: { title: input["title"], size: input["size"] },
+            body: {
+              sessionID: input["sessionID"],
+              generation: input["generation"],
+              expectedFence: input["expectedFence"],
+              actor: input["actor"],
+              title: input["title"],
+              size: input["size"],
+            },
             successStatus: 200,
-            declaredStatuses: [404, 401, 400],
+            declaredStatuses: [403, 409, 404, 401, 400],
             empty: false,
           },
           requestOptions,
@@ -1858,13 +1873,52 @@ export function make(options: ClientOptions) {
           {
             method: "DELETE",
             path: `/api/pty/${encodeURIComponent(input.ptyID)}`,
-            query: { location: input["location"] },
+            query: { location: input["location"], sessionID: input["sessionID"] },
             successStatus: 204,
-            declaredStatuses: [404, 401, 400],
+            declaredStatuses: [403, 404, 401, 400],
             empty: true,
           },
           requestOptions,
         ),
+      control: (input: PtyControlInput, requestOptions?: RequestOptions) =>
+        request<PtyControlOutput>(
+          {
+            method: "POST",
+            path: `/api/pty/${encodeURIComponent(input.ptyID)}/control`,
+            query: { location: input["location"] },
+            body: {
+              sessionID: input["sessionID"],
+              generation: input["generation"],
+              expectedFence: input["expectedFence"],
+              action: input["action"],
+            },
+            successStatus: 200,
+            declaredStatuses: [403, 409, 404, 401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      connect: {
+        token: (input: PtyConnectTokenInput, requestOptions?: RequestOptions) =>
+          request<PtyConnectTokenOutput>(
+            {
+              method: "POST",
+              path: `/api/pty/${encodeURIComponent(input.ptyID)}/connect-token`,
+              query: { location: input["location"] },
+              headers: { "x-ycoding-ticket": input["x-ycoding-ticket"] },
+              body: {
+                sessionID: input["sessionID"],
+                access: input["access"],
+                generation: input["generation"],
+                expectedFence: input["expectedFence"],
+              },
+              successStatus: 200,
+              declaredStatuses: [403, 409, 404, 401, 400],
+              empty: false,
+            },
+            requestOptions,
+          ),
+      },
     },
     shell: {
       list: (input?: ShellListInput, requestOptions?: RequestOptions) =>

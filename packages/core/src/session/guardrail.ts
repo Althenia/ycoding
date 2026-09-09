@@ -11,6 +11,7 @@ import { KeyedMutex } from "../effect/keyed-mutex"
 import { EventV2 } from "../event"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
+import { Location } from "../location"
 import { Hash } from "../util/hash"
 import { SessionAutonomy } from "./autonomy"
 import { SessionErrors } from "./error"
@@ -33,6 +34,7 @@ export interface Evaluation {
   readonly ruleIDs: ReadonlyArray<string>
   readonly reason?: string
   readonly standard: boolean
+  readonly hardReview: boolean
 }
 
 export interface Reservation {
@@ -149,6 +151,7 @@ export const layer = Layer.effect(
     const events = yield* EventV2.Service
     const sessions = yield* SessionStore.Service
     const autonomy = yield* SessionAutonomy.Service
+    const location = yield* Location.Service
     const entries = yield* config.entries()
     const settings = Config.latest(entries, "guardrails")
     const counters = SessionGuardrailCounter.make({
@@ -256,11 +259,27 @@ export const layer = Layer.effect(
 
     const evaluate = Effect.fn("SessionGuardrail.evaluate")(function* (input: EvaluateInput) {
       const rootSessionID = yield* root(input.sessionID)
+      const paths = {
+        workdir: typeof input.metadata?.workdir === "string" ? input.metadata.workdir : location.directory,
+        project: location.project.directory,
+        home: global.home,
+      }
       if (settings?.enabled === false) {
-        const standard = SessionGuardrailMatch.evaluate({ action: input.action, resources: input.resources })
+        const loaded = yield* documents()
+        const standard = SessionGuardrailMatch.evaluate({
+          action: input.action,
+          resources: input.resources,
+          paths,
+          custom: loaded.map((layer) => ({
+            rules: layer.rules.filter((rule) => rule.decision === "hard_review"),
+            invalidFiles: [],
+          })),
+        })
         return {
           rootSessionID,
-          ...(standard.decision === "deny" ? standard : { decision: "allow" as const, ruleIDs: [], standard: false }),
+          ...(standard.decision === "deny" || standard.hardReview
+            ? standard
+            : { decision: "allow" as const, ruleIDs: [], standard: false, hardReview: false }),
         }
       }
       const loaded = yield* documents()
@@ -269,6 +288,7 @@ export const layer = Layer.effect(
         ...SessionGuardrailMatch.evaluate({
           action: input.action,
           resources: input.resources,
+          paths,
           custom: loaded,
         }),
       }
@@ -338,8 +358,8 @@ export const layer = Layer.effect(
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             if (
               result.decision === "allow" ||
-              reusableApprovals.has(reusableApprovalKey) ||
-              (result.decision === "ask" && autoGuardrail)
+              (!result.hardReview && reusableApprovals.has(reusableApprovalKey)) ||
+              (result.decision === "ask" && !result.hardReview && autoGuardrail)
             ) {
               const reservation = yield* reserveActionUnlocked(result.rootSessionID, input.action)
               yield* events.publish(Guardrail.Event.Decided, {
@@ -362,6 +382,7 @@ export const layer = Layer.effect(
               ruleIDs: [...result.ruleIDs],
               reason: result.reason ?? "Session guardrail review required",
               standard: result.standard,
+              ...(result.hardReview ? { hardReview: true } : {}),
               ...(input.metadata === undefined ? {} : { metadata: structuredClone(input.metadata) }),
             })
             const deferred = yield* Deferred.make<void, DeclinedError>()
@@ -404,21 +425,22 @@ export const layer = Layer.effect(
           if (rootSessionID !== item.request.rootSessionID)
             return yield* new RequestNotFoundError({ requestID: input.requestID })
           removePendingUnlocked(input.requestID)
+          const reply = item.request.hardReview && input.reply === "always" ? "reject" : input.reply
           yield* events
             .publish(Guardrail.Event.Replied, {
               rootSessionID: item.request.rootSessionID,
               sessionID: item.request.sessionID,
               requestID: item.request.id,
-              reply: input.reply,
+              reply,
             })
             .pipe(Effect.onError(() => Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))))
-          if (input.reply === "reject") {
+          if (reply === "reject") {
             yield* Deferred.fail(item.deferred, new DeclinedError({ requestID: item.request.id }))
             return yield* Effect.void
           }
           approvals.set(item.request.rootSessionID, (approvals.get(item.request.rootSessionID) ?? 0) + 1)
           advanceUnlocked(item.request.rootSessionID)
-          if (input.reply === "always" && !reusableApprovals.has(item.approvalKey)) {
+          if (reply === "always" && !reusableApprovals.has(item.approvalKey)) {
             reusableApprovals.set(item.approvalKey, item.request.rootSessionID)
             advanceUnlocked(item.request.rootSessionID)
           }
@@ -486,6 +508,7 @@ export const layer = Layer.effect(
                 ruleIDs: request.ruleIDs,
                 reason: request.reason,
                 standard: request.standard,
+                hardReview: request.hardReview ?? false,
                 metadata: request.metadata ?? null,
               }))
               .toSorted((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)),
@@ -522,5 +545,5 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [Config.node, FSUtil.node, Global.node, EventV2.node, SessionStore.node, SessionAutonomy.node],
+  deps: [Config.node, FSUtil.node, Global.node, EventV2.node, SessionStore.node, SessionAutonomy.node, Location.node],
 })

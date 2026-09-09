@@ -1,10 +1,15 @@
-import { Option } from "effect"
+import { Effect, Option } from "effect"
 import { RunCommand } from "../run"
 import { Runtime } from "../../framework/runtime"
 import { runCommand } from "./run-shared"
 
 export default Runtime.handler(RunCommand, (input) => {
   const separator = process.argv.indexOf("--", 2)
+  if (process.argv.slice(2, separator === -1 ? undefined : separator).includes("--yolo") && Option.isNone(input.yolo))
+    return Effect.sync(() => {
+      process.exitCode = 1
+      process.stderr.write("ycoding: --yolo requires one of 0, 1, 2, or 3\n")
+    })
   return runCommand({
     server: Option.getOrUndefined(input.server),
     standalone: input.standalone,
@@ -18,6 +23,6 @@ export default Runtime.handler(RunCommand, (input) => {
     file: [...input.file],
     title: Option.getOrUndefined(input.title),
     thinking: input.thinking,
-    auto: input.auto || input.yolo,
+    yolo: Option.getOrUndefined(input.yolo),
   })
 })

@@ -1,14 +1,19 @@
 import { Pty } from "@ycoding-ai/schema/pty"
 import { PtyTicket } from "@ycoding-ai/schema/pty-ticket"
 import { Location } from "@ycoding-ai/schema/location"
+import { Session } from "@ycoding-ai/schema/session"
 import { Schema } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
-import { ForbiddenError, PtyNotFoundError } from "../errors.js"
+import { ForbiddenError, PtyConflictError, PtyNotFoundError, PtyResourceLimitError, SessionNotFoundError } from "../errors.js"
 import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 export const PTY_CONNECT_TICKET_QUERY = "ticket"
 export const PTY_CONNECT_TOKEN_HEADER = "x-ycoding-ticket"
 export const PTY_CONNECT_TOKEN_HEADER_VALUE = "1"
+
+const OwnedLocationQuery = Schema.Struct({ ...LocationQuery.fields, sessionID: Session.ID }).annotate({
+  identifier: "Pty.OwnedLocationQuery",
+})
 
 const PTY_CONNECT_PATH = /^\/api\/pty\/[^/]+\/connect$/
 
@@ -21,7 +26,7 @@ export function hasPtyConnectTicketURL(url: URL) {
 export const PtyGroup = HttpApiGroup.make("server.pty")
   .add(
     HttpApiEndpoint.get("pty.list", "/api/pty", {
-      query: LocationQuery,
+      query: OwnedLocationQuery,
       success: Location.response(Schema.Array(Pty.Info)),
     })
       .annotateMerge(locationQueryOpenApi)
@@ -38,6 +43,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       query: LocationQuery,
       payload: Pty.CreateInput,
       success: Location.response(Pty.Info),
+      error: [SessionNotFoundError, PtyResourceLimitError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -51,9 +57,9 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
   .add(
     HttpApiEndpoint.get("pty.get", "/api/pty/:ptyID", {
       params: { ptyID: Pty.ID },
-      query: LocationQuery,
+      query: OwnedLocationQuery,
       success: Location.response(Pty.Info),
-      error: PtyNotFoundError,
+      error: [ForbiddenError, PtyNotFoundError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -70,7 +76,7 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       query: LocationQuery,
       payload: Pty.UpdateInput,
       success: Location.response(Pty.Info),
-      error: PtyNotFoundError,
+      error: [ForbiddenError, PtyConflictError, PtyNotFoundError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -84,9 +90,9 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
   .add(
     HttpApiEndpoint.delete("pty.remove", "/api/pty/:ptyID", {
       params: { ptyID: Pty.ID },
-      query: LocationQuery,
+      query: OwnedLocationQuery,
       success: HttpApiSchema.NoContent,
-      error: PtyNotFoundError,
+      error: [ForbiddenError, PtyNotFoundError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -98,11 +104,30 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       ),
   )
   .add(
-    HttpApiEndpoint.post("pty.connectToken", "/api/pty/:ptyID/connect-token", {
+    HttpApiEndpoint.post("pty.control", "/api/pty/:ptyID/control", {
       params: { ptyID: Pty.ID },
       query: LocationQuery,
+      payload: Pty.ControlInput,
+      success: Location.response(Pty.Info),
+      error: [ForbiddenError, PtyConflictError, PtyNotFoundError],
+    })
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.pty.control",
+          summary: "Transfer PTY input control",
+          description: "Take, pause, or explicitly return exclusive PTY input control using a writer fence.",
+        }),
+      ),
+  )
+  .add(
+    HttpApiEndpoint.post("pty.connectToken", "/api/pty/:ptyID/connect-token", {
+      params: { ptyID: Pty.ID },
+      headers: Schema.Struct({ [PTY_CONNECT_TOKEN_HEADER]: Schema.Literal(PTY_CONNECT_TOKEN_HEADER_VALUE) }),
+      query: LocationQuery,
+      payload: Pty.ConnectInput,
       success: Location.response(PtyTicket.ConnectToken),
-      error: [ForbiddenError, PtyNotFoundError],
+      error: [ForbiddenError, PtyConflictError, PtyNotFoundError],
     })
       .annotateMerge(locationQueryOpenApi)
       .annotateMerge(
@@ -124,13 +149,22 @@ export const PtyGroup = HttpApiGroup.make("server.pty")
       OpenApi.annotations({
         identifier: "v2.pty.connect",
         summary: "Connect to PTY session",
-        description: "Establish a WebSocket connection streaming PTY output and accepting terminal input.",
+        description: "Establish a ticketed WebSocket connection for inspection or fenced user input.",
         transform: (operation) => ({
           ...operation,
           "x-websocket": true,
           parameters: [
             ...(operation.parameters ?? []),
-            ...["location[directory]", "location[workspace]", "cursor", PTY_CONNECT_TICKET_QUERY].map((name) => ({
+            ...[
+              "location[directory]",
+              "location[workspace]",
+              "sessionID",
+              "generation",
+              "offset",
+              "access",
+              "fence",
+              PTY_CONNECT_TICKET_QUERY,
+            ].map((name) => ({
               in: "query",
               name,
               schema: { type: "string" },

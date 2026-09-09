@@ -76,11 +76,14 @@ Child model requests materialize the same Location-registered tool catalog as pr
 
 Permissions decide whether an agent may attempt an action. Guardrails apply independently to the complete root Session family, including direct shell mode, the parent Session, and all descendant subagents.
 
-Guardrail reviews are not auto-approved by `yolo`, `goal`, or the TUI permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
+Ordinary guardrail reviews are auto-approved only at effective YOLO 3. YOLO 0–2 and an active goal below effective YOLO 3 keep
+reviews enforced. The TUI has no separate permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
 
 - `Allow once`
 - `Allow for this session`
 - `Deny`
+
+**Hard reviews** offer only `Allow once` and `Deny` and require a fresh human decision. No YOLO level, active goal, agent automation, previous reusable approval, custom allow rule, or disabled optional guardrails can bypass a built-in hard review. An `always` reply to a hard review is rejected.
 
 The durable `always` reply, rendered as `Allow for this session`, is not a durable permission grant. It reuses approval only in the current Location-service/process lifetime for the exact root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. Each action is freshly evaluated first; a deny, a changed match, or a non-review result cannot reuse it. `once` is never reusable, and descendants share the root-family key.
 
@@ -99,20 +102,21 @@ The durable `always` reply, rendered as `Allow for this session`, is not a durab
 
 Defaults are 8 running shells, 8 running subagents, and 16 pending reviews per root Session family. Reservations release after success, failure, cancellation, or interruption.
 
-`guardrails.enabled` configures guardrail-service enablement. Agent permissions and shell sandbox configuration remain independent, and no configuration or approval reply overrides a standard catastrophic deny.
+`guardrails.enabled` configures optional guardrail-service behavior. Agent permissions and shell sandbox configuration remain independent. Standard catastrophic denies and built-in hard reviews remain enforced when optional guardrails are disabled.
 
 ### Standard policy
 
 The code-owned standard profile:
 
 - hard-denies recognized catastrophic host-destruction commands before process creation;
+- requires hard human review for recognized recursive deletion of a complete current project, its ancestors, or multiple directory targets, while retaining stricter root/home catastrophic denials;
 - requires a human review for recognized destructive Git operations, bulk deletion, publishing and deployment, destructive database operations, access-control changes, likely secret transmission, and other high-impact mutation patterns;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;
 - evaluates shell, direct Session shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation at their side-effect boundary.
 
-The matcher is conservative rather than a complete shell-language interpreter. Approval does not make a denied agent permission valid, and a permission approval does not bypass a guardrail review.
+The matcher is conservative rather than a complete shell-language interpreter. It tracks possible working directories across supported compound commands; `cd ... &&` establishes relocation only on success, while unconditional, fallback, pipeline and background execution cannot assume relocation succeeded. Aliases, functions, command substitution, `xargs`/`find` deletion, and symlink identity remain outside broad-deletion recognition. Approval does not make a denied agent permission valid, and a permission approval does not bypass a guardrail review.
 
-Catastrophic standard denies are unoverrideable. For every other action, the first matching custom source layer decides before standard review or allow behavior. A source layer with enabled invalid configuration reviews mutation actions and retains its place in that ordering.
+Catastrophic standard denies and built-in hard reviews are unoverrideable. For other actions, the first matching custom source layer decides before ordinary standard review or allow behavior. A source layer with enabled invalid configuration reviews mutation actions and retains its place in that ordering.
 
 ### Custom guardrails
 
@@ -123,7 +127,7 @@ Custom files are direct Markdown children, not a recursive tree:
 <repository Config.Directory>/guardrails/*.md
 ```
 
-Every discovered repository `Config.Directory` contributes a source layer. The nearest repository directory is evaluated first, then broader repository directories, then the global config directory. The first source layer that matches decides; standard mandatory review and standard allow behavior apply only when no custom layer decides. Within one source layer, rules sort by descending numeric `priority`, then deterministic lexical file path and rule ID.
+Every discovered repository `Config.Directory` contributes a source layer. After standard catastrophic denies and built-in hard reviews, the nearest repository directory is evaluated first, then broader repository directories, then the global config directory. The first source layer that matches decides; ordinary standard review and standard allow behavior apply only when no custom layer decides. Within one source layer, rules sort by descending numeric `priority`, then deterministic lexical file path and rule ID.
 
 Each enabled file defines one rule in YAML frontmatter. The Markdown body is operator-facing explanation and is not injected into the model prompt.
 
@@ -158,6 +162,45 @@ Fields:
 An enabled invalid file is reported in guardrail status. It fails mutation actions closed with a review while preserving the source layer's priority; read-only actions remain available, and a valid matching deny in that layer remains a deny. A valid custom deny cannot weaken a catastrophic standard deny, and neither `once` nor `always` can bypass a deny.
 
 The Session sidebar displays the active profile, custom-rule count, approvals, blocked actions, family counters, and invalid-file count. It does not display raw rule files or command history.
+
+### Workspace and user configuration
+
+Place a workspace rule in `.ycoding/guardrails/<rule-name>.md` under the project you open in YCoding. Place a user rule in `~/.config/ycoding/guardrails/<rule-name>.md` with the default configuration location, or under `guardrails/` in the configured global YCoding directory. Use one rule per file; nested directories are not scanned. See [configuration discovery](./configuration.md) for global-directory overrides.
+
+Workspace files can be reviewed and versioned with the repository. User files provide personal defaults across projects; they are not an organization-wide enforcement boundary. The source-layer order above means a matching nearer workspace rule can take precedence over an ordinary user rule. A high numeric `priority` changes ordering within its source layer, not across layers. Do not put credentials, account tokens, or private resource inventories in rule files.
+
+After changing a rule, inspect the Session guardrail sidebar for invalid files and check the next matching review before relying on the policy. A rule matches the action and resource strings presented by the tool; it is not an operating-system sandbox or a cloud authorization policy.
+
+### AWS example: deny destructive resource operations
+
+Save this as `.ycoding/guardrails/protect-aws-resources.md` for a workspace, or in the user guardrail directory for a personal default. It deliberately denies the listed operations rather than approving them automatically:
+
+```yaml
+---
+id: protect-aws-resources
+enabled: true
+decision: deny
+actions:
+  - shell
+resources:
+  - "*aws *s3 rb *"
+  - "*aws *s3 rm *--recursive*"
+  - "*aws *s3api delete-bucket*"
+  - "*aws *cloudformation delete-stack*"
+  - "*aws *ec2 terminate-instances*"
+  - "*aws *rds delete-db-instance*"
+  - "*aws *rds delete-db-cluster*"
+  - "*aws *dynamodb delete-table*"
+reason: Destructive AWS resource operation is not permitted by this rule
+priority: 100
+---
+Use a separately reviewed operations procedure. Confirm the AWS account,
+region, exact resource identifiers, dependencies, backups, and recovery plan.
+```
+
+Examples matched by this rule include `aws s3 rb s3://example-protected-bucket --force`, `aws --profile example-admin cloudformation delete-stack --stack-name example-stack`, and `aws ec2 terminate-instances --instance-ids i-0123456789abcdef0`. These are matching examples, not commands to run for validation. Read-only commands such as `aws sts get-caller-identity` and `aws ec2 describe-instances` do not match this rule.
+
+The patterns inspect shell command text, not the contents of scripts, SDK calls, aliases, or every equivalent arrangement of AWS options. They do not cover all AWS services or non-shell tools. Add rules for the actual actions/resources your tools expose, and enforce cloud-side least privilege with AWS IAM and, where applicable, organization service control policies. YCoding guardrails do not replace those controls. Use synthetic matcher tests rather than deleting real cloud resources to test a rule.
 
 ### Guardrail approval notification
 

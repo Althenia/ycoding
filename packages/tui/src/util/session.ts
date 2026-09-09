@@ -17,8 +17,7 @@ type BtwSessionApi = {
     delivery: "steer"
     resume: false
   }): Promise<unknown>
-  prompt(input: { sessionID: string; text: string; delivery?: "steer" }): Promise<unknown>
-  generate?(input: { sessionID: string; prompt: string }): Promise<{ data: { text: string } } | { text: string }>
+  prompt(input: { id?: string; sessionID: string; text: string; delivery?: "steer" }): Promise<unknown>
 }
 
 function rawParentSlice(messages: readonly SessionMessageInfo[]): string {
@@ -35,42 +34,6 @@ function rawParentSlice(messages: readonly SessionMessageInfo[]): string {
   return ["Recent parent session history:", ...recent.map((item) => `${item.role}:\n${item.text}`)].join("\n\n")
 }
 
-async function summarizeParentContext(
-  api: BtwSessionApi,
-  parentID: string,
-  messages: readonly SessionMessageInfo[],
-): Promise<string> {
-  const fallback = rawParentSlice(messages)
-  const generate = api.generate
-  if (!generate) return fallback
-  try {
-    const raw = messages
-      .slice(-12)
-      .map((m) => {
-        if (m.type === "user") return `User: ${m.text}`
-        if (m.type === "synthetic") return `Context: ${m.text}`
-        if (m.type === "assistant")
-          return `Assistant: ${m.content
-            .filter((p) => p.type === "text")
-            .map((p) => (p as { text: string }).text)
-            .join("\n")}`
-        return ""
-      })
-      .filter(Boolean)
-      .join("\n\n")
-    if (!raw.trim()) return fallback
-    const result = await generate({
-      sessionID: parentID,
-      prompt: `Summarize parent session history for btw context. Keep key facts, decisions, file paths, and open questions concise (<=12 bullets). History:\n${raw.slice(0, 6000)}`,
-    })
-    const text = (result as { data?: { text?: string }; text?: string })?.data?.text ?? (result as { text?: string }).text
-    if (typeof text === "string" && text.trim()) return `Parent summary (synthesized):\n${text.trim()}\n\nFallback raw (truncated):\n${fallback.slice(0, 2000)}`
-  } catch {
-    // fall through
-  }
-  return fallback
-}
-
 export async function openBtwSession(input: {
   api: BtwSessionApi
   parentID: string
@@ -79,10 +42,9 @@ export async function openBtwSession(input: {
   text?: string
 }) {
   const session = await input.api.create({ parentID: input.parentID, agent: "btw", model: input.model })
-  const summarized = await summarizeParentContext(input.api, input.parentID, input.messages)
   await input.api.synthetic({
     sessionID: session.id,
-    text: summarized,
+    text: rawParentSlice(input.messages),
     description: "Parent session history snapshot",
     delivery: "steer",
     resume: false,
@@ -92,46 +54,12 @@ export async function openBtwSession(input: {
 }
 
 export async function steerBtwConclusion(input: {
-  api: Pick<BtwSessionApi, "prompt" | "generate">
+  api: Pick<BtwSessionApi, "prompt">
+  id: string
   parentID: string
   text: string
-  btwMessages?: readonly SessionMessageInfo[]
-  btwSessionID?: string
 }) {
-  let text = input.text
-  if (input.btwMessages?.length) {
-    const raw = input.btwMessages
-      .flatMap((m) => {
-        if (m.type === "user") return [`User: ${m.text}`]
-        if (m.type === "assistant")
-          return [
-            `Assistant: ${m.content
-              .filter((p) => p.type === "text")
-              .map((p) => (p as { text: string }).text)
-              .join("\n")}`,
-          ]
-        if (m.type === "synthetic") return [`Context: ${m.text}`]
-        return []
-      })
-      .join("\n\n")
-      .slice(0, 6000)
-    if (raw.trim() && input.btwSessionID && (input.api as BtwSessionApi).generate) {
-      try {
-        const result = await (input.api as BtwSessionApi).generate!({
-          sessionID: input.btwSessionID,
-          prompt: `Summarize this btw side-chat for steering the parent. Keep decisions, findings, and next steps. Then append the user conclusion:\nConclusion: ${text}\n\nChat:\n${raw}`,
-        })
-        const summarized = (result as { data?: { text?: string }; text?: string })?.data?.text ?? (result as { text?: string }).text
-        if (typeof summarized === "string" && summarized.trim()) text = summarized.trim()
-        else text = `BTW summary:\n${raw.slice(0, 3000)}\n\nConclusion: ${text}`
-      } catch {
-        text = `BTW summary:\n${raw.slice(0, 3000)}\n\nConclusion: ${text}`
-      }
-    } else if (raw.trim()) {
-      text = `BTW summary:\n${raw.slice(0, 3000)}\n\nConclusion: ${text}`
-    }
-  }
-  await input.api.prompt({ sessionID: input.parentID, text, delivery: "steer" })
+  await input.api.prompt({ id: input.id, sessionID: input.parentID, text: input.text, delivery: "steer" })
 }
 
 export type SessionShellGroup = {

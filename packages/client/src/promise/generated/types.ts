@@ -344,16 +344,7 @@ export type GuardrailReply = "once" | "always" | "reject"
 
 export type GuardrailDecision = "allow" | "ask" | "deny" | "cap_exceeded"
 
-export type Pty = {
-  id: string
-  title: string
-  command: string
-  args: Array<string>
-  cwd: string
-  status: "running" | "exited"
-  pid: number
-  exitCode?: number
-}
+export type PtySize = { rows: number; cols: number }
 
 export type QuestionV2Option = { label: string; description: string }
 
@@ -375,6 +366,14 @@ export type SessionStatus =
       next: number
     }
   | { type: "busy" }
+
+export type PtyTicketConnectToken = {
+  ticket: string
+  expires_in: number
+  access: "inspect" | "control"
+  generation: number
+  fence?: number
+}
 
 export type ShellInfo1 = {
   id: string
@@ -941,6 +940,7 @@ export type GuardrailAsked = {
     ruleIDs: Array<string>
     reason: string
     standard: boolean
+    hardReview?: boolean
     metadata?: { [x: string]: JsonValue }
   }
 }
@@ -1012,7 +1012,7 @@ export type PtyExited = {
   sourceEpoch?: string
   type: "pty.exited"
   location?: LocationRef
-  data: { id: string; exitCode: number }
+  data: { id: string; exitCode: number; reason: "exit" | "timeout" }
 }
 
 export type PtyDeleted = {
@@ -1838,24 +1838,22 @@ export type GuardrailDecided = {
   }
 }
 
-export type PtyCreated = {
+export type Pty = {
   id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "pty.created"
-  location?: LocationRef
-  data: { info: Pty }
-}
-
-export type PtyUpdated = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "pty.updated"
-  location?: LocationRef
-  data: { info: Pty }
+  title: string
+  command: string
+  args: Array<string>
+  cwd: string
+  sessionID: string
+  status: "running" | "exited"
+  pid: number
+  exitCode?: number
+  exitReason?: "exit" | "timeout" | "terminated"
+  generation: number
+  size: PtySize
+  control: { owner: "agent" | "user" | "paused"; fence: number }
+  output: { startOffset: number; endOffset: number; truncated: boolean }
+  limits: { maxRuntimeSeconds: number; maxRetainedBytes: number; maxInputBytes: number }
 }
 
 export type QuestionV2Info = {
@@ -2249,6 +2247,26 @@ export type FormReplied = {
   type: "form.replied"
   location?: LocationRef
   data: { id: string; sessionID: string; answer: FormAnswer }
+}
+
+export type PtyCreated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "pty.created"
+  location?: LocationRef
+  data: { info: Pty }
+}
+
+export type PtyUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "pty.updated"
+  location?: LocationRef
+  data: { info: Pty }
 }
 
 export type QuestionV2Asked = {
@@ -3477,9 +3495,21 @@ export type PermissionNotFoundError = {
 export const isPermissionNotFoundError = (value: unknown): value is PermissionNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PermissionNotFoundError"
 
+export type PtyResourceLimitError = {
+  readonly _tag: "PtyResourceLimitError"
+  readonly resource: string
+  readonly message: string
+}
+export const isPtyResourceLimitError = (value: unknown): value is PtyResourceLimitError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PtyResourceLimitError"
+
 export type PtyNotFoundError = { readonly _tag: "PtyNotFoundError"; readonly ptyID: string; readonly message: string }
 export const isPtyNotFoundError = (value: unknown): value is PtyNotFoundError =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PtyNotFoundError"
+
+export type PtyConflictError = { readonly _tag: "PtyConflictError"; readonly ptyID: string; readonly message: string }
+export const isPtyConflictError = (value: unknown): value is PtyConflictError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "PtyConflictError"
 
 export type ShellNotFoundError = { readonly _tag: "ShellNotFoundError"; readonly id: string; readonly message: string }
 export const isShellNotFoundError = (value: unknown): value is ShellNotFoundError =>
@@ -4474,6 +4504,7 @@ export type GuardrailRequestListOutput = {
     ruleIDs: Array<string>
     reason: string
     standard: boolean
+    hardReview?: boolean
     metadata?: { [x: string]: JsonValue }
   }>
 }["data"]
@@ -5955,7 +5986,12 @@ export type EventSubscribeOutput = V2Event
 export type PtyListInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID: string
   }["location"]
+  readonly sessionID: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID: string
+  }["sessionID"]
 }
 
 export type PtyListOutput = {
@@ -5967,41 +6003,105 @@ export type PtyCreateInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
   }["location"]
-  readonly command?: {
+  readonly sessionID: {
+    readonly sessionID: string
     readonly command?: string
     readonly args?: ReadonlyArray<string>
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
+  }["sessionID"]
+  readonly command?: {
+    readonly sessionID: string
+    readonly command?: string
+    readonly args?: ReadonlyArray<string>
+    readonly cwd?: string
+    readonly title?: string
+    readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
   }["command"]
   readonly args?: {
+    readonly sessionID: string
     readonly command?: string
     readonly args?: ReadonlyArray<string>
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
   }["args"]
   readonly cwd?: {
+    readonly sessionID: string
     readonly command?: string
     readonly args?: ReadonlyArray<string>
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
   }["cwd"]
   readonly title?: {
+    readonly sessionID: string
     readonly command?: string
     readonly args?: ReadonlyArray<string>
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
   }["title"]
   readonly env?: {
+    readonly sessionID: string
     readonly command?: string
     readonly args?: ReadonlyArray<string>
     readonly cwd?: string
     readonly title?: string
     readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
   }["env"]
+  readonly size?: {
+    readonly sessionID: string
+    readonly command?: string
+    readonly args?: ReadonlyArray<string>
+    readonly cwd?: string
+    readonly title?: string
+    readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
+  }["size"]
+  readonly maxRuntimeSeconds?: {
+    readonly sessionID: string
+    readonly command?: string
+    readonly args?: ReadonlyArray<string>
+    readonly cwd?: string
+    readonly title?: string
+    readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
+  }["maxRuntimeSeconds"]
+  readonly maxRetainedBytes?: {
+    readonly sessionID: string
+    readonly command?: string
+    readonly args?: ReadonlyArray<string>
+    readonly cwd?: string
+    readonly title?: string
+    readonly env?: { readonly [x: string]: string }
+    readonly size?: { readonly rows: number; readonly cols: number }
+    readonly maxRuntimeSeconds?: number
+    readonly maxRetainedBytes?: number
+  }["maxRetainedBytes"]
 }
 
 export type PtyCreateOutput = {
@@ -6013,7 +6113,12 @@ export type PtyGetInput = {
   readonly ptyID: { readonly ptyID: string }["ptyID"]
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID: string
   }["location"]
+  readonly sessionID: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID: string
+  }["sessionID"]
 }
 
 export type PtyGetOutput = {
@@ -6026,11 +6131,54 @@ export type PtyUpdateInput = {
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
   }["location"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly actor: "agent" | "user"
+    readonly title?: string
+    readonly size?: { readonly rows: number; readonly cols: number }
+  }["sessionID"]
+  readonly generation: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly actor: "agent" | "user"
+    readonly title?: string
+    readonly size?: { readonly rows: number; readonly cols: number }
+  }["generation"]
+  readonly expectedFence: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly actor: "agent" | "user"
+    readonly title?: string
+    readonly size?: { readonly rows: number; readonly cols: number }
+  }["expectedFence"]
+  readonly actor: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly actor: "agent" | "user"
+    readonly title?: string
+    readonly size?: { readonly rows: number; readonly cols: number }
+  }["actor"]
   readonly title?: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly actor: "agent" | "user"
     readonly title?: string
     readonly size?: { readonly rows: number; readonly cols: number }
   }["title"]
-  readonly size?: { readonly title?: string; readonly size?: { readonly rows: number; readonly cols: number } }["size"]
+  readonly size?: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly actor: "agent" | "user"
+    readonly title?: string
+    readonly size?: { readonly rows: number; readonly cols: number }
+  }["size"]
 }
 
 export type PtyUpdateOutput = {
@@ -6042,10 +6190,88 @@ export type PtyRemoveInput = {
   readonly ptyID: { readonly ptyID: string }["ptyID"]
   readonly location?: {
     readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID: string
   }["location"]
+  readonly sessionID: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+    readonly sessionID: string
+  }["sessionID"]
 }
 
 export type PtyRemoveOutput = void
+
+export type PtyControlInput = {
+  readonly ptyID: { readonly ptyID: string }["ptyID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly action: "take" | "pause" | "agent"
+  }["sessionID"]
+  readonly generation: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly action: "take" | "pause" | "agent"
+  }["generation"]
+  readonly expectedFence: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly action: "take" | "pause" | "agent"
+  }["expectedFence"]
+  readonly action: {
+    readonly sessionID: string
+    readonly generation: number
+    readonly expectedFence: number
+    readonly action: "take" | "pause" | "agent"
+  }["action"]
+}
+
+export type PtyControlOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: Pty
+}
+
+export type PtyConnectTokenInput = {
+  readonly ptyID: { readonly ptyID: string }["ptyID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly "x-ycoding-ticket": { readonly "x-ycoding-ticket": "1" }["x-ycoding-ticket"]
+  readonly sessionID: {
+    readonly sessionID: string
+    readonly access: "inspect" | "control"
+    readonly generation: number
+    readonly expectedFence?: number
+  }["sessionID"]
+  readonly access: {
+    readonly sessionID: string
+    readonly access: "inspect" | "control"
+    readonly generation: number
+    readonly expectedFence?: number
+  }["access"]
+  readonly generation: {
+    readonly sessionID: string
+    readonly access: "inspect" | "control"
+    readonly generation: number
+    readonly expectedFence?: number
+  }["generation"]
+  readonly expectedFence?: {
+    readonly sessionID: string
+    readonly access: "inspect" | "control"
+    readonly generation: number
+    readonly expectedFence?: number
+  }["expectedFence"]
+}
+
+export type PtyConnectTokenOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: PtyTicketConnectToken
+}
 
 export type ShellListInput = {
   readonly location?: {

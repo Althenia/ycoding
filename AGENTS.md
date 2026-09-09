@@ -233,8 +233,8 @@ const table = sqliteTable("session", {
 - Goal reports are reserved for unresolved blockers after reasonable self-resolution; each accepted report consumes one no-progress attempt. Successful active-goal settlement advances continuation without a report and does not reset the no-progress budget.
 - Subagents are durable child Sessions and always launch in the background. Do not add a synchronous result path disguised by the deprecated `background` input.
 - Preserve parent-child ownership, permission ceilings, explicit agent selection, and the configured nesting bound.
-- Session guardrails apply to the root Session family independently from tool permissions. `yolo` levels `1-2` and `goal`/`permission auto-approval` never auto-answer guardrail reviews; only `yolo 3` auto-approves guardrail reviews.
-- Guardrail reviews expose one-time approval, session-scoped Always approval for exact matching asks and metadata within the root Session family and current Location process, or rejection.
+- Session guardrails apply to the root Session family independently from tool permissions. `yolo` levels `1-2` and `goal`/`permission auto-approval` never auto-answer ordinary guardrail reviews; only `yolo 3` auto-approves ordinary reviews. Hard reviews always require a human `once` or `reject` reply and cannot use YOLO 0-3, goal/agent automation, `always`, disabled ordinary guardrails, or custom allow rules.
+- Ordinary guardrail reviews expose one-time approval, session-scoped Always approval for exact matching asks and metadata within the root Session family and current Location process, or rejection; hard reviews expose only one-time approval or rejection.
 - Runtime observations are append-only durable messages in chronological history. TeamView is user-authority synthetic context, while trusted Session state and step-limit notices are System messages; none is an assistant narration of routine bookkeeping.
 - TUI subagent indicators must rehydrate from durable state after reconnect or restart. Requiring the user to enter each child session to rebuild counts is a defect.
 

@@ -18,7 +18,7 @@ export type ClientConnectionEvent = {
 }
 
 type ManagedService = {
-  reconnect: (signal: AbortSignal) => Promise<{ api: YCodingClient }>
+  reconnect: (signal: AbortSignal) => Promise<{ api: YCodingClient; baseUrl?: string }>
   restart: () => Promise<void>
 }
 
@@ -28,11 +28,12 @@ const connectionHistoryLimit = 50
 
 export const { use: useClient, provider: ClientProvider } = createSimpleContext({
   name: "Client",
-  init: (props: { api: YCodingClient; service?: ManagedService }) => {
+  init: (props: { api: YCodingClient; baseUrl?: string; service?: ManagedService }) => {
     const log = useLog({ component: "client" })
     const abort = new AbortController()
     const history: ClientConnectionEvent[] = []
     let api = props.api
+    let baseUrl = props.baseUrl
     const events = createGlobalEmitter<ClientEventMap>()
     const [connection, setConnection] = createStore<{
       status: ClientConnectionStatus
@@ -123,6 +124,7 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
             if (abort.signal.aborted || controller.signal.aborted) return
             if (next) {
               api = next.api
+              baseUrl = next.baseUrl ?? baseUrl
               if (attempt === 1) continue
             }
           }
@@ -141,6 +143,9 @@ export const { use: useClient, provider: ClientProvider } = createSimpleContext(
     return {
       get api() {
         return api
+      },
+      baseUrl() {
+        return baseUrl
       },
       event: {
         on: events.on,

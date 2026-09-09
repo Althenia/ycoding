@@ -30,6 +30,7 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 | [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.   |
 | [Provider usage](./provider-usage.md)     | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
 | [Tools](./tools.md)                       | Explain tool construction, registration, execution, and settlement laws.                |
+| [Session-owned PTY](./pty.md)             | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.     |
 
 ## Decisions and proposals
 

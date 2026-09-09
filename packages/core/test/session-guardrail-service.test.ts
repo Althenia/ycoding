@@ -54,6 +54,7 @@ priority: ${input.priority ?? 0}
 function harness(input?: {
   readonly entries?: ReadonlyArray<Config.Entry>
   readonly documents?: ReadonlyMap<string, string>
+  readonly autoGuardrail?: boolean
   readonly replyGate?: {
     readonly entered: PromiseWithResolvers<void>
     readonly release: PromiseWithResolvers<void>
@@ -80,7 +81,16 @@ function harness(input?: {
   const dependencies = Layer.mergeAll(
     Layer.mock(Config.Service, { entries: () => Effect.succeed([...(input?.entries ?? [])]) }),
     filesystem,
-    Global.layerWith({ data: "/data", config: "/global" }),
+    Global.layerWith({ home: "/home/user", data: "/data", config: "/global" }),
+    Layer.succeed(
+      Location.Service,
+      Location.Service.of(
+        location(
+          { directory: AbsolutePath.make("/workspace/project") },
+          { projectDirectory: AbsolutePath.make("/workspace/project") },
+        ),
+      ),
+    ),
     Layer.mock(EventV2.Service, {
       publish: (definition, data) => {
         const gated = definition.type === Guardrail.Event.Replied.type && input?.replyGate && !replyGated
@@ -111,7 +121,7 @@ function harness(input?: {
         ),
     }),
     Layer.mock(SessionAutonomy.Service, {
-      canAutoGuardrail: () => Effect.succeed(false),
+      canAutoGuardrail: () => Effect.succeed(input?.autoGuardrail ?? false),
     } as unknown as SessionAutonomy.Interface),
   )
   return {
@@ -301,6 +311,82 @@ autonomousRuntime.effect(
     }),
 )
 
+autonomousRuntime.effect("requires human review for broad deletion at YOLO 0-3 and in goal mode", () =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: autonomousSessionID,
+        project_id: Project.ID.global,
+        directory: "/project",
+        title: "Hard-review autonomy invariant",
+        agent: "guardrail-autonomy-test",
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    const autonomy = yield* SessionAutonomy.Service
+    const events = yield* EventV2.Service
+    const guardrail = yield* SessionGuardrail.Service
+    const review = Effect.fn("SessionGuardrailTest.reviewHardDeletion")(function* () {
+      const asked = yield* Deferred.make<void>()
+      const unsubscribe = yield* events.listen((event) =>
+        event.type === Guardrail.Event.Asked.type
+          ? Deferred.succeed(asked, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+      )
+      const fiber = yield* guardrail
+        .assert({
+          sessionID: autonomousSessionID,
+          action: "shell",
+          resources: ["rm -rf ."],
+          metadata: { workdir: "/project" },
+        })
+        .pipe(Effect.forkScoped)
+      yield* Deferred.await(asked).pipe(Effect.timeout("1 second"), Effect.ensuring(unsubscribe))
+      const request = (yield* guardrail.forSession(autonomousSessionID))[0]
+      if (!request) return yield* Effect.die("hard-review request was not retained")
+      expect(request.hardReview).toBe(true)
+      yield* guardrail.reply({ sessionID: autonomousSessionID, requestID: request.id, reply: "once" })
+      const reservation = yield* Fiber.join(fiber)
+      yield* reservation.release
+    })
+
+    for (const yolo of [0, 1, 2, 3]) {
+      yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo })
+      expect(
+        yield* guardrail.evaluate({
+          sessionID: autonomousSessionID,
+          action: "shell",
+          resources: ["rm -rf ."],
+          metadata: { workdir: "/project" },
+        }),
+      ).toMatchObject({ decision: "ask", hardReview: true })
+      yield* review()
+    }
+    yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 0 })
+    yield* autonomy.setGoal({ sessionID: autonomousSessionID, text: "Delete safely" })
+    yield* review()
+
+    yield* autonomy.clearGoal(autonomousSessionID)
+    yield* autonomy.setYolo({ sessionID: autonomousSessionID, yolo: 3 })
+    const ordinary = yield* guardrail.assert({
+      ...destructive,
+      sessionID: autonomousSessionID,
+      metadata: { workdir: "/project" },
+    })
+    yield* ordinary.release
+    expect(yield* guardrail.forSession(autonomousSessionID)).toEqual([])
+  }),
+)
+
 describe("SessionGuardrail reusable approvals", () => {
   exact.it.effect("reuses always only for the exact action, ordered rules, resources, and metadata in one family", () =>
     Effect.gen(function* () {
@@ -413,6 +499,13 @@ const changingRule = harness({
   ]),
 })
 
+const hardenedRule = harness({
+  entries: [new Config.Directory({ type: "directory", path: AbsolutePath.make("/global") })],
+  documents: new Map([
+    ["/global/guardrails/review.md", markdown({ id: "stable-rule", decision: "ask", resource: "deploy exact" })],
+  ]),
+})
+
 const disabled = harness({
   entries: [
     new Config.Document({
@@ -422,11 +515,104 @@ const disabled = harness({
   ],
 })
 
+const hardReviewInput = {
+  sessionID: parentID,
+  action: "shell",
+  resources: ["rm -rf ."],
+  metadata: { workdir: "/workspace/project" },
+} satisfies SessionGuardrail.EvaluateInput
+
+const autoHardReview = harness({ autoGuardrail: true })
+
+autoHardReview.it.effect("does not let YOLO 3 auto-approve a hard review", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, { ...hardReviewInput, sessionID: childID })
+    expect(pending.request).toMatchObject({ rootSessionID: parentID, sessionID: childID, hardReview: true })
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "once" })
+    const reservation = yield* Fiber.join(pending.fiber)
+    yield* reservation.release
+  }),
+)
+
+exact.it.effect("rejects reusable Always for hard reviews and requires a fresh human decision", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, { ...hardReviewInput, sessionID: childID })
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "always" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+
+    const repeated = yield* waitForRequest(service, { ...hardReviewInput, sessionID: childID })
+    yield* service.reply({ sessionID: childID, requestID: repeated.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(repeated.fiber))).toBe(true)
+  }),
+)
+
 disabled.it.effect("keeps catastrophic standard denies active when configurable guardrails are disabled", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service
     const error = yield* Effect.flip(service.assert({ ...destructive, resources: ["rm -rf /"] }))
     expect(error._tag).toBe("Guardrail.BlockedError")
+  }),
+)
+
+disabled.it.effect("keeps standard hard reviews active when configurable guardrails are disabled", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, hardReviewInput)
+    expect(pending.request.hardReview).toBe(true)
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+  }),
+)
+
+const disabledCustomHardReview = harness({
+  entries: [
+    new Config.Document({
+      type: "document",
+      info: new Config.Info({ guardrails: new ConfigGuardrail.Info({ enabled: false }) }),
+    }),
+  ],
+  documents: new Map([
+    [
+      "/global/guardrails/aws.md",
+      markdown({ id: "human-review-aws-close", decision: "hard_review", resource: "aws account close-account*" }),
+    ],
+  ]),
+})
+
+disabledCustomHardReview.it.effect("does not disable a configured hard review with guardrails.enabled false", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const pending = yield* waitForRequest(service, {
+      sessionID: parentID,
+      action: "shell",
+      resources: ["aws account close-account --account-id 111122223333"],
+    })
+    expect(pending.request).toMatchObject({ hardReview: true, ruleIDs: ["human-review-aws-close"] })
+    yield* service.reply({ sessionID: parentID, requestID: pending.request.id, reply: "reject" })
+    expect(Exit.isFailure(yield* Fiber.await(pending.fiber))).toBe(true)
+  }),
+)
+
+hardenedRule.it.effect("does not reuse a prior Always after the same rule becomes a hard review", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const input = { sessionID: parentID, action: "shell", resources: ["deploy exact"] } as const
+    const ordinary = yield* waitForRequest(service, input)
+    yield* service.reply({ sessionID: parentID, requestID: ordinary.request.id, reply: "always" })
+    const reservation = yield* Fiber.join(ordinary.fiber)
+    yield* reservation.release
+
+    hardenedRule.documents.set(
+      "/global/guardrails/review.md",
+      markdown({ id: "stable-rule", decision: "hard_review", resource: "deploy exact" }),
+    )
+    const hard = yield* waitForRequest(service, input)
+    expect(hard.request).toMatchObject({ hardReview: true, ruleIDs: ["stable-rule"] })
+    yield* service.reply({ sessionID: parentID, requestID: hard.request.id, reply: "once" })
+    const approved = yield* Fiber.join(hard.fiber)
+    yield* approved.release
   }),
 )
 

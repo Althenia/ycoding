@@ -72,6 +72,7 @@ export async function renderScreen(input: {
 
   return {
     events,
+    renderer: setup.renderer,
     frame: () => setup.captureCharFrame(),
     lines: () => setup.captureCharFrame().split("\n"),
     spans: () => setup.captureSpans(),

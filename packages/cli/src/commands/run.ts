@@ -51,10 +51,16 @@ export const RunCommand = Spec.make("run", {
     ),
     title: Flag.string("title").pipe(Flag.withDescription("Session title"), Flag.optional),
     thinking: Flag.boolean("thinking").pipe(Flag.withDescription("Show thinking blocks"), Flag.withDefault(false)),
-    auto: Flag.boolean("auto").pipe(
-      Flag.withDescription("Auto-approve permissions that are not explicitly denied"),
-      Flag.withDefault(false),
+    yolo: Flag.choiceWithValue("yolo", [
+      ["0", 0],
+      ["1", 1],
+      ["2", 2],
+      ["3", 3],
+    ]).pipe(
+      Flag.withDescription(
+        "Set durable Session YOLO level; omitted preserves it (0: off, 1: questions/forms, 2: +permissions, 3: +ordinary guardrails; explicit denies and hard guardrails still apply)",
+      ),
+      Flag.optional,
     ),
-    yolo: Flag.boolean("yolo").pipe(Flag.withDefault(false), Flag.withHidden),
   },
 })

@@ -44,6 +44,17 @@ ycoding --model <provider/model> "Explain this repository"
 
 Run `ycoding run --help` for options. See [runtime behavior](./docs/runtime.md) for sessions and autonomy, or [repository resources](./docs/repository-resources.md) for customization.
 
+## Guardrails and customization
+
+Agent permissions and Session guardrails are separate checks. Permissions control what an agent may attempt; guardrails review or deny high-impact operations across the main Session and its subagents. An approval does not override an explicit permission denial or a built-in catastrophic denial.
+
+Customize guardrails with one Markdown rule per file:
+
+- **Workspace:** `.ycoding/guardrails/*.md` in the project.
+- **User:** `~/.config/ycoding/guardrails/*.md` with the default global configuration location.
+
+See the [guardrail guide](./docs/guardrails-and-provider-usage.md#session-guardrails) for decisions, approval lifetime, limits and rule precedence; the [workspace/user instructions](./docs/guardrails-and-provider-usage.md#workspace-and-user-configuration) for placement; and the [AWS resource protection example](./docs/guardrails-and-provider-usage.md#aws-example-deny-destructive-resource-operations) for a tested deny-rule template. Guardrails inspect supported tool actions and resource strings; they are not a replacement for filesystem isolation or AWS IAM policies.
+
 ## Development
 
 From a checkout, with **Bun 1.4.2** installed:

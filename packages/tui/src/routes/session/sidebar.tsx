@@ -159,6 +159,7 @@ export function AutonomyRailContent(props: { autonomy: SessionAutonomyState }) {
               level() === 3 ? themeV2.text.feedback.warning.default : themeV2.text.feedback.success.default
             }
           />
+          <RailRow label="Hard reviews" value="human only" valueColor={themeV2.text.feedback.success.default} />
         </RailSection>
       </Show>
     </>

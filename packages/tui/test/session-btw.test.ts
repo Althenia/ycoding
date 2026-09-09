@@ -24,7 +24,7 @@ type SessionApi = {
     delivery: "steer"
     resume: false
   }): Promise<unknown>
-  prompt(input: { sessionID: string; text: string; delivery?: "steer" }): Promise<unknown>
+  prompt(input: { id?: string; sessionID: string; text: string; delivery?: "steer" }): Promise<unknown>
 }
 
 type OpenBtwSession = (input: {
@@ -37,6 +37,7 @@ type OpenBtwSession = (input: {
 
 type SteerBtwConclusion = (input: {
   api: Pick<SessionApi, "prompt">
+  id: string
   parentID: string
   text: string
 }) => Promise<void>
@@ -138,6 +139,32 @@ test("creates a distinct BTW child per command, seeds history, and admits with t
   ])
 })
 
+test("opening BTW copies history without invoking the parent's generation API", async () => {
+  const generated: unknown[] = []
+  const snapshots: string[] = []
+  const api = {
+    create: async (input: { parentID: string; agent: string }) => session("ses_btw", input.parentID, input.agent),
+    synthetic: async (input: { text: string }) => {
+      snapshots.push(input.text)
+    },
+    prompt: async () => undefined,
+    generate: async (input: unknown) => {
+      generated.push(input)
+      return { text: "Unexpected helper generation" }
+    },
+  }
+  await util.openBtwSession({
+    api,
+    parentID: "ses_main",
+    messages: history,
+    model: { providerID: "test", id: "model" },
+  })
+  expect(generated).toEqual([])
+  expect(snapshots).toHaveLength(1)
+  expect(snapshots[0]).toContain("Investigate the failed build")
+  expect(snapshots[0]).toContain("The typecheck fails in the TUI.")
+})
+
 test("side-chat activity leaves parent session state untouched", async () => {
   expect(typeof openBtwSessionCandidate).toBe("function")
   if (typeof openBtwSessionCandidate !== "function") return
@@ -209,12 +236,12 @@ test("steers an explicit conclusion into the parent without interrupting it", as
     },
   }
 
-  await steerBtwConclusion({ api, parentID: "ses_main", text: "Use the narrow fix." })
+  await steerBtwConclusion({ api, id: "msg_export", parentID: "ses_main", text: "Use the narrow fix." })
 
   expect(calls).toEqual([
     {
       type: "prompt",
-      input: { sessionID: "ses_main", text: "Use the narrow fix.", delivery: "steer" },
+      input: { id: "msg_export", sessionID: "ses_main", text: "Use the narrow fix.", delivery: "steer" },
     },
   ])
 })
@@ -222,7 +249,7 @@ test("steers an explicit conclusion into the parent without interrupting it", as
 test("opens BTW only from explicit model-dialog completion and retains the draft on cancellation", async () => {
   const source = await Bun.file(new URL("../src/component/prompt/index.tsx", import.meta.url)).text()
   const start = source.indexOf('title: "Open BTW side chat"')
-  const end = source.indexOf('title: "Send to parent"', start)
+  const end = source.indexOf('title: "Send to main chat"', start)
   const command = source.slice(start, end)
 
   expect(source).toContain('slash: { name: "btw", arguments: true as const }')
@@ -232,7 +259,9 @@ test("opens BTW only from explicit model-dialog completion and retains the draft
   expect(command).toContain("clearPrompt()")
   expect(command).toContain("openBtwSession({")
   expect(command).not.toContain("local.model.current()")
-  expect(source).toContain('if (slash.command.id !== "session.btw") clearPrompt()')
+  expect(source).toContain(
+    'if (slash.command.id !== "session.btw" && slash.command.id !== "session.btw.send") clearPrompt()',
+  )
   expect(source).not.toContain("queueMicrotask")
   expect(source).toContain('enabled: data.session.get(props.sessionID ?? "")?.agent === "btw"')
 })

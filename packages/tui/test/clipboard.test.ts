@@ -58,3 +58,27 @@ test("CLP-002 removes a partial clipboard file when acquisition fails", async ()
 
   expect(await readdir(root)).toEqual([])
 })
+
+test("CLP-003 aborts clipboard materialization and releases its owned temporary file", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-clipboard-abort-test-"))
+  const controller = new AbortController()
+  let started!: () => void
+  const writing = new Promise<void>((resolve) => (started = resolve))
+
+  const acquisition = materializeClipboardImage(
+    root,
+    async (file) => {
+      await Bun.write(file, "partial")
+      started()
+      await new Promise<void>((_resolve, reject) =>
+        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), { once: true }),
+      )
+    },
+    { signal: controller.signal },
+  )
+
+  await writing
+  controller.abort(new Error("cancel clipboard acquisition"))
+  await expect(acquisition).rejects.toThrow("cancel clipboard acquisition")
+  expect(await readdir(root)).toEqual([])
+})

@@ -3,6 +3,7 @@ export * as PtyTicket from "./ticket"
 import { WorkspaceV2 } from "../workspace"
 import { PtyTicket } from "@ycoding-ai/schema/pty-ticket"
 import { PtyID } from "./schema"
+import { SessionV2 } from "../session"
 import { Cache, Context, Duration, Effect, Layer } from "effect"
 import { makeGlobalNode } from "../effect/app-node"
 
@@ -13,6 +14,10 @@ export const ConnectToken = PtyTicket.ConnectToken
 
 export type Scope = {
   readonly ptyID: PtyID
+  readonly sessionID: SessionV2.ID
+  readonly access: "inspect" | "control"
+  readonly generation: number
+  readonly fence?: number
   readonly directory?: string
   readonly workspaceID?: WorkspaceV2.ID
 }
@@ -26,7 +31,13 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/Pty
 
 function matches(record: Scope, input: Scope) {
   return (
-    record.ptyID === input.ptyID && record.directory === input.directory && record.workspaceID === input.workspaceID
+    record.ptyID === input.ptyID &&
+    record.sessionID === input.sessionID &&
+    record.access === input.access &&
+    record.generation === input.generation &&
+    record.fence === input.fence &&
+    record.directory === input.directory &&
+    record.workspaceID === input.workspaceID
   )
 }
 
@@ -43,7 +54,13 @@ export const make = (ttl: Duration.Input = DEFAULT_TTL) =>
       issue: Effect.fn("PtyTicket.issue")(function* (input) {
         const ticket = crypto.randomUUID()
         yield* Cache.set(cache, ticket, input)
-        return { ticket, expires_in: expiresIn }
+        return {
+          ticket,
+          expires_in: expiresIn,
+          access: input.access,
+          generation: input.generation,
+          fence: input.fence,
+        }
       }),
       consume: Effect.fn("PtyTicket.consume")(function* (input) {
         return yield* Cache.invalidateWhen(cache, input.ticket, (stored) => matches(stored, input))

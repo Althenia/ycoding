@@ -1251,28 +1251,41 @@ const Endpoint21_0 = (raw: RawClient["server.event"]) => () =>
 const adaptGroup21 = (raw: RawClient["server.event"]) => ({ subscribe: Endpoint21_0(raw) })
 
 type Endpoint22_0Request = Parameters<RawClient["server.pty"]["pty.list"]>[0]
-type Endpoint22_0Input = { readonly location?: Endpoint22_0Request["query"]["location"] }
-const Endpoint22_0 = (raw: RawClient["server.pty"]) => (input?: Endpoint22_0Input) =>
-  raw["pty.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError))
+type Endpoint22_0Input = {
+  readonly location?: Endpoint22_0Request["query"]["location"]
+  readonly sessionID: Endpoint22_0Request["query"]["sessionID"]
+}
+const Endpoint22_0 = (raw: RawClient["server.pty"]) => (input: Endpoint22_0Input) =>
+  raw["pty.list"]({ query: { location: input["location"], sessionID: input["sessionID"] } }).pipe(
+    Effect.mapError(mapClientError),
+  )
 
 type Endpoint22_1Request = Parameters<RawClient["server.pty"]["pty.create"]>[0]
 type Endpoint22_1Input = {
   readonly location?: Endpoint22_1Request["query"]["location"]
+  readonly sessionID: Endpoint22_1Request["payload"]["sessionID"]
   readonly command?: Endpoint22_1Request["payload"]["command"]
   readonly args?: Endpoint22_1Request["payload"]["args"]
   readonly cwd?: Endpoint22_1Request["payload"]["cwd"]
   readonly title?: Endpoint22_1Request["payload"]["title"]
   readonly env?: Endpoint22_1Request["payload"]["env"]
+  readonly size?: Endpoint22_1Request["payload"]["size"]
+  readonly maxRuntimeSeconds?: Endpoint22_1Request["payload"]["maxRuntimeSeconds"]
+  readonly maxRetainedBytes?: Endpoint22_1Request["payload"]["maxRetainedBytes"]
 }
-const Endpoint22_1 = (raw: RawClient["server.pty"]) => (input?: Endpoint22_1Input) =>
+const Endpoint22_1 = (raw: RawClient["server.pty"]) => (input: Endpoint22_1Input) =>
   raw["pty.create"]({
-    query: { location: input?.["location"] },
+    query: { location: input["location"] },
     payload: {
-      command: input?.["command"],
-      args: input?.["args"],
-      cwd: input?.["cwd"],
-      title: input?.["title"],
-      env: input?.["env"],
+      sessionID: input["sessionID"],
+      command: input["command"],
+      args: input["args"],
+      cwd: input["cwd"],
+      title: input["title"],
+      env: input["env"],
+      size: input["size"],
+      maxRuntimeSeconds: input["maxRuntimeSeconds"],
+      maxRetainedBytes: input["maxRetainedBytes"],
     },
   }).pipe(Effect.mapError(mapClientError))
 
@@ -1280,16 +1293,22 @@ type Endpoint22_2Request = Parameters<RawClient["server.pty"]["pty.get"]>[0]
 type Endpoint22_2Input = {
   readonly ptyID: Endpoint22_2Request["params"]["ptyID"]
   readonly location?: Endpoint22_2Request["query"]["location"]
+  readonly sessionID: Endpoint22_2Request["query"]["sessionID"]
 }
 const Endpoint22_2 = (raw: RawClient["server.pty"]) => (input: Endpoint22_2Input) =>
-  raw["pty.get"]({ params: { ptyID: input["ptyID"] }, query: { location: input["location"] } }).pipe(
-    Effect.mapError(mapClientError),
-  )
+  raw["pty.get"]({
+    params: { ptyID: input["ptyID"] },
+    query: { location: input["location"], sessionID: input["sessionID"] },
+  }).pipe(Effect.mapError(mapClientError))
 
 type Endpoint22_3Request = Parameters<RawClient["server.pty"]["pty.update"]>[0]
 type Endpoint22_3Input = {
   readonly ptyID: Endpoint22_3Request["params"]["ptyID"]
   readonly location?: Endpoint22_3Request["query"]["location"]
+  readonly sessionID: Endpoint22_3Request["payload"]["sessionID"]
+  readonly generation: Endpoint22_3Request["payload"]["generation"]
+  readonly expectedFence: Endpoint22_3Request["payload"]["expectedFence"]
+  readonly actor: Endpoint22_3Request["payload"]["actor"]
   readonly title?: Endpoint22_3Request["payload"]["title"]
   readonly size?: Endpoint22_3Request["payload"]["size"]
 }
@@ -1297,18 +1316,71 @@ const Endpoint22_3 = (raw: RawClient["server.pty"]) => (input: Endpoint22_3Input
   raw["pty.update"]({
     params: { ptyID: input["ptyID"] },
     query: { location: input["location"] },
-    payload: { title: input["title"], size: input["size"] },
+    payload: {
+      sessionID: input["sessionID"],
+      generation: input["generation"],
+      expectedFence: input["expectedFence"],
+      actor: input["actor"],
+      title: input["title"],
+      size: input["size"],
+    },
   }).pipe(Effect.mapError(mapClientError))
 
 type Endpoint22_4Request = Parameters<RawClient["server.pty"]["pty.remove"]>[0]
 type Endpoint22_4Input = {
   readonly ptyID: Endpoint22_4Request["params"]["ptyID"]
   readonly location?: Endpoint22_4Request["query"]["location"]
+  readonly sessionID: Endpoint22_4Request["query"]["sessionID"]
 }
 const Endpoint22_4 = (raw: RawClient["server.pty"]) => (input: Endpoint22_4Input) =>
-  raw["pty.remove"]({ params: { ptyID: input["ptyID"] }, query: { location: input["location"] } }).pipe(
-    Effect.mapError(mapClientError),
-  )
+  raw["pty.remove"]({
+    params: { ptyID: input["ptyID"] },
+    query: { location: input["location"], sessionID: input["sessionID"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_5Request = Parameters<RawClient["server.pty"]["pty.control"]>[0]
+type Endpoint22_5Input = {
+  readonly ptyID: Endpoint22_5Request["params"]["ptyID"]
+  readonly location?: Endpoint22_5Request["query"]["location"]
+  readonly sessionID: Endpoint22_5Request["payload"]["sessionID"]
+  readonly generation: Endpoint22_5Request["payload"]["generation"]
+  readonly expectedFence: Endpoint22_5Request["payload"]["expectedFence"]
+  readonly action: Endpoint22_5Request["payload"]["action"]
+}
+const Endpoint22_5 = (raw: RawClient["server.pty"]) => (input: Endpoint22_5Input) =>
+  raw["pty.control"]({
+    params: { ptyID: input["ptyID"] },
+    query: { location: input["location"] },
+    payload: {
+      sessionID: input["sessionID"],
+      generation: input["generation"],
+      expectedFence: input["expectedFence"],
+      action: input["action"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint22_6Request = Parameters<RawClient["server.pty"]["pty.connectToken"]>[0]
+type Endpoint22_6Input = {
+  readonly ptyID: Endpoint22_6Request["params"]["ptyID"]
+  readonly location?: Endpoint22_6Request["query"]["location"]
+  readonly "x-ycoding-ticket": Endpoint22_6Request["headers"]["x-ycoding-ticket"]
+  readonly sessionID: Endpoint22_6Request["payload"]["sessionID"]
+  readonly access: Endpoint22_6Request["payload"]["access"]
+  readonly generation: Endpoint22_6Request["payload"]["generation"]
+  readonly expectedFence?: Endpoint22_6Request["payload"]["expectedFence"]
+}
+const Endpoint22_6 = (raw: RawClient["server.pty"]) => (input: Endpoint22_6Input) =>
+  raw["pty.connectToken"]({
+    params: { ptyID: input["ptyID"] },
+    query: { location: input["location"] },
+    headers: { "x-ycoding-ticket": input["x-ycoding-ticket"] },
+    payload: {
+      sessionID: input["sessionID"],
+      access: input["access"],
+      generation: input["generation"],
+      expectedFence: input["expectedFence"],
+    },
+  }).pipe(Effect.mapError(mapClientError))
 
 const adaptGroup22 = (raw: RawClient["server.pty"]) => ({
   list: Endpoint22_0(raw),
@@ -1316,6 +1388,8 @@ const adaptGroup22 = (raw: RawClient["server.pty"]) => ({
   get: Endpoint22_2(raw),
   update: Endpoint22_3(raw),
   remove: Endpoint22_4(raw),
+  control: Endpoint22_5(raw),
+  connect: { token: Endpoint22_6(raw) },
 })
 
 type Endpoint23_0Request = Parameters<RawClient["server.shell"]["shell.list"]>[0]

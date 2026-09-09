@@ -8,8 +8,14 @@ const sample = (pid: number) => ({
   command: "cmd.exe",
   args: [],
   cwd: "C:\\",
+  sessionID: "ses_test",
   status: "running",
   pid,
+  generation: 1,
+  size: { rows: 24, cols: 80 },
+  control: { owner: "agent", fence: 1 },
+  output: { startOffset: 0, endOffset: 0, truncated: false },
+  limits: { maxRuntimeSeconds: 300, maxRetainedBytes: Pty.MAX_RETAINED_BYTES, maxInputBytes: Pty.MAX_INPUT_BYTES },
 })
 
 describe("Pty.Info", () => {

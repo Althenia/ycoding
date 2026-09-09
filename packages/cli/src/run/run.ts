@@ -24,7 +24,7 @@ export type RunCommandInput = {
   file: string[]
   title?: string
   thinking?: boolean
-  auto?: boolean
+  yolo?: 0 | 1 | 2 | 3
 }
 
 type FilePart = {
@@ -127,6 +127,9 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
       title: input.title || prepared.message.slice(0, 50) + (prepared.message.length > 50 ? "..." : ""),
     })
   }
+  if (input.yolo !== undefined) {
+    await client.session.autonomy.set({ sessionID: target.session.id, payload: { yolo: input.yolo } })
+  }
 
   await runNonInteractivePrompt({
     client,
@@ -139,7 +142,6 @@ async function execute(input: RunCommandInput, prepared: Prepared, endpoint: End
     variant,
     thinking: input.thinking ?? false,
     format: input.format,
-    auto: input.auto ?? false,
     attached: true,
     renderTool: (part) => renderTool(part, target.location.directory),
     renderToolError: (part) => renderToolError(part, target.location.directory),

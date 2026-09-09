@@ -7,7 +7,7 @@ import type { LLMError } from "../schema"
  *
  * `Framing` is the byte-stream-shaped seam between transport and protocol:
  *
- * - SSE (`Framing.sse`) — UTF-8 decode the body, run the SSE channel decoder,
+ * - SSE (`Framing.sse`) — UTF-8 decode the body, run the SSE parser,
  *   drop empty / `[DONE]` keep-alives. Each emitted frame is the JSON `data:`
  *   payload of one event.
  * - AWS event stream — length-prefixed binary frames with CRC checksums.
