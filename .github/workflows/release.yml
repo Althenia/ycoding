@@ -89,7 +89,7 @@ jobs:
         run: bun test test/session-execution.test.ts test/session-autonomy.test.ts
 
       - name: Verify installer and documentation
-        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/pages.test.ts"
+        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/pages.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts"
 
   build:
     name: build ${{ matrix.target }}
@@ -282,11 +282,11 @@ jobs:
           tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" ycoding ycoding-computer-helper
           tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding
           (cd unpacked/ycoding-windows-x64 && zip "../../release/ycoding-$version-windows-x64.zip" ycoding.exe)
-          tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -q '^-rwx'
-          tar -tzvf "release/ycoding-$version-darwin-x64.tar.gz" | grep -q '^-rwx'
-          tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep -q '^-rwx'
-          tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -qx 'ycoding-computer-helper'
-          tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -qx 'ycoding-computer-helper'
+          tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep '^-rwx' >/dev/null
+          tar -tzvf "release/ycoding-$version-darwin-x64.tar.gz" | grep '^-rwx' >/dev/null
+          tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep '^-rwx' >/dev/null
+          tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'ycoding-computer-helper' >/dev/null
+          tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'ycoding-computer-helper' >/dev/null
           (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")
 
       - name: Upload prepared release assets
