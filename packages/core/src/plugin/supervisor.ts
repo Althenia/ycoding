@@ -15,8 +15,11 @@ import {
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { AgentV2 } from "../agent";
+import { Browser } from "../browser";
+import { IsolatedBrowser } from "../isolated-browser";
 import { Catalog } from "../catalog";
 import { CommandV2 } from "../command";
+import { Computer } from "../computer";
 import { Config } from "../config";
 import { ConfigPlugin } from "../config/plugin";
 import { Credential } from "../credential";
@@ -369,8 +372,11 @@ export const node = makeLocationNode({
     PluginV2.node,
     SdkPlugins.node,
     AgentV2.node,
+    Browser.node,
+    IsolatedBrowser.node,
     Catalog.node,
     CommandV2.node,
+    Computer.node,
     Config.node,
     Credential.node,
     EventV2.node,

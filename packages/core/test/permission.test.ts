@@ -5,7 +5,6 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
-import { Job } from "@ycoding-ai/core/job"
 import { Location } from "@ycoding-ai/core/location"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { PermissionTable } from "@ycoding-ai/core/permission/sql"
@@ -299,7 +298,7 @@ describe("PermissionV2", () => {
     }),
   )
 
-  it.effect("uses build permissions when the Session agent is omitted", () =>
+  it.effect("uses default primary agent permissions when the Session agent is omitted", () =>
     Effect.gen(function* () {
       yield* setup()
       const { db } = yield* Database.Service
@@ -311,7 +310,7 @@ describe("PermissionV2", () => {
         .pipe(Effect.orDie)
       const agents = yield* AgentV2.Service
       yield* agents.transform((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
+        editor.update(AgentV2.ID.make("test"), (agent) => {
           agent.permissions = [{ action: "custom", resource: "*", effect: "allow" }]
         }),
       )

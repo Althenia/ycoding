@@ -1,0 +1,49 @@
+:root {
+  color-scheme: light dark;
+  font:
+    13px/1.4 system-ui,
+    sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 340px;
+}
+
+main {
+  padding: 14px;
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+
+label {
+  display: grid;
+  gap: 4px;
+  margin: 9px 0;
+}
+
+input,
+button {
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.warning {
+  border-inline-start: 3px solid #c98200;
+  padding-inline-start: 8px;
+}
+
+.note,
+#status {
+  color: GrayText;
+}

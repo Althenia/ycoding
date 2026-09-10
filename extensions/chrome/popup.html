@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>YCoding tab sharing</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <h1>YCoding tab sharing</h1>
+      <p class="warning">
+        Chrome shows a debugger warning while a selected tab is shared. YCoding never activates a tab.
+      </p>
+      <label>Local server URL <input id="server" value="http://127.0.0.1:4096" spellcheck="false" /></label>
+      <label>Session ID <input id="session" placeholder="ses_…" spellcheck="false" /></label>
+      <label>One-time pairing secret <input id="secret" type="password" autocomplete="off" /></label>
+      <div class="actions">
+        <button id="pair">Pair selected Session</button>
+        <button id="connect" disabled>Connect selected Session</button>
+        <button id="forget" disabled>Forget pairing</button>
+        <button id="share" disabled>Share current tab</button>
+        <button id="revoke" disabled>Revoke current tab</button>
+      </div>
+      <p id="status" role="status" aria-live="polite">Not paired</p>
+      <p class="note">A shared tab pauses whenever it is active. Switch away before asking YCoding to act.</p>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

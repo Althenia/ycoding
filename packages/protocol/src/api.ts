@@ -33,6 +33,8 @@ import { ProjectGroup } from "./groups/project.js"
 import { ProjectCopyGroup } from "./groups/project-copy.js"
 import { VcsGroup } from "./groups/vcs.js"
 import { ProjectArtifactGroup } from "./groups/project-artifact.js"
+import { makeBrowserGroup } from "./groups/browser.js"
+import { makeIsolatedBrowserGroup } from "./groups/isolated-browser.js"
 
 type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
   | HttpApiGroup.AddMiddleware<typeof LocationGroup, LocationId>
@@ -59,6 +61,8 @@ type LocationGroups<LocationId extends HttpApiMiddleware.AnyId> =
 type SessionGroups<SessionLocationId extends HttpApiMiddleware.AnyId, SessionLocationService> =
   | ReturnType<typeof makeSessionGroup<SessionLocationId, SessionLocationService>>
   | ReturnType<typeof makeGuardrailGroup<SessionLocationId, SessionLocationService>>
+  | ReturnType<typeof makeBrowserGroup<SessionLocationId, SessionLocationService>>
+  | ReturnType<typeof makeIsolatedBrowserGroup<SessionLocationId, SessionLocationService>>
   | HttpApiGroup.AddMiddleware<typeof MessageGroup, SessionLocationId>
 
 type FormGroups<
@@ -178,6 +182,8 @@ const makeApiFromGroup = <
     .add(VcsGroup.middleware(locationMiddleware))
     .add(ProjectArtifactGroup.middleware(locationMiddleware))
     .add(DebugGroup)
+    .add(makeBrowserGroup(sessionLocationMiddleware))
+    .add(makeIsolatedBrowserGroup(sessionLocationMiddleware))
     .annotateMerge(
       OpenApi.annotations({
         title: "ycoding HttpApi",

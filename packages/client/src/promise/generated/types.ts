@@ -452,6 +452,20 @@ export type ProjectArtifactConfidence = {
   eligible: boolean
 }
 
+export type BrowserStatus = {
+  state: "unavailable" | "pairing" | "connected" | "paused"
+  generation?: number
+  pairingExpiresAt?: number
+  extensionID?: string
+  pendingCallID?: string
+}
+
+export type BrowserPage = { origin: string; path: string }
+
+export type BrowserPairing = { secret: string; expiresAt: number }
+
+export type BrowserCaptureOutput = { mediaType: "image/png"; data: string; bytes: number }
+
 export type SessionMessageModelSelected = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -2031,6 +2045,28 @@ export type ProjectArtifactApiMetrics = {
   lastUsedAt?: ProjectArtifactTimestampMillis | undefined
 }
 
+export type BrowserTab = {
+  id: string
+  sessionID: string
+  title: string
+  page: BrowserPage
+  status: "shared" | "paused" | "unavailable"
+  generation: number
+  documentGeneration: number
+  observationRevision: number
+  pauseReason?: "user_active" | "requested" | "uncertain" | "disconnected"
+  uncertainCallID?: string
+}
+
+export type BrowserElement = {
+  ref: string
+  role: string
+  name: string
+  description?: string
+  disabled?: boolean
+  destination?: BrowserPage
+}
+
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
 export type SessionCacheDiagnostics = {
@@ -2350,6 +2386,56 @@ export type ProjectArtifactVersion = {
   provenance: ProjectArtifactProvenance
   timeCreated: ProjectArtifactTimestampMillis
   timeStateChanged: ProjectArtifactTimestampMillis
+}
+
+export type BrowserActionResult = {
+  callID: string
+  tab: BrowserTab
+  status: "completed" | "paused" | "rejected" | "uncertain"
+  message?: string
+  capture?: BrowserCaptureOutput
+}
+
+export type IsolatedBrowserStatus = {
+  mode: "isolated"
+  state: "unavailable" | "starting" | "ready" | "paused" | "stopped"
+  reason?: string
+  instanceID?: string
+  tab?: BrowserTab
+}
+
+export type IsolatedBrowserActionResult = {
+  mode: "isolated"
+  instanceID: string
+  callID: string
+  tab: BrowserTab
+  status: "completed" | "rejected" | "uncertain"
+  message?: string
+  capture?: BrowserCaptureOutput
+}
+
+export type BrowserObservation = {
+  tabID: string
+  generation: number
+  documentGeneration: number
+  revision: number
+  title: string
+  page: BrowserPage
+  elements: Array<BrowserElement>
+  truncated: boolean
+}
+
+export type IsolatedBrowserObservation = {
+  tabID: string
+  generation: number
+  documentGeneration: number
+  revision: number
+  title: string
+  page: BrowserPage
+  elements: Array<BrowserElement>
+  truncated: boolean
+  mode: "isolated"
+  instanceID: string
 }
 
 export type AgentInfo = {
@@ -7142,3 +7228,283 @@ export type DebugLocationEvictInput = {
 }
 
 export type DebugLocationEvictOutput = void
+
+export type BrowserStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type BrowserStatusOutput = { data: BrowserStatus }["data"]
+
+export type BrowserTabsInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type BrowserTabsOutput = { data: Array<BrowserTab> }["data"]
+
+export type BrowserStartInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type BrowserStartOutput = { data: BrowserPairing }["data"]
+
+export type BrowserObserveInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly tabID: { readonly tabID: string; readonly generation: number; readonly callID: string }["tabID"]
+  readonly generation: { readonly tabID: string; readonly generation: number; readonly callID: string }["generation"]
+  readonly callID: { readonly tabID: string; readonly generation: number; readonly callID: string }["callID"]
+}
+
+export type BrowserObserveOutput = { data: BrowserObservation }["data"]
+
+export type BrowserActionInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly tabID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+  }["tabID"]
+  readonly generation: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+  }["generation"]
+  readonly documentGeneration: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+  }["documentGeneration"]
+  readonly observationRevision: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+  }["observationRevision"]
+  readonly callID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+  }["callID"]
+  readonly action: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+  }["action"]
+}
+
+export type BrowserActionOutput = { data: BrowserActionResult }["data"]
+
+export type BrowserControlInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly action: { readonly action: "pause" | "resume" }["action"]
+}
+
+export type BrowserControlOutput = { data: BrowserStatus }["data"]
+
+export type BrowserStopInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type BrowserStopOutput = void
+
+export type BrowserForgetInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type BrowserForgetOutput = void
+
+export type IsolatedBrowserStatusInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type IsolatedBrowserStatusOutput = { data: IsolatedBrowserStatus }["data"]
+
+export type IsolatedBrowserStartInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly url: { readonly url: string }["url"]
+}
+
+export type IsolatedBrowserStartOutput = { data: IsolatedBrowserStatus }["data"]
+
+export type IsolatedBrowserTabsInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type IsolatedBrowserTabsOutput = { data: Array<BrowserTab> }["data"]
+
+export type IsolatedBrowserObserveInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly tabID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly callID: string
+    readonly instanceID: string
+  }["tabID"]
+  readonly generation: {
+    readonly tabID: string
+    readonly generation: number
+    readonly callID: string
+    readonly instanceID: string
+  }["generation"]
+  readonly callID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly callID: string
+    readonly instanceID: string
+  }["callID"]
+  readonly instanceID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly callID: string
+    readonly instanceID: string
+  }["instanceID"]
+}
+
+export type IsolatedBrowserObserveOutput = { data: IsolatedBrowserObservation }["data"]
+
+export type IsolatedBrowserActionInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly tabID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["tabID"]
+  readonly generation: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["generation"]
+  readonly documentGeneration: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["documentGeneration"]
+  readonly observationRevision: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["observationRevision"]
+  readonly callID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["callID"]
+  readonly action: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["action"]
+  readonly instanceID: {
+    readonly tabID: string
+    readonly generation: number
+    readonly documentGeneration: number
+    readonly observationRevision: number
+    readonly callID: string
+    readonly action:
+      | { readonly type: "navigate"; readonly url: string }
+      | { readonly type: "click"; readonly ref: string }
+      | { readonly type: "type"; readonly ref: string; readonly text: string }
+      | { readonly type: "scroll"; readonly deltaY: number }
+      | { readonly type: "capture" }
+    readonly instanceID: string
+  }["instanceID"]
+}
+
+export type IsolatedBrowserActionOutput = { data: IsolatedBrowserActionResult }["data"]
+
+export type IsolatedBrowserControlInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly action: { readonly action: "pause" | "resume" }["action"]
+}
+
+export type IsolatedBrowserControlOutput = { data: IsolatedBrowserStatus }["data"]
+
+export type IsolatedBrowserStopInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type IsolatedBrowserStopOutput = void

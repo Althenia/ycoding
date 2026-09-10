@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run --cwd packages/cli --conditions=browser src/index.ts",
     "build:tui": "bun run --cwd packages/cli build:tui --single --outdir=../../dist/tui",
+    "build:computer-helper": "bun run --cwd packages/cli build:computer-helper",
     "smoke:tui": "bun run --cwd packages/cli smoke:tui -- --dir=../../dist/tui",
     "smoke:runtime": "bun run --cwd packages/cli smoke:runtime -- --dir=../../dist/tui",
     "refresh:models": "bun run --cwd packages/cli refresh:models",
@@ -27,7 +28,9 @@
     "prepare": "husky",
     "random": "echo 'Random script'",
     "sso": "aws sso login --sso-session=ycoding --no-browser",
-    "test": "echo 'do not run tests from root' && exit 1"
+    "test": "echo 'do not run tests from root' && exit 1",
+    "test:unit:browser": "bun run --cwd packages/core test:unit:browser && bun run --cwd packages/tui test:unit:browser",
+    "test:integration:browser": "bun run --cwd packages/core test:integration:browser && bun run --cwd packages/server test:integration:browser && bun run --cwd packages/tui test:integration:browser"
   },
   "workspaces": {
     "packages": [

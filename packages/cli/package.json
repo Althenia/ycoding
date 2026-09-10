@@ -18,6 +18,7 @@
   "scripts": {
     "build": "bun run script/build.ts",
     "build:tui": "bun run script/build.ts --tui-only",
+    "build:computer-helper": "bun run script/computer-helper.ts",
     "smoke:tui": "bun run script/tui-smoke.ts",
     "smoke:runtime": "bun run script/runtime-smoke.ts",
     "build:node": "bun run script/build-node.ts",

@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
+import { TestClock } from "effect/testing"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -112,6 +113,8 @@ const counts = (sessionID: SessionV2.ID) =>
 describe("SessionUsageCleanup", () => {
   it.effect("prunes only stale inactive usage projections", () =>
     Effect.gen(function* () {
+      // Let the startup cleanup suspend before inserting the retention-boundary fixtures.
+      yield* TestClock.adjust(0)
       const staleID = SessionV2.ID.make("ses_usage_stale")
       const recentID = SessionV2.ID.make("ses_usage_recent")
       const activeID = SessionV2.ID.make("ses_usage_active")

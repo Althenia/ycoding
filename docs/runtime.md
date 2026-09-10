@@ -98,6 +98,30 @@ The Session command palette opens a terminal picker restricted to the active Ses
 
 The inspector retains its emulator across contiguous output reconnects. Input stays disabled until the control connection is open and its captured replay has been applied. Output gaps or generation mismatches disable input rather than claiming a restored screen. Fit-to-pane resize is explicit and available only during synchronized user control. Service shutdown emits an end frame and closes attached WebSockets with code 1012. See the [Session-owned PTY contract](../specs/v2/pty.md) for resource bounds and platform limitations; this is not native Warp/iTerm automation or desktop isolation.
 
+### Selected-tab Chrome bridge
+
+An optional unpacked Manifest V3 extension can attach Chrome DevTools only to a tab the user explicitly shares. Pairing uses a Session-scoped, two-minute, one-time secret in the first WebSocket frame and an exact matching `chrome-extension://` Origin; the WebSocket URL itself contains no credential. Core owns the bridge as a Location-scoped service and rejects cross-Session access.
+
+The browser tool exposes status, shared-tab listing, bounded accessibility observations, generation-fenced semantic actions, pause/resume, and stop. It does not expose pairing, arbitrary JavaScript, arbitrary CDP, cookies, storage, host input, clipboard, uploads, or unrestricted URL data. Shared tabs pause while active. Pairing, sharing, observation, scroll, and capture are implemented, but navigate/click/type currently fail closed before CDP action dispatch because Chrome's extension debugger transport cannot enforce the required selected-tab no-download guard. An explicit internal pre-dispatch error settles as rejected; mutation failures after dispatch without a known terminal result remain uncertain. Both retain the original call ID and prevent automatic replay. See [Chrome selected-tab bridge](./browser-extension.md) and the [V2 contract](../specs/v2/browser.md) for exact bounds and validation limits.
+
+### Session-owned isolated browser
+
+The Session command palette exposes **Isolated browser** controls for explicit temporary headless browsing. The user starts a fresh browser with a credential-free HTTP(S) URL; opening or refreshing the dialog never starts it. There is no personal-profile attachment, persistent login, visible-browser handoff, or automatic restart. The current implementation is restricted to macOS arm64 with installed Google Chrome major 152 and required startup controls. Real-browser, TUI/API, and Bun/Node packaged-runtime checks pass on that environment; the isolated-browser contract records validation limits rather than certifying a release.
+
+The `browser` tool uses explicit `mode: "isolated"` to select this already-started browser. Omitted mode continues to mean the selected-tab extension and never falls back. Isolated status and control results containing page metadata require `browser_read` before model exposure, independently of `browser_control`; semantic mutations retain their permission and `browser_mutation` guardrail checks. Normal authenticated Session-location routes and regenerated clients expose the separate `isolatedBrowser` group.
+
+Isolated ownership is process-local and fenced by Session, instance, tab, connection, document, observation, and call identities. Pause blocks new actions; it does not freeze website scripts or prove in-flight work stopped. The TUI states this distinction. Stop terminates owned temporary resources; recovery requires explicit fresh startup rather than action replay. A Session must stop one mode before starting the other. The [isolated-browser contract](../specs/v2/isolated-browser.md) defines restrictions, settlement semantics, and remaining acceptance gates.
+
+### Native computer use
+
+Native cancellation and Session release retain the active target fence until helper settlement, invalidate the claim, and reject late successful responses from cancelled calls.
+
+The Location-scoped `computer` service separates platform-neutral capability reporting, Session ownership, revision fencing, cancellation, permissions, and guardrails from native providers. macOS is the only implemented provider. It supports exact iTerm session inspection and text submission plus exact Finder path inspection and move; unsupported platforms expose no capabilities and fail before helper invocation.
+
+Inspect claims one explicit target for the observing Session and returns its revision. A mutation requires the same Session and revision. Session release, cancellation, a stale revision, cross-Session access, or an uncertain native result prevents mutation until a fresh inspect. iTerm text passes through shell guardrails, while Finder moves use canonical Location paths, external-directory permissions when applicable, and file-mutation guardrails.
+
+The macOS helper does not activate or launch applications, target frontmost UI, use global input or clipboard state, reveal Finder items, capture the screen, or prompt for Automation access. Packaged executables resolve a signed sibling helper. Bun source development resolves only an explicitly built helper in Core's repository-ignored cache and never compiles it during runtime startup. See [Native computer use](./computer-use.md) for the exact capability, build, install, and validation boundaries.
+
 ### Shell resource control
 
 Shell `timeout` is finite: omission or `0` uses 600,000 ms. A foreground command still running after 300,000 ms moves to the background without being stopped; its eventual settlement is delivered as the existing completion notification.
@@ -417,7 +441,7 @@ The runtime removes only raw provider-request and usage-aggregate projections fo
 
 ### Model-switch context admission
 
-Before changing a Session model, the runtime resolves the target model in the Session Location catalog and estimates the persisted rolling summary plus active recent history against its safe input budget. The budget is the target context window minus the effective `compaction.context_safety_margin_tokens`; an absent margin is explicitly zero. A fitting switch appends the normal durable model-selection event. An over-budget switch returns structured `ModelSwitchBlockedError` data and leaves the selected model, summary, transcript, and compaction state unchanged. It never triggers summarization; an optional `maximumSafeSummaryBoundary` is advisory and exists only when configured `keep_recent_messages` leaves a fitting recent tail. Selection waits for an active drain to settle, so the started provider request retains its original model and the new model applies to the following request boundary.
+Before changing a Session model, the runtime resolves the target model in the Session Location catalog and estimates the persisted rolling summary plus active recent history against its safe input budget. The budget is the target context window minus the effective `compaction.context_safety_margin_tokens`, which defaults to 4096 tokens. A fitting switch appends the normal durable model-selection event. An over-budget switch returns structured `ModelSwitchBlockedError` data and leaves the selected model, summary, transcript, and compaction state unchanged. It never triggers summarization; an optional `maximumSafeSummaryBoundary` is advisory and exists only when explicitly configured `keep_recent_messages` leaves a fitting recent tail. Selection waits for an active drain to settle, so the started provider request retains its original model and the new model applies to the following request boundary.
 
 ## Provider quota and credit diagnostics
 

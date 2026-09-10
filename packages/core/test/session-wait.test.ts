@@ -4,7 +4,6 @@ import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
-import { Job } from "@ycoding-ai/core/job"
 import { Location } from "@ycoding-ai/core/location"
 import { ProjectV2 } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -20,6 +19,7 @@ const projects = Layer.mock(ProjectV2.Service, {
   resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
 })
 const execution = Layer.mock(SessionExecution.Service, {
+  active: Effect.succeed(new Set<SessionV2.ID>()),
   awaitIdle: (sessionID) => Effect.sync(() => awaited.push(sessionID)),
 })
 const it = testEffect(

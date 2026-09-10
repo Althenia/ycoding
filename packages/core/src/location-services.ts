@@ -1,7 +1,12 @@
 import { Effect, Layer, LayerMap } from "effect"
 import { AgentV2 } from "./agent"
 import { AISDK } from "./aisdk"
+import { Browser } from "./browser"
+import { BrowserAdmission } from "./browser/admission"
+import { IsolatedBrowserExecutor } from "./browser/isolated-executor"
+import { IsolatedBrowser } from "./isolated-browser"
 import { Catalog } from "./catalog"
+import { Computer } from "./computer"
 import { CommandV2 } from "./command"
 import { Config } from "./config"
 import { LayerNode } from "./effect/layer-node"
@@ -86,6 +91,11 @@ const locationServiceNodes = [
   MCP.node,
   PermissionV2.node,
   SessionGuardrail.node,
+  BrowserAdmission.node,
+  IsolatedBrowserExecutor.node,
+  Browser.node,
+  IsolatedBrowser.node,
+  Computer.node,
   ToolOutputStore.node,
   ToolRegistry.node,
   ToolRegistry.toolsNode,

@@ -24,6 +24,8 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`product-direction.md`](./product-direction.md)       | TUI-only product scope, priorities, and compatibility policy.                                          |
 | [`architecture.md`](./architecture.md)                 | Active package graph, ownership, runtime flow, and constraints.                                        |
 | [`runtime.md`](./runtime.md)                           | Implemented Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior. |
+| [`browser-extension.md`](./browser-extension.md)       | Selected-tab Chrome bridge installation, isolation boundary, operations, and validation limits.       |
+| [`computer-use.md`](./computer-use.md)                 | Native computer capability, macOS iTerm/Finder boundary, helper development, packaging, and validation limits. |
 | [`tui-redesign-backlog.md`](./tui-redesign-backlog.md) | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog. |
 | [`provider-efficiency.md`](./provider-efficiency.md)   | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks. |
 | [`configuration.md`](./configuration.md)               | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.         |

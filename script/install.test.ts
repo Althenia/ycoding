@@ -18,10 +18,18 @@ describe("curl installer", () => {
     const first = await runInstaller(fixture)
 
     expect(first.exitCode).toBe(0)
-    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding"), "utf8")).toBe(`#!/bin/sh\necho ycoding ${fixtureVersion}\n`)
+    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding"), "utf8")).toBe(
+      `#!/bin/sh\necho ycoding ${fixtureVersion}\n`,
+    )
     expect((await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).stat()).mode & 0o111).not.toBe(0)
+    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding-computer-helper"), "utf8")).toBe(
+      "#!/bin/sh\nexit 0\n",
+    )
+    expect(
+      (await Bun.file(path.join(fixture.home, ".local/bin/ycoding-computer-helper")).stat()).mode & 0o111,
+    ).not.toBe(0)
     expect(await readFile(path.join(fixture.home, ".zshrc"), "utf8")).toBe(
-      "# existing profile\nexport PATH=\"$HOME/.local/bin:$PATH\"\n",
+      '# existing profile\nexport PATH="$HOME/.local/bin:$PATH"\n',
     )
     expect(first.stdout).toContain(`Installed ycoding ${fixtureVersion}`)
     expect(first.stdout).toContain("Restart your shell")
@@ -44,10 +52,7 @@ describe("curl installer", () => {
     await writeFile(path.join(equivalent.home, ".zshrc"), 'export PATH="$PATH:$HOME/.local/bin"\n')
     const equivalentResult = await runInstaller(equivalent)
     expect(equivalentResult.exitCode).toBe(0)
-    expect(await readFile(path.join(equivalent.home, ".zshrc"), "utf8")).toBe(
-      'export PATH="$PATH:$HOME/.local/bin"\n',
-    )
-
+    expect(await readFile(path.join(equivalent.home, ".zshrc"), "utf8")).toBe('export PATH="$PATH:$HOME/.local/bin"\n')
   })
 
   test("recognizes an equivalent absolute profile PATH entry", async () => {
@@ -94,7 +99,7 @@ describe("curl installer", () => {
     const result = await runInstaller(fixture, { SHELL: "/usr/local/bin/fish" })
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout).toContain('Add $HOME/.local/bin to PATH in your fish shell configuration')
+    expect(result.stdout).toContain("Add $HOME/.local/bin to PATH in your fish shell configuration")
     expect(await readFile(path.join(fixture.home, ".zshrc"), "utf8")).toBe("# existing profile\n")
 
     const unset = await setup()
@@ -115,6 +120,104 @@ describe("curl installer", () => {
     expect(result.stderr).toContain("Checksum verification failed")
     expect(await readFile(path.join(fixture.home, ".local/bin/ycoding"), "utf8")).toBe("old binary\n")
     expect(await Array.fromAsync(new Bun.Glob("ycoding-install.*").scan(fixture.tmp))).toEqual([])
+  })
+
+  test("restores the installed macOS pair when the final executable replacement fails", async () => {
+    const fixture = await setup()
+    const install = path.join(fixture.home, ".local/bin")
+    await mkdir(install, { recursive: true })
+    await writeFile(path.join(install, "ycoding"), "old ycoding\n")
+    await writeFile(path.join(install, "ycoding-computer-helper"), "old helper\n")
+    await writeExecutable(
+      path.join(fixture.path.split(":")[0]!, "mv"),
+      `#!/bin/sh
+destination=
+for argument do destination=$argument; done
+if [ "$destination" = "$HOME/.local/bin/ycoding" ] && [ ! -e "$FIXTURE/mv-failed" ]; then
+  touch "$FIXTURE/mv-failed"
+  exit 70
+fi
+exec /bin/mv "$@"
+`,
+    )
+
+    const result = await runInstaller(fixture)
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("Failed to install ycoding")
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old ycoding\n")
+    expect(await readFile(path.join(install, "ycoding-computer-helper"), "utf8")).toBe("old helper\n")
+    expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan(install))).toEqual([])
+  })
+
+  test("retains an old helper backup with recovery guidance when rollback also fails", async () => {
+    const fixture = await setup()
+    const install = path.join(fixture.home, ".local/bin")
+    await mkdir(install, { recursive: true })
+    await writeFile(path.join(install, "ycoding"), "old ycoding\n")
+    await writeFile(path.join(install, "ycoding-computer-helper"), "old helper\n")
+    await writeExecutable(
+      path.join(fixture.path.split(":")[0]!, "mv"),
+      `#!/bin/sh
+source=
+destination=
+for argument do
+  case "$argument" in
+    -*) ;;
+    *) source=$destination; destination=$argument ;;
+  esac
+done
+if [ "$destination" = "$HOME/.local/bin/ycoding" ] && [ ! -e "$FIXTURE/mv-failed" ]; then
+  touch "$FIXTURE/mv-failed"
+  exit 70
+fi
+case "$source:$destination" in
+  */.ycoding-computer-helper-backup.*:"$HOME/.local/bin/ycoding-computer-helper") exit 71 ;;
+esac
+exec /bin/mv "$@"
+`,
+    )
+
+    const result = await runInstaller(fixture)
+
+    expect(result.exitCode).not.toBe(0)
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old ycoding\n")
+    expect(await Bun.file(path.join(install, "ycoding-computer-helper")).exists()).toBe(false)
+    const backups = await Array.fromAsync(new Bun.Glob(".ycoding-computer-helper-backup.*").scan(install))
+    expect(backups).toHaveLength(1)
+    expect(await readFile(path.join(install, backups[0]!), "utf8")).toBe("old helper\n")
+    expect(result.stderr).toContain(`Computer helper backup retained at ${path.join(install, backups[0]!)}`)
+    expect(result.stderr).toContain(`Move that backup to ${path.join(install, "ycoding-computer-helper")}`)
+  })
+
+  test("rejects a macOS archive without the direct computer helper", async () => {
+    const fixture = await setup()
+    const tar = Bun.spawnSync([
+      "tar",
+      "-C",
+      fixture.fixture,
+      "-czf",
+      path.join(fixture.fixture, fixture.asset),
+      "ycoding",
+    ])
+    expect(tar.exitCode).toBe(0)
+    await writeChecksum(fixture.fixture, fixture.asset)
+
+    const result = await runInstaller(fixture)
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("Release archive has invalid direct entries")
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(false)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-computer-helper")).exists()).toBe(false)
+  })
+
+  test("installs a Linux archive without a macOS helper", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64" })
+    const result = await runInstaller(fixture)
+
+    expect(result.exitCode).toBe(0)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(true)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-computer-helper")).exists()).toBe(false)
   })
 
   test("rejects invalid versions and unsupported platforms before downloading", async () => {
@@ -142,13 +245,16 @@ async function setup(platform: { system: string; machine: string } = { system: "
   await Promise.all([mkdir(home), mkdir(fixture), mkdir(bin), mkdir(tmp)])
   await writeFile(path.join(home, ".zshrc"), "# existing profile\n")
   await writeFile(path.join(fixture, "ycoding"), `#!/bin/sh\necho ycoding ${fixtureVersion}\n`)
+  await writeFile(path.join(fixture, "ycoding-computer-helper"), "#!/bin/sh\nexit 0\n")
   await chmod(path.join(fixture, "ycoding"), 0o755)
-  const asset = `ycoding-${fixtureVersion}-darwin-arm64.tar.gz`
+  await chmod(path.join(fixture, "ycoding-computer-helper"), 0o755)
+  const target = `${platform.system === "Darwin" ? "darwin" : "linux"}-${["arm64", "aarch64"].includes(platform.machine) ? "arm64" : "x64"}`
+  const asset = `ycoding-${fixtureVersion}-${target}.tar.gz`
   const archive = path.join(fixture, asset)
-  const tar = Bun.spawnSync(["tar", "-C", fixture, "-czf", archive, "ycoding"])
+  const entries = platform.system === "Darwin" ? ["ycoding", "ycoding-computer-helper"] : ["ycoding"]
+  const tar = Bun.spawnSync(["tar", "-C", fixture, "-czf", archive, ...entries])
   expect(tar.exitCode).toBe(0)
-  const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(archive).arrayBuffer()).digest("hex")
-  await writeFile(path.join(fixture, "checksums"), `${digest}  ${asset}\n`)
+  await writeChecksum(fixture, asset)
   await writeExecutable(
     path.join(bin, "uname"),
     `#!/bin/sh\ncase "$1" in\n  -s) printf '%s\\n' '${platform.system}' ;;\n  -m) printf '%s\\n' '${platform.machine}' ;;\n  *) exit 1 ;;\nesac\n`,
@@ -178,8 +284,8 @@ case "$url" in
     printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v${fixtureVersion}' ;;
   https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/ycoding-${fixtureVersion}-checksums.txt)
     cp "$FIXTURE/checksums" "$output" ;;
-  https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/ycoding-${fixtureVersion}-darwin-arm64.tar.gz)
-    cp "$FIXTURE/ycoding-${fixtureVersion}-darwin-arm64.tar.gz" "$output" ;;
+  https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/${asset})
+    cp "$FIXTURE/${asset}" "$output" ;;
   *)
     printf 'unexpected URL: %s\\n' "$url" >&2
     exit 42 ;;
@@ -189,10 +295,7 @@ esac
   return { home, fixture, tmp, asset, path: `${bin}:/usr/bin:/bin` }
 }
 
-async function runInstaller(
-  fixture: Awaited<ReturnType<typeof setup>>,
-  environment: Record<string, string> = {},
-) {
+async function runInstaller(fixture: Awaited<ReturnType<typeof setup>>, environment: Record<string, string> = {}) {
   const child = Bun.spawn(["/bin/sh", installer], {
     env: {
       HOME: fixture.home,
@@ -217,4 +320,11 @@ async function runInstaller(
 async function writeExecutable(file: string, content: string) {
   await writeFile(file, content)
   await chmod(file, 0o755)
+}
+
+async function writeChecksum(fixture: string, asset: string) {
+  const digest = new Bun.CryptoHasher("sha256")
+    .update(await Bun.file(path.join(fixture, asset)).arrayBuffer())
+    .digest("hex")
+  await writeFile(path.join(fixture, "checksums"), `${digest}  ${asset}\n`)
 }

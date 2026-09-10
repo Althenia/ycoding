@@ -295,6 +295,36 @@ import type {
   DebugLocationListOutput,
   DebugLocationEvictInput,
   DebugLocationEvictOutput,
+  BrowserStatusInput,
+  BrowserStatusOutput,
+  BrowserTabsInput,
+  BrowserTabsOutput,
+  BrowserStartInput,
+  BrowserStartOutput,
+  BrowserObserveInput,
+  BrowserObserveOutput,
+  BrowserActionInput,
+  BrowserActionOutput,
+  BrowserControlInput,
+  BrowserControlOutput,
+  BrowserStopInput,
+  BrowserStopOutput,
+  BrowserForgetInput,
+  BrowserForgetOutput,
+  IsolatedBrowserStatusInput,
+  IsolatedBrowserStatusOutput,
+  IsolatedBrowserStartInput,
+  IsolatedBrowserStartOutput,
+  IsolatedBrowserTabsInput,
+  IsolatedBrowserTabsOutput,
+  IsolatedBrowserObserveInput,
+  IsolatedBrowserObserveOutput,
+  IsolatedBrowserActionInput,
+  IsolatedBrowserActionOutput,
+  IsolatedBrowserControlInput,
+  IsolatedBrowserControlOutput,
+  IsolatedBrowserStopInput,
+  IsolatedBrowserStopOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -2442,6 +2472,202 @@ export function make(options: ClientOptions) {
             requestOptions,
           ),
       },
+    },
+    browser: {
+      status: (input: BrowserStatusInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserStatusOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      tabs: (input: BrowserTabsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserTabsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/tabs`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      start: (input: BrowserStartInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserStartOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/start`,
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      observe: (input: BrowserObserveInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserObserveOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/observe`,
+            body: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      action: (input: BrowserActionInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserActionOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/action`,
+            body: {
+              tabID: input["tabID"],
+              generation: input["generation"],
+              documentGeneration: input["documentGeneration"],
+              observationRevision: input["observationRevision"],
+              callID: input["callID"],
+              action: input["action"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      control: (input: BrowserControlInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserControlOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/control`,
+            body: { action: input["action"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      stop: (input: BrowserStopInput, requestOptions?: RequestOptions) =>
+        request<BrowserStopOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser`,
+            successStatus: 204,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      forget: (input: BrowserForgetInput, requestOptions?: RequestOptions) =>
+        request<BrowserForgetOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/pairing`,
+            successStatus: 204,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+    },
+    isolatedBrowser: {
+      status: (input: IsolatedBrowserStatusInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IsolatedBrowserStatusOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      start: (input: IsolatedBrowserStartInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IsolatedBrowserStartOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated/start`,
+            body: { url: input["url"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      tabs: (input: IsolatedBrowserTabsInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IsolatedBrowserTabsOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated/tabs`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      observe: (input: IsolatedBrowserObserveInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IsolatedBrowserObserveOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated/observe`,
+            body: {
+              tabID: input["tabID"],
+              generation: input["generation"],
+              callID: input["callID"],
+              instanceID: input["instanceID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      action: (input: IsolatedBrowserActionInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IsolatedBrowserActionOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated/action`,
+            body: {
+              tabID: input["tabID"],
+              generation: input["generation"],
+              documentGeneration: input["documentGeneration"],
+              observationRevision: input["observationRevision"],
+              callID: input["callID"],
+              action: input["action"],
+              instanceID: input["instanceID"],
+            },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      control: (input: IsolatedBrowserControlInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: IsolatedBrowserControlOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated/control`,
+            body: { action: input["action"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      stop: (input: IsolatedBrowserStopInput, requestOptions?: RequestOptions) =>
+        request<IsolatedBrowserStopOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/isolated`,
+            successStatus: 204,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
     },
   }
 }

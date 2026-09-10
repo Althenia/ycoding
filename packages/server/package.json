@@ -9,7 +9,8 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
-    "test": "bun test --only-failures",
+    "test": "bun test --only-failures --path-ignore-patterns=test-integration",
+    "test:integration:browser": "bun test --timeout 120000 test-integration/browser-connect.test.ts test-integration/isolated-browser.test.ts",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

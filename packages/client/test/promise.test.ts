@@ -36,6 +36,8 @@ test("exposes every standard HTTP API group", () => {
     "vcs",
     "projectArtifact",
     "debug",
+    "browser",
+    "isolatedBrowser",
   ])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
@@ -55,6 +57,25 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])
   expect(Object.keys(client.providerUsage)).toEqual(["list", "get"])
+  expect(Object.keys(client.browser)).toEqual([
+    "status",
+    "tabs",
+    "start",
+    "observe",
+    "action",
+    "control",
+    "stop",
+    "forget",
+  ])
+  expect(Object.keys(client.isolatedBrowser)).toEqual([
+    "status",
+    "start",
+    "tabs",
+    "observe",
+    "action",
+    "control",
+    "stop",
+  ])
 })
 
 test("VCS branch uses the public HTTP contract", async () => {

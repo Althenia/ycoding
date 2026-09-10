@@ -62,6 +62,7 @@ import { useDialog } from "../../ui/dialog"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { DialogSessionSkills } from "../../component/dialog-session-skills"
 import { DialogSessionTerminals } from "../../component/dialog-session-terminals"
+import { SessionIsolatedBrowserCommand } from "../../component/dialog-session-browser"
 import { DialogProjectArtifacts } from "../../component/dialog-project-artifacts"
 import { DialogMessage } from "./dialog-message"
 import { DialogFork } from "./dialog-fork"
@@ -1405,6 +1406,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         }}
       >
         <SessionMemoryCommand sessionID={route.sessionID} />
+        <Show when={location()}>
+          {(ownerLocation) => <SessionIsolatedBrowserCommand sessionID={route.sessionID} location={ownerLocation()} />}
+        </Show>
         <ProviderUsageCommand />
         <Header
         path={location()?.directory}
