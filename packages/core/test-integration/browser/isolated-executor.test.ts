@@ -778,7 +778,8 @@ function downloadFixture() {
 }
 
 function oversizedCaptureFixture() {
-  return `<!doctype html><title>Preparing oversized capture</title><style>html,body{margin:0}canvas{display:block}</style>
+  // Classic scrollbars shrink the noise area below 1 MiB; force their geometry so hidden overflow is regression-tested.
+  return `<!doctype html><title>Preparing oversized capture</title><style>html,body{margin:0;overflow:hidden}canvas{display:block}::-webkit-scrollbar{width:15px;height:15px}</style>
     <canvas width="800" height="600"></canvas><script>
       const canvas=document.querySelector('canvas');const context=canvas.getContext('2d');const image=context.createImageData(800,600);
       for(let offset=0;offset<image.data.length;offset+=65536)crypto.getRandomValues(image.data.subarray(offset,Math.min(offset+65536,image.data.length)));
