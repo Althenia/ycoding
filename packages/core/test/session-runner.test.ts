@@ -40,6 +40,8 @@ import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-
 import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
 import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
+import { SessionOrchestration } from "@ycoding-ai/core/session/orchestration"
+import { QuestionID } from "@ycoding-ai/schema/session-orchestration"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
@@ -1395,6 +1397,95 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID: forked.id, text: "Observe unchanged fork", resume: false })
       yield* session.resume(forked.id)
       expect(teamMessages(requests[8]!)).toEqual(inherited)
+    }),
+  )
+
+  it.effect("does not append TeamView observations for repeated progress metadata", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const events = yield* EventV2.Service
+      const db = (yield* Database.Service).db
+      yield* admit(session, "Start review")
+      yield* session.resume(sessionID)
+      yield* insertSession(otherSessionID)
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: otherSessionID,
+        change: {
+          type: "launched",
+          parentID: sessionID,
+          parentAssistantMessageID: requireAssistant(yield* session.context(sessionID)).id,
+          toolCallID: "call-team-churn",
+          inputID: SessionMessage.ID.make("msg_team_churn"),
+          description: "Review fixture",
+          agent: AgentV2.ID.make("build"),
+          model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+          promptDigest: "fixture-digest",
+          background: true,
+          delivery: "steer",
+        },
+      })
+      yield* events.publish(SessionEvent.Task.Updated, { sessionID: otherSessionID, change: { type: "started" } })
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: otherSessionID,
+        change: { type: "progressed", progress: { text: "Checking fixture", time: 1 } },
+      })
+      yield* admit(session, "Observe review")
+      yield* session.resume(sessionID)
+      const before = yield* session.context(sessionID)
+      const publicBefore = yield* SessionOrchestration.readTeamView(db, sessionID)
+      const protectedBefore = yield* SessionLiveState.captureDatabase(db, sessionID)
+      const observations = before.filter((message) =>
+        message.type === "synthetic" && message.metadata?.contextSource === "team-view",
+      )
+      expect(observations).toHaveLength(1)
+
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: otherSessionID,
+        change: { type: "progressed", progress: { text: "Checking fixture", time: 2 } },
+      })
+      const publicAfter = yield* SessionOrchestration.readTeamView(db, sessionID)
+      expect(publicAfter!.view.children[0]!.revision).toBeGreaterThan(publicBefore!.view.children[0]!.revision)
+      expect(publicAfter!.view.children[0]!.progress?.time).toBe(2)
+      expect((yield* SessionLiveState.captureDatabase(db, sessionID)).sources.orchestration.digest)
+        .not.toBe(protectedBefore.sources.orchestration.digest)
+      yield* admit(session, "Observe unchanged review")
+      yield* session.resume(sessionID)
+      expect((yield* session.context(sessionID)).filter((message) =>
+        message.type === "synthetic" && message.metadata?.contextSource === "team-view",
+      )).toEqual(observations)
+      expect(requests[2]!.messages.slice(0, requests[1]!.messages.length)).toEqual([...requests[1]!.messages])
+
+      yield* replaySessionProjection(sessionID)
+      yield* admit(session, "Observe after replay")
+      yield* session.resume(sessionID)
+      expect((yield* session.context(sessionID)).filter((message) =>
+        message.type === "synthetic" && message.metadata?.contextSource === "team-view",
+      )).toEqual(observations)
+
+      const question = { id: QuestionID.make("qst_team_scope"), text: "Which scope?", data: { choices: ["core", "all"] }, time: 3 }
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: otherSessionID,
+        change: { type: "question_asked", question },
+      })
+      yield* admit(session, "Observe question")
+      yield* session.resume(sessionID)
+      expect(requests[4]!.messages.slice(0, requests[3]!.messages.length)).toEqual([...requests[3]!.messages])
+      const questionText = requests[4]!.messages.at(-1)!.content.find((part) => part.type === "text")!
+      expect(questionText.text).toContain('"state":"waiting"')
+      expect(questionText.text).toContain('"id":"qst_team_scope"')
+      expect(questionText.text).toContain('"choices":["core","all"]')
+      expect(questionText.text).not.toContain('"time"')
+
+      yield* events.publish(SessionEvent.Task.Updated, {
+        sessionID: otherSessionID,
+        change: { type: "question_answered", answer: { questionID: question.id, text: "core" } },
+      })
+      yield* admit(session, "Observe answered question")
+      yield* session.resume(sessionID)
+      const answeredText = requests[5]!.messages.at(-1)!.content.find((part) => part.type === "text")!
+      expect(answeredText.text).toContain('"state":"running"')
+      expect(answeredText.text).not.toContain('"question"')
+      expect(requests[5]!.messages.slice(0, requests[4]!.messages.length)).toEqual([...requests[4]!.messages])
     }),
   )
 
