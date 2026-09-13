@@ -6,12 +6,61 @@ repository="Althenia/ycoding"
 install_dir="$HOME/.local/bin"
 temporary=
 candidate=
+helper_candidate=
+binary_backup=
+helper_backup=
+install_transaction=false
+binary_backed_up=false
+helper_backed_up=false
+binary_installed=false
+helper_installed=false
 
 cleanup() {
+  status=$?
+  trap - 0 HUP INT TERM
+  set +e
+  if [ "$install_transaction" = true ]; then
+    restore_status=0
+    if [ "$binary_installed" = true ] || [ "$binary_backed_up" = true ]; then
+      rm -f "$install_dir/ycoding" || restore_status=1
+    fi
+    if [ "$helper_installed" = true ] || [ "$helper_backed_up" = true ]; then
+      rm -f "$install_dir/ycoding-computer-helper" || restore_status=1
+    fi
+    if [ "$binary_backed_up" = true ]; then
+      if mv -f "$binary_backup" "$install_dir/ycoding"; then
+        binary_backed_up=false
+        binary_backup=
+      else
+        printf 'ycoding installer: YCoding executable backup retained at %s\n' "$binary_backup" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/ycoding" >&2
+        restore_status=1
+      fi
+    fi
+    if [ "$helper_backed_up" = true ]; then
+      if mv -f "$helper_backup" "$install_dir/ycoding-computer-helper"; then
+        helper_backed_up=false
+        helper_backup=
+      else
+        printf 'ycoding installer: Computer helper backup retained at %s\n' "$helper_backup" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/ycoding-computer-helper" >&2
+        restore_status=1
+      fi
+    fi
+    if [ "$restore_status" -ne 0 ]; then
+      printf 'ycoding installer: Failed to restore the previously installed executable pair\n' >&2
+      status=1
+    fi
+  fi
   if [ -n "$candidate" ]; then rm -f "$candidate"; fi
+  if [ -n "$helper_candidate" ]; then rm -f "$helper_candidate"; fi
+  if [ -n "$binary_backup" ] && [ "$binary_backed_up" = false ]; then rm -f "$binary_backup"; fi
+  if [ -n "$helper_backup" ] && [ "$helper_backed_up" = false ]; then rm -f "$helper_backup"; fi
   if [ -n "$temporary" ]; then rm -rf "$temporary"; fi
+  exit "$status"
 }
-trap cleanup 0 HUP INT TERM
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
 
 fail() {
   printf 'ycoding installer: %s\n' "$1" >&2
@@ -79,19 +128,61 @@ else
 fi
 [ "$actual" = "$expected" ] || fail "Checksum verification failed for $asset"
 
-entries=$(tar -tzf "$temporary/$asset") || fail "Failed to inspect $asset"
-[ "$entries" = "ycoding" ] || fail "Release archive must contain only the direct ycoding executable"
+tar -tzf "$temporary/$asset" >"$temporary/entries" || fail "Failed to inspect $asset"
+entries=$(LC_ALL=C sort "$temporary/entries")
+expected_entries=ycoding
+if [ "$operating_system" = "darwin" ]; then
+  expected_entries=$(printf '%s\n' ycoding ycoding-computer-helper | LC_ALL=C sort)
+fi
+[ "$entries" = "$expected_entries" ] || fail "Release archive has invalid direct entries"
 mkdir "$temporary/extract"
 tar -xzf "$temporary/$asset" -C "$temporary/extract" || fail "Failed to extract $asset"
 [ -f "$temporary/extract/ycoding" ] && [ ! -L "$temporary/extract/ycoding" ] && [ -s "$temporary/extract/ycoding" ] ||
   fail "Release archive did not contain a regular ycoding executable"
+if [ "$operating_system" = "darwin" ]; then
+  [ -f "$temporary/extract/ycoding-computer-helper" ] && [ ! -L "$temporary/extract/ycoding-computer-helper" ] && [ -s "$temporary/extract/ycoding-computer-helper" ] ||
+    fail "Release archive did not contain a regular computer helper"
+fi
 
 mkdir -p "$install_dir"
 candidate=$(mktemp "$install_dir/.ycoding.XXXXXX") || fail "Failed to create an install candidate"
 cp "$temporary/extract/ycoding" "$candidate" || fail "Failed to prepare the ycoding executable"
 chmod 755 "$candidate" || fail "Failed to make the ycoding executable runnable"
+if [ "$operating_system" = "darwin" ]; then
+  helper_candidate=$(mktemp "$install_dir/.ycoding-computer-helper.XXXXXX") || fail "Failed to create a computer helper install candidate"
+  cp "$temporary/extract/ycoding-computer-helper" "$helper_candidate" || fail "Failed to prepare the computer helper"
+  chmod 755 "$helper_candidate" || fail "Failed to make the computer helper runnable"
+
+  if [ -e "$install_dir/ycoding" ] || [ -L "$install_dir/ycoding" ]; then
+    binary_backup=$(mktemp "$install_dir/.ycoding-backup.XXXXXX") || fail "Failed to reserve the ycoding rollback path"
+    rm -f "$binary_backup" || fail "Failed to prepare the ycoding rollback path"
+  fi
+  if [ -e "$install_dir/ycoding-computer-helper" ] || [ -L "$install_dir/ycoding-computer-helper" ]; then
+    helper_backup=$(mktemp "$install_dir/.ycoding-computer-helper-backup.XXXXXX") || fail "Failed to reserve the computer helper rollback path"
+    rm -f "$helper_backup" || fail "Failed to prepare the computer helper rollback path"
+  fi
+
+  install_transaction=true
+  if [ -n "$binary_backup" ]; then
+    mv -f "$install_dir/ycoding" "$binary_backup" || fail "Failed to preserve the installed ycoding executable"
+    binary_backed_up=true
+  fi
+  if [ -n "$helper_backup" ]; then
+    mv -f "$install_dir/ycoding-computer-helper" "$helper_backup" || fail "Failed to preserve the installed computer helper"
+    helper_backed_up=true
+  fi
+  mv -f "$helper_candidate" "$install_dir/ycoding-computer-helper" || fail "Failed to install the computer helper"
+  helper_installed=true
+  helper_candidate=
+fi
 mv -f "$candidate" "$install_dir/ycoding" || fail "Failed to install ycoding"
+binary_installed=true
 candidate=
+install_transaction=false
+if [ -n "$binary_backup" ]; then rm -f "$binary_backup"; fi
+if [ -n "$helper_backup" ]; then rm -f "$helper_backup"; fi
+binary_backup=
+helper_backup=
 
 printf 'Installed ycoding %s to %s/ycoding\n' "$version" "$install_dir"
 

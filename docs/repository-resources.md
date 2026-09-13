@@ -445,6 +445,8 @@ Custom tools must be supplied through:
 
 This distinction is intentional: plugin and MCP lifecycles provide validation, permissions, cancellation, and cleanup that arbitrary source-file loading would bypass.
 
+The built-in `browser` tool is registered through the same Location-scoped internal plugin lifecycle. Omitted mode operates only tabs explicitly shared through the selected-tab Chrome bridge; explicit `mode: "isolated"` operates an already-started Session-owned isolated browser. Neither mode starts or falls back to the other. The tool never exposes pairing to the model and applies browser permissions plus mutation guardrails at execution. See [`browser-extension.md`](./browser-extension.md) and the [isolated-browser contract](../specs/v2/isolated-browser.md).
+
 ## Themes
 
 Terminal themes are JSON files under `themes`:

@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema, Stream } from "effect"
+import { TestClock } from "effect/testing"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -86,6 +87,8 @@ const rowsFor = (sessionID: SessionV2.ID) =>
 describe("SessionFileChangeCleanup", () => {
   it.effect("deletes stale file-change ledger rows only", () =>
     Effect.gen(function* () {
+      // Let the startup cleanup suspend before inserting the retention-boundary fixtures.
+      yield* TestClock.adjust(0)
       const staleID = SessionV2.ID.make("ses_file_change_stale")
       const recentID = SessionV2.ID.make("ses_file_change_recent")
       yield* insertSession(staleID)
@@ -99,6 +102,7 @@ describe("SessionFileChangeCleanup", () => {
 
   it.effect("preserves executor-active stale Session ledgers", () =>
     Effect.gen(function* () {
+      yield* TestClock.adjust(0)
       const activeID = SessionV2.ID.make("ses_file_change_active")
       yield* insertSession(activeID)
       active.add(activeID)
@@ -111,6 +115,7 @@ describe("SessionFileChangeCleanup", () => {
 
   it.effect("rebuilds a deleted stale ledger row from its retained file-change fact", () =>
     Effect.gen(function* () {
+      yield* TestClock.adjust(0)
       const sessionID = SessionV2.ID.make("ses_file_change_recovery")
       const change = { path: RelativePath.make("src/recovered.ts"), patch: "@@", additions: 2, deletions: 1 }
       const { db } = yield* Database.Service

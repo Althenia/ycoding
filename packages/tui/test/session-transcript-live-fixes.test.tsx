@@ -810,7 +810,7 @@ test("does not mount TodoWrite tasks in the transcript", async () => {
   }
 }, 60_000)
 
-test("renders retained Session state and TeamView bodies in chronological transcript order", async () => {
+test("hides retained Session state bodies while keeping TeamView order", async () => {
   const messages: SessionMessageInfo[] = [
     { id: "msg_context_prompt", type: "user", text: "Coordinate the work", time: { created: 1 } },
     {
@@ -834,21 +834,21 @@ test("renders retained Session state and TeamView bodies in chronological transc
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(messages),
-    settle: "Authoritative current Session state: normal mode",
+    settle: "TeamView: reviewer is running",
   })
   try {
     const frame = screen.frame()
-    expect(frame).toContain("Authoritative current Session state: normal mode")
+    expect(frame).not.toContain("Authoritative current Session state: normal mode")
     expect(frame).toContain("TeamView: reviewer is running")
-    expect(frame.indexOf("Coordinate the work")).toBeLessThan(frame.indexOf("Authoritative current Session state"))
-    expect(frame.indexOf("Authoritative current Session state")).toBeLessThan(frame.indexOf("TeamView: reviewer"))
+    expect(frame.indexOf("Coordinate the work")).toBeLessThan(frame.indexOf("TeamView: reviewer"))
     expect(frame.indexOf("TeamView: reviewer")).toBeLessThan(frame.indexOf("Continue after the update"))
+    expect(messages.some((message) => message.id === "msg_context_state")).toBe(true)
   } finally {
     await screen.dispose()
   }
 }, 60_000)
 
-test("renders Session state and TeamView notices summary-only without mutating canonical messages", async () => {
+test("hides Session state notices while rendering TeamView summary-only", async () => {
   const sessionState =
     'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"todos":[{"content":"First task","status":"pending"},{"content":"Second task","status":"pending"},{"content":"Third task","status":"pending"},{"content":"Fourth task","status":"pending"},{"content":"Fifth task","status":"pending"},{"content":"Sixth task","status":"pending"}]}'
   const teamView =
@@ -874,10 +874,10 @@ test("renders Session state and TeamView notices summary-only without mutating c
     ...NARROW_VIEWPORT,
     args: { sessionID },
     route: routeFor(messages),
-    settle: "Session state · normal · YOLO 0 · 6 tasks",
+    settle: "TeamView · 1 running · 1 completed · 1 omitted",
   })
   try {
-    expect(screen.frame()).toContain("Session state · normal · YOLO 0 · 6 tasks")
+    expect(screen.frame()).not.toContain("Session state · normal · YOLO 0 · 6 tasks")
     expect(screen.frame()).toContain("TeamView · 1 running · 1 completed · 1 omitted")
     expect(screen.frame()).not.toContain("First task")
     expect(screen.frame()).not.toContain("Sixth task")

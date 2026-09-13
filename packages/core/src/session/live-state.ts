@@ -15,7 +15,7 @@ import { ContextManifest } from "./context-manifest"
 import { SessionErrors } from "./error"
 import { SessionEvent } from "./event"
 import { SessionGuardrail } from "./guardrail"
-import { readTeamView, renderTeamView } from "./orchestration-view"
+import { readTeamObservation, renderTeamObservation } from "./orchestration-view"
 import { SessionPermissionCeiling } from "./permission-ceiling"
 import { SessionRunnerCache } from "./runner/cache"
 import {
@@ -30,7 +30,7 @@ import {
 export interface Snapshot {
   readonly rendered: Message
   readonly text: string
-  readonly teamView?: ReturnType<typeof renderTeamView>
+  readonly teamView?: ReturnType<typeof renderTeamObservation>
   readonly sources: Readonly<Record<ProtectedStateSource, Source>>
 }
 
@@ -267,7 +267,7 @@ export const layer = Layer.effect(
       ]
         .filter((part): part is string => part !== undefined)
         .join("\n\n")
-      const teamView = yield* readTeamView(db, sessionID)
+      const teamView = yield* readTeamObservation(db, sessionID)
       return {
         rendered: Message.make({
           role: "system",

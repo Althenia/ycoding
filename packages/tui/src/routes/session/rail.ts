@@ -18,31 +18,16 @@ export type RailSectionKey =
 export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
 
 /**
- * Ordinary defaults keep Session, context and todo open. Active surfaces add their operational
- * sections; auxiliary sections still require attention or an explicit user toggle.
+ * Defaults keep only Session, context and todo open. All other sections stay
+ * collapsed until the user expands them or an attention event forces them open.
  */
-export function defaultExpanded(input: {
+export function defaultExpanded(_input?: {
   goal?: boolean
   autonomy?: boolean
   shellSurface?: boolean
   allExpanded?: boolean
 }): RailSectionKey[] {
-  if (input.allExpanded) return ["session", "goal", "autonomy", "context", "todo", "subagents", "shells"]
-  if (input.shellSurface)
-    return [
-      "shells",
-      "session",
-      ...(input.goal ? (["goal"] as const) : []),
-      ...(input.autonomy ? (["autonomy"] as const) : []),
-      "todo",
-    ]
-  return [
-    "session",
-    "context",
-    ...(input.goal ? (["goal"] as const) : []),
-    ...(input.autonomy ? (["autonomy"] as const) : []),
-    "todo",
-  ]
+  return ["session", "context", "todo"]
 }
 
 /**

@@ -442,11 +442,10 @@ const layer = Layer.effect(
       const resolution = yield* Effect.gen(function* () {
         const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
         const config = yield* Config.Service.pipe(Effect.provide(locations.get(session.location)))
-        const compaction = ConfigCompaction.resolve(
-          (yield* config.entries())
-            .filter((entry): entry is Config.Document => entry.type === "document")
-            .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : [])),
-        )
+        const compactions = (yield* config.entries())
+          .filter((entry): entry is Config.Document => entry.type === "document")
+          .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : []))
+        const compaction = ConfigCompaction.resolve(compactions)
         return {
           target: SessionContextBudget.resolveCapabilities(
             yield* catalog.model.available(),
@@ -456,7 +455,9 @@ const layer = Layer.effect(
               safetyMarginTokens: compaction.contextSafetyMarginTokens,
             },
           ),
-          keepRecentMessages: compaction.keepRecentMessages,
+          keepRecentMessages: compactions
+            .flatMap((info) => (info.keep_recent_messages === undefined ? [] : [info.keep_recent_messages]))
+            .at(-1),
         }
       })
       const messages = yield* SessionHistory.forModel(db, session.id)
@@ -1207,6 +1208,14 @@ const layer = Layer.effect(
         )
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
+        const current = yield* result.get(input.sessionID)
+        if (
+          current.model?.providerID === input.model.providerID &&
+          current.model.id === input.model.id &&
+          (current.model.variant ?? "default") === (input.model.variant ?? "default")
+        )
+          return { status: "switched" }
+        yield* execution.awaitIdle(input.sessionID)
         const session = yield* result.get(input.sessionID)
         if (
           session.model?.providerID === input.model.providerID &&
@@ -1375,7 +1384,7 @@ const layer = Layer.effect(
                 } as const
                 if (yield* compactionJobs.hasUnchangedDeterministicFailure(admission)) return undefined
                 const admitted = yield* admit(admission)
-                yield* compactionExecution.run({ jobID: admitted.id, manifest })
+                yield* compactionExecution.start({ jobID: admitted.id, manifest })
                 return admitted
               }
               const active = (yield* compactionJobs.pending(input.sessionID))[0]
@@ -1713,7 +1722,7 @@ function isCompleteMessage(type: SessionMessage.Type, data: unknown) {
   if (type === "assistant" || type === "shell") return hasTime(data, "completed")
   if (type !== "compaction") return true
   if (!isRecord(data)) return false
-  return data.status === "completed" || data.status === "failed"
+  return data.status === "completed"
 }
 
 function hasTime(data: unknown, key: string) {

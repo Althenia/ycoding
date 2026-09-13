@@ -329,6 +329,11 @@ test("applies one outer surface row around populated normal rail sections", asyn
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS") && frame.includes("MCP"))
 
   try {
+    // Only session/context/todo expand by default; expand the operational sections explicitly.
+    for (const title of ["SUBAGENTS", "SHELLS", "MCP"]) {
+      const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes(title))
+      await app.mockMouse.click(2, headingRow)
+    }
     await app.waitForFrame((frame) => frame.includes("Main chat"))
 
     const lines = app.captureCharFrame().split("\n")
@@ -697,6 +702,13 @@ test("an attention event preserves default-expanded sections and releases its ow
   )
   await app.waitForFrame((frame) => frame.includes("context body"))
 
+  // Only session/context/todo expand by default; expand goal and autonomy explicitly.
+  for (const title of ["GOAL", "AUTONOMY"]) {
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes(title))
+    await app.mockMouse.click(2, headingRow)
+  }
+  await app.waitForFrame((frame) => frame.includes("goal body") && frame.includes("autonomy body"))
+
   setWaiting(true)
   await app.waitForFrame((frame) => frame.includes("subagent body"))
 
@@ -744,6 +756,39 @@ test("a user can toggle a collapsed section from its header", async () => {
   }
 })
 
+test("preserves user toggles across session prop changes", async () => {
+  const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
+  const [goal, setGoal] = createSignal(false)
+  const app = await mount(() => (
+    <RailProvider goal={goal()} autonomy={goal()}>
+      <RailSection section="context" title="CONTEXT">
+        <text>context body</text>
+      </RailSection>
+      <RailSection section="todo" title="TODO">
+        <text>todo body</text>
+      </RailSection>
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("context body"))
+
+  try {
+    expect(app.captureCharFrame()).toContain("todo body")
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => !frame.includes("todo body"))
+    // Simulate navigating to a subagent chat and back by changing session-driven props.
+    setGoal(true)
+    await app.waitForFrame((frame) => frame.includes("CONTEXT"))
+    expect(app.captureCharFrame()).toContain("context body")
+    expect(app.captureCharFrame()).not.toContain("todo body")
+    setGoal(false)
+    await app.waitForFrame((frame) => frame.includes("CONTEXT"))
+    expect(app.captureCharFrame()).not.toContain("todo body")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("renders accurate shell summaries and releases orphaned-shell attention", async () => {
   const [{ RailProvider }, { ShellRailContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
@@ -784,7 +829,7 @@ test("renders accurate shell summaries and releases orphaned-shell attention", a
   }
 })
 
-test("prioritizes and expands SHELLS only while the Shell composer surface is active", async () => {
+test("keeps SHELLS collapsed until its header is toggled", async () => {
   const [{ RailProvider }, { SessionRailContent }, { ShellRailContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
     import("../src/routes/session/sidebar"),
@@ -805,6 +850,11 @@ test("prioritizes and expands SHELLS only while the Shell composer surface is ac
   await app.waitForFrame((frame) => frame.includes("SHELLS"))
 
   try {
+    expect(app.captureCharFrame()).toContain("SHELLS")
+    expect(app.captureCharFrame()).not.toContain("Main chat")
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("SHELLS"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => frame.includes("Main chat"))
     const frame = app.captureCharFrame()
 
     expect(frame).toContain("SHELLS")

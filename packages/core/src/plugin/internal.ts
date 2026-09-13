@@ -4,9 +4,12 @@ import type { Plugin } from "@ycoding-ai/plugin/effect/plugin";
 import { Context, Effect, Scope } from "effect";
 import { HttpClient } from "effect/unstable/http";
 import { AgentV2 } from "../agent";
+import { Browser } from "../browser";
+import { IsolatedBrowser } from "../isolated-browser";
 import { Catalog } from "../catalog";
 import { CommandV2 } from "../command";
 import { Config } from "../config";
+import { Computer } from "../computer";
 import { Credential } from "../credential";
 import { ConfigAgentPlugin } from "../config/plugin/agent";
 import { ConfigCommandPlugin } from "../config/plugin/command";
@@ -32,7 +35,9 @@ import { Reference } from "../reference";
 import { Ripgrep } from "../ripgrep";
 import { SessionAutonomy } from "../session/autonomy";
 import { SessionGuardrail } from "../session/guardrail";
+import { BrowserTool } from "../tool/browser";
 import { ConversationCompactTool } from "../tool/conversation-compact";
+import { ComputerTool } from "../tool/computer";
 import { SessionInstructions } from "../session/instructions";
 import { SessionRunnerModel } from "../session/runner/model";
 import { SessionTodo } from "../session/todo";
@@ -73,9 +78,12 @@ import { ProjectArtifactSource } from "../project-artifact/source";
 
 const services = Effect.fn("PluginInternal.services")(function* () {
   const agent = yield* AgentV2.Service;
+  const browser = yield* Browser.Service;
+  const isolatedBrowser = yield* IsolatedBrowser.Service;
   const catalog = yield* Catalog.Service;
   const command = yield* CommandV2.Service;
   const config = yield* Config.Service;
+  const computer = yield* Computer.Service;
   const credential = yield* Credential.Service;
   const events = yield* EventV2.Service;
   const mutation = yield* FileMutation.Service;
@@ -110,9 +118,12 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const projectArtifactStore = yield* ProjectArtifactStore.Service;
   return Context.mergeAll(
     Context.make(AgentV2.Service, agent),
+    Context.make(Browser.Service, browser),
+    Context.make(IsolatedBrowser.Service, isolatedBrowser),
     Context.make(Catalog.Service, catalog),
     Context.make(CommandV2.Service, command),
     Context.make(Config.Service, config),
+    Context.make(Computer.Service, computer),
     Context.make(Credential.Service, credential),
     Context.make(EventV2.Service, events),
     Context.make(FileMutation.Service, mutation),
@@ -162,6 +173,7 @@ const pre = [
   CommandPlugin.Plugin,
   SkillPlugin.Plugin,
   ConversationCompactTool.Plugin,
+  ComputerTool.Plugin,
   ...SystemPromptPlugin.Plugins,
   ModelsDevPlugin,
   ...ProviderPlugins,
@@ -183,6 +195,7 @@ const pre = [
   WebSearchTool.Plugin,
   WriteTool.Plugin,
   GoalTool.Plugin,
+  BrowserTool.Plugin,
 ] as const satisfies readonly InternalPlugin[];
 
 const post = [

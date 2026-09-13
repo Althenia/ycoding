@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "YCoding Selected Tab Bridge",
+  "version": "0.1.0",
+  "description": "Shares only Chrome tabs you explicitly select with a local YCoding Session.",
+  "permissions": ["activeTab", "alarms", "debugger", "storage"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "YCoding selected-tab sharing",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  }
+}

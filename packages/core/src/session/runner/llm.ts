@@ -48,7 +48,7 @@ import { SessionProviderState } from "../provider-state"
 import { SessionRunnerRetry } from "./retry"
 import { SessionUsage } from "../usage"
 import { SessionLiveState } from "../live-state"
-import { renderTeamView } from "../orchestration-view"
+import { renderTeamObservation } from "../orchestration-view"
 import { SessionHistory } from "../history"
 import { MAX_STEPS_PROMPT, MAX_STEPS_RESET_PROMPT } from "./max-steps"
 import { and, eq, inArray, sql } from "drizzle-orm"
@@ -225,7 +225,7 @@ const layer = Layer.effect(
         ...(state.teamView
           ? [{ source: "team-view" as const, text: state.teamView.text }]
           : inheritedTeam || observedSources.has("team-view")
-            ? [{ source: "team-view" as const, text: renderTeamView([]).text }]
+            ? [{ source: "team-view" as const, text: renderTeamObservation([]).text }]
             : []),
         ...(stepLimit ? [{ source: "step-limit" as const, text: stepLimit }] : []),
       ]

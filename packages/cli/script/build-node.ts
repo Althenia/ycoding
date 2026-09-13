@@ -13,6 +13,12 @@ import { collectNodeAssets, copyNodeAssets, hashNodeAssets, seaAssetMap } from "
 import { mainConfig } from "../vite.node.config"
 import { nodeExecArgv, nodeTarget, type NodeTarget } from "../src/node/target"
 import { NODE_BINARY, platformBinary } from "../src/binary"
+import {
+  buildComputerHelper,
+  computerHelperBuildAvailable,
+  COMPUTER_HELPER_BINARY,
+  verifyPackagedComputerHelper,
+} from "./computer-helper"
 
 const NODE_VERSION = "26.4.0"
 const dir = path.resolve(import.meta.dirname, "..")
@@ -35,19 +41,31 @@ const allTargets = [
   nodeTarget("win32", "arm64"),
   nodeTarget("win32", "x64"),
 ]
-const targets = requested
+const requestedTargets = requested
   ? allTargets.filter((target) => targetName(target) === requested)
   : single || bundleOnly
     ? [nodeTarget(process.platform, process.arch)]
     : allTargets
 
-if (targets.length === 0) {
+if (requestedTargets.length === 0) {
   if (requested === "darwin-x64") throw new Error("Node 26.4 SEA does not support macOS x64")
   throw new Error(`Unknown Node target: ${requested}`)
 }
-if (!bundleOnly && targets.some((target) => target.platform === "darwin" && target.arch === "x64")) {
+if (!bundleOnly && requestedTargets.some((target) => target.platform === "darwin" && target.arch === "x64")) {
   throw new Error("Node 26.4 SEA does not support macOS x64")
 }
+const unavailableTargets = bundleOnly
+  ? []
+  : requestedTargets.filter((target) => !computerHelperBuildAvailable(target, process.platform))
+if (requested && unavailableTargets.length > 0) {
+  throw new Error(`A complete ${requested} artifact requires a macOS host`)
+}
+if (unavailableTargets.length > 0) {
+  console.warn(
+    `Skipping ${unavailableTargets.map(targetName).join(", ")}: complete macOS artifacts require a macOS host`,
+  )
+}
+const targets = requestedTargets.filter((target) => !unavailableTargets.includes(target))
 
 process.chdir(dir)
 if (!skipInstall) run(process.execPath, ["install", "--os=*", "--cpu=*"])
@@ -94,6 +112,7 @@ for (const target of targets) {
   await writeFile("dist-node/sea.json", `${JSON.stringify(config, null, 2)}\n`)
   run(builder, ["--build-sea", "dist-node/sea.json"])
   if (target.platform !== "win32") await chmod(output, 0o755)
+  await buildComputerHelper(target, path.dirname(output))
   if (target.platform === "darwin" && process.platform === "darwin") run("codesign", ["--sign", "-", output])
   if (target.platform === "darwin" && process.platform !== "darwin") {
     console.warn(`${output} must be signed on macOS before it can run`)
@@ -112,7 +131,7 @@ for (const target of targets) {
       2,
     )}\n`,
   )
-  if (host) await smoke(output)
+  if (host) await smoke(output, target)
 }
 
 async function resolveHostNode() {
@@ -182,11 +201,14 @@ async function resolveTargetNode(target: NodeTarget, host?: string) {
   return realpath(executable)
 }
 
-async function smoke(output: string) {
+async function smoke(output: string, target: NodeTarget) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-node-smoke-"))
   const executable = path.join(root, path.basename(output))
   await copyFile(output, executable)
+  if (target.platform === "darwin")
+    await copyFile(path.join(path.dirname(output), COMPUTER_HELPER_BINARY), path.join(root, COMPUTER_HELPER_BINARY))
   if (process.platform !== "win32") await chmod(executable, 0o755)
+  await verifyPackagedComputerHelper(root, target.platform)
   run(executable, ["--version"], root)
   run(executable, ["--help"], root)
   await rm(root, { recursive: true, force: true })

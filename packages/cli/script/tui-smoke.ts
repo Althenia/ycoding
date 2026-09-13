@@ -2,17 +2,16 @@
 
 import path from "node:path"
 import { BUN_BINARY, platformBinary } from "../src/binary"
+import { verifyPackagedComputerHelper } from "./computer-helper"
 
 const dir = path.resolve(import.meta.dirname, "..")
-const outdir = path.resolve(
-  dir,
-  process.argv.find((arg) => arg.startsWith("--dir="))?.slice("--dir=".length) ?? "dist",
-)
+const outdir = path.resolve(dir, process.argv.find((arg) => arg.startsWith("--dir="))?.slice("--dir=".length) ?? "dist")
 const platform = process.platform === "win32" ? "windows" : process.platform
 const executable = platformBinary(BUN_BINARY)
 const binary = path.join(outdir, `tui-${platform}-${process.arch}`, "bin", executable)
 
 if (!(await Bun.file(binary).exists())) throw new Error(`TUI artifact not found: ${binary}`)
+await verifyPackagedComputerHelper(path.dirname(binary))
 
 const help = Bun.spawnSync([binary, "--help"], { stdout: "pipe", stderr: "pipe" })
 const helpText = help.stdout.toString()

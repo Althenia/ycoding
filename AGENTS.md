@@ -195,6 +195,8 @@ const table = sqliteTable("session", {
 - Avoid mocks as much as possible. Do not use `globalThis.*` unless no realistic alternative exists.
 - Test actual implementation behavior; do not duplicate production logic in tests.
 - The root `bun test` script intentionally fails. Run tests from the affected package or with an explicit package working directory.
+- Unit tests verify requests, responses, branching, ordering, processing, and state transitions with mocked external boundaries while running the implementation under test. Real browsers, listening servers, and packaged executables belong to explicitly named integration/E2E suites and commands, not unit-test commands. Preserve both kinds of evidence; never describe a mixed package-wide suite as unit-only.
+- Browser service/tool and dialog unit checks run with `bun run test:unit:browser`; real Core/Server/TUI browser checks run separately with `bun run test:integration:browser` on macOS arm64 with installed Chrome 152. The latter fails when its required environment is unavailable. Schema/Protocol/Client contract suites remain separate affected-package checks.
 - Run affected package typechecks. Run root `bun run typecheck`, `bun run lint`, and `bun run lint:effect-patterns` when the change crosses their scope.
 - TUI-visible changes require a TUI render, component, integration, or smoke test that proves the actual displayed behavior.
 - Before claiming completion, inspect `git diff`, run the relevant tests, and report exact commands and outcomes.

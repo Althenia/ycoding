@@ -41,6 +41,8 @@ export const groupNames = {
   "server.plugin": "plugin",
   "server.session": "session",
   "server.guardrail": "guardrail",
+  "server.browser": "browser",
+  "server.isolatedBrowser": "isolatedBrowser",
   "server.message": "message",
   "server.model": "model",
   "server.generate": "generate",
@@ -65,5 +67,5 @@ export const groupNames = {
   "server.projectArtifact": "projectArtifact",
 } as const
 
-export const promiseOmitEndpoints = new Set(["pty.connect"])
-export const effectOmitEndpoints = new Set(["fs.read", "pty.connect"])
+export const promiseOmitEndpoints = new Set(["browser.connect", "pty.connect"])
+export const effectOmitEndpoints = new Set(["browser.connect", "fs.read", "pty.connect"])

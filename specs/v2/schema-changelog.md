@@ -2,6 +2,16 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-09-09: Add Session-Owned Selected-Tab Browser Contracts
+
+- Add bounded browser status, pairing, shared-tab, observation, action, capture, and control shapes.
+- Add Session-location HTTP operations for status, tabs, pairing start, observe, action, control, stop, and an extension-origin WebSocket bridge.
+
+Compatibility:
+
+- The operations and Schema exports are additive. Existing Session, tool, and provider contracts are unchanged.
+- Promise and Effect client surfaces are regenerated from the assembled `HttpApi`.
+
 ## 2026-08-25: Expose Compaction Admission Pressure
 
 - Add optional `pressure: { estimatedInputTokens, safeInputTokens }` to current `session.compaction.admitted.2` events and projected compaction messages.

@@ -6,6 +6,7 @@ import { Script } from "@ycoding-ai/script"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { modelsData } from "./generate"
 import { BUN_BINARY } from "../src/binary"
+import { buildComputerHelper, computerHelperBuildAvailable } from "./computer-helper"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const binary = BUN_BINARY
@@ -26,7 +27,7 @@ const baselineFlag = process.argv.includes("--baseline")
 const plugin = createSolidTransformPlugin()
 
 const allTargets: {
-  os: string
+  os: "linux" | "darwin" | "win32"
   arch: "arm64" | "x64"
   abi?: "musl"
   avx2?: false
@@ -45,13 +46,24 @@ const allTargets: {
   { os: "win32", arch: "x64", avx2: false },
 ]
 
-const targets = singleFlag
+const requestedTargets = singleFlag
   ? allTargets.filter((item) => {
       if (item.os !== process.platform || item.arch !== process.arch) return false
       if (item.avx2 === false) return baselineFlag
       return item.abi === undefined
     })
   : allTargets
+const unavailableTargets = requestedTargets.filter(
+  (item) => !computerHelperBuildAvailable({ platform: item.os, arch: item.arch }, process.platform),
+)
+if (unavailableTargets.length > 0) {
+  console.warn(
+    `Skipping ${unavailableTargets.map((item) => `${item.os}-${item.arch}`).join(", ")}: complete macOS artifacts require a macOS host`,
+  )
+}
+const targets = requestedTargets.filter((item) =>
+  computerHelperBuildAvailable({ platform: item.os, arch: item.arch }, process.platform),
+)
 
 for (const item of targets) {
   const target = [
@@ -100,6 +112,8 @@ for (const item of targets) {
     for (const log of result.logs) console.error(log)
     process.exit(1)
   }
+
+  await buildComputerHelper({ platform: item.os, arch: item.arch }, path.join(outdir, name, "bin"))
 
   await Bun.write(
     path.join(outdir, name, "package.json"),

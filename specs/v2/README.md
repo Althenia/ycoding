@@ -24,22 +24,24 @@ Generated clients follow the assembled public `HttpApi`. GitHub issues own activ
 
 ## Current contracts
 
-| Document                                  | Job                                                                                     |
-| ----------------------------------------- | --------------------------------------------------------------------------------------- |
-| [Session](./session.md)                   | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
-| [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.   |
-| [Provider usage](./provider-usage.md)     | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
-| [Tools](./tools.md)                       | Explain tool construction, registration, execution, and settlement laws.                |
-| [Session-owned PTY](./pty.md)             | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.     |
+| Document                                      | Job                                                                                     |
+| --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| [Session](./session.md)                       | Explain prompt admission, execution, instructions, compaction, and recovery boundaries. |
+| [Session guardrails](./session-guardrails.md) | Explain root-family policy, reviews, counters, boundaries, and security invariants.     |
+| [Provider usage](./provider-usage.md)         | Explain normalized quota sources, caching, source stability, APIs, and TUI semantics.   |
+| [Tools](./tools.md)                           | Explain tool construction, registration, execution, and settlement laws.                |
+| [Session-owned PTY](./pty.md)                 | Explain owned terminal lifecycle, control fencing, bounded replay, and TUI recovery.    |
+| [Selected-tab browser](./browser.md)          | Explain explicit Chrome sharing, pairing, semantic actions, fencing, and safety bounds. |
 
 ## Decisions and proposals
 
-| Document                                                          | Status                     | Job                                                                          |
-| ----------------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------- |
-| [Event stream](./event-stream-architecture.md)                    | Accepted and implemented   | Record why public events use one encoded feed with independent queues.       |
-| [Managed restart continuation](./session-restart-continuation.md) | Accepted and implemented   | Record why graceful managed-service restart uses private Session suspension. |
-| [Instruction sync](./instruction-sync-proposal.md)                | Accepted and implemented   | Record why instruction state is value deltas plus derived rendering.         |
-| [Provider policy](./provider-policy.md)                           | Proposed and unimplemented | Explore provider authorization independently from provider configuration.    |
+| Document                                                          | Status                      | Job                                                                                |
+| ----------------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------- |
+| [Event stream](./event-stream-architecture.md)                    | Accepted and implemented    | Record why public events use one encoded feed with independent queues.             |
+| [Managed restart continuation](./session-restart-continuation.md) | Accepted and implemented    | Record why graceful managed-service restart uses private Session suspension.       |
+| [Instruction sync](./instruction-sync-proposal.md)                | Accepted and implemented    | Record why instruction state is value deltas plus derived rendering.               |
+| [Provider policy](./provider-policy.md)                           | Proposed and unimplemented  | Explore provider authorization independently from provider configuration.          |
+| [Isolated browser](./isolated-browser.md)                         | Partial; acceptance pending | Define temporary headless ownership, mode separation, and production safety gates. |
 
 ## Historical context
 

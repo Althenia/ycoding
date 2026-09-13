@@ -11,6 +11,7 @@ import { llmClient } from "@ycoding-ai/core/effect/app-node-platform"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { EventSequenceTable, EventTable } from "@ycoding-ai/core/event/sql"
+import { Location } from "@ycoding-ai/core/location"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import type { LocationServices } from "@ycoding-ai/core/location-services"
 import { ModelV2 } from "@ycoding-ai/core/model"
@@ -113,6 +114,9 @@ const contextLocations = Layer.effect(
       guardrails as unknown as Layer.Layer<LocationServices>,
   ),
 )
+const projects = Layer.mock(Project.Service, {
+  resolve: (directory) => Effect.succeed({ id: Project.ID.global, directory }),
+})
 
 const configLayer = (compaction: ConfigCompaction.Info) =>
   Layer.mock(Config.Service)({
@@ -146,6 +150,8 @@ const testWithConfig = (compaction = new ConfigCompaction.Info({ keep_recent_mes
         [SessionCacheRuntime.node, cacheRuntime],
         [SessionRunnerModel.node, models],
         [SessionHelperPolicy.node, helperPolicy],
+        [Project.node, projects],
+        [Location.node, Location.boundNode({ directory: AbsolutePath.make("/project") })],
         [LocationServiceMap.node, contextLocations],
       ],
     ),

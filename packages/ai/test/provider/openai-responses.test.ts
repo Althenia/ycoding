@@ -1032,7 +1032,13 @@ describe("OpenAI Responses route", () => {
           model: Model.update(direct, { route: direct.route.with({ id: "openai-codex-responses" }) }),
           system: { type: "text", text: "static prefix", cache },
           messages: [Message.user([{ type: "text", text: "hi", cache }])],
-          providerOptions: { openai: { promptCacheKey: "codex-key" } },
+          providerOptions: {
+            openai: {
+              promptCacheKey: "codex-key",
+              promptCacheOptions: { mode: "explicit", ttl: "30m" },
+              promptCacheRetention: "24h",
+            },
+          },
         }),
       )
 
@@ -1048,6 +1054,109 @@ describe("OpenAI Responses route", () => {
         content: [{ type: "input_text", text: "hi" }],
       })
       expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache_breakpoint")
+    }),
+  )
+
+  it.effect("preserves prior prepared blocks when chronological state observations are appended", () =>
+    Effect.gen(function* () {
+      const initial = LLM.request({
+        model: Model.update(model, { id: "gpt-5.6" }),
+        system: "Stable operator instructions.",
+        messages: [
+          Message.user("Inspect the task."),
+          Message.system("State: normal."),
+          Message.assistant([ToolCallPart.make({ id: "call_1", name: "lookup", input: { query: "task" } })]),
+          Message.tool({ id: "call_1", name: "lookup", resultType: "text", result: "Task found." }),
+        ],
+        cache: { system: true, messages: { tail: 50 } },
+        providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+      })
+      const before = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(initial)
+      const after = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(initial, {
+          messages: [...initial.messages, Message.system("State: goal active."), Message.user("TeamView: child completed.")],
+        }),
+      )
+
+      expect(after.body.input.slice(0, before.body.input.length)).toEqual(before.body.input)
+      expect(expectToolOutput(after.body)).toEqual(expectToolOutput(before.body))
+      expect(expectToolOutput(after.body).output).toEqual([
+        { type: "input_text", text: "Task found.", prompt_cache_breakpoint: { mode: "explicit" } },
+      ])
+      expect(after.body.input.slice(before.body.input.length)).toEqual([
+        { role: "system", content: [{ type: "input_text", text: "State: goal active." }] },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "TeamView: child completed.", prompt_cache_breakpoint: { mode: "explicit" } }],
+        },
+      ])
+    }),
+  )
+
+  it.effect("preserves an eligible prepared boundary when a volatile suffix switches hybrid caching to explicit", () =>
+    Effect.gen(function* () {
+      const initial = LLM.request({
+        model: Model.update(model, { id: "gpt-5.6" }),
+        system: "Stable operator instructions.",
+        messages: [Message.user("Stable task."), Message.system("State: normal.")],
+        providerOptions: { openai: { promptCacheOptions: { mode: "implicit", ttl: "30m" } } },
+      })
+      const before = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(initial)
+      const after = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(initial, {
+          messages: [
+            ...initial.messages,
+            Message.make({ role: "user", content: "TeamView: child running.", volatile: true }),
+          ],
+        }),
+      )
+
+      expect(before.body.prompt_cache_options).toEqual({ mode: "implicit", ttl: "30m" })
+      expect(after.body.prompt_cache_options).toEqual({ mode: "explicit", ttl: "30m" })
+      expect(after.body.input.slice(0, before.body.input.length)).toEqual(before.body.input)
+      expect(after.body.input[1]).toEqual({
+        role: "user",
+        content: [{ type: "input_text", text: "Stable task.", prompt_cache_breakpoint: { mode: "explicit" } }],
+      })
+      expect(after.body.input.at(-1)).toEqual({
+        role: "user",
+        content: [{ type: "input_text", text: "TeamView: child running." }],
+      })
+    }),
+  )
+
+  it.effect("retains early prepared anchors and bounds candidates as long history grows", () =>
+    Effect.gen(function* () {
+      const initial = LLM.request({
+        model: Model.update(model, { id: "gpt-5.6" }),
+        system: "Stable operator instructions.",
+        messages: Array.from({ length: 60 }, (_, index) => Message.user(`History ${index}.`)),
+        cache: { system: true, messages: { tail: 50 } },
+        providerOptions: { openai: { promptCacheOptions: { mode: "explicit", ttl: "30m" } } },
+      })
+      const before = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(initial)
+      const after = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.updateRequest(initial, { messages: [...initial.messages, Message.user("History 60.")] }),
+      )
+
+      expect(after.body.input.slice(0, 3)).toEqual(before.body.input.slice(0, 3))
+      for (const body of [before.body, after.body]) {
+        const marked = body.input.flatMap((item) =>
+          "content" in item && Array.isArray(item.content)
+            ? item.content.flatMap((part) =>
+                "prompt_cache_breakpoint" in part && part.prompt_cache_breakpoint && "text" in part ? [part.text] : [],
+              )
+            : [],
+        )
+        expect(marked).toHaveLength(50)
+        expect(marked.slice(0, 3)).toEqual(["Stable operator instructions.", "History 0.", "History 1."])
+        expect(marked).not.toContain("History 2.")
+        expect(marked).toContain("History 59.")
+      }
+      expect(after.body.input.at(-1)).toEqual({
+        role: "user",
+        content: [{ type: "input_text", text: "History 60.", prompt_cache_breakpoint: { mode: "explicit" } }],
+      })
     }),
   )
 

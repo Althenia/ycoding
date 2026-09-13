@@ -5,6 +5,7 @@ import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { ServiceStatus } from "@ycoding-ai/protocol/groups/health"
 import { hasPtyConnectTicketURL } from "@ycoding-ai/protocol/groups/pty"
+import { isBrowserConnectURL } from "@ycoding-ai/protocol/groups/browser"
 import { Cause, Context, Deferred, Effect, Exit, Layer, Logger, Option, Ref, Schema, Scope } from "effect"
 import { HttpMiddleware, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { randomUUID } from "node:crypto"
@@ -174,7 +175,11 @@ function dispatch(
     const state = yield* status.current
     const app = yield* Ref.get(application)
     const ready = state.type === "ready" && Option.isSome(app)
-    if ((!ready || !hasPtyConnectTicketURL(url)) && !(yield* authorizedRequest(request, auth))) return unauthorized()
+    if (
+      (!ready || (!hasPtyConnectTicketURL(url) && !isBrowserConnectURL(url))) &&
+      !(yield* authorizedRequest(request, auth))
+    )
+      return unauthorized()
     if (ready) return yield* app.value
     return unavailable(state)
   })

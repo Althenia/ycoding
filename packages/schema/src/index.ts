@@ -1,4 +1,6 @@
 export { Agent } from "./agent.js"
+export { Browser } from "./browser.js"
+export { IsolatedBrowser } from "./isolated-browser.js"
 export { Command } from "./command.js"
 export { Config } from "./config.js"
 export { Connection } from "./connection.js"

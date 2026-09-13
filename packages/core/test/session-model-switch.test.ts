@@ -464,11 +464,11 @@ describe("SessionV2.switchModel context validation", () => {
       expect(outcome.currentContextTokens).toBeGreaterThan(outcome.targetSafeInputTokens)
       expect(outcome.requiredReductionTokens).toBe(outcome.currentContextTokens - outcome.targetSafeInputTokens)
       expect(outcome.reason).toBe("context-window-exceeded")
-      expect(outcome.maximumSafeSummaryBoundary).toBe(messageID(sessionID, SessionMessage.ID.make("msg_u1")))
+      expect(outcome.maximumSafeSummaryBoundary).toBeUndefined()
     }),
   )
 
-  it.effect("uses the resolved default keep-recent setting when offering an advisory boundary", () =>
+  it.effect("omits an advisory boundary when keep-recent is not configured", () =>
     Effect.gen(function* () {
       compactionConfig = []
       const { sessionID, location } = createSession()
@@ -477,8 +477,8 @@ describe("SessionV2.switchModel context validation", () => {
       yield* seedTranscript({
         sessionID,
         summary: "x".repeat(250_000),
-        posts: ["msg_p0", "msg_p1", "msg_p2", "msg_p3", "msg_p4"].map((id) => ({
-          id: SessionMessage.ID.make(id),
+        posts: Array.from({ length: 25 }, (_, index) => ({
+          id: SessionMessage.ID.make(`msg_p${index}`),
           text: "post-switch context",
         })),
       })
@@ -487,8 +487,9 @@ describe("SessionV2.switchModel context validation", () => {
 
       expect(outcome).toMatchObject({
         status: "blocked",
-        maximumSafeSummaryBoundary: messageID(sessionID, SessionMessage.ID.make("msg_p4")),
       })
+      if (outcome.status !== "blocked") throw new Error("Expected a blocked switch, got a switch")
+      expect(outcome.maximumSafeSummaryBoundary).toBeUndefined()
     }),
   )
 

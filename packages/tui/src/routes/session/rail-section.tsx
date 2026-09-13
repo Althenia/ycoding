@@ -27,28 +27,13 @@ const RailContext = createContext<RailStore>()
 export function RailProvider(
   props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean; allExpanded?: boolean; leftRule?: boolean }>,
 ) {
-  const [order, setOrder] = createSignal(
-    defaultExpanded({
-      goal: props.goal,
-      autonomy: props.autonomy,
-      shellSurface: props.shellSurface,
-      allExpanded: props.allExpanded,
-    }),
-  )
+  // Initial expansion is session/context/todo only. This order signal lives for the
+  // provider lifetime so user toggles survive sessionID changes (main transcript
+  // <-> subagent chat) instead of resetting on every prop change.
+  const [order, setOrder] = createSignal<RailSectionKey[]>(defaultExpanded())
   // Tracks which sections are open only because of an attention event, so clearing the event can
   // re-collapse exactly those and leave the default-expanded ones alone.
   const [attending, setAttending] = createSignal<RailSectionKey[]>([])
-
-  createEffect(() =>
-    setOrder(
-      defaultExpanded({
-        goal: props.goal,
-        autonomy: props.autonomy,
-        shellSurface: props.shellSurface,
-        allExpanded: props.allExpanded,
-      }),
-    ),
-  )
 
   const store: RailStore = {
     allExpanded: () => Boolean(props.allExpanded),
