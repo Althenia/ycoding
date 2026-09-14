@@ -54,6 +54,9 @@ export function createEventStream() {
     emit(event: YCodingEvent) {
       send(v2, pending, event)
     },
+    subscriptions() {
+      return v2.size
+    },
     v2() {
       return response(v2, pending, { id: "evt_connected", type: "server.connected", data: {} })
     },

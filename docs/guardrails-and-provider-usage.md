@@ -76,6 +76,8 @@ Child model requests materialize the same Location-registered tool catalog as pr
 
 Permissions decide whether an agent may attempt an action. Guardrails apply independently to the complete root Session family, including direct shell mode, the parent Session, and all descendant subagents.
 
+Because a pending review blocks the family, the terminal surfaces the review prompt and transcript row in every Session view that the review can block, including a subagent chat and an autonomous Session. An autonomous Session cannot silently absorb its own review.
+
 Ordinary guardrail reviews are auto-approved only at effective YOLO 3. YOLO 0–2 and an active goal below effective YOLO 3 keep
 reviews enforced. The TUI has no separate permission auto-approve mode. The terminal shows a distinct **Session guardrail review** with:
 
@@ -108,8 +110,9 @@ Defaults are 8 running shells, 8 running subagents, and 16 pending reviews per r
 
 The code-owned standard profile:
 
-- hard-denies recognized catastrophic host-destruction commands before process creation;
-- requires hard human review for recognized recursive deletion of a complete current project, its ancestors, or multiple directory targets, while retaining stricter root/home catastrophic denials;
+- hard-denies recognized catastrophic host-destruction commands before process creation, including recursive deletion of a filesystem root or the home directory;
+- requires hard human review for recognized recursive deletion of a complete current project, its ancestors, or a direct child of the home directory, unoverrideable by custom allow rules, while retaining stricter root/home catastrophic denials;
+- requires an ordinary human review for recognized recursive deletion of multiple narrow targets;
 - requires a human review for recognized destructive Git operations, bulk deletion, publishing and deployment, destructive database operations, access-control changes, likely secret transmission, and other high-impact mutation patterns;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;
 - evaluates shell, direct Session shell, edit, write, patch, subagent launch, mutation-capable MCP tools, and project-artifact mutation at their side-effect boundary.

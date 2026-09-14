@@ -14,12 +14,36 @@ export type RailSectionKey =
   | "guardrails"
   | "lsp"
 
+/**
+ * Every rail section can expand. Defaults keep only session/context/todo open;
+ * all other sections stay collapsed until the user expands them or attention
+ * forces them open. Collapsed headers still carry their summary.
+ */
+export const EXPANDABLE_RAIL_SECTIONS: ReadonlyArray<RailSectionKey> = [
+  "session",
+  "context",
+  "todo",
+  "goal",
+  "autonomy",
+  "subagents",
+  "shells",
+  "skills",
+  "mcp",
+  "plugins",
+  "guardrails",
+  "lsp",
+]
+
+export function isExpandableRailSection(key: RailSectionKey): boolean {
+  return EXPANDABLE_RAIL_SECTIONS.includes(key)
+}
+
 // Penpot's 32px section bands occupy 2.76 terminal rows at the measured 11.594px row height.
 export const RAIL_SECTION_BAND_HEIGHT = Math.ceil(32 / 11.594)
 
 /**
  * Defaults keep only Session, context and todo open. All other sections stay
- * collapsed until the user expands them or an attention event forces them open.
+ * collapsed by default until the user expands them or an attention event forces them open.
  */
 export function defaultExpanded(_input?: {
   goal?: boolean

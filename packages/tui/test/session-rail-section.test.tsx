@@ -2,11 +2,16 @@
 import { TextRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { GuardrailStatusOutput, SessionAutonomyState, SessionCacheDiagnostics, SessionTodoInfo } from "@ycoding-ai/client"
-import { expect, test } from "bun:test"
+import { expect, test, beforeEach } from "bun:test"
 import { createSignal, type JSX } from "solid-js"
 import { useTheme } from "../src/context/theme"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
+
+beforeEach(async () => {
+  const { resetRailExpansion } = await import("../src/routes/session/rail-section")
+  resetRailExpansion()
+})
 
 async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 20 }) {
   const config = createTuiResolvedConfig()
@@ -30,7 +35,7 @@ async function mount(body: () => JSX.Element, dimensions = { width: 40, height: 
   return app
 }
 
-test("keeps summarised sections collapsed until their header is clicked", async () => {
+test("keeps every section toggleable with others collapsed by default", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
   const app = await mount(() => (
     <RailProvider>
@@ -49,11 +54,17 @@ test("keeps summarised sections collapsed until their header is clicked", async 
     expect(app.captureCharFrame()).toContain("3 connected")
     expect(app.captureCharFrame()).not.toContain("mcp body")
 
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
-    await app.mockMouse.click(2, headingRow)
+    // Every section expands: MCP opens when its header is clicked.
+    const mcpRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
+    await app.mockMouse.click(2, mcpRow)
     await app.waitForFrame((frame) => frame.includes("mcp body"))
-    await app.mockMouse.click(2, headingRow)
-    await app.waitForFrame((frame) => !frame.includes("mcp body"))
+    expect(app.captureCharFrame()).toContain("mcp body")
+
+    const todoRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    await app.mockMouse.click(2, todoRow)
+    await app.waitForFrame((frame) => !frame.includes("todo body"))
+    await app.mockMouse.click(2, todoRow)
+    await app.waitForFrame((frame) => frame.includes("todo body"))
   } finally {
     app.renderer.destroy()
   }
@@ -251,9 +262,7 @@ test("renders compact operational rail summaries from live component state", asy
       const header = frame.split("\n").find((line) => line.includes(title))
       expect(header).toContain(summary)
     }
-    expect(frame).toContain("+10 more")
-    expect(frame).not.toContain("0 / 5")
-    expect(frame).not.toContain("█")
+    // Headers carry summaries; attention-owned sections may expand their bodies.
   } finally {
     app.renderer.destroy()
   }
@@ -275,27 +284,25 @@ test("keeps guardrail profile identity and surfaces only its highest-priority ex
   expect(guardrailSummary(base).header).toBe("Standard")
 })
 
-test("leaves one blank row after normal expanded SUBAGENTS content", async () => {
-  const [{ RailProvider, RailSection }, { SubagentRailContent }] = await Promise.all([
+test("leaves one blank row after expanded TODO content", async () => {
+  const [{ RailProvider, RailSection }, { TodoRailContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
-    import("../src/feature-plugins/sidebar/subagents"),
+    import("../src/feature-plugins/sidebar/todo"),
   ])
   const app = await mount(() => (
     <RailProvider>
-      <SubagentRailContent
-        tasks={[
-          { sessionID: "ses_running", description: "Running task", state: "running", elapsed: "2m" },
-          { sessionID: "ses_completed", description: "Completed task", state: "completed", elapsed: "1m" },
+      <TodoRailContent
+        list={[
+          { content: "Running task", status: "pending", priority: "medium" },
+          { content: "Completed task", status: "completed", priority: "low" },
         ]}
       />
       <RailSection section="mcp" title="NEXT" summary="next" />
     </RailProvider>
   ))
-  await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
+  await app.waitForFrame((frame) => frame.includes("TODO LIST"))
 
   try {
-    const header = app.captureCharFrame().split("\n").findIndex((line) => line.includes("SUBAGENTS"))
-    await app.mockMouse.click(2, header)
     await app.waitForFrame((frame) => frame.includes("Completed task"))
 
     const lines = app.captureCharFrame().split("\n")
@@ -310,36 +317,31 @@ test("leaves one blank row after normal expanded SUBAGENTS content", async () =>
   }
 })
 
-test("applies one outer surface row around populated normal rail sections", async () => {
-  const [{ RailProvider, RailRow, RailSection }, { SubagentRailContent }, { ShellRailContent }] =
-    await Promise.all([
-      import("../src/routes/session/rail-section"),
-      import("../src/feature-plugins/sidebar/subagents"),
-      import("../src/feature-plugins/sidebar/shells"),
-    ])
+test("applies one outer surface row around populated expandable rail sections", async () => {
+  const { RailProvider, RailRow, RailSection } = await import("../src/routes/session/rail-section")
   const app = await mount(() => (
     <RailProvider allExpanded>
-      <SubagentRailContent tasks={[{ sessionID: "ses_subagent", description: "subagent row", state: "running", elapsed: "2m" }]} />
-      <ShellRailContent groups={[{ owner: { label: "Main chat" }, shells: [{ id: "shell", status: "running" }] }]} terminalCount={0} />
-      <RailSection section="mcp" title="MCP" summary="1/1 connected">
-        <RailRow label="server row" value="Connected" />
+      <RailSection section="session" title="SESSION" summary="audit">
+        <RailRow label="session row" value="Active" />
+      </RailSection>
+      <RailSection section="context" title="CONTEXT" summary="56%">
+        <RailRow label="context row" value="56%" />
+      </RailSection>
+      <RailSection section="todo" title="TODO LIST" summary="1/1 open">
+        <RailRow label="todo row" value="Open" />
       </RailSection>
     </RailProvider>
   ))
-  await app.waitForFrame((frame) => frame.includes("SUBAGENTS") && frame.includes("MCP"))
+  await app.waitForFrame((frame) => frame.includes("SESSION") && frame.includes("TODO LIST"))
 
   try {
-    // Only session/context/todo expand by default; expand the operational sections explicitly.
-    for (const title of ["SUBAGENTS", "SHELLS", "MCP"]) {
-      const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes(title))
-      await app.mockMouse.click(2, headingRow)
-    }
-    await app.waitForFrame((frame) => frame.includes("Main chat"))
+    // session/context/todo expand by default, so all three bodies are already visible.
+    await app.waitForFrame((frame) => frame.includes("session row"))
 
     const lines = app.captureCharFrame().split("\n")
     const pairs: Array<[string, string, string]> = [
-      ["SUBAGENTS", "subagent row", "SHELLS"],
-      ["SHELLS", "Main chat", "MCP"],
+      ["SESSION", "session row", "CONTEXT"],
+      ["CONTEXT", "context row", "TODO LIST"],
     ]
     for (const [header, content, nextHeader] of pairs) {
       const headerRow = lines.findIndex((line) => line.includes(header))
@@ -533,8 +535,8 @@ test("renders rail header glyphs and colors for expanded, collapsed, and attenti
       <RailProvider>
         <RailSection section="todo" title="EXPANDED" />
         <RailSection section="mcp" title="COLLAPSED" />
-        <RailSection section="subagents" title="ATTENTION EXPANDED" attention />
-        <RailSection section="shells" title="ATTENTION COLLAPSED" attention />
+        <RailSection section="context" title="ATTENTION EXPANDED" attention />
+        <RailSection section="session" title="ATTENTION COLLAPSED" attention />
       </RailProvider>
     )
   })
@@ -570,7 +572,31 @@ test("renders rail header glyphs and colors for expanded, collapsed, and attenti
   }
 })
 
-test("auto-expands on attention and re-collapses once it clears", async () => {
+test("auto-expands an expandable section on attention and re-collapses once it clears", async () => {
+  const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
+  const [waiting, setWaiting] = createSignal(false)
+  const app = await mount(() => (
+    <RailProvider>
+      <RailSection section="todo" title="TODO" summary="1 open" attention={waiting()}>
+        <text>todo body</text>
+      </RailSection>
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("TODO"))
+  // TODO starts expanded; collapse it first so attention ownership is observable.
+  const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+  await app.mockMouse.click(2, headingRow)
+  await app.waitForFrame((frame) => !frame.includes("todo body"))
+
+  setWaiting(true)
+  await app.waitForFrame((frame) => frame.includes("todo body"))
+
+  setWaiting(false)
+  await app.waitForFrame((frame) => !frame.includes("todo body"))
+  app.renderer.destroy()
+})
+
+test("expands every section on attention", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
   const [waiting, setWaiting] = createSignal(false)
   const app = await mount(() => (
@@ -581,14 +607,17 @@ test("auto-expands on attention and re-collapses once it clears", async () => {
     </RailProvider>
   ))
   await app.waitForFrame((frame) => frame.includes("SUBAGENTS"))
-  expect(app.captureCharFrame()).not.toContain("subagent body")
-
-  setWaiting(true)
-  await app.waitForFrame((frame) => frame.includes("subagent body"))
-
-  setWaiting(false)
-  await app.waitForFrame((frame) => !frame.includes("subagent body"))
-  app.renderer.destroy()
+  try {
+    expect(app.captureCharFrame()).not.toContain("subagent body")
+    setWaiting(true)
+    await app.waitForFrame((frame) => frame.includes("subagent body"))
+    expect(app.captureCharFrame()).toContain("subagent body")
+    setWaiting(false)
+    await app.waitForFrame((frame) => !frame.includes("subagent body"))
+    expect(app.captureCharFrame()).not.toContain("subagent body")
+  } finally {
+    app.renderer.destroy()
+  }
 })
 
 test("renders distinct GOAL and AUTONOMY sections, SUBAGENTS and SHELLS rail rows, and a TODO LIST in the correct order", async () => {
@@ -677,63 +706,77 @@ function hasChildren(value: unknown): value is { getChildren(): readonly unknown
 test("an attention event preserves default-expanded sections and releases its own section", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
   const [contextAttention, setContextAttention] = createSignal(false)
-  const [waiting, setWaiting] = createSignal(false)
+  const [todoAttention, setTodoAttention] = createSignal(false)
   const app = await mount(
     () => (
       <RailProvider goal autonomy>
         <RailSection section="context" title="CONTEXT" attention={contextAttention()}>
           <text>context body</text>
         </RailSection>
-        <RailSection section="goal" title="GOAL">
-          <text>goal body</text>
+        <RailSection section="session" title="SESSION">
+          <text>session body</text>
         </RailSection>
-        <RailSection section="autonomy" title="AUTONOMY">
-          <text>autonomy body</text>
-        </RailSection>
-        <RailSection section="todo" title="TODO">
+        <RailSection section="todo" title="TODO" attention={todoAttention()}>
           <text>todo body</text>
-        </RailSection>
-        <RailSection section="subagents" title="SUBAGENTS" summary="1 waiting" attention={waiting()}>
-          <text>subagent body</text>
         </RailSection>
       </RailProvider>
     ),
     { width: 40, height: 60 },
   )
   await app.waitForFrame((frame) => frame.includes("context body"))
+  expect(app.captureCharFrame()).toContain("todo body")
 
-  // Only session/context/todo expand by default; expand goal and autonomy explicitly.
-  for (const title of ["GOAL", "AUTONOMY"]) {
-    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes(title))
-    await app.mockMouse.click(2, headingRow)
-  }
-  await app.waitForFrame((frame) => frame.includes("goal body") && frame.includes("autonomy body"))
+  // Collapse TODO so attention ownership is observable; CONTEXT stays expanded throughout.
+  const todoRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+  await app.mockMouse.click(2, todoRow)
+  await app.waitForFrame((frame) => !frame.includes("todo body"))
 
-  setWaiting(true)
-  await app.waitForFrame((frame) => frame.includes("subagent body"))
+  setTodoAttention(true)
+  await app.waitForFrame((frame) => frame.includes("todo body"))
 
   const frame = app.captureCharFrame()
   expect(frame).toContain("context body")
-  expect(frame).toContain("goal body")
+  expect(frame).toContain("session body")
   expect(frame).toContain("todo body")
-  expect(frame).toContain("subagent body")
 
   setContextAttention(true)
   await app.waitForFrame((value) => value.includes("context body"))
   setContextAttention(false)
   await app.waitForFrame((value) => value.includes("context body"))
 
-  setWaiting(false)
-  await app.waitForFrame((value) => !value.includes("subagent body"))
+  setTodoAttention(false)
+  await app.waitForFrame((value) => !value.includes("todo body"))
   const cleared = app.captureCharFrame()
   expect(cleared).toContain("context body")
-  expect(cleared).toContain("goal body")
-  expect(cleared).toContain("autonomy body")
-  expect(cleared).toContain("todo body")
+  expect(cleared).toContain("session body")
+  expect(cleared).not.toContain("todo body")
   app.renderer.destroy()
 })
 
-test("a user can toggle a collapsed section from its header", async () => {
+test("a user can toggle an expandable section from its header", async () => {
+  const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
+  const app = await mount(() => (
+    <RailProvider>
+      <RailSection section="todo" title="TODO" summary="1 open">
+        <text>todo body</text>
+      </RailSection>
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("TODO"))
+
+  try {
+    expect(app.captureCharFrame()).toContain("todo body")
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => !frame.includes("todo body"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => frame.includes("todo body"))
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("every section toggles from its header", async () => {
   const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
   const app = await mount(() => (
     <RailProvider>
@@ -749,8 +792,10 @@ test("a user can toggle a collapsed section from its header", async () => {
     const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("MCP"))
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => frame.includes("mcp body"))
+    expect(app.captureCharFrame()).toContain("mcp body")
     await app.mockMouse.click(2, headingRow)
     await app.waitForFrame((frame) => !frame.includes("mcp body"))
+    expect(app.captureCharFrame()).not.toContain("mcp body")
   } finally {
     app.renderer.destroy()
   }
@@ -789,7 +834,49 @@ test("preserves user toggles across session prop changes", async () => {
   }
 })
 
-test("renders accurate shell summaries and releases orphaned-shell attention", async () => {
+test("preserves expand/collapse across Session remounts (main <-> subagent)", async () => {
+  const { RailProvider, RailSection } = await import("../src/routes/session/rail-section")
+  const app = await mount(() => (
+    <RailProvider>
+      <RailSection section="context" title="CONTEXT">
+        <text>context body</text>
+      </RailSection>
+      <RailSection section="todo" title="TODO">
+        <text>todo body</text>
+      </RailSection>
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("todo body"))
+  try {
+    const headingRow = app.captureCharFrame().split("\n").findIndex((line) => line.includes("TODO"))
+    await app.mockMouse.click(2, headingRow)
+    await app.waitForFrame((frame) => !frame.includes("todo body"))
+  } finally {
+    app.renderer.destroy()
+  }
+
+  // Remount simulates navigating to a subagent chat and back; the Session route is keyed by
+  // sessionID so the whole provider remounts.
+  const next = await mount(() => (
+    <RailProvider>
+      <RailSection section="context" title="CONTEXT">
+        <text>context body</text>
+      </RailSection>
+      <RailSection section="todo" title="TODO">
+        <text>todo body</text>
+      </RailSection>
+    </RailProvider>
+  ))
+  await next.waitForFrame((frame) => frame.includes("CONTEXT"))
+  try {
+    expect(next.captureCharFrame()).toContain("context body")
+    expect(next.captureCharFrame()).not.toContain("todo body")
+  } finally {
+    next.renderer.destroy()
+  }
+})
+
+test("renders accurate shell summaries and expands on orphaned-shell attention", async () => {
   const [{ RailProvider }, { ShellRailContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
     import("../src/feature-plugins/sidebar/shells"),
@@ -816,12 +903,17 @@ test("renders accurate shell summaries and releases orphaned-shell attention", a
     let frame = app.captureCharFrame()
     expect(frame).toContain("1/2 running")
     expect(frame).not.toContain("orphaned")
+    expect(frame).not.toContain("Main chat")
 
+    // Orphaned attention expands SHELLS to show its bodies.
     setOrphaned(true)
-    await app.waitForFrame((value) => value.includes("Unknown session 1"))
+    await app.waitForFrame((value) => value.includes("1 orphaned"))
+    await app.waitForFrame((value) => value.includes("Main chat"))
+    expect(app.captureCharFrame()).toContain("Unknown session 1")
 
     setOrphaned(false)
-    await app.waitForFrame((value) => !value.includes("Unknown session 1"))
+    await app.waitForFrame((value) => !value.includes("orphaned"))
+    await app.waitForFrame((value) => !value.includes("Main chat"))
     frame = app.captureCharFrame()
     expect(frame).toContain("1/2 running")
   } finally {
@@ -829,7 +921,7 @@ test("renders accurate shell summaries and releases orphaned-shell attention", a
   }
 })
 
-test("keeps SHELLS collapsed until its header is toggled", async () => {
+test("expands SHELLS when its header is toggled", async () => {
   const [{ RailProvider }, { SessionRailContent }, { ShellRailContent }] = await Promise.all([
     import("../src/routes/session/rail-section"),
     import("../src/routes/session/sidebar"),

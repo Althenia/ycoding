@@ -139,6 +139,40 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
+  it.effect("starts a fresh drain after an interrupt so an admitted steer is not stranded", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_interrupt_steer")
+      yield* seedSessions(database, [sessionID])
+
+      let drains = 0
+      const firstDrainEntered = yield* Deferred.make<void>()
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(scope, () =>
+        Effect.gen(function* () {
+          drains += 1
+          // The first drain models a long-running step. Interruption ends it; a later wake must
+          // schedule a successor, otherwise a steer admitted during the step waits for nothing.
+          if (drains > 1) return
+          yield* Deferred.succeed(firstDrainEntered, undefined)
+          yield* Effect.never
+        }),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID).pipe(Effect.forkScoped)
+      yield* Deferred.await(firstDrainEntered)
+      expect(drains).toBe(1)
+
+      // Steer-now admits the input first, then interrupts the active step, then wakes.
+      yield* execution.interrupt(sessionID)
+      yield* execution.resume(sessionID)
+
+      expect(drains).toBe(2)
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
   it.effect("does not invoke the runner for a waiting managed child", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service

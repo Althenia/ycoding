@@ -162,7 +162,8 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 
 - **Steer** inputs promote at the next safe step boundary and require the active drain to continue.
 - **Queue** inputs remain pending until the session would otherwise become idle.
-- A prompt is admitted before a requested provider, model, or variant switch is applied. The exact admission is then resumed after the switch record commits, so the composer becomes reusable without waiting for the prior run and the new selection is observed only when the runner prepares a safe request boundary.
+- A prompt is admitted before a requested provider, model, or variant switch is applied. While a drain owns the Session, the switch is requested and the admitted input resumes without waiting for it: the switch waits for that drain's boundary, so awaiting it would refuse every later prompt for as long as the running step takes, and the selection still applies at the following request boundary. An idle Session awaits the switch, so the admitted prompt runs on the newly selected model. A rejected or over-budget switch reports separately and never withholds the admitted prompt.
+- **Send and steer now** (`<leader>d`, `prompt.steer`, palette) admits the prompt, interrupts the active step so the boundary is reached immediately, then wakes the Session. The admitted steer is promoted by the successor drain rather than waiting for the running step to finish on its own. An idle or locally unowned Session makes interruption a no-op.
 - Promoting new user input resets the selected agent's step allowance.
 - Durable pending user and synthetic inputs are projected back into the resident transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
 - Outbound user bubbles render lifecycle receipts from durable state only: a clock while the admitted input remains pending, one subdued check after promotion, and two info-colored checks after a physical model request consumed that exact message. Assistant, synthetic, and system rows do not render these receipts. Historical promoted messages without a consumption event remain in the sent state; assistant activity is not treated as proof of consumption.
@@ -172,13 +173,15 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 
 The composer displays one correlated preparation phase while reading the clipboard, creating a Session, activating skills, admitting attachments, or waking an admitted prompt. After ten seconds it also displays elapsed seconds. `Cancel pending action` and Escape cancel that local operation without interrupting Session execution; a newer draft is not cleared by an older submission's completion.
 
+A terminal paste transfers text only, so an image on the host clipboard is never carried by the paste payload itself. The composer reads the host clipboard directly for an image-only clipboard that arrives as an empty bracketed paste, and a pasted file path that resolves to a supported attachment type becomes a real attachment instead of literal text.
+
 Missing temporary clipboard images block the first send with re-paste/remove guidance. A second explicit Enter, or `Remove unavailable attachment and send`, removes the missing attachment and sends the retained text. Clipboard subprocesses are bounded and cancellable; temporary image files are uniquely owned and released after managed attachment receipts are retained.
 
 Admission and wake are separate. An unresolved admission or failed wake retains the original Session, prompt, and skill identities and any managed attachment receipts for exact retry. `Retry previous submission` restores the retained input; a changed draft cannot silently replace an unresolved send. `Discard previous submission recovery` discards local recovery state, not a durable admitted prompt. Skill activation failure prevents prompt admission and allows an intentional changed next prompt after that pre-admission attempt settles.
 
 ### Durable runtime observations
 
-`session.context.observed.1` is an append-only durable Session event with `{ sessionID, source, text }`. `source` is one of `session-state`, `team-view`, or `step-limit`. Its projection is chronological: `session-state` and `step-limit` become trusted System messages, and `team-view` becomes a Synthetic message with user authority and the description `TeamView update`. Session-state and TeamView notices render as compact summaries only. This is presentation only: stored event/message text and model-facing history remain unchanged.
+`session.context.observed.1` is an append-only durable Session event with `{ sessionID, source, text }`. `source` is one of `session-state`, `team-view`, or `step-limit`. Its projection is chronological: `session-state` and `step-limit` become trusted System messages, and `team-view` becomes a Synthetic message with user authority and the description `TeamView update`. Session-state and TeamView notices stay in the message store but never render in the transcript. This is presentation only: stored event/message text and model-facing history remain unchanged.
 
 At serialized safe boundaries after prompt promotion and after compaction reload, the runner compares each source with its latest selected trusted observation and appends an event only when the text changes. Returning from A to B to A appends a new observation; previously stored bytes are never changed or moved. Restart does not duplicate an unchanged observation, and compaction or revert refreshes a missing selected observation. Goals and reminders fold into `session-state`, including an explicit clearing notice for ended goals; step-limit entry and exit are both observed. The existing step-limit tool-disable enforcement is unchanged.
 
@@ -232,7 +235,7 @@ Guardrails are a root-Session-family safety boundary independent of agent permis
 
 Current behavior:
 
-- recognized catastrophic shell commands are denied before process creation;
+- recognized catastrophic shell commands, including recursive deletion of a filesystem root or the home directory, are denied before process creation;
 - standard catastrophic denies and built-in broad-deletion hard reviews are unoverrideable; otherwise the first matching custom source layer decides before ordinary standard review or allow behavior;
 - ordinary guardrail reviews remain reviews in `normal`, `yolo 1-2`, and `goal` modes; only `yolo 3` auto-approves ordinary reviews;
 - hard reviews require a fresh human one-time approval or rejection, even with YOLO 3, active goal, disabled optional guardrails, custom allow rules or an earlier reusable approval; `always` cannot settle a hard review;
@@ -243,11 +246,15 @@ Current behavior:
 - replies are `once`, `always`, or `reject`; `always` is process-memory reuse for the root Session family and exact action, ordered rule IDs, ordered resources, and request metadata only after a fresh evaluation still asks;
 - pending reviews rehydrate through the canonical Session guardrail API and live events, including reviews initiated by child Sessions.
 
+A pending review blocks the whole root Session family, so its review row and prompt render in every Session view that can be blocked by it, including a subagent chat. The transcript row renders whenever a review exists; the request list only contains reviews still awaiting a reply, so the row disappears on reply.
+
 `once` is not reusable. A deny or a changed evaluation cannot reuse an `always` approval. The approval set is Location-service/process-memory only, is cleared with the service, and is never durable or global. Descendants share the root-family key.
 
 After a pending-review checkpoint of 500 ms, the TUI emits a root-owned notification titled with the root-family Session ownership and the message **Guardrail approval needed**. The root system notification is blurred-only, uses the `permission` sound, and is suppressed when the review resolves before the checkpoint. Permission approval does not bypass guardrails, and guardrail approval does not widen an agent permission denial.
 
 Permission and guardrail choices keep their labels on fixed terminal rows during keyboard navigation and mouse hover. Selection changes the highlight without moving labels or surrounding content; approval and rejection semantics are unchanged.
+
+A Session view surfaces the pending permission and form prompts of its own Session and that Session's descendants. A root view therefore covers the whole family, while a subagent chat still shows prompts raised by the subagent and its own children instead of blocking invisibly behind them.
 
 Operator configuration is documented in [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md).
 
@@ -280,8 +287,8 @@ Current behavior:
 - The parent receives lifecycle state and completion or failure notification.
 - Once a parent has no local runnable work, it completes its own response and is free even while child Sessions continue in the background.
 - Completion notifications are delivered automatically; parent guidance prohibits polling and sleep or no-op waiting, and directs the model to continue useful work or finish its response until notification arrives.
-- TeamView is a durable chronological `team-view` observation whenever its selected child-state text changes. It is available on every provider route, including Codex, as a Synthetic user-authority message with description `TeamView update`; final terminal state remains visible. An empty update clears a previously observed or inherited view when no children remain, but Sessions with no prior view receive no initial empty observation.
-- TeamView and other automatic runtime observations are visible notices, not assistant narration. The parent does not add routine assistant status text for launch, running, completion, or other bookkeeping unless the user asks.
+- TeamView is a durable chronological `team-view` observation whenever its selected child-state text changes. It is available on every provider route, including Codex, as a Synthetic user-authority message with description `TeamView update`; final terminal state remains stored. An empty update clears a previously observed or inherited view when no children remain, but Sessions with no prior view receive no initial empty observation.
+- TeamView and other automatic runtime observations stay in the message store but never render in the transcript; they are not assistant narration. The parent does not add routine assistant status text for launch, running, completion, or other bookkeeping unless the user asks.
 - A child failure may still be reported when it blocks the requested outcome, but not as routine orchestration bookkeeping.
 - Running children receive a status, blocker, and ETA request every ten minutes.
 - An optional child `timeout` accepts at most 86,400,000 ms and defaults to 3,600,000 ms when omitted. On expiry, the runtime interrupts the child, settles its durable task as failed, and delivers the existing parent failure notification.
@@ -533,7 +540,7 @@ A subagent is considered blocked when its orchestration task state is `waiting` 
 
 ## Rail priority and expanded-state behavior
 
-The rail sidebar selects initial expanded sections from the active surface and preserves explicit section toggles until those surface inputs change.
+Every rail section can expand. Defaults expand only `session`, `context`, and `todo`; all other sections start collapsed. Expand/collapse state is shared across Session navigation, so going to a subagent chat and back to the main transcript preserves what was expanded or collapsed.
 
 ### Section keys
 
@@ -541,7 +548,7 @@ The rail supports these section keys: `session`, `context`, `todo`, `goal`, `aut
 
 ### Default expanded sections
 
-The ordinary defaults are `session`, `context`, and `todo`, with `goal` and `autonomy` additionally expanded when their provider inputs are active. The Shell composer prioritizes and expands `shells`, followed by `session`, active `goal`/`autonomy`, and `todo`. The `allExpanded` input opens the primary operational sections (`session`, `goal`, `autonomy`, `context`, `todo`, `subagents`, `shells`), not every auxiliary section. Attention can open another section, and a user can manually toggle any section.
+The defaults are `session`, `context`, and `todo`. Every other section (`goal`, `autonomy`, `subagents`, `shells`, `skills`, `mcp`, `plugins`, `guardrails`, `lsp`) starts collapsed behind its header summary but can expand via header toggle or attention. The `goal`, `autonomy`, `shellSurface`, and `allExpanded` provider inputs no longer change expansion.
 
 ### Independent expansion
 
@@ -601,7 +608,7 @@ The TUI is the only release surface and currently includes:
 - one-time startup loading that never remounts resident Session content during later route-specific plugin, tool, or MCP refreshes;
 - toast overlays anchored to the physical terminal top-right, including above a docked Session rail;
 - dedicated shell output view with kill/back actions;
-- rail sidebar with priority-based expanded-state management.
+- rail sidebar with session/context/todo-only expansion persisted across Session navigation.
 
 TUI-visible state must rehydrate from durable or canonical API state after process restart. A feature that appears only after visiting a child session or reopening a dialog is a defect unless the interaction itself is the explicit trigger.
 

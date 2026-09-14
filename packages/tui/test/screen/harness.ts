@@ -25,10 +25,17 @@ export async function renderScreen(input: {
   args?: { sessionID?: string }
   pluginStatus?: ReadonlyArray<TuiPluginStatus>
   clipboard?: ClipboardService
+  /** The real renderer enables the kitty keyboard protocol; modifier sequences need it. */
+  kittyKeyboard?: boolean
   /** Frame is stable once this appears; avoids asserting a half-painted screen. */
   settle: string
 }) {
-  const setup = await createTestRenderer({ width: input.width, height: input.height, useThread: false })
+  const setup = await createTestRenderer({
+    width: input.width,
+    height: input.height,
+    useThread: false,
+    kittyKeyboard: input.kittyKeyboard ?? false,
+  })
   const core = await import("@opentui/core")
   mock.module("@opentui/core", () => ({ ...core, createCliRenderer: async () => setup.renderer }))
   // A module mock persists for the whole Bun process, so installing it only when a caller asks for
@@ -73,6 +80,24 @@ export async function renderScreen(input: {
   return {
     events,
     renderer: setup.renderer,
+    /**
+     * Waits for a stable live-event subscription before a test emits into the stream. Emitting
+     * before the app attaches (or during a reconnect gap) can lose the payload, because the event
+     * channel is volatile by contract.
+     */
+    async waitForEventStream() {
+      const deadline = Date.now() + 5_000
+      let previous = -1
+      let stable = 0
+      while (Date.now() < deadline) {
+        const subscriptions = events.subscriptions()
+        stable = subscriptions > 0 && subscriptions === previous ? stable + 1 : 0
+        previous = subscriptions
+        if (stable >= 10) return
+        await Bun.sleep(20)
+      }
+      throw new Error("the app never attached a stable live-event subscription")
+    },
     frame: () => setup.captureCharFrame(),
     lines: () => setup.captureCharFrame().split("\n"),
     spans: () => setup.captureSpans(),

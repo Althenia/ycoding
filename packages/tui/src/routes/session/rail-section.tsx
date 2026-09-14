@@ -24,13 +24,29 @@ type RailStore = {
 
 const RailContext = createContext<RailStore>()
 
+// Shared across Session remounts so expand/collapse survives main transcript <->
+// subagent chat navigation.
+let persistedRailOrder: RailSectionKey[] = defaultExpanded()
+
+export function resetRailExpansion() {
+  persistedRailOrder = defaultExpanded()
+}
+
 export function RailProvider(
   props: ParentProps<{ goal?: boolean; autonomy?: boolean; shellSurface?: boolean; allExpanded?: boolean; leftRule?: boolean }>,
 ) {
-  // Initial expansion is session/context/todo only. This order signal lives for the
-  // provider lifetime so user toggles survive sessionID changes (main transcript
-  // <-> subagent chat) instead of resetting on every prop change.
-  const [order, setOrder] = createSignal<RailSectionKey[]>(defaultExpanded())
+  // Initial expansion is session/context/todo only. The order signal starts from the
+  // shared persisted value and writes back to it, so user toggles survive both
+  // sessionID prop changes and full Session remounts (keyed by sessionID).
+  const [order, setOrderState] = createSignal<RailSectionKey[]>(persistedRailOrder)
+  const setOrder = (update: RailSectionKey[] | ((current: RailSectionKey[]) => RailSectionKey[])) => {
+    const next =
+      typeof update === "function"
+        ? (update as (current: RailSectionKey[]) => RailSectionKey[])(order())
+        : update
+    persistedRailOrder = [...next]
+    setOrderState(persistedRailOrder)
+  }
   // Tracks which sections are open only because of an attention event, so clearing the event can
   // re-collapse exactly those and leave the default-expanded ones alone.
   const [attending, setAttending] = createSignal<RailSectionKey[]>([])
@@ -41,8 +57,9 @@ export function RailProvider(
     leftRule: Boolean(props.leftRule),
     shellSurface: Boolean(props.shellSurface),
     showTodo: () => true,
-    toggle: (key) =>
-      setOrder((current) => (current.includes(key) ? collapseSection(current, key) : expandSection(current, key))),
+    toggle: (key) => {
+      setOrder((current) => (current.includes(key) ? collapseSection(current, key) : expandSection(current, key)))
+    },
     attend: (key, needsAttention) => {
       if (needsAttention === attending().includes(key)) return
       if (needsAttention) {

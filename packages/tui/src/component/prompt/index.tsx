@@ -566,6 +566,22 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Send and steer now",
+        name: "prompt.steer",
+        category: "Prompt",
+        palette: true,
+        enabled: status() === "running",
+        run: async (_input: string | undefined, event?: KeyEvent) => {
+          event?.preventDefault()
+          event?.stopPropagation()
+          if (!input.focused) return
+          const handled = await submit({ steerNow: true })
+          if (!handled) return
+
+          dialog.clear()
+        },
+      },
+      {
         title: "Remove editor context",
         name: "prompt.editor_context.clear",
         category: "Prompt",
@@ -1525,7 +1541,7 @@ export function Prompt(props: PromptProps) {
   })
 
   let submitting = false
-  async function submit() {
+  async function submit(options?: { steerNow?: boolean }) {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -1534,20 +1550,20 @@ export function Prompt(props: PromptProps) {
     // to a freshly created session.
     if (submitting || operation()) return false
     submitting = true
-    const current = beginOperation("submit", "Preparing prompt…")
+    const current = beginOperation("submit", options?.steerNow ? "Preparing steer…" : "Preparing prompt…")
     if (!current) {
       submitting = false
       return false
     }
     try {
-      return await submitInner(current)
+      return await submitInner(current, options)
     } finally {
       finishOperation(current.id)
       submitting = false
     }
   }
 
-  async function submitInner(currentOperation: PromptOperation) {
+  async function submitInner(currentOperation: PromptOperation, options?: { steerNow?: boolean }) {
     // IME: double-defer may fire before onContentChange flushes the last
     // composed character (e.g. Korean hangul) to the store, so read
     // plainText directly and sync before any downstream reads.
@@ -1952,24 +1968,50 @@ export function Prompt(props: PromptProps) {
       }
       let phase: "skill" | "admission" | "wake" = "admission"
       let switched = false
-      let switchWarning: unknown
       const result = await submitPromptWithSkills({
         prompt: async (resume) => {
+          if (resume && options?.steerNow && status() === "running") {
+            // End the active step so the admitted steer is promoted at the boundary it reaches now
+            // instead of waiting for a long-running step to finish on its own. An idle or locally
+            // unowned Session is already a no-op for interruption.
+            await client.api.session
+              .interrupt({ sessionID }, requestOptions(currentOperation))
+              .catch((error: unknown) => {
+                toast.show({
+                  title: "Steer needs attention",
+                  message: errorMessage(error),
+                  variant: "warning",
+                })
+              })
+          }
           if (resume && switchRequired && !switched) {
             switched = true
-            const switchError = await client.api.session
-              .switchModel(
-                {
-                  sessionID,
-                  model: submission.payload.model,
-                },
-                requestOptions(currentOperation),
-              )
-              .then(
+            // A switch waits for the active drain to reach its boundary, and it also publishes the
+            // selection the runner reads at the next request boundary.
+            const switching = client.api.session.switchModel(
+              {
+                sessionID,
+                model: submission.payload.model,
+              },
+              requestOptions(currentOperation),
+            )
+            const warnSwitch = (error: unknown) =>
+              toast.show({
+                title: "Model switch needs attention",
+                message: errorMessage(error),
+                variant: "warning",
+              })
+            if (status() === "running") {
+              // The admitted prompt must not be held behind a switch that is waiting for a running
+              // step to finish; that wait is as long as the step itself and would refuse every
+              // later send. The selection still applies at the following request boundary.
+              void switching.catch(warnSwitch)
+            } else {
+              await switching.then(
                 () => undefined,
-                (error) => error,
+                (error) => warnSwitch(error),
               )
-            if (switchError) switchWarning = switchError
+            }
           }
           return client.api.session.prompt(
             {
@@ -2045,13 +2087,6 @@ export function Prompt(props: PromptProps) {
           variant: "error",
         })
         return false
-      }
-      if (switchWarning) {
-        toast.show({
-          title: "Model switch needs attention",
-          message: errorMessage(switchWarning),
-          variant: "warning",
-        })
       }
       if (pendingEditorSelection) editor.markSelectionSent()
     }

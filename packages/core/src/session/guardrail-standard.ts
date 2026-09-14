@@ -105,18 +105,36 @@ function deletionMatch(command: string, paths?: Paths): Match | undefined {
           hardReview: false,
         },
       ]
-    if (operation.targets.length > 1 || targets.some((target) => target === "project"))
+    if (
+      targets.some((target) => target === "project") ||
+      operation.targets.some((target) => isHomeChild(target, operation.workdir, paths))
+    )
+      return [
+        {
+          id: "standard.review.broad-deletion",
+          decision: "ask",
+          reason:
+            "Recursive deletion includes the current project, one of its ancestors, a direct child of the home directory, or multiple targets",
+          hardReview: true,
+        },
+      ]
+    if (operation.targets.length > 1)
       return [
         {
           id: "standard.review.broad-deletion",
           decision: "ask",
           reason: "Recursive deletion includes the current project, one of its ancestors, or multiple targets",
-          hardReview: true,
+          hardReview: false,
         },
       ]
     return []
   })
   return matches.find((match) => match.decision === "deny") ?? matches[0]
+}
+
+function isHomeChild(target: string, workdir: string, paths?: Paths) {
+  if (!paths) return false
+  return path.dirname(resolveTarget(wholeTarget(target), workdir, paths)) === path.resolve(paths.home)
 }
 
 interface RmOperation {

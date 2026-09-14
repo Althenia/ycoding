@@ -157,8 +157,11 @@ export const Definitions = {
   prompt_stash: keybind("none", "Stash prompt"),
   prompt_stash_pop: keybind("none", "Pop stashed prompt"),
   prompt_stash_list: keybind("none", "List stashed prompts"),
+  prompt_steer: keybind("<leader>d", "Send prompt and steer immediately"),
 
   input_clear: keybind("ctrl+c", "Clear input field"),
+  // The terminal must forward the gesture: YCoding reads the host clipboard itself, because a
+  // terminal paste only ever transfers text and cannot carry an image.
   input_paste: keybind({ key: "ctrl+v", preventDefault: false }, "Paste from clipboard"),
   input_submit: keybind("return", "Submit input"),
   input_newline: keybind("shift+return,ctrl+return,alt+return,ctrl+j", "Insert newline in input"),
@@ -361,6 +364,7 @@ export const CommandMap = {
   prompt_stash: "prompt.stash",
   prompt_stash_pop: "prompt.stash.pop",
   prompt_stash_list: "prompt.stash.list",
+  prompt_steer: "prompt.steer",
   input_clear: "prompt.clear",
   input_paste: "prompt.paste",
   input_submit: "input.submit",

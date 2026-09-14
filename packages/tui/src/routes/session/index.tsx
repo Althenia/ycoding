@@ -91,7 +91,7 @@ import { projectedPromptInput } from "../../prompt/codec"
 import { useEpilogue } from "../../context/epilogue"
 import { normalizePath } from "../../util/path"
 import { PermissionPrompt } from "./permission"
-import { GuardrailPrompt } from "./guardrail"
+import { GuardrailPrompt, activeGuardrail } from "./guardrail"
 import { FormPrompt } from "./form"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { DialogExportResult } from "../../ui/dialog-export-result"
@@ -240,22 +240,31 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     setEpilogue(sessionEpilogue({ title, sessionID: session()?.id }))
   })
   onCleanup(() => setEpilogue())
+  // Sessions whose pending permission and form state this view surfaces. A root view covers the
+  // whole family; a subagent view must still surface prompts for its own subtree, otherwise the
+  // subagent blocks invisibly until the Session is interrupted.
   const descendantSessionIDs = createMemo(() => {
-    if (session()?.parentID) return []
-    return data.session.family(route.sessionID).filter((id) => id !== route.sessionID)
+    const members = data.session.family(route.sessionID).filter((id) => id !== route.sessionID)
+    if (!session()?.parentID) return members
+    const visited = new Set([route.sessionID])
+    const collect = (parentID: string): string[] =>
+      members
+        .filter((id) => data.session.get(id)?.parentID === parentID && !visited.has(id))
+        .flatMap((id) => {
+          visited.add(id)
+          return [id, ...collect(id)]
+        })
+    return collect(route.sessionID)
   })
-  const permissions = createMemo(() => {
-    if (session()?.parentID) return []
-    return [route.sessionID, ...descendantSessionIDs()].flatMap(
+  const permissions = createMemo(() =>
+    [route.sessionID, ...descendantSessionIDs()].flatMap(
       (sessionID) => data.session.permission.list(sessionID) ?? [],
-    )
-  })
-  const guardrails = createMemo(() => {
-    if (session()?.parentID) return []
-    return data.session.guardrail.list(route.sessionID)
-  })
+    ),
+  )
+  const guardrails = createMemo(() => data.session.guardrail.list(route.sessionID))
   const [guardrailReview, setGuardrailReview] = createSignal<string>()
   const reviewingGuardrail = createMemo(() => guardrails().find((request) => request.id === guardrailReview()))
+  const activeGuardrailRequest = createMemo(() => activeGuardrail(guardrails(), guardrailReview()))
   createEffect(() => {
     if (guardrailReview() && !reviewingGuardrail()) setGuardrailReview(undefined)
   })
@@ -270,14 +279,14 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     open: false,
     tab: undefined as string | undefined,
   })
-  const disabled = createMemo(() => permissions().length > 0 || forms().length > 0)
+  const disabled = createMemo(() => permissions().length > 0 || forms().length > 0 || guardrails().length > 0)
 
   createEffect(() => {
     if (disabled() && composer.open) setComposer("open", false)
   })
 
   const blockedReason = createMemo(() => {
-    if (reviewingGuardrail()) return "Composer paused: guardrail review"
+    if (guardrails().length > 0) return "Composer paused: guardrail review"
     if (permissions().length > 0) return "Composer paused: permission review"
     if (forms().length > 0) return "Composer paused: form input"
     return undefined
@@ -565,14 +574,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const blockedActivity = createMemo(() => currentTask()?.description)
   const editor = useEditorContext()
-  const rows = createSessionRows(
-    () => route.sessionID,
-    () => {
-      const raw = (autonomy() as unknown as { yolo?: unknown }).yolo
-      const lvl = typeof raw === "number" ? raw : raw === true ? 2 : 0
-      return !session()?.parentID && lvl === 0
-    },
-  )
+  const rows = createSessionRows(() => route.sessionID)
   createEffect(
     on(
       [() => route.sessionID, () => session()?.parentID, () => client.connection.status()],
@@ -1517,7 +1519,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
             <box
               flexShrink={0}
               paddingBottom={
-                forms().length > 0 || permissions().length > 0 || reviewingGuardrail()
+                forms().length > 0 || permissions().length > 0 || guardrails().length > 0
                   ? 0
                   : Math.max(1, Math.min(4, Math.floor(dimensions().height / 16)))
               }
@@ -1548,7 +1550,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 <Match when={blockedQuestion()}>
                   <SubagentAnswerComposer sessionID={route.sessionID} branch={branch()} />
                 </Match>
-                <Match when={reviewingGuardrail()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
+                <Match when={activeGuardrailRequest()}>{(request) => <GuardrailPrompt request={request()} />}</Match>
                 <Match when={permissions().length > 0}>
                   <Show when={permissions()[0]?.id} keyed>
                     {(_) => {
@@ -2275,8 +2277,8 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
         </box>
       </Match>
       <Match when={true}>
-        {/* Session-state notices stay in the message store but never render. */}
-        <Show when={contextSource() !== "session-state"}>
+        {/* Session-state and TeamView notices stay in the message store but never render. */}
+        <Show when={contextSource() !== "session-state" && contextSource() !== "team-view"}>
           <Show when={notice()} fallback={<RawNoticeMarkdown content={text()} />}>
             {(summary) => <SummaryNoticeMessage summary={summary()} />}
           </Show>

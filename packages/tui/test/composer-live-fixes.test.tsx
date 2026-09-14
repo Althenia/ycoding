@@ -46,7 +46,6 @@ const permission = {
   metadata: {},
 }
 let submittedPrompt: string | undefined
-let submittedResume: boolean | undefined
 let failNextPrompt = false
 let conflictNextPrompt = false
 let holdAdmissionUntilCancelled = false
@@ -63,6 +62,7 @@ const promptRequests: Array<{
 let failNextWake = false
 let wakeGate: Promise<void> | undefined
 let releaseWake: (() => void) | undefined
+const submittedResumes: boolean[] = []
 const skillRequests: Array<{ id: string; skill: string }> = []
 let failNextSkill = false
 let skillGate: Promise<void> | undefined
@@ -70,10 +70,6 @@ let releaseSkill: (() => void) | undefined
 
 function submittedText(): string | undefined {
   return submittedPrompt
-}
-
-function submittedResumeValue(): boolean | undefined {
-  return submittedResume
 }
 
 function isPromptBody(value: unknown): value is {
@@ -114,6 +110,7 @@ async function route(url: URL, request: Request) {
     const body: unknown = await request.json()
     if (!isPromptBody(body)) return json({ error: "invalid prompt" }, { status: 400 })
     promptRequests.push(body)
+    submittedResumes.push(body.resume === true)
     if (holdAdmissionUntilCancelled && !body.resume) {
       return new Promise<Response>((_resolve, reject) => {
         const cancel = () => {
@@ -138,7 +135,6 @@ async function route(url: URL, request: Request) {
       return json({ error: "simulated wake failure" }, { status: 500 })
     }
     submittedPrompt = body.text
-    submittedResume = body.resume
     const files = body.files?.map((file) => ({
       name: file.name,
       content: { digest: file.uri.split("/").at(-1)?.padEnd(64, "c").slice(0, 64) ?? "c".repeat(64) },
@@ -693,7 +689,7 @@ test("submits virtualized large pastes at full length without blocking the compo
 
 test("admits a steer before an in-flight model variant switch and reuses the composer", async () => {
   submittedPrompt = undefined
-  submittedResume = undefined
+  submittedResumes.length = 0
   modelSwitchStarted = false
   modelSwitchGate = new Promise<void>((resolve) => {
     releaseModelSwitch = resolve
@@ -720,7 +716,10 @@ test("admits a steer before an in-flight model variant switch and reuses the com
 
     expect(modelSwitchStarted).toBe(true)
     expect(submittedText()).toBe("steer on the selected variant")
-    expect(submittedResumeValue()).toBe(false)
+    // The steer is admitted before the switch request. The switch waits for the active drain to
+    // reach its boundary, so the composer must not be held behind it: the admission resumes and the
+    // composer clears while the switch is still in flight.
+    expect(submittedResumes[0]).toBe(false)
     releaseModelSwitch?.()
     await waitForFrameText(screen, "Message YCoding…")
 
@@ -756,7 +755,6 @@ test("submits the prompt when a model switch is blocked and warns instead of fai
     return route(url, request)
   }
   submittedPrompt = undefined
-  submittedResume = undefined
   modelSwitchGate = undefined
   releaseModelSwitch = undefined
   const screen = await renderScreen({

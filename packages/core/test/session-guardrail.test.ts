@@ -37,8 +37,33 @@ describe("SessionGuardrailMatch", () => {
     ['/bin/rm -fr -- "/workspace/project"', "quoted project path"],
     ["rm --recursive --force /workspace", "project ancestor"],
     ['echo ready && rm -r -f "$PWD"', "compound command"],
-    ["rm -rf packages/one packages/two", "multiple recursive targets"],
   ])("requires hard review for broad deletion via %s (%s)", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "ask",
+      hardReview: true,
+      standard: true,
+      ruleIDs: ["standard.review.broad-deletion"],
+    })
+  })
+
+  test.each([
+    "rm -rf packages/one packages/two",
+    "rm -rf /tmp/cache-a /tmp/cache-b /tmp/cache-c",
+  ])("requires ordinary review for multiple narrow recursive targets via %s", (command) => {
+    expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
+      decision: "ask",
+      hardReview: false,
+      standard: true,
+      ruleIDs: ["standard.review.broad-deletion"],
+    })
+  })
+
+  test.each([
+    "rm -rf /home/user/Documents",
+    "rm -rf ~/Documents",
+    'rm -rf "$HOME/Documents"',
+    "rm -rf ~/Documents ~/Downloads",
+  ])("requires hard review for recursive deletion one level below home via %s", (command) => {
     expect(SessionGuardrailMatch.evaluate({ action: "shell", resources: [command], paths })).toMatchObject({
       decision: "ask",
       hardReview: true,
@@ -123,6 +148,22 @@ describe("SessionGuardrailMatch", () => {
       SessionGuardrailMatch.evaluate({
         action: "shell",
         resources: ["rm -rf ."],
+        paths,
+        custom: [layer([custom({ id: "allow-all", decision: "allow", actions: ["shell"], resources: ["*"] })])],
+      }),
+    ).toMatchObject({
+      decision: "ask",
+      hardReview: true,
+      standard: true,
+      ruleIDs: ["standard.review.broad-deletion"],
+    })
+  })
+
+  test("does not let a custom allow weaken home-child hard review", () => {
+    expect(
+      SessionGuardrailMatch.evaluate({
+        action: "shell",
+        resources: ["rm -rf ~/Documents"],
         paths,
         custom: [layer([custom({ id: "allow-all", decision: "allow", actions: ["shell"], resources: ["*"] })])],
       }),

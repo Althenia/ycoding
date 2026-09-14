@@ -66,7 +66,7 @@ function residentCompactionBoundary(sessionID: string, messages: SessionMessageI
   return Math.max(fromStore, fromMessages)
 }
 
-export function createSessionRows(sessionID: Accessor<string>, activity = () => true) {
+export function createSessionRows(sessionID: Accessor<string>) {
   const data = useData()
   const client = useClient()
   const [rows, setRows] = createStore<SessionRow[]>([])
@@ -108,12 +108,11 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
       if (index === -1) rows.push(row)
       else rows.splice(index, 0, row)
     }
-    const activityBoundary = rows.findLastIndex((row) => {
-      if (row.type === "compaction") return true
-      if (row.type !== "message") return false
-      return data.session.message.get(sessionID(), row.messageID)?.type === "compaction"
-    })
-    if (activity() && activityBoundary !== -1) rows.push(...activityRows())
+    // A pending guardrail review blocks the Session family, so its row must render in every
+    // Session view where it can block work, including a subagent chat and an autonomous Session.
+    // The list only contains requests that are still awaiting a reply.
+    const pendingGuardrails = activityRows()
+    if (pendingGuardrails.length > 0) rows.push(...pendingGuardrails)
     partitionPending(rows, pendingPermissions())
     // Attach a stable unique key so keyed reconcile reuses tail activity rows instead of
     // rebuilding them positionally when an earlier message row is inserted.
@@ -175,7 +174,6 @@ export function createSessionRows(sessionID: Accessor<string>, activity = () => 
   createEffect(
     on(
       () => [
-        activity(),
         // The closing assistant footer depends on execution state, so idling must re-reduce.
         data.session.status(sessionID()),
         ...data.session.guardrail.list(sessionID()).map((request) => `${request.id}:${request.reason}`),

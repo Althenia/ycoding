@@ -7,6 +7,13 @@ import { Prompt } from "./permission"
 
 export type GuardrailRequest = GuardrailRequestListOutput[number]
 
+export function activeGuardrail<T extends { id: string }>(
+  requests: readonly T[],
+  reviewID: string | undefined,
+): T | undefined {
+  return requests.find((request) => request.id === reviewID) ?? requests[0]
+}
+
 export function guardrailPresentation(request: GuardrailRequest) {
   return {
     title: "Guardrail blocked",

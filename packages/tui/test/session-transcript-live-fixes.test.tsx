@@ -810,7 +810,7 @@ test("does not mount TodoWrite tasks in the transcript", async () => {
   }
 }, 60_000)
 
-test("hides retained Session state bodies while keeping TeamView order", async () => {
+test("hides retained Session state and TeamView bodies while keeping message order", async () => {
   const messages: SessionMessageInfo[] = [
     { id: "msg_context_prompt", type: "user", text: "Coordinate the work", time: { created: 1 } },
     {
@@ -834,26 +834,29 @@ test("hides retained Session state bodies while keeping TeamView order", async (
     ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(messages),
-    settle: "TeamView: reviewer is running",
+    settle: "Continue after the update",
   })
   try {
     const frame = screen.frame()
     expect(frame).not.toContain("Authoritative current Session state: normal mode")
-    expect(frame).toContain("TeamView: reviewer is running")
-    expect(frame.indexOf("Coordinate the work")).toBeLessThan(frame.indexOf("TeamView: reviewer"))
-    expect(frame.indexOf("TeamView: reviewer")).toBeLessThan(frame.indexOf("Continue after the update"))
+    expect(frame).not.toContain("TeamView: reviewer is running")
+    expect(frame).toContain("Coordinate the work")
+    expect(frame).toContain("Continue after the update")
+    expect(frame.indexOf("Coordinate the work")).toBeLessThan(frame.indexOf("Continue after the update"))
     expect(messages.some((message) => message.id === "msg_context_state")).toBe(true)
+    expect(messages.some((message) => message.id === "msg_context_team")).toBe(true)
   } finally {
     await screen.dispose()
   }
 }, 60_000)
 
-test("hides Session state notices while rendering TeamView summary-only", async () => {
+test("hides Session state and TeamView notices while keeping messages", async () => {
   const sessionState =
     'Authoritative current Session state (JSON):\n{"autonomy":{"mode":"normal"},"todos":[{"content":"First task","status":"pending"},{"content":"Second task","status":"pending"},{"content":"Third task","status":"pending"},{"content":"Fourth task","status":"pending"},{"content":"Fifth task","status":"pending"},{"content":"Sixth task","status":"pending"}]}'
   const teamView =
     'Internal orchestration context (JSON). Use it to coordinate work. Do not surface subagent status unless the user explicitly asks; report a failure only when it blocks the requested outcome:\n{"children":[{"state":"running"},{"state":"completed"}],"omitted":1}'
   const messages: SessionMessageInfo[] = [
+    { id: "msg_context_before", type: "user", text: "Before notices", time: { created: 1 } },
     {
       id: "msg_context_state_table",
       type: "system",
@@ -869,20 +872,23 @@ test("hides Session state notices while rendering TeamView summary-only", async 
       metadata: { contextSource: "team-view" },
       time: { created: 3 },
     },
+    { id: "msg_context_after", type: "user", text: "After notices", time: { created: 4 } },
   ]
   const screen = await renderScreen({
-    ...NARROW_VIEWPORT,
+    ...DESIGN_VIEWPORT,
     args: { sessionID },
     route: routeFor(messages),
-    settle: "TeamView · 1 running · 1 completed · 1 omitted",
+    settle: "After notices",
   })
   try {
-    expect(screen.frame()).not.toContain("Session state · normal · YOLO 0 · 6 tasks")
-    expect(screen.frame()).toContain("TeamView · 1 running · 1 completed · 1 omitted")
+    expect(screen.frame()).not.toContain("Session state · normal")
+    expect(screen.frame()).not.toContain("TeamView · 1 running")
     expect(screen.frame()).not.toContain("First task")
     expect(screen.frame()).not.toContain("Sixth task")
-    expect(messages[0]).toMatchObject({ text: sessionState })
-    expect(messages[1]).toMatchObject({ text: teamView })
+    expect(screen.frame()).toContain("Before notices")
+    expect(screen.frame()).toContain("After notices")
+    expect(messages[1]).toMatchObject({ text: sessionState })
+    expect(messages[2]).toMatchObject({ text: teamView })
   } finally {
     await screen.dispose()
   }

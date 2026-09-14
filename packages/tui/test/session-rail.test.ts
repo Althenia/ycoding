@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test"
 import {
   collapseSection,
   defaultExpanded,
+  EXPANDABLE_RAIL_SECTIONS,
   expandSection,
+  isExpandableRailSection,
   railPlacement,
   railWidth,
   resolveExpanded,
@@ -40,6 +42,40 @@ describe("rail default expansion", () => {
       "context",
       "todo",
     ])
+  })
+})
+
+describe("rail expandable sections", () => {
+  test("allows every section to expand", () => {
+    expect(EXPANDABLE_RAIL_SECTIONS).toEqual([
+      "session",
+      "context",
+      "todo",
+      "goal",
+      "autonomy",
+      "subagents",
+      "shells",
+      "skills",
+      "mcp",
+      "plugins",
+      "guardrails",
+      "lsp",
+    ])
+    for (const key of [
+      "session",
+      "context",
+      "todo",
+      "goal",
+      "autonomy",
+      "subagents",
+      "shells",
+      "skills",
+      "mcp",
+      "plugins",
+      "guardrails",
+      "lsp",
+    ] as const)
+      expect(isExpandableRailSection(key)).toBe(true)
   })
 })
 
