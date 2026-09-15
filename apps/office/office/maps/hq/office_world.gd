@@ -62,8 +62,9 @@ const DOOR_COLS := [9, 10]
 
 ## Floor atlas columns from tools/generate_art.py.
 ##
-## The atlas is 12 columns: 0-1 wood, 2-3 carpet A, 4-5 carpet B, 6-7 tile, a
-## single 8 for concrete, 9-10 grey checker and a single 11 for cool plank.
+## The atlas is 13 columns: 0-1 wood, 2-3 carpet A, 4-5 carpet B, 6-7 tile, a
+## single 8 for concrete, 9-10 grey checker, a single 11 for cool plank and a
+## single 12 for the light lounge floor.
 ##
 ## Tones vary per material, which is why the checkerboard below cannot simply add
 ## one to every base: indexing past a material's last tone would draw nothing at
@@ -76,6 +77,8 @@ const FLOOR_TILE := 6
 const FLOOR_CONCRETE := 8
 const FLOOR_CHECKER := 9
 const FLOOR_PLANK := 11
+## The reference's light patterned lounge floor.
+const FLOOR_LOUNGE := 12
 
 ## Tones per material, matching the atlas exactly.
 const FLOOR_TONES := {
@@ -86,6 +89,19 @@ const FLOOR_TONES := {
 	FLOOR_CONCRETE: 1,
 	FLOOR_CHECKER: 2,
 	FLOOR_PLANK: 1,
+	FLOOR_LOUNGE: 1,
+}
+
+## The name shown over each zone.
+##
+## The reference labels its clusters with a floating tag, which is how a viewer
+## learns the plan without a legend. Reception and the corridor are omitted: they
+## are circulation, and labelling a walkway adds noise rather than meaning.
+const ZONE_LABELS := {
+	"product": "Product team",
+	"ops": "Ops team",
+	"engineering": "Engineering",
+	"ceo": "CEO office",
 }
 
 ## Room zones: id -> {rect (tiles), floor column}. The rects tile the floor
@@ -96,7 +112,7 @@ const ZONES := [
 	{"id": "reception_s", "rect": Rect2i(1, 13, 12, 9), "floor": FLOOR_TILE},
 	{"id": "corridor", "rect": Rect2i(1, 11, 39, 2), "floor": FLOOR_CONCRETE},
 	{"id": "product", "rect": Rect2i(13, 2, 13, 9), "floor": FLOOR_CHECKER},
-	{"id": "ops", "rect": Rect2i(27, 2, 13, 9), "floor": FLOOR_CHECKER},
+	{"id": "ops", "rect": Rect2i(27, 2, 13, 9), "floor": FLOOR_LOUNGE},
 	{"id": "engineering", "rect": Rect2i(13, 13, 13, 9), "floor": FLOOR_CHECKER},
 	{"id": "ceo", "rect": Rect2i(27, 13, 13, 9), "floor": FLOOR_CARPET_A},
 ]
@@ -127,6 +143,8 @@ const FURNITURE := [
 	{"id": "rec_side", "cell": Vector2i(4, 18), "prop": "side_table", "solid": true},
 	{"id": "rec_plant_c", "cell": Vector2i(1, 20), "prop": "plant", "solid": true},
 	{"id": "rec_plant_d", "cell": Vector2i(11, 20), "prop": "plant", "solid": true},
+	{"id": "rec_arcade", "cell": Vector2i(9, 17), "prop": "arcade", "solid": true},
+	{"id": "rec_lockers", "cell": Vector2i(1, 17), "prop": "lockers", "solid": true},
 	{"id": "rec_shelf", "cell": Vector2i(9, 17), "prop": "bookshelf", "solid": true},
 	# --- Product team: cols 13-25, rows 2-5. Four desks; anchors sit on each desk base row. ---
 	{"id": "desk_prod_0", "cell": Vector2i(13, 2), "prop": "desk", "solid": true},
@@ -148,6 +166,9 @@ const FURNITURE := [
 	{"id": "play_sofa_b", "cell": Vector2i(22, 6), "prop": "sofa", "solid": true},
 	{"id": "play_tv", "cell": Vector2i(19, 10), "prop": "tv_stand", "solid": true},
 	{"id": "play_plant", "cell": Vector2i(25, 6), "prop": "plant", "solid": true},
+	{"id": "play_pouf_a", "cell": Vector2i(21, 6), "prop": "pouf", "solid": true},
+	{"id": "play_pouf_b", "cell": Vector2i(25, 9), "prop": "pouf", "solid": true},
+	{"id": "hud_round_table", "cell": Vector2i(30, 7), "prop": "round_table", "solid": true},
 	# --- Focus: col 24-25, rows 7-8. Where an agent consolidating context retires to. ---
 	{"id": "focus_rug", "cell": Vector2i(25, 8), "prop": "rug_warm", "solid": false},
 	{"id": "focus_chair", "cell": Vector2i(25, 8), "prop": "reading_chair", "solid": false},
@@ -195,16 +216,24 @@ const FURNITURE := [
 ## Each entry is a tile column and a PROP_TEXTURES key, so decoration shares
 ## one registry and one naming scheme with floor props. Decoration never blocks
 ## navigation.
+## Mounted wall decoration, drawn on the north wall band above the wall art.
+##
+## The reference runs glazing along its walls, so windows dominate here and the
+## signage is dropped. Each entry is a tile column and a PROP_TEXTURES key, so
+## decoration shares one registry with floor props.
 const WALL_DECOR := [
-	{"id": "decor_window_a", "x": 3, "prop": "window"},
-	{"id": "decor_poster", "x": 7, "prop": "wall_poster"},
-	{"id": "decor_sign", "x": 15, "prop": "wall_sign"},
-	{"id": "decor_sign_b", "x": 18, "prop": "wall_sign"},
-	{"id": "decor_clock", "x": 21, "prop": "wall_clock"},
-	{"id": "decor_screen", "x": 23, "prop": "wall_screen"},
-	{"id": "decor_window_b", "x": 29, "prop": "window"},
-	{"id": "decor_pinboard", "x": 32, "prop": "wall_pinboard"},
-	{"id": "decor_art", "x": 36, "prop": "wall_frame_art"},
+	{"id": "decor_window_a", "x": 2, "prop": "window"},
+	{"id": "decor_clock", "x": 6, "prop": "wall_clock"},
+	{"id": "decor_window_b", "x": 8, "prop": "window"},
+	{"id": "decor_screen", "x": 16, "prop": "wall_screen"},
+	{"id": "decor_wall_tv", "x": 14, "prop": "wall_tv"},
+	{"id": "decor_pinboard", "x": 20, "prop": "wall_pinboard"},
+	{"id": "decor_window_c", "x": 24, "prop": "window"},
+	{"id": "decor_poster", "x": 28, "prop": "wall_poster"},
+	{"id": "decor_sign", "x": 34, "prop": "wall_sign"},
+	{"id": "decor_art", "x": 26, "prop": "wall_frame_art"},
+	{"id": "decor_window_d", "x": 31, "prop": "window"},
+	{"id": "decor_window_e", "x": 36, "prop": "window"},
 ]
 
 ## Work/visitor anchors per prop.
@@ -270,6 +299,11 @@ const PROP_TEXTURES := {
 	"vending": "res://office/art/prop_vending.png",
 	"armchair": "res://office/art/prop_armchair.png",
 	"counter": "res://office/art/prop_counter.png",
+	"arcade": "res://office/art/prop_arcade.png",
+	"lockers": "res://office/art/prop_lockers.png",
+	"wall_tv": "res://office/art/prop_wall_tv.png",
+	"pouf": "res://office/art/prop_pouf.png",
+	"round_table": "res://office/art/prop_round_table.png",
 	"side_table": "res://office/art/prop_side_table.png",
 }
 
@@ -299,11 +333,18 @@ const PROP_FOOTPRINT := {
 	"vending": Vector2i(1, 2),
 	"armchair": Vector2i(1, 2),
 	"counter": Vector2i(3, 2),
+	"arcade": Vector2i(1, 2),
+	"lockers": Vector2i(2, 2),
+	"pouf": Vector2i(1, 1),
+	"round_table": Vector2i(1, 1),
 	"side_table": Vector2i(1, 1),
 }
 
 var navigation: OfficeNavigation
 var actors: Dictionary = {}
+## The presentation preference shared with the composition root. Assigned before
+## an actor spawns so a new arrival never animates once and then stops.
+var motion: Motion = Motion.new()
 var notices: Dictionary = {}
 var _selected: String = ""
 var _assignments: Dictionary = {}
@@ -557,6 +598,7 @@ func _add_actor(actor: ActorPresentation) -> void:
 	# Actors join the Y-sorted props layer so furniture and people interleave by
 	# their base line instead of drawing in two fixed passes.
 	_props.add_child(node)
+	node.motion = motion
 	node.update_from(actor, _anchor_for(actor))
 	actors[actor.identity.session_id] = node
 

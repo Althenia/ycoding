@@ -1,109 +1,151 @@
 ## Prompt composer.
 ##
-## One compact bar floated over the office: the input, the model pill and send on
-## one row, with the location on a foot line. Ordinary task text, exactly like the
-## TUI. In DEMO the composer is a preview: submitting never sends a mutation. It
-## does not script employee movement, inject roleplay, or select an agent on the
-## user's behalf.
+## One rounded card floated over the office, shaped like the reference: the input
+## on its own top line, and a control row beneath it carrying attach, the approval
+## affordance, the model/effort pill, and a circular send button.
 ##
-## The bar is deliberately short. Its previous shape stacked a heading, a 76px
-## input, a button row and a notice line, which needed about 156px of content in a
-## 96px box, so the send button was clipped. Everything here is sized so the real
-## content minimum fits the box the shell layout gives it.
+## Ordinary task text, exactly like the TUI. In DEMO the composer is a preview:
+## submitting never sends a mutation. It does not script employee movement, inject
+## roleplay, or select an agent on the user's behalf.
+##
+## Every row has an explicit height and the card's total matches what the shell
+## layout reserves, because an earlier version stacked more content than its box
+## allowed and silently clipped the send button.
 class_name PromptPanel
 extends PanelContainer
 
 signal prompt_submitted(text: String)
 signal model_selected(ref: String)
+signal effort_selected(variant: String)
 
-## Row heights. The entry row is one input line plus the pill and the send button;
-## the foot row carries the location.
-const ENTRY_H := 38.0
-const FOOT_H := 14.0
+## Row metrics. The card is INPUT_H + CONTROL_H + padding.
+const INPUT_H := 44.0
+const CONTROL_H := 34.0
+const CARD_H := 116.0
+const PILL_W := 208.0
+## A wrapping label needs a known minimum width, or at zero width it reports one
+## glyph per line and inflates the card's minimum height.
+const WRAP_MIN_WIDTH := 200.0
 
 var _input: TextEdit
-var _button: Button
-var _notice: Label
+var _send: Button
+var _attach: Button
+var _approval: Button
 var _pill: Button
 var _pill_menu: PopupMenu
-var _path_label: Label
+var _notice: Label
+var _effort: EffortSlider
 var _mode: String = OfficeStore.MODE_DEMO
 var _models: Array = []
 var _model_ref: String = ""
 
 
 func _ready() -> void:
-	add_theme_stylebox_override("panel", OfficeTheme.panel_style())
+	add_theme_stylebox_override("panel", OfficeTheme.card_style())
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 4)
+	box.add_theme_constant_override("separation", 8)
 
-	# --- entry row ----------------------------------------------------------
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-
+	# --- input ---------------------------------------------------------------
 	_input = TextEdit.new()
-	_input.custom_minimum_size = Vector2(0, ENTRY_H)
-	_input.placeholder_text = "Describe the task, as you would in the TUI…"
+	_input.custom_minimum_size = Vector2(0, INPUT_H)
+	_input.placeholder_text = "Do anything"
 	_input.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	_input.add_theme_font_size_override("font_size", 14)
-	_input.add_theme_stylebox_override("normal", OfficeTheme.panel_style(OfficeTheme.BG_INPUT))
-	# Focus keeps the filled surface and gains the accent ring, so the focused
-	# composer is visibly distinct from the unfocused one.
-	_input.add_theme_stylebox_override("focus", OfficeTheme.focus_fill_style(OfficeTheme.BG_INPUT))
+	_input.add_theme_font_size_override("font_size", 15)
+	_input.add_theme_stylebox_override("normal", OfficeTheme.input_style())
+	_input.add_theme_stylebox_override("focus", OfficeTheme.input_focus_style())
 	_input.add_theme_color_override("font_color", OfficeTheme.TEXT)
-	_input.add_theme_color_override("font_color_readonly", OfficeTheme.TEXT_DIM)
 	_input.add_theme_color_override("caret_color", OfficeTheme.ACCENT)
 	_input.add_theme_color_override("font_placeholder_color", OfficeTheme.TEXT_MUTED)
 	_input.focus_mode = Control.FOCUS_ALL
-	_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_input.gui_input.connect(_on_input_event)
-	row.add_child(_input)
+	box.add_child(_input)
 
-	_pill = OfficeTheme.button("Default", false)
-	_pill.custom_minimum_size = Vector2(168, ENTRY_H)
+	# --- control row ---------------------------------------------------------
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	row.custom_minimum_size = Vector2(0, CONTROL_H)
+
+	_attach = OfficeTheme.icon_button("+")
+	_attach.tooltip_text = "Attach a file or connect an app"
+	_attach.pressed.connect(_on_attach)
+	row.add_child(_attach)
+
+	_approval = OfficeTheme.icon_button("Ask for approval")
+	_approval.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_approval.add_theme_font_size_override("font_size", 13)
+	_approval.add_theme_color_override("font_color", OfficeTheme.TEXT_DIM)
+	_approval.tooltip_text = "DEMO: approvals are not requested"
+	row.add_child(_approval)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(spacer)
+
+	_pill = OfficeTheme.pill_button("Default")
+	_pill.custom_minimum_size = Vector2(PILL_W, CONTROL_H)
 	_pill.pressed.connect(_on_pill_pressed)
 	row.add_child(_pill)
 
-	_button = OfficeTheme.button("↑", true)
-	_button.custom_minimum_size = Vector2(ENTRY_H, ENTRY_H)
-	_button.pressed.connect(_on_send)
-	row.add_child(_button)
+	_send = OfficeTheme.send_button()
+	_send.pressed.connect(_on_send)
+	row.add_child(_send)
 
-	# --- foot row: the location --------------------------------------------
-	var foot := HBoxContainer.new()
-	foot.add_theme_constant_override("separation", 8)
-	_path_label = Label.new()
-	_path_label.add_theme_font_size_override("font_size", 11)
-	_path_label.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
-	_path_label.custom_minimum_size = Vector2(0, FOOT_H)
-	foot.add_child(_path_label)
+	box.add_child(row)
+
+	# --- notice line ---------------------------------------------------------
 	_notice = Label.new()
 	_notice.add_theme_font_size_override("font_size", 11)
 	_notice.add_theme_color_override("font_color", OfficeTheme.ACCENT_WARM)
 	_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_notice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	foot.add_child(_notice)
+	_notice.custom_minimum_size = Vector2(WRAP_MIN_WIDTH, 0.0)
+	box.add_child(_notice)
 
-	box.add_child(row)
-	box.add_child(foot)
 	add_child(box)
 
 	_pill_menu = PopupMenu.new()
 	_pill_menu.index_pressed.connect(_on_model_index)
 	add_child(_pill_menu)
 
+	# The effort card is a popover anchored to the pill. It is added to the
+	# composer's PARENT and given a high z_index, because as a child of this
+	# panel it would be painted inside the card's rounded surface and clipped.
+	_effort = EffortSlider.new()
+	_effort.visible = false
+	_effort.z_index = 10
+	_effort.variant_chosen.connect(_on_effort_chosen)
+	call_deferred("_attach_effort")
+
+
+## Attach the popover above the composer once both are in the tree.
+func _attach_effort() -> void:
+	if _effort == null or _effort.get_parent() != null:
+		return
+	var host := get_parent()
+	if host == null:
+		add_child(_effort)
+		return
+	host.add_child(_effort)
+
+
+## Reposition the popover whenever the composer is laid out, because it is
+## anchored to the pill rather than owned by the layout.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED and _effort != null and _effort.visible:
+		_place_effort()
+
 
 func set_mode(mode: String) -> void:
 	_mode = mode
-	if _button != null and mode == OfficeStore.MODE_DEMO:
-		_button.tooltip_text = "DEMO: submitting records the text locally only"
+	if _send == null:
+		return
+	_send.tooltip_text = (
+		"DEMO: submitting records the text locally only"
+		if mode == OfficeStore.MODE_DEMO
+		else "Send the prompt"
+	)
 
 
 ## Offer the models the popover lists and set the current selection.
-##
-## `catalog` is either the server's model list or `ModelCatalog.demo_catalog()`.
-## Grouping and labels come from ModelCatalog, so the pill never renders the
-## config string form.
 func set_models(catalog: Array, current_ref: String) -> void:
 	if _pill == null:
 		return
@@ -114,13 +156,11 @@ func set_models(catalog: Array, current_ref: String) -> void:
 	for group in ModelCatalog.group_by_provider(catalog):
 		if index > 0:
 			_pill_menu.add_separator()
-		var provider := str(group["provider"])
-		_pill_menu.add_item(ModelCatalog.provider_label(provider), index)
+		_pill_menu.add_item(ModelCatalog.provider_label(str(group["provider"])), index)
 		_pill_menu.set_item_disabled(index, true)
 		index += 1
 		for entry in group["models"]:
-			var name := str(entry.get("name", entry.get("id", "")))
-			_pill_menu.add_item("   %s" % name, index)
+			_pill_menu.add_item("   %s" % ModelCatalog.model_label(entry), index)
 			_pill_menu.set_item_metadata(index, ModelCatalog.format_ref(entry))
 			index += 1
 	if _pill_menu.item_count == 0:
@@ -128,44 +168,38 @@ func set_models(catalog: Array, current_ref: String) -> void:
 		_pill.disabled = true
 		return
 	_pill.disabled = false
-	_pill.text = "%s  ⌄" % _pill_label()
+	_refresh_pill()
 
 
-## The pill's text, composed from fields. Falls back to the raw reference only
-## when the catalogue cannot resolve it, which is a visible failure rather than a
-## silent one.
-func _pill_label() -> String:
+## The pill's text: the model name, then the variant in a dimmer weight.
+##
+## Composed from fields. The config form is never rendered here.
+func _refresh_pill() -> void:
 	var ref := ModelCatalog.parse_ref(_model_ref)
 	if ref.is_empty():
-		return "Default"
+		_pill.text = "Default"
+		return
+	_pill.text = ModelCatalog.display_label(_entry_for(ref), str(ref["variant"]))
+
+
+func _entry_for(ref: Dictionary) -> Dictionary:
 	for entry in _models:
 		if not (entry is Dictionary):
 			continue
 		var candidate: Dictionary = entry
-		if str(candidate.get("id", "")) != str(ref["id"]):
-			continue
-		if str(candidate.get("providerID", "")) != str(ref["providerID"]):
-			continue
-		return ModelCatalog.display_label(candidate, str(ref["variant"]))
-	return str(ref["id"])
+		if (
+			str(candidate.get("id", "")) == str(ref["id"])
+			and str(candidate.get("providerID", "")) == str(ref["providerID"])
+		):
+			return candidate
+	return {}
 
 
-## Show the location every visible session shares.
-##
-## The office is a view over sessions and each session carries its own durable
-## directory, so a single path is only claimed when they actually agree. With more
-## than one directory the label says so instead of picking one.
-func set_location(store: OfficeStore) -> void:
-	if _path_label == null or store == null:
-		return
-	var locations := store.locations()
-	if locations.is_empty():
-		_path_label.text = "No location reported"
-		return
-	if locations.size() > 1:
-		_path_label.text = "%d locations" % locations.size()
-		return
-	_path_label.text = locations[0]
+## The model entry currently selected, or {} when the catalogue cannot resolve it.
+func current_entry() -> Dictionary:
+	if _models.is_empty():
+		return {}
+	return _entry_for(ModelCatalog.parse_ref(_model_ref))
 
 
 func current_text() -> String:
@@ -184,7 +218,6 @@ func _on_input_event(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
-	# Ctrl/Cmd+Enter submits; Enter alone inserts a newline for multi-line tasks.
 	if key.pressed and key.keycode == KEY_ENTER and (key.ctrl_pressed or key.meta_pressed):
 		_on_send()
 		accept_event()
@@ -197,12 +230,33 @@ func _on_send() -> void:
 	prompt_submitted.emit(text)
 
 
+## The attach affordance opens the same style of menu the reference shows: the
+## things a prompt can carry, and nothing it cannot.
+func _on_attach() -> void:
+	var menu := PopupMenu.new()
+	menu.add_item("Outputs", 0)
+	menu.set_item_disabled(0, true)
+	menu.add_item("Create a file or site", 1)
+	menu.set_item_disabled(1, true)
+	menu.add_separator()
+	menu.add_item("Sources", 2)
+	menu.set_item_disabled(2, true)
+	menu.add_item("Attach files or connect apps", 3)
+	menu.set_item_disabled(3, true)
+	menu.position = Vector2i(Vector2(_attach.global_position.x, _attach.global_position.y - 8.0))
+	add_child(menu)
+	menu.popup()
+	# In DEMO nothing can be attached, so every entry states that rather than
+	# offering an action that would silently do nothing.
+	menu.id_pressed.connect(func(_id: int):
+		menu.queue_free()
+		show_notice("DEMO — attachments are not sent"))
+
+
 func _on_pill_pressed() -> void:
 	if _pill_menu.item_count == 0:
 		return
-	_pill_menu.position = Vector2i(
-		Vector2(_pill.global_position.x, _pill.global_position.y - 8.0)
-	)
+	_pill_menu.position = Vector2i(Vector2(_pill.global_position.x, _pill.global_position.y - 8.0))
 	_pill_menu.popup()
 
 
@@ -211,11 +265,71 @@ func _on_model_index(index: int) -> void:
 	if metadata == null:
 		return
 	_model_ref = str(metadata)
-	_pill.text = "%s  ⌄" % _pill_label()
+	_refresh_pill()
+	model_selected.emit(_model_ref)
+	_open_effort()
+
+
+## Show the effort card for the current model.
+##
+## Offered only when the model declares variants: a slider with no real stops
+## would be a control that cannot do anything.
+func _open_effort() -> void:
+	var entry := current_entry()
+	var stops := ModelCatalog.variant_stops(entry)
+	if stops.is_empty():
+		show_notice("This model has no effort settings")
+		return
+	var ref := ModelCatalog.parse_ref(_model_ref)
+	_effort.open(entry, str(ref.get("variant", "")), stops)
+	_place_effort()
+
+
+## Place the card above the pill, kept inside the window.
+##
+## The popover lives in the SHELL's coordinate space, not the composer's, so the
+## anchor must be converted to global. Reading local coordinates placed it at the
+## shell origin, which looked like the card had vanished.
+##
+## It prefers to sit above the pill; when there is no room it drops below, so it
+## is never pushed off the top of the window on a short display.
+func _place_effort() -> void:
+	if _effort == null or _pill == null:
+		return
+	var parent := _effort.get_parent() as Control
+	if parent == null:
+		return
+	var card := _effort.custom_minimum_size
+	var anchor := _pill.global_position
+	var origin := parent.get_global_transform().origin
+	var x := anchor.x + _pill.size.x * 0.5 - card.x * 0.5
+	# Prefer above the pill; use the room below only when above will not fit, and
+	# clamp so the card can never leave the window on a short display.
+	var above := anchor.y - card.y - 8.0
+	var below := anchor.y + _pill.size.y + 8.0
+	var limit := parent.size.y - card.y - 8.0
+	var y := above if above >= 8.0 else below
+	_effort.position = Vector2(
+		clampf(x - origin.x, 8.0, maxf(parent.size.x - card.x - 8.0, 8.0)),
+		clampf(y - origin.y, 8.0, maxf(limit, 8.0))
+	)
+	_effort.visible = true
+
+
+func _on_effort_chosen(variant: String) -> void:
+	var ref := ModelCatalog.parse_ref(_model_ref)
+	if ref.is_empty():
+		return
+	ref["variant"] = variant
+	_model_ref = ModelCatalog.format_ref(ref)
+	_refresh_pill()
+	effort_selected.emit(variant)
 	model_selected.emit(_model_ref)
 
 
-## States the DEMO boundary instead of pretending a prompt was delivered.
-func show_demo_notice(text: String) -> void:
+## State a boundary or an outcome next to the composer. Used for the DEMO
+## preview boundary and for a refusal returned by the service, so the user learns
+## why a submission did not become work.
+func show_notice(text: String) -> void:
 	var preview := text if text.length() <= 48 else text.substr(0, 48) + "…"
-	_notice.text = "DEMO — not sent: “%s”" % preview
+	_notice.text = preview

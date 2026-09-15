@@ -4,15 +4,15 @@
 
 Project: **YCoding Office** · Data updated: **2026-09-15**
 
-**25/48 implementation tasks done.** Pack creation is not application progress.
+**31/48 implementation tasks done.** Pack creation is not application progress.
 
 | State | Count |
 |---|---:|
-| Not started | 21 |
+| Not started | 16 |
 | In progress | 0 |
-| Blocked | 1 |
+| Blocked | 0 |
 | In review | 1 |
-| Done | 25 |
+| Done | 31 |
 | Deferred | 0 |
 
 ## Milestones
@@ -22,14 +22,13 @@ Project: **YCoding Office** · Data updated: **2026-09-15**
 | M0 — Audit and safe boundaries | 8 / 8 | TASK-008 | Done |
 | M1 — Bootable foundation | 8 / 8 | TASK-016 | Done |
 | M2 — Fidelity slice | 7 / 8 | TASK-024 | In review |
-| M3 — Live integration | 2 / 8 | TASK-032 | Not started |
+| M3 — Live integration | 8 / 8 | TASK-032 | Done |
 | M4 — Full office MVP | 0 / 8 | TASK-040 | Not started |
 | M5 — Internal-ready desktop | 0 / 8 | TASK-048 | Not started |
 
 ## Dependency-ready tasks
 
-- **TASK-027** — Implement snapshot-first reconnect and scope recovery
-- **TASK-028** — Wire real prompt admission, retry and interruption
+No unstarted task is currently dependency-ready. Inspect in-progress/review/blocked tasks.
 
 ## Rules
 

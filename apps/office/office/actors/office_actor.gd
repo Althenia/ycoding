@@ -42,6 +42,10 @@ var work_state: int = WorkState.Kind.IDLE
 var settled_status: String = ""
 var attention_required: bool = false
 
+## Presentation preference owned by the actor. Reduced motion removes
+## interpolation and frame cycling without moving the actor's destination.
+var motion: Motion = Motion.new()
+
 var _sheet: Texture2D
 var _sprite: Sprite2D
 var _frame_row: int = ROW_IDLE
@@ -103,6 +107,10 @@ func set_route(route: Array[Vector2]) -> void:
 	_route_index = 1
 	_walking = true
 	_frame_row = ROW_WALK
+	# Under reduced motion the route is still adopted whole, but the actor settles
+	# on its final point at once rather than waiting for the next frame.
+	if motion.reduced():
+		_settle_still()
 
 
 func is_walking() -> bool:
@@ -120,8 +128,34 @@ func _process(delta: float) -> void:
 			_ambient = ""
 			if not _walking:
 				_frame_row = _rest_row()
+	if motion.reduced():
+		_settle_still()
+		return
 	_walk(delta)
 	_animate(delta)
+
+
+## Reduced motion: reach the destination without travelling there, and hold the
+## rest pose instead of cycling frames.
+##
+## The office stays truthful about where an agent is — the actor still ends on
+## the route's final point and still faces the way the route approached it — but
+## nothing interpolates. This runs every frame, so it must be idempotent, and it
+## is also what settles an actor whose motion is toggled mid-walk.
+func _settle_still() -> void:
+	if _walking and _route.size() >= 2:
+		var last := _route.size() - 1
+		_direction = _facing_for(_route[last] - _route[last - 1])
+		position = _route[last]
+		_route_index = _route.size()
+		_walking = false
+	elif _frame_row == _rest_row() and _frame_variant == 0:
+		# Already settled: reduced motion does no per-frame work at all.
+		return
+	_frame_row = _rest_row()
+	_frame_variant = 0
+	_frame_accumulator = 0.0
+	_apply_frame()
 
 
 ## Constant-speed progression toward each route point; never interpolates

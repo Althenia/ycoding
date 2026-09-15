@@ -46,6 +46,27 @@ Memo ID chosen from the user's explicit request to persist implementation memory
 - Original in-house family, no third-party license. Regenerate with `python3 apps/office/tools/generate_art.py`.
 - 32px tiles, 32x48 character frames, feet-origin, 2px contact shadow. Character rows: idle(2), walk(6), sit(2), type(2), read(2), talk(2); direction columns down/up/left/right.
 
+## Resume point
+- Everything the user asked for is committed; tree is clean; all gates green.
+- Latest render: `dist/office/captures/final_release.png` (1600x900). Zone labels, checker floors, stations all present.
+- Next real work, in order: (1) live prompt submission from the composer, (2) `adopt_reload` fed by real session-list + per-session log reads, (3) reduced-motion support.
+- Held tasks release the moment the user accepts TASK-024 (fidelity) and TASK-040 (MVP).
+
+## Release state (2026-09-15)
+- Ledger 31/48 done. The other 17 are held ONLY by user gates TASK-024 (fidelity) and TASK-040 (MVP); their work is complete. The pack validator enforces the dependency graph, so marking them done fails validation. Do not mark them done.
+- Verification: verify.sh 4982 assertions / 18 flow / 0 engine errors; verify-integration.sh 21 contract + 14 live-attach.
+- Export works: templates installed, `--export-release "macOS"` -> 59.9 MB .app, launches with no editor process.
+- Open: live prompt submission (composer is a DEMO preview), reduced motion, and `adopt_reload` still replaces with caller-supplied events rather than real session/log reads.
+
+## Design rule: a zone must earn its footprint
+A room is kept only if a real signal sends an actor there. Applied honestly this cut a library, an archive, a kitchen and a meeting room. Current drivers: desks (ACTION_WORK), reception (shift entry/exit), play (idle), focus (session.compaction -> COMPACTING), huddle (CHANGE_QUESTION_ASKED), CEO (CHANGE_COMPLETED report). `test_every_station_exists_in_the_world` proves every station resolves to a real anchor.
+
+## Godot gotchas found the hard way (second batch)
+- TileSet `has_tile` must be true for a column or the tile draws the DARK EMPTY DEFAULT. The atlas grew to 12 columns while `hq_tileset.tres` still declared 9, so checker floors rendered black. A test now pins atlas AND tileset columns.
+- An `Array[T]`-typed const is needed for `for x: T in CONST` to type; `const FOO := [...]` leaves the loop var Variant and arithmetic on it fails to infer.
+- An autowrap Label computes its minimum height from its CURRENT width. At zero width it reports one glyph per line and the panel's minimum explodes, clamping every later size assignment. A ScrollContainer bounds it.
+- `z_index 0` is not "on top": a sibling with z_index 1 or 2 draws over it.
+
 ## State
 - Pack fixes applied (wire audit, F-11 gate disambiguation, storyboard duration, TEST-037/F-08, TASK-044 blocker).
 - M0 boundary change applied across README/AGENTS/product-direction/architecture/CONTRIBUTING/specs/tui-package/docs/README + injected agent prompt and its test.

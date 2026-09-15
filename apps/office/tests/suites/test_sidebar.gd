@@ -16,6 +16,9 @@ func run(t) -> void:
 	test_selection_marker_is_not_colour_only(t)
 	test_team_line_spells_out_attention(t)
 	test_sessions_group_children_under_their_root(t)
+	test_a_group_can_be_collapsed(t)
+	test_the_status_bar_carries_the_location(t)
+	test_a_shared_location_is_reported_and_a_split_one_is_not(t)
 
 
 func _store_with(events: Array) -> OfficeStore:
@@ -190,15 +193,87 @@ func test_sessions_group_children_under_their_root(t) -> void:
 	var root_row := panel._sessions_box.get_child(0) as HBoxContainer
 	var child_row := panel._sessions_box.get_child(1) as HBoxContainer
 	t.check(root_row != null and child_row != null, "both rows exist")
-	if root_row != null and child_row != null:
-		# The nested row is inset, which is what shows the hierarchy.
-		t.check(
-			bool((root_row.get_child(0) as Label).text == SidebarPanel.MARK_SELECTED)
-			or bool((root_row.get_child(0) as Label).text == SidebarPanel.MARK_UNSELECTED),
-			"the root row starts with a selection marker"
-		)
-		t.check(
-			child_row.get_child(0) is Control and not (child_row.get_child(0) is Label),
-			"the child row is indented"
-		)
+	if root_row == null or child_row == null:
+		panel.free()
+		return
+	# A root with children leads with a disclosure marker, then the selection
+	# marker. A child row is indented instead and has no disclosure.
+	t.check(
+		(root_row.get_child(0) as Button) != null,
+		"the root row offers a disclosure control"
+	)
+	t.check(
+		(root_row.get_child(1) as Label).text == SidebarPanel.MARK_SELECTED
+		or (root_row.get_child(1) as Label).text == SidebarPanel.MARK_UNSELECTED,
+		"the root row carries a selection marker"
+	)
+	t.check(
+		(child_row.get_child(0) as Control) != null
+		and not (child_row.get_child(0) is Label),
+		"the child row is indented rather than offering disclosure"
+	)
+	panel.free()
+
+
+## A group can be collapsed, which is the tree behaviour the reference shows.
+func test_a_group_can_be_collapsed(t) -> void:
+	var panel := SidebarPanel.new()
+	panel._ensure_built()
+	var store := _store_with([
+		_created("ses_root", "lead"),
+		_created("ses_child", "backend", "ses_root"),
+	])
+	panel.refresh(store, false)
+	t.check(panel._sessions_box.get_child_count() == 2, "both rows show when expanded")
+	t.check(not panel.is_group_collapsed("ses_root"), "a group starts expanded")
+	panel.toggle_group("ses_root")
+	t.check(panel.is_group_collapsed("ses_root"), "toggling collapses it")
+	t.check(
+		panel._sessions_box.get_child_count() == 1,
+		"a collapsed group hides its children"
+	)
+	panel.toggle_group("ses_root")
+	t.check(panel._sessions_box.get_child_count() == 2, "expanding shows them again")
+	panel.free()
+
+
+## The status bar is where the location lives, matching the reference's footer.
+func test_the_status_bar_carries_the_location(t) -> void:
+	var panel := SidebarPanel.new()
+	panel._ensure_built()
+	var store := _store_with([_created("ses_a", "lead")])
+	panel.refresh(store, false)
+	panel.set_location(store)
+	t.check(panel._status_label != null, "the rail has a status bar")
+	t.check(not panel._status_label.text.is_empty(), "the status bar says something")
+	t.check(
+		panel._status_label.text.find("active") != -1,
+		"the status bar reports activity"
+	)
+	# With no location reported it must still render rather than blank out.
+	t.check(panel._location_text(store) == "", "an unplaced store reports no location")
+	panel.free()
+
+
+## The location is only claimed when every visible session agrees on one.
+func test_a_shared_location_is_reported_and_a_split_one_is_not(t) -> void:
+	var panel := SidebarPanel.new()
+	panel._ensure_built()
+	var one := _store_with([{
+		"type": Wire.SESSION_CREATED, "sessionID": "ses_a",
+		"data": {"agent": "lead", "parentID": "", "location": {"directory": "/tmp/one"}},
+	}])
+	t.check(panel._location_text(one) == "/tmp/one", "one directory is shown as-is")
+	var two := _store_with([
+		{"type": Wire.SESSION_CREATED, "sessionID": "ses_a",
+		 "data": {"agent": "lead", "parentID": "", "location": {"directory": "/tmp/one"}}},
+		{"type": Wire.SESSION_CREATED, "sessionID": "ses_b",
+		 "data": {"agent": "qa", "parentID": "", "location": {"directory": "/tmp/two"}}},
+	])
+	var text := panel._location_text(two)
+	t.check(
+		text.find("/tmp") == -1,
+		"a split roster reports a count rather than picking one directory"
+	)
+	t.check(text.find("2") != -1, "the count names how many there are")
 	panel.free()

@@ -37,8 +37,29 @@ static func prompt(session_id: String) -> String:
 static func interrupt(session_id: String) -> String:
 	return "/api/session/%s/interrupt" % session_id
 
+## Switch the model used by subsequent steps. The service refuses the switch when
+## the current context cannot fit the target model, so this is a real request
+## rather than a local preference.
+static func switch_model(session_id: String) -> String:
+	return "/api/session/%s/model" % session_id
+
 static func subagents(parent_id: String) -> String:
 	return "/api/session/%s/subagent" % parent_id
+
+## Human attention. A session blocked on a question, a permission or a guardrail
+## review is answered through these. All three take a JSON body and answer 204.
+static func question_reply(session_id: String, request_id: String) -> String:
+	return "/api/session/%s/question/%s/reply" % [session_id, request_id]
+
+static func question_reject(session_id: String, request_id: String) -> String:
+	return "/api/session/%s/question/%s/reject" % [session_id, request_id]
+
+static func permission_reply(session_id: String, request_id: String) -> String:
+	return "/api/session/%s/permission/%s/reply" % [session_id, request_id]
+
+static func guardrail_reply(session_id: String, request_id: String) -> String:
+	return "/api/session/%s/guardrail/%s/reply" % [session_id, request_id]
+
 
 ## Durable session log. Read it as an SSE stream, not as a JSON request.
 static func log(session_id: String, after: int, follow: bool) -> String:

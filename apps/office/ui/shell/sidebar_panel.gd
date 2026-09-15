@@ -1,37 +1,36 @@
 ## The floating sidebar.
 ##
-## One rail carries everything the window header would have: the mode/connection
-## badge, the session list, the team, and the agent selector. It absorbs the
-## former `mode_badge.gd` and `status_panel.gd`, which is why the mode wording and
-## the F-08 legibility rules below are preserved rather than reinvented.
+## Shaped like the reference: a product pill with the icon actions beside it, a
+## primary action, then labelled sections holding a tree, and a status bar pinned
+## to the bottom.
 ##
-## Two rules are correctness, not styling:
-##   * DEMO must be unmistakable and must never read as LIVE.
-##   * selected and attention states must be legible without colour, so each one
-##     carries a text marker as well as a tint.
+## It absorbs what the removed window header held: the mode/connection badge and
+## the agent selector now live here. Two rules stay correctness rather than style:
+## DEMO must be unmistakable and must never read as LIVE, and selected and
+## attention states must be legible without colour, so each carries a text marker.
 class_name SidebarPanel
 extends PanelContainer
 
 signal session_selected(session_id: String)
 signal new_session_requested()
 signal agent_selected(agent_id: String)
+signal mode_toggle_requested()
 
 ## Text markers. These are what make state legible without colour (F-08).
 const MARK_SELECTED := "●"
 const MARK_UNSELECTED := "○"
 const MARK_ATTENTION := "!"
-const MARK_NONE := " "
+const MARK_GROUP_OPEN := "▾"
+const MARK_GROUP_CLOSED := "▸"
 
-## Wrapping labels need a known minimum width. An autowrap Label computes its
-## minimum height from its current width, so at zero width it reports one glyph
-## per line and inflates the whole panel's minimum height before the first
-## layout pass, which clamps every later size assignment.
-const WRAP_MIN_WIDTH := 240.0
+## A wrapping label needs a known minimum width, or at zero width it reports one
+## glyph per line and inflates the whole panel's minimum height.
+const WRAP_MIN_WIDTH := 200.0
 
-## Optional room lookup, injected by the composition root so this panel needs no
-## scene-tree knowledge of its own.
+## Optional room lookup, injected by the composition root.
 var zone_provider: Callable = Callable()
 
+var _product_button: Button
 var _mode_label: Label
 var _detail_label: Label
 var _new_button: Button
@@ -39,6 +38,10 @@ var _sessions_box: VBoxContainer
 var _team_box: VBoxContainer
 var _agent_button: Button
 var _agent_menu: PopupMenu
+var _status_label: Label
+## The location text, set from the store and shown in the status bar.
+var _location: String = ""
+var _collapsed: Dictionary = {}
 var _agents: Array[String] = []
 var _current_agent: String = ""
 var _built := false
@@ -48,27 +51,32 @@ var _store: OfficeStore
 ## Build the rail. Called from `_ready` and lazily from `refresh`, so a test can
 ## drive the panel without adding it to a scene tree.
 ##
-## The mode row, the detail line and the New session button are pinned; the lists
-## scroll. Two reasons: the mode must stay visible so DEMO can never scroll out of
-## sight, and the scrolling region bounds the panel's minimum height. Without
-## that bound a wrapping label reports one glyph per line while the panel is still
-## zero-width, the panel's minimum height explodes, and every later size
-## assignment is clamped to it.
+## The product pill, mode row and primary action are pinned; the lists scroll. The
+## mode must stay visible so DEMO can never scroll out of sight, and the scrolling
+## region bounds the panel's minimum height.
 func _ensure_built() -> void:
 	if _built:
 		return
 	_built = true
-	add_theme_stylebox_override("panel", OfficeTheme.panel_style())
+	add_theme_stylebox_override("panel", OfficeTheme.card_style())
+
 	var outer := VBoxContainer.new()
 	outer.add_theme_constant_override("separation", 10)
 
-	# --- mode row (pinned) --------------------------------------------------
-	var mode_row := HBoxContainer.new()
-	mode_row.add_theme_constant_override("separation", 8)
+	# --- product pill with its icon actions --------------------------------
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 6)
+	_product_button = OfficeTheme.pill_button("YCoding Office  ⌄")
+	_product_button.custom_minimum_size = Vector2(0, 34)
+	_product_button.pressed.connect(func(): mode_toggle_requested.emit())
+	head.add_child(_product_button)
+	var head_spacer := Control.new()
+	head_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(head_spacer)
 	_mode_label = Label.new()
-	_mode_label.add_theme_font_size_override("font_size", 14)
-	mode_row.add_child(_mode_label)
-	outer.add_child(mode_row)
+	_mode_label.add_theme_font_size_override("font_size", 12)
+	head.add_child(_mode_label)
+	outer.add_child(head)
 
 	_detail_label = Label.new()
 	_detail_label.add_theme_font_size_override("font_size", 11)
@@ -77,11 +85,13 @@ func _ensure_built() -> void:
 	_detail_label.custom_minimum_size = Vector2(WRAP_MIN_WIDTH, 0.0)
 	outer.add_child(_detail_label)
 
-	_new_button = OfficeTheme.button("+  New session", true)
+	_new_button = OfficeTheme.pill_button("✎   New session")
+	_new_button.custom_minimum_size = Vector2(0, 34)
+	_new_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_new_button.pressed.connect(func(): new_session_requested.emit())
 	outer.add_child(_new_button)
 
-	# --- scrolling lists ----------------------------------------------------
+	# --- scrolling sections -------------------------------------------------
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -91,30 +101,39 @@ func _ensure_built() -> void:
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(box)
 
-	box.add_child(OfficeTheme.heading("SESSIONS"))
 	_sessions_box = VBoxContainer.new()
 	_sessions_box.add_theme_constant_override("separation", 2)
+	box.add_child(OfficeTheme.section_label("Sessions"))
 	box.add_child(_sessions_box)
 
-	box.add_child(OfficeTheme.heading("TEAM"))
+	box.add_child(OfficeTheme.section_label("Team"))
 	_team_box = VBoxContainer.new()
 	_team_box.add_theme_constant_override("separation", 2)
 	box.add_child(_team_box)
 
-	# --- agent --------------------------------------------------------------
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(spacer)
-	box.add_child(OfficeTheme.heading("AGENT"))
-	_agent_button = OfficeTheme.button("No agent", false)
-	_agent_button.pressed.connect(_on_agent_pressed)
-	box.add_child(_agent_button)
-
 	outer.add_child(scroll)
+
+	# --- agent selector -----------------------------------------------------
+	_agent_button = OfficeTheme.pill_button("No agent  ⌄")
+	_agent_button.custom_minimum_size = Vector2(0, 32)
+	_agent_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_agent_button.add_theme_font_size_override("font_size", 13)
+	_agent_button.pressed.connect(_on_agent_pressed)
+	outer.add_child(_agent_button)
+
+	# --- status bar ---------------------------------------------------------
+	_status_label = Label.new()
+	_status_label.add_theme_font_size_override("font_size", 11)
+	_status_label.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	outer.add_child(_status_label)
+
 	add_child(outer)
 
-	# The popup is a child of the panel, not of the scrolling list, so it is not
-	# clipped by the scroll region.
+	# The popup is a child of the panel, not of the scrolling list, so the scroll
+	# region cannot clip it.
 	_agent_menu = PopupMenu.new()
 	_agent_menu.index_pressed.connect(_on_agent_index)
 	add_child(_agent_menu)
@@ -124,8 +143,7 @@ func _ready() -> void:
 	_ensure_built()
 
 
-## Rebuild the whole rail from the store. `playing` only chooses the detail line,
-## matching the badge this replaces.
+## Rebuild the whole rail from the store.
 func refresh(store: OfficeStore, playing: bool) -> void:
 	_ensure_built()
 	_store = store
@@ -135,6 +153,7 @@ func refresh(store: OfficeStore, playing: bool) -> void:
 	_refresh_sessions(store)
 	_refresh_team(store)
 	_refresh_agent_button()
+	_refresh_status(store)
 
 
 ## The exact text shown in the mode row, e.g. "DEMO · READY".
@@ -167,10 +186,43 @@ func set_agents(agent_ids: Array[String], current: String) -> void:
 	_refresh_agent_button()
 
 
+## Show the location every visible session shares.
+##
+## The office is a view over sessions and each session carries its own durable
+## directory, so a single path is only claimed when they actually agree. With more
+## than one directory the label reports the count instead of picking one.
+func set_location(store: OfficeStore) -> void:
+	_location = _location_text(store)
+	if _status_label != null and _store != null:
+		_refresh_status(_store)
+
+
+func _location_text(store: OfficeStore) -> String:
+	if store == null:
+		return ""
+	var locations := store.locations()
+	if locations.is_empty():
+		return ""
+	if locations.size() > 1:
+		return "%d locations" % locations.size()
+	return locations[0]
+
+
+## Collapse or expand a session group.
+func toggle_group(group_id: String) -> void:
+	_collapsed[group_id] = not bool(_collapsed.get(group_id, false))
+	if _store != null:
+		_refresh_sessions(_store)
+
+
+func is_group_collapsed(group_id: String) -> bool:
+	return bool(_collapsed.get(group_id, false))
+
+
 ## --- mode -------------------------------------------------------------------
 
 func _refresh_mode(store: OfficeStore, playing: bool) -> void:
-	_mode_label.text = "%s · %s" % [store.mode, _connection_text(store.connection_state)]
+	_mode_label.text = store.mode
 	# DEMO is a hard visual boundary, never a quiet label.
 	var demo := store.mode == OfficeStore.MODE_DEMO
 	_mode_label.add_theme_color_override(
@@ -180,20 +232,8 @@ func _refresh_mode(store: OfficeStore, playing: bool) -> void:
 		_detail_label.text = _detail_text(store, playing)
 		_detail_label.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
 		return
-	# An error outranks the routine detail line, matching the badge this replaces.
 	_detail_label.text = store.last_error
 	_detail_label.add_theme_color_override("font_color", OfficeTheme.DANGER)
-
-
-func _connection_text(state: String) -> String:
-	match state:
-		OfficeStore.CONNECTION_SYNCING:
-			return "SYNCING"
-		OfficeStore.CONNECTION_RECONNECTING:
-			return "RECONNECTING"
-		OfficeStore.CONNECTION_DISCONNECTED:
-			return "DISCONNECTED"
-	return "READY"
 
 
 func _detail_text(store: OfficeStore, playing: bool) -> String:
@@ -202,10 +242,25 @@ func _detail_text(store: OfficeStore, playing: bool) -> String:
 	return "Live playback" if playing else "Idle"
 
 
+## The status bar states the connection, so the reference's bottom strip has
+## something real to say.
+func _refresh_status(store: OfficeStore) -> void:
+	var connection := store.connection_state
+	var parts: Array[String] = []
+	if not _location.is_empty():
+		parts.append(_location)
+	parts.append("%s · %d active" % [connection, store.actor_list().size()])
+	_status_label.text = "  ·  ".join(parts)
+	_status_label.add_theme_color_override(
+		"font_color",
+		OfficeTheme.OK if connection == OfficeStore.CONNECTION_LIVE else OfficeTheme.TEXT_MUTED
+	)
+
+
 ## --- sessions ---------------------------------------------------------------
 
-## Roots first, each followed by its children. The store already exposes parent
-## identity per actor, so grouping needs no second source of truth.
+## Roots first, each followed by its children. A group is a root session, and a
+## group with children can be collapsed, which is the reference's tree behaviour.
 func _refresh_sessions(store: OfficeStore) -> void:
 	_clear(_sessions_box)
 	var actors := store.actor_list()
@@ -223,32 +278,39 @@ func _refresh_sessions(store: OfficeStore) -> void:
 		bucket.append(actor)
 		children[parent] = bucket
 	for root in roots:
-		_sessions_box.add_child(_session_row(root, false))
-		for child in children.get(root.identity.session_id, []):
+		var group_id := root.identity.session_id
+		var nested: Array = children.get(group_id, [])
+		_sessions_box.add_child(_group_row(root, nested.size()))
+		if is_group_collapsed(group_id):
+			continue
+		for child in nested:
 			_sessions_box.add_child(_session_row(child, true))
 
 
-func _session_row(actor: ActorPresentation, nested: bool) -> Control:
-	var selected := _is_selected(actor)
+## A root row: a disclosure marker, the selection marker, and the title.
+func _group_row(actor: ActorPresentation, child_count: int) -> Control:
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	if nested:
-		var indent := Control.new()
-		indent.custom_minimum_size = Vector2(16, 0)
-		row.add_child(indent)
-	var marker := Label.new()
-	marker.text = MARK_SELECTED if selected else MARK_UNSELECTED
-	marker.add_theme_font_size_override("font_size", 12)
-	marker.custom_minimum_size = Vector2(14, 0)
-	marker.add_theme_color_override(
-		"font_color", OfficeTheme.ACCENT if selected else OfficeTheme.TEXT_MUTED
-	)
-	row.add_child(marker)
+	row.add_theme_constant_override("separation", 4)
+	var selected := _is_selected(actor)
+	if child_count > 0:
+		var twisty := Button.new()
+		twisty.flat = true
+		twisty.text = MARK_GROUP_CLOSED if is_group_collapsed(actor.identity.session_id) else MARK_GROUP_OPEN
+		twisty.add_theme_font_size_override("font_size", 11)
+		twisty.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+		var group_id := actor.identity.session_id
+		twisty.pressed.connect(func(): toggle_group(group_id))
+		row.add_child(twisty)
+	else:
+		var pad := Control.new()
+		pad.custom_minimum_size = Vector2(14, 0)
+		row.add_child(pad)
+	row.add_child(_marker(selected))
 	var button := Button.new()
 	button.flat = true
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.text = _session_label(actor)
-	button.add_theme_font_size_override("font_size", 13)
+	button.add_theme_font_size_override("font_size", 14)
 	button.add_theme_color_override(
 		"font_color", OfficeTheme.TEXT if selected else OfficeTheme.TEXT_DIM
 	)
@@ -256,6 +318,45 @@ func _session_row(actor: ActorPresentation, nested: bool) -> Control:
 	button.pressed.connect(func(): session_selected.emit(session_id))
 	row.add_child(button)
 	return row
+
+
+## A nested row: indented, with the selection marker and presence.
+func _session_row(actor: ActorPresentation, nested: bool) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	if nested:
+		var indent := Control.new()
+		indent.custom_minimum_size = Vector2(28, 0)
+		row.add_child(indent)
+	var selected := _is_selected(actor)
+	row.add_child(_marker(selected))
+	var text := _session_label(actor)
+	var presence := Presence.label(actor.presence)
+	if not presence.is_empty():
+		text = "%s  ·  %s" % [text, presence]
+	var button := Button.new()
+	button.flat = true
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.text = text
+	button.add_theme_font_size_override("font_size", 13)
+	button.add_theme_color_override(
+		"font_color", OfficeTheme.TEXT if selected else OfficeTheme.TEXT_MUTED
+	)
+	var session_id := actor.identity.session_id
+	button.pressed.connect(func(): session_selected.emit(session_id))
+	row.add_child(button)
+	return row
+
+
+func _marker(selected: bool) -> Label:
+	var marker := Label.new()
+	marker.text = MARK_SELECTED if selected else MARK_UNSELECTED
+	marker.add_theme_font_size_override("font_size", 11)
+	marker.custom_minimum_size = Vector2(14, 0)
+	marker.add_theme_color_override(
+		"font_color", OfficeTheme.ACCENT if selected else OfficeTheme.TEXT_MUTED
+	)
+	return marker
 
 
 func _session_label(actor: ActorPresentation) -> String:
@@ -293,38 +394,25 @@ func _team_row(row: Dictionary) -> Control:
 	line.text = "%s  %s" % [str(row["glyph"]), _team_line(row, selected, attention)]
 	line.add_theme_color_override(
 		"font_color",
-		OfficeTheme.ACCENT_WARM if attention else (OfficeTheme.TEXT if selected else OfficeTheme.TEXT_DIM)
+		OfficeTheme.ACCENT_WARM if attention
+		else (OfficeTheme.TEXT if selected else OfficeTheme.TEXT_DIM)
 	)
 	line.pressed.connect(func(): session_selected.emit(session_id))
 	return line
 
 
 ## The row text. Selection and attention are both spelled out, so neither depends
-## on the colour tint above. Reads with defaults so a partial row degrades to a
-## plain label instead of raising.
+## on the colour tint above.
 func _team_line(row: Dictionary, selected: bool, attention: bool) -> String:
 	var parts := [str(row.get("name", "Agent"))]
-	var room := _room_for(str(row.get("session_id", "")))
-	if not room.is_empty():
-		parts.append(room)
+	var presence := str(row.get("presence_label", ""))
+	if not presence.is_empty():
+		parts.append(presence)
 	if attention:
 		parts.append("needs you")
 	if selected:
 		parts.append(MARK_SELECTED)
 	return "  ".join(parts)
-
-
-func _room_for(session_id: String) -> String:
-	if not zone_provider.is_valid():
-		return ""
-	return str(zone_provider.call(session_id))
-
-
-func _is_selected(actor: ActorPresentation) -> bool:
-	if _store == null:
-		return false
-	var current := _store.selected_actor()
-	return current != null and current.identity.session_id == actor.identity.session_id
 
 
 ## --- agent ------------------------------------------------------------------
@@ -342,8 +430,9 @@ func _refresh_agent_button() -> void:
 func _on_agent_pressed() -> void:
 	if _agents.is_empty():
 		return
-	var position := _agent_button.global_position + Vector2(0, _agent_button.size.y)
-	_agent_menu.position = Vector2i(position)
+	_agent_menu.position = Vector2i(
+		Vector2(_agent_button.global_position.x, _agent_button.global_position.y - 8.0)
+	)
 	_agent_menu.popup()
 
 
@@ -353,6 +442,13 @@ func _on_agent_index(index: int) -> void:
 	_current_agent = _agents[index]
 	_refresh_agent_button()
 	agent_selected.emit(_current_agent)
+
+
+func _is_selected(actor: ActorPresentation) -> bool:
+	if _store == null:
+		return false
+	var current := _store.selected_actor()
+	return current != null and current.identity.session_id == actor.identity.session_id
 
 
 func _clear(container: VBoxContainer) -> void:

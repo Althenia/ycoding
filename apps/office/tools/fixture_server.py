@@ -21,16 +21,20 @@ import base64
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 FIXTURE_VERSION = "fixture"
 SESSION_TITLE = "Fixture session"
 LOCATION_DIRECTORY = "/fixture/workspace"
 CREATED_BASE_MS = 1_700_000_000_000
 KEEP_ALIVE_SECONDS = 1.0
+## How often the feed checks for newly published events.
+PUSH_POLL_SECONDS = 0.01
 AUTH_USERNAME = "ycoding"
 WWW_AUTHENTICATE = 'Basic realm="Secure Area"'
 STREAM_HEADERS = [
@@ -53,6 +57,25 @@ def wait(seconds):
     threading.Event().wait(seconds)
 
 
+def read_stream(url, password, seconds):
+    """Read SSE frames for a bounded time. Returns the raw lines seen."""
+    stream = open_stream(url, password, timeout=0.5)
+    lines = []
+    deadline = time.time() + seconds
+    try:
+        while time.time() < deadline:
+            try:
+                raw = stream.readline()
+            except (TimeoutError, OSError):
+                continue
+            if not raw:
+                break
+            lines.append(raw.decode("utf-8", "replace").rstrip("\n"))
+    finally:
+        stream.close()
+    return lines
+
+
 class FixtureState:
     """Mutable fixture data. Every read and write takes the same lock."""
 
@@ -63,6 +86,9 @@ class FixtureState:
         self.counter = 0
         self.sessions = {}
         self.active = {}
+        # Live subscribers, mirroring the real server's feed: the connected frame
+        # is written first, then every event published afterwards is pushed.
+        self.subscribers = []
 
     def _next(self):
         self.counter += 1
@@ -83,7 +109,20 @@ class FixtureState:
             "data": data,
         }
         record["events"].append(event)
+        for queue in list(self.subscribers):
+            queue.append(event)
         return event
+
+    def subscribe(self):
+        with self.lock:
+            queue = []
+            self.subscribers.append(queue)
+            return queue
+
+    def unsubscribe(self, queue):
+        with self.lock:
+            if queue in self.subscribers:
+                self.subscribers.remove(queue)
 
     def connected_event(self):
         with self.lock:
@@ -163,6 +202,15 @@ class FixtureState:
             events = [event for event in record["events"] if event["durable"]["seq"] > after]
             watermark = {"type": "log.synced", "aggregateID": session_id, "seq": record["seq"]}
             return events, watermark
+
+    def switch_model(self, session_id, model):
+        with self.lock:
+            record = self.sessions.get(session_id)
+            if record is None:
+                return None
+            record["info"]["model"] = dict(model)
+            record["info"]["time"]["updated"] = self._now()
+            return record["info"]
 
     def admit_prompt(self, session_id, payload):
         with self.lock:
@@ -342,6 +390,20 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if admitted is None:
                 return self._json(404, {"message": "Unknown session"})
             return self._json(200, {"data": admitted})
+        if url.path.startswith("/api/session/") and url.path.endswith("/model"):
+            session_id = url.path[len("/api/session/") : -len("/model")]
+            body = self._read_json()
+            if body is None:
+                return self._json(400, {"message": "Invalid JSON body"})
+            model = body.get("model")
+            # Mirror the real route's contract: the payload is a Model.Ref with
+            # id and providerID, and variant only when one was chosen.
+            if not isinstance(model, dict) or not model.get("id") or not model.get("providerID"):
+                return self._json(400, {"message": "model requires id and providerID"})
+            switched = state.switch_model(session_id, model)
+            if switched is None:
+                return self._json(404, {"message": "Unknown session"})
+            return self._json(200, {"data": switched})
         if url.path.startswith("/api/session/") and url.path.endswith("/interrupt"):
             session_id = url.path[len("/api/session/") : -len("/interrupt")]
             if not state.interrupt(session_id):
@@ -366,14 +428,30 @@ class FixtureHandler(BaseHTTPRequestHandler):
     # -- streams ------------------------------------------------------------
 
     def _event_stream(self):
+        queue = self.server.state.subscribe()
         self._open_stream()
         try:
             self._write_frame(self.server.state.connected_event())
+            idle = 0.0
             while True:
-                wait(KEEP_ALIVE_SECONDS)
-                self._write_comment("keep-alive")
+                # Push promptly: a published event must not wait for the keep-alive
+                # interval, or a client would see it up to a second late.
+                drained = False
+                while queue:
+                    self._write_frame(queue.pop(0))
+                    drained = True
+                if drained:
+                    idle = 0.0
+                    continue
+                wait(PUSH_POLL_SECONDS)
+                idle += PUSH_POLL_SECONDS
+                if idle >= KEEP_ALIVE_SECONDS:
+                    self._write_comment("keep-alive")
+                    idle = 0.0
         except OSError:
             return
+        finally:
+            self.server.state.unsubscribe(queue)
 
     def _log_stream(self, session_id, query):
         state = self.server.state
@@ -522,7 +600,45 @@ def run_selftest():
         else:
             record("session-create", True)
 
-        request("POST", base + "/api/session/%s/prompt" % session_id, password, {"text": "fixture prompt"})
+        status, _, _ = request("POST", base + "/api/session/%s/prompt" % session_id, password, {"text": "fixture prompt"})
+        record("prompt admitted", status == 200, "status=%s" % status)
+        status, _, switched = request(
+            "POST",
+            base + "/api/session/%s/model" % session_id,
+            password,
+            {"model": {"providerID": "openrouter", "id": "deepseek/deepseek-v4.1-flash", "variant": "high"}},
+        )
+        record("model switch accepted", status == 200, "status=%s" % status)
+        record(
+            "model switch is durable",
+            switched.get("data", {}).get("model", {}).get("id") == "deepseek/deepseek-v4.1-flash",
+            "body=%s" % switched,
+        )
+        status, _, _ = request(
+            "POST",
+            base + "/api/session/%s/model" % session_id,
+            password,
+            {"model": {"id": "no-provider"}},
+        )
+        record("model switch rejects an incomplete ref", status == 400, "status=%s" % status)
+
+        # The feed must deliver events published after a client subscribes. A feed
+        # that only ever sends the connected frame looks identical to a working one
+        # until something needs to arrive live.
+        live_lines = []
+        reader = threading.Thread(
+            target=lambda: live_lines.extend(read_stream(base + "/api/event", password, 4)),
+            daemon=True,
+        )
+        reader.start()
+        wait(0.3)
+        request("POST", base + "/api/session/%s/prompt" % session_id, password, {"text": "live push"})
+        reader.join(timeout=5)
+        record(
+            "feed delivers events published after subscribing",
+            any("session.input.admitted" in line for line in live_lines),
+            "lines=%d" % len(live_lines),
+        )
 
         status, _, snapshot = request("GET", base + "/api/session/%s/snapshot" % session_id, password)
         watermark = snapshot.get("watermark", {})

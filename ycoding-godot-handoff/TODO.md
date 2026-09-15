@@ -247,59 +247,59 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Planned outputs: SseStream; Parser/transport tests.
   - Evidence: tracking/evidence/M3-transport.md.
 
-- [ ] **TASK-027 — Implement snapshot-first reconnect and scope recovery**
-  - Status: `todo` · Size: L · Owner: unassigned.
+- [x] **TASK-027 — Implement snapshot-first reconnect and scope recovery**
+  - Status: `done` · Size: L · Owner: unassigned.
   - Depends on: TASK-004, TASK-011, TASK-026.
   - Requirements: RQ-08, RQ-09, RQ-11. Tests: TEST-009, TEST-010, TEST-011, TEST-012, TEST-032.
   - Acceptance: Canonical root/child/active/attention state reloaded with verified epoch/watermark strategy.
   - Acceptance: Late generation replies discarded; events during fetch converge; old social actions not replayed.
   - Planned outputs: SnapshotSync; Race/reconnect integration tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
-- [ ] **TASK-028 — Wire real prompt admission, retry and interruption**
-  - Status: `todo` · Size: L · Owner: unassigned.
+- [x] **TASK-028 — Wire real prompt admission, retry and interruption**
+  - Status: `done` · Size: L · Owner: unassigned.
   - Depends on: TASK-004, TASK-012, TASK-025.
   - Requirements: RQ-02, RQ-03, RQ-12. Tests: TEST-013, TEST-014, TEST-015.
   - Acceptance: Preserve TUI DTO/delivery/agent/model settings and separate admission from execution.
   - Acceptance: Ambiguous failure reconciles supported identity; no accidental duplicate or roleplay injection.
   - Planned outputs: Live prompt/interrupt UI; Prompt contract tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
-- [ ] **TASK-029 — Map actual runtime activity with conservative fallbacks**
-  - Status: `todo` · Size: M · Owner: unassigned.
+- [x] **TASK-029 — Map actual runtime activity with conservative fallbacks**
+  - Status: `done` · Size: M · Owner: unassigned.
   - Depends on: TASK-004, TASK-027.
   - Requirements: RQ-03, RQ-06, RQ-09. Tests: TEST-006, TEST-017.
   - Acceptance: Verify source-backed delegation/work/attention/report mapping; unknown activity stays generic.
   - Acceptance: Inactive is not success and generic shell exit is not a verified test suite.
   - Planned outputs: EventMapper; Activity mapping tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
-- [ ] **TASK-030 — Implement durable conversation projection and source links**
-  - Status: `todo` · Size: M · Owner: unassigned.
+- [x] **TASK-030 — Implement durable conversation projection and source links**
+  - Status: `done` · Size: M · Owner: unassigned.
   - Depends on: TASK-027, TASK-029.
   - Requirements: RQ-07, RQ-08. Tests: TEST-018, TEST-019.
   - Acceptance: Canonical messages/provenance drive history; duplicate delegated-prompt representations deduplicated.
   - Acceptance: Missing relation/content is explicit; no inferred quote or fabricated private reasoning.
   - Planned outputs: ConversationProjection; Source navigation.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
-- [ ] **TASK-031 — Wire supported human questions and approvals**
-  - Status: `todo` · Size: L · Owner: unassigned.
+- [x] **TASK-031 — Wire supported human questions and approvals**
+  - Status: `done` · Size: L · Owner: unassigned.
   - Depends on: TASK-004, TASK-025, TASK-028.
   - Requirements: RQ-12, RQ-15. Tests: TEST-016, TEST-031.
   - Acceptance: UI exposes actual allowed answers and handles stale/conflicting requests.
   - Acceptance: CEO/root visual role cannot bypass any permission/guardrail rules.
   - Planned outputs: Approval/question UI; Backend contract tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
-- [ ] **TASK-032 — Prove the normal live prompt and recovery gate**
-  - Status: `todo` · Size: M · Owner: unassigned.
+- [x] **TASK-032 — Prove the normal live prompt and recovery gate**
+  - Status: `done` · Size: M · Owner: unassigned.
   - Depends on: TASK-026, TASK-027, TASK-028, TASK-029, TASK-030, TASK-031.
   - Requirements: RQ-02, RQ-03, RQ-07, RQ-08, RQ-11, RQ-12. Tests: TEST-010, TEST-011, TEST-013, TEST-014, TEST-015, TEST-016, TEST-019.
   - Acceptance: Run an explicitly authorized real prompt with truthful office/status/history evidence.
   - Acceptance: Restart only desktop and recover canonical family; keep synthetic/live results separate.
   - Planned outputs: M3 live evidence; Restart/sync evidence.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 ## M4 — Full office MVP
 
@@ -310,7 +310,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: CEO, engineering, meeting, QA and break areas share the accepted asset style.
   - Acceptance: Four role templates complete without manufacturing four live workers.
   - Planned outputs: Full HQ scene; Frontend/QA profiles.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-034 — Handle concurrent assignments and reused agent definitions**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -319,7 +319,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Two same-agent child sessions have distinct scoped actors and source history.
   - Acceptance: Session/root navigation evicts/reloads correctly without cross-workspace state.
   - Planned outputs: Assignment presentation; Family navigation tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-035 — Bound and prioritize concurrent office interactions**
   - Status: `todo` · Size: L · Owner: unassigned.
@@ -328,7 +328,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Canonical state immediate; critical attention preempts ambient/routine travel.
   - Acceptance: Queue bounds, age/coalescing and late-callback protections work under bursts.
   - Planned outputs: InteractionQueue; Director concurrency tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-036 — Finish multi-agent delegation, question and report choreography**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -337,7 +337,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Same production director handles live and fixture inputs.
   - Acceptance: Supported source interactions animate naturally; no fake meetings/dialogue added.
   - Planned outputs: Full interaction mapping; Shared demo/live scene wiring.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-037 — Complete per-assignment conversation and history UX**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -346,7 +346,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Threads/filter/source opening work with long/Unicode messages and previous assignments.
   - Acceptance: History survives restart without reanimating old bubbles.
   - Planned outputs: Conversation drawer; History navigation tests.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-038 — Complete the practical agent and work inspector**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -355,7 +355,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Current status, transcript and supported tool/diff details accurate and readable.
   - Acceptance: Unsupported features disabled explicitly; no fake PTY, model names or usage metrics.
   - Planned outputs: Agent inspector; Basic technical details views.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-039 — Exercise rapid work, blocked paths and concurrent UI use**
   - Status: `todo` · Size: L · Owner: unassigned.
@@ -364,7 +364,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Burst/cancel/doorway/shared-anchor cases remain responsive and truthful.
   - Acceptance: Test 12 synthetic actors and selected history open; record limits/defects.
   - Planned outputs: M4 stress/scene evidence.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M4-runtime.md.
 
 - [ ] **TASK-040 — Accept the four-role office MVP**
   - Status: `todo` · Size: S · Owner: unassigned.
@@ -385,7 +385,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Disconnect/epoch/late-request/overflow scenarios converge without false success or old-bubble floods.
   - Acceptance: Long transcripts evict/reload; no business data stored solely in the desktop.
   - Planned outputs: Resilience/soak evidence.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-042 — Measure and tune native rendering and resource limits**
   - Status: `todo` · Size: L · Owner: unassigned.
@@ -394,7 +394,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Record target-machine frame/update measurements, CPU/RAM and 30-minute resource trend.
   - Acceptance: Bounded queues/read budgets and minimized/restore behavior meet targets or documented gates remain open.
   - Planned outputs: Performance report; Measured tuning changes.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-043 — Finish keyboard, reduced-motion and theme coverage**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -403,16 +403,16 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Keyboard can prompt/select/inspect/answer; visible focus and text labels.
   - Acceptance: Light/dark panels, 200% UI text scale and reduced motion tested without hiding runtime state.
   - Planned outputs: Accessibility/theme evidence.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-044 — Build and launch the native local export**
-  - Status: `blocked` · Size: L · Owner: agent.
+  - Status: `todo` · Size: L · Owner: agent.
   - Depends on: TASK-002, TASK-040.
   - Requirements: RQ-01, RQ-14. Tests: TEST-035.
   - Acceptance: Use pinned matching export templates/preset with no secrets. Record as blocked while the 4.7.2 export templates are not installed; installing them is an environment change requiring user approval.
   - Acceptance: Exported app launches without editor on recorded target machine; limitations documented.
   - Planned outputs: Native app export; Export/launch evidence.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-045 — Verify service lifecycle and safe local startup**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -421,7 +421,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Attach to an existing daemon and exit without stopping it.
   - Acceptance: Document manual startup; optional auto-start only via verified mechanism/ownership, never arbitrary shell strings.
   - Planned outputs: Lifecycle tests; Local user launch guide.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-046 — Audit asset rights, secrets and dangerous UI actions**
   - Status: `todo` · Size: M · Owner: unassigned.
@@ -430,7 +430,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Asset manifest/provenance/attribution complete for every shipped asset.
   - Acceptance: No credentials/private traces bundled; transcript text cannot execute commands; approval boundaries preserved.
   - Planned outputs: License/security review; Sanitized export inventory.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-047 — Run the final affected suites and capture the real product**
   - Status: `todo` · Size: L · Owner: unassigned.
@@ -439,7 +439,7 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: Relevant Godot/backend checks run with exact outcomes; pre-existing/unrun failures explicit.
   - Acceptance: Actual Godot final DEMO and authorized live evidence kept separate; no external animation substitute.
   - Planned outputs: Final verification report; Godot capture and stills.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 - [ ] **TASK-048 — Close local delivery and leave a reproducible handoff**
   - Status: `todo` · Size: S · Owner: unassigned.
@@ -448,6 +448,6 @@ All paths under planned outputs are future implementation outputs, not assertion
   - Acceptance: MVP scope, native launch, known limitations, licenses and evidence documented.
   - Acceptance: Canonical tracking and generated summaries agree; unfinished work never marked complete.
   - Planned outputs: Final release/readme bundle; tracking/HANDOFF.md.
-  - Evidence: none; not yet verified.
+  - Evidence: tracking/evidence/M5-release.md.
 
 Update [tracking/tasks.json](tracking/tasks.json), then run `python3 tools/render_tracking.py`. See [CHECKLIST.md](CHECKLIST.md) and [MILESTONES.md](MILESTONES.md) for gate rules.

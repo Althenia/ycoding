@@ -21,9 +21,41 @@ var world: OfficeWorld
 func _draw() -> void:
 	if world == null:
 		return
+	_draw_zone_labels()
 	_draw_selection()
 	_draw_glyphs()
 	_draw_notices()
+
+
+## A floating tag naming each zone, centred in it.
+##
+## Drawn first, so an actor or a bubble always sits above its own zone's label.
+## Only zones with a name are drawn: circulation is deliberately unlabelled.
+func _draw_zone_labels() -> void:
+	var font := ThemeDB.fallback_font
+	for zone in OfficeWorld.ZONES:
+		var id := str(zone["id"])
+		var label := str(OfficeWorld.ZONE_LABELS.get(id, ""))
+		if label.is_empty():
+			continue
+		var rect: Rect2i = zone["rect"]
+		var centre := Vector2(rect.get_center()) * TILE
+		var size := font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, FONT_SIZE)
+		var box := Rect2(
+			centre - Vector2(size.x * 0.5 + PAD, size.y * 0.5 + PAD * 0.5),
+			Vector2(size.x + PAD * 2.0, size.y + PAD)
+		)
+		draw_rect(box, Color(0.09, 0.10, 0.13, 0.72), true)
+		draw_rect(box, Color(0.55, 0.60, 0.72, 0.55), false, 1.0)
+		draw_string(
+			font,
+			box.position + Vector2(PAD, size.y),
+			label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			FONT_SIZE,
+			Color(0.90, 0.92, 0.96, 0.92)
+		)
 
 
 func _draw_selection() -> void:

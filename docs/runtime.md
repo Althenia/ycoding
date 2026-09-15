@@ -612,6 +612,37 @@ The TUI is the only release surface and currently includes:
 
 TUI-visible state must rehydrate from durable or canonical API state after process restart. A feature that appears only after visiting a child session or reopening a dialog is a defect unless the interaction itself is the explicit trigger.
 
+## Native desktop client
+
+The Godot client under `apps/office` is a **presentation surface** with no
+execution authority. It owns no runtime state; it reads the same HTTP/SSE
+contract as the TUI and performs no persistence of its own.
+
+- **DEMO** is synthetic playback from a fixture. It performs no mutation, and the
+  store exposes no mutation method in that mode.
+- **LIVE** attaches to an existing local service and is entered only on an
+  explicit request; DEMO never becomes LIVE on its own. The office attaches to a
+  service but never starts or stops one.
+- In LIVE the client performs the session mutations the UI exposes: prompting,
+  model switching, and answering human attention. A refusal returned by the
+  service is reported to the user rather than swallowed.
+- The global event feed is volatile by contract, so a reconnect is **not** a
+  resume. A dropped feed or a changed `sourceEpoch` marks the projection
+  incomplete and requires a canonical reload; only a completed reload clears it.
+- A canonical reload re-lists the sessions and replays each one's durable log in
+  order, and completes only when every requested log has answered. A partial read
+  never clears the incomplete marking.
+- Human attention (questions, permissions, guardrails) is durable state a session
+  is blocked on. Replies are shaped by the schema, not the UI: permission and
+  guardrail requests offer exactly `once`/`always`/`reject`, and a question's
+  options are the ones the runtime supplied.
+- Every room in the office is justified by a signal that sends an actor there.
+  A zone with no driver is decoration and is not kept.
+- Motion is a presentation preference persisted under `user://`, exposed beside
+  the panel toggles. Reduced motion still moves an actor to its destination and
+  still faces it; it removes the interpolation and the walk cycle, never the
+  truth about where an agent is.
+
 ## Known boundaries
 
 - Session execution placement is process-local; clustering is not implemented.

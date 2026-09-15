@@ -31,6 +31,7 @@ func run(t) -> void:
 	test_notice_bubble_contains_its_text(t)
 	test_notice_bubble_is_centred_on_its_actor(t)
 	test_overlay_draws_above_every_other_layer(t)
+	test_working_zones_are_named_and_circulation_is_not(t)
 	test_clicking_an_actor_opens_its_source(t)
 	test_clicking_a_notice_bubble_opens_its_source(t)
 	test_clicking_empty_floor_selects_nothing(t)
@@ -276,3 +277,29 @@ func _image(path: String) -> Image:
 		return null
 	var texture: Texture2D = load(path)
 	return null if texture == null else texture.get_image()
+
+
+## Every working zone is named, and circulation is not.
+##
+## The reference labels its clusters so a viewer learns the plan without a legend.
+## Labelling a walkway would add noise rather than meaning, so reception and the
+## corridor must stay unlabelled.
+func test_working_zones_are_named_and_circulation_is_not(t) -> void:
+	var named := OfficeWorld.ZONE_LABELS
+	t.check(not named.is_empty(), "some zones are named")
+	for zone in OfficeWorld.ZONES:
+		var id := str(zone["id"])
+		if id.begins_with("reception") or id == "corridor":
+			t.check(
+				not named.has(id),
+				"circulation zone %s is deliberately unlabelled" % id
+			)
+			continue
+		t.check(named.has(id), "working zone %s has a name" % id)
+		t.check(not str(named[id]).is_empty(), "zone %s has a non-empty name" % id)
+	# A label for a zone that does not exist would never be drawn.
+	var zone_ids := {}
+	for zone in OfficeWorld.ZONES:
+		zone_ids[str(zone["id"])] = true
+	for id in named:
+		t.check(zone_ids.has(str(id)), "label %s names a real zone" % id)

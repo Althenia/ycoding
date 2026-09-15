@@ -30,24 +30,24 @@ extends RefCounted
 ##
 ## The rail takes about a fifth of the frame at 1600x900. At 320 it read as a
 ## dominant column rather than a floating panel; 264 leaves the office legible.
-const SIDEBAR_W := 264.0
+const SIDEBAR_W := 272.0
 const SIDEBAR_MARGIN := 16.0
 ## The sidebar spans the window height minus its margins.
 const SIDEBAR_MARGIN_Y := 16.0
 ## Space kept between the sidebar and the content area's left edge.
 const GAP := 12.0
 
-## Composer: about 42% of the content area, clamped, centred in that area, and
+## Composer: about half of the content area, clamped, centred in that area, and
 ## floated above the bottom.
 ##
 ## It centres in the space EAST of the sidebar, not in the window. Centring in
 ## the window would push it under the sidebar on a narrow display, and the
 ## reference this design follows centres it in the content area too.
 const COMPOSER_SHARE := 0.50
-const COMPOSER_MIN_W := 440.0
-const COMPOSER_MAX_W := 680.0
-const COMPOSER_H := 96.0
-const COMPOSER_BOTTOM := 44.0
+const COMPOSER_MIN_W := 460.0
+const COMPOSER_MAX_W := 720.0
+const COMPOSER_H := 116.0
+const COMPOSER_BOTTOM := 40.0
 
 ## The chrome-toggle cluster: hide and show the panels without leaving the office.
 ##

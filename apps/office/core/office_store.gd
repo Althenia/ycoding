@@ -34,6 +34,13 @@ var interactions: Array[Dictionary] = []
 var seen_interaction_ids: Dictionary = {}
 var root_session_id: String = ""
 var last_error: String = ""
+## Set when the projection is known to be incomplete, e.g. after a reconnect that
+## could not be resumed. Cleared only by a completed reload.
+var stale: bool = false
+
+## Requests a session is blocked on. Separate from `interactions`, which records
+## history: a request is live state that must be answerable and then retired.
+var attention: AttentionQueue = AttentionQueue.new()
 
 
 func actor_for(session_id: String) -> ActorPresentation:
@@ -406,6 +413,13 @@ func apply_task_change(session_id: String, data: Dictionary) -> bool:
 		Wire.CHANGE_QUESTION_ASKED:
 			if actor != null:
 				actor.attention_required = true
+			var asked: Dictionary = change.get("question", {})
+			attention.push(
+				AttentionQueue.KIND_QUESTION,
+				str(asked.get("id", "")),
+				session_id,
+				asked
+			)
 			var question: Dictionary = change.get("question", {})
 			record_interaction(
 				{
@@ -420,6 +434,8 @@ func apply_task_change(session_id: String, data: Dictionary) -> bool:
 		Wire.CHANGE_QUESTION_ANSWERED:
 			if actor != null:
 				actor.attention_required = false
+			# The runtime answered it, so it is no longer answerable here.
+			attention.resolve(str((change.get("answer", {}) as Dictionary).get("questionID", "")))
 			var answer: Dictionary = change.get("answer", {})
 			record_interaction(
 				{
@@ -484,7 +500,53 @@ func record_interaction(item: Dictionary) -> void:
 
 ## An epoch change discards comparable cursors and cosmetic sequences without
 ## discarding durable history.
+## Reconcile a reconnect.
+##
+## The global feed is volatile by contract: events during a disconnection are
+## missed, and a restarted service has a NEW epoch. So a reconnect is not a
+## resume — the projection may have holes. The honest response is to discard the
+## projection and reload it canonically, which is what this marks.
+##
+## `stale` is deliberately a one-way flag: only a completed reload clears it, so
+## no layer can quietly present a projection it knows is incomplete.
+func mark_stale() -> void:
+	stale = true
+	connection_state = CONNECTION_RECONNECTING
+	for actor in actors.values():
+		actor.interaction_token += 1
+		actor.queue_generation += 1
+
+
+## Replace the projection with canonically reloaded state.
+##
+## The epoch and watermark come from the reload, not from the caller's memory, so
+## the store never claims a watermark it has not actually reached.
+func adopt_reload(reloaded: Array, new_epoch: String, _watermark: int = 0) -> void:
+	actors.clear()
+	interactions.clear()
+	seen_interaction_ids.clear()
+	attention.clear()
+	root_session_id = ""
+	last_error = ""
+	source_epoch = new_epoch
+	stale = false
+	for entry in reloaded:
+		if entry is Dictionary:
+			var event: Dictionary = entry
+			apply(event)
+	connection_state = CONNECTION_LIVE
+
+
+## True while the projection is known to be incomplete after a reconnect.
+##
+## Presentation may keep drawing, but anything claiming completeness must check
+## this first.
+func is_stale() -> bool:
+	return stale
+
+
 func invalidate_epoch(new_epoch: String) -> void:
+	stale = true
 	source_epoch = new_epoch
 	for actor in actors.values():
 		actor.interaction_token += 1

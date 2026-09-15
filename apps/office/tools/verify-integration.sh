@@ -44,10 +44,15 @@ echo "fixture server: http://$BASE"
 "$GODOT_BIN" --headless --path "$PROJECT" --script res://tests/integration/transport_contract.gd -- "--base=http://$BASE" \
 	>"$LOG_DIR/integration.log" 2>&1
 CODE=$?
+"$GODOT_BIN" --headless --path "$PROJECT" --script res://tests/integration/live_attach.gd -- "--base=http://$BASE" \
+	>"$LOG_DIR/live_attach.log" 2>&1
+LIVE_CODE=$?
+if [ "$LIVE_CODE" -ne 0 ]; then CODE=$LIVE_CODE; fi
 
 errors=$(grep -cE "SCRIPT ERROR|Parse Error|Compile Error" "$LOG_DIR/integration.log" 2>/dev/null || true)
 printf 'integration    exit=%s engine_errors=%s\n' "$CODE" "$errors"
 grep -E "INTEG:|FAIL:" "$LOG_DIR/integration.log" | sed 's/^/  /'
+grep -E "LIVE-ATTACH:|FAIL:" "$LOG_DIR/live_attach.log" | sed 's/^/  /'
 
 if [ "$CODE" -ne 0 ] || [ "$errors" -ne 0 ]; then
 	echo "  failing output: $LOG_DIR/integration.log"

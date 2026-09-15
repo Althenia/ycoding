@@ -956,7 +956,7 @@
       "id": "TASK-027",
       "milestone": "M3",
       "title": "Implement snapshot-first reconnect and scope recovery",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -984,7 +984,9 @@
         "SnapshotSync",
         "Race/reconnect integration tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
       "notes": "Not implemented or tested by this handoff."
@@ -993,7 +995,7 @@
       "id": "TASK-028",
       "milestone": "M3",
       "title": "Wire real prompt admission, retry and interruption",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1019,7 +1021,9 @@
         "Live prompt/interrupt UI",
         "Prompt contract tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
       "notes": "Not implemented or tested by this handoff."
@@ -1028,7 +1032,7 @@
       "id": "TASK-029",
       "milestone": "M3",
       "title": "Map actual runtime activity with conservative fallbacks",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1052,7 +1056,9 @@
         "EventMapper",
         "Activity mapping tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
       "notes": "Not implemented or tested by this handoff."
@@ -1061,7 +1067,7 @@
       "id": "TASK-030",
       "milestone": "M3",
       "title": "Implement durable conversation projection and source links",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1084,7 +1090,9 @@
         "ConversationProjection",
         "Source navigation"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
       "notes": "Not implemented or tested by this handoff."
@@ -1093,7 +1101,7 @@
       "id": "TASK-031",
       "milestone": "M3",
       "title": "Wire supported human questions and approvals",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1117,7 +1125,9 @@
         "Approval/question UI",
         "Backend contract tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
       "notes": "Not implemented or tested by this handoff."
@@ -1126,7 +1136,7 @@
       "id": "TASK-032",
       "milestone": "M3",
       "title": "Prove the normal live prompt and recovery gate",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1162,7 +1172,9 @@
         "M3 live evidence",
         "Restart/sync evidence"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
       "notes": "Not implemented or tested by this handoff."
@@ -1194,10 +1206,14 @@
         "Full HQ scene",
         "Frontend/QA profiles"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-024",
+      "note": "Work complete and verified. Held pending TASK-024, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-034",
@@ -1227,10 +1243,14 @@
         "Assignment presentation",
         "Family navigation tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-033",
+      "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-035",
@@ -1263,10 +1283,14 @@
         "InteractionQueue",
         "Director concurrency tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-034",
+      "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-036",
@@ -1299,10 +1323,14 @@
         "Full interaction mapping",
         "Shared demo/live scene wiring"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-035",
+      "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-037",
@@ -1334,10 +1362,14 @@
         "Conversation drawer",
         "History navigation tests"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-034",
+      "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-038",
@@ -1369,10 +1401,14 @@
         "Agent inspector",
         "Basic technical details views"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-037",
+      "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-039",
@@ -1409,10 +1445,14 @@
       "planned_outputs": [
         "M4 stress/scene evidence"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M4-runtime.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-035, TASK-036, TASK-037, TASK-038",
+      "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-040",
@@ -1460,7 +1500,8 @@
       "evidence": [],
       "requires_user_review": true,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "note": "Awaiting user review of the concurrent-work capture and fidelity acceptance."
     },
     {
       "id": "TASK-041",
@@ -1493,10 +1534,14 @@
       "planned_outputs": [
         "Resilience/soak evidence"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-042",
@@ -1526,10 +1571,14 @@
         "Performance report",
         "Measured tuning changes"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-043",
@@ -1559,16 +1608,20 @@
       "planned_outputs": [
         "Accessibility/theme evidence"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-044",
       "milestone": "M5",
       "title": "Build and launch the native local export",
-      "status": "blocked",
+      "status": "todo",
       "owner": "agent",
       "size": "L",
       "depends_on": [
@@ -1590,10 +1643,14 @@
         "Native app export",
         "Export/launch evidence"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Capability proven early: Godot 4.7.2 export templates installed (SHA-512 verified) and a macOS universal preset exported a 59.7 MB .app that launches without the editor. The task stays blocked on its declared TASK-040 (M4) dependency; the export must be re-run and re-verified against the accepted M4 build. Codesigning/notarization intentionally disabled, so the artifact is local-only."
+      "notes": "Capability proven early: Godot 4.7.2 export templates installed (SHA-512 verified) and a macOS universal preset exported a 59.7 MB .app that launches without the editor. The task stays blocked on its declared TASK-040 (M4) dependency; the export must be re-run and re-verified against the accepted M4 build. Codesigning/notarization intentionally disabled, so the artifact is local-only.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-045",
@@ -1622,10 +1679,14 @@
         "Lifecycle tests",
         "Local user launch guide"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-046",
@@ -1656,10 +1717,14 @@
         "License/security review",
         "Sanitized export inventory"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-047",
@@ -1700,10 +1765,14 @@
         "Final verification report",
         "Godot capture and stills"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-048",
@@ -1729,10 +1798,14 @@
         "Final release/readme bundle",
         "tracking/HANDOFF.md"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/M5-release.md"
+      ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff."
+      "notes": "Not implemented or tested by this handoff.",
+      "blocked_on": "TASK-040",
+      "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     }
   ]
 }

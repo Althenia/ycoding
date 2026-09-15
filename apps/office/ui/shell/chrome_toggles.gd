@@ -17,6 +17,7 @@ signal toggled(name: String, hidden: bool)
 const ENTRIES := [
 	{"name": "sidebar", "label": "Panel"},
 	{"name": "composer", "label": "Prompt"},
+	{"name": "motion", "label": "Motion"},
 ]
 
 var _hidden: Dictionary = {}

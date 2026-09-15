@@ -578,6 +578,21 @@ Ambient instructions currently come from:
 
 The top-level `instructions` field is Schema-accepted but not connected to current instruction discovery.
 
+## Native desktop client
+
+`apps/office` needs no configuration of its own. In LIVE it reads the same local
+service registration the CLI writes, so the address and password are not retyped.
+`YCODING_SERVICE_FILE` overrides the registration path; otherwise the search
+mirrors the client contract: `XDG_STATE_HOME/ycoding/service.json`, then
+`~/.local/state/ycoding/service.json`. The registration lives under the **state**
+directory, not the config directory.
+
+The client holds no credentials of its own, writes no runtime configuration, and
+never starts or stops a service.
+
+It persists exactly one presentation preference: reduced motion, under the
+Godot-managed `user://` path. It carries no runtime state.
+
 ## References
 
 Reference names cannot contain `/`, whitespace, a backtick, or a comma.

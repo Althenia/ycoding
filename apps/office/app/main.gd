@@ -11,6 +11,7 @@ const AMBIENT_INTERVAL_MS := 6000
 var store: OfficeStore
 var director: OfficeDirector
 var demo: DemoTransport
+var live: LiveTransport
 
 var office_view: OfficeViewport
 var prompt_panel: PromptPanel
@@ -19,6 +20,9 @@ var sidebar: SidebarPanel
 var chrome_toggles: ChromeToggles
 
 var _shell: Control
+## The presentation preference shared by every actor. Loaded once at startup and
+## applied on every refresh, so a change reaches actors created later too.
+var motion: Motion = Motion.new()
 ## The agent chosen in the sidebar. DEMO has no runtime agent to select, so this
 ## stays empty there rather than naming one the runtime did not choose.
 var selected_agent_id: String = ""
@@ -36,9 +40,13 @@ var _active: Dictionary = {}
 
 
 func _ready() -> void:
+	# Load the saved preference before the first actor exists, so the office never
+	# animates once and then stops.
+	motion.load()
 	store = OfficeStore.new()
 	director = OfficeDirector.new()
 	demo = DemoTransport.new()
+	live = LiveTransport.new()
 
 	office_view = $Shell/OfficeViewport
 	prompt_panel = $Shell/PromptPanel
@@ -47,12 +55,15 @@ func _ready() -> void:
 	chrome_toggles = $Shell/ChromeToggles
 
 	office_view.bind_store(store)
+	if office_view.world != null:
+		office_view.world.motion = motion
 	prompt_panel.prompt_submitted.connect(_on_prompt_submitted)
 	prompt_panel.model_selected.connect(_on_model_selected)
 	conversation_panel.close_requested.connect(func(): conversation_panel.visible = false)
 	sidebar.session_selected.connect(_on_actor_selected)
 	sidebar.new_session_requested.connect(_on_new_session)
 	sidebar.agent_selected.connect(_on_agent_selected)
+	sidebar.mode_toggle_requested.connect(_on_mode_toggle)
 	# The sidebar shows each actor's room without reaching into the scene.
 	sidebar.zone_provider = func(session_id: String) -> String:
 		return zone_for(session_id)
@@ -89,6 +100,9 @@ func _apply_regions() -> void:
 
 	OfficeShellLayout.place(sidebar, overlays["sidebar"])
 	OfficeShellLayout.place(chrome_toggles, overlays["toggles"])
+	# Seed the toggle from the SAVED preference before the first apply, or the
+	# default (full motion) would overwrite the user's stored choice on startup.
+	chrome_toggles.set_hidden("motion", motion.reduced())
 	_apply_chrome_visibility()
 	# The source drawer floats above the composer on the right. Its placement is
 	# provisional: it was not part of the reviewed overlay design.
@@ -116,6 +130,162 @@ func _start_demo() -> void:
 	demo.event_ready.connect(_on_event)
 	demo.play(true)
 	prompt_panel.set_mode(OfficeStore.MODE_DEMO)
+
+
+## Connect to a real local service.
+##
+## LIVE is only entered on an explicit request. Nothing here can move DEMO to LIVE
+## on its own, which the badge and the mode boundary both depend on.
+##
+## Returns an error string, or "" on success. The address is validated before any
+## state changes, so a typo cannot leave the office in a half-live state.
+func start_live(base_url: String, password: String = "") -> String:
+	var error := live.configure(base_url, Gateway.AUTH_USERNAME, password)
+	if not error.is_empty():
+		store.last_error = error
+		_refresh_ui()
+		return error
+	# Stop the demo cleanly first: two transports feeding one store would make
+	# the office report fiction as fact.
+	_stop_demo()
+	# A live service is a different world, so the accumulated demo state, its
+	# cursors and its cosmetic sequences are all discarded before it joins.
+	store = OfficeStore.new()
+	office_view.bind_store(store)
+	if office_view.world != null:
+		office_view.world.motion = motion
+	store.mode = OfficeStore.MODE_LIVE
+	live.event_ready.connect(_on_event)
+	live.connection_changed.connect(_on_connection_changed)
+	live.failure.connect(_on_live_failure)
+	live.reload_required.connect(_on_reload_required)
+	live.reload_ready.connect(_on_reload_ready)
+	live.reload_failed.connect(_on_reload_failed)
+	live.play()
+	prompt_panel.set_mode(OfficeStore.MODE_LIVE)
+	_refresh_ui()
+	return ""
+
+
+## Return to synthetic playback, discarding live state.
+func start_demo_mode() -> void:
+	if store.mode == OfficeStore.MODE_LIVE:
+		live.stop()
+		live.event_ready.disconnect(_on_event)
+	store = OfficeStore.new()
+	office_view.bind_store(store)
+	if office_view.world != null:
+		office_view.world.motion = motion
+	_start_demo()
+	_refresh_ui()
+
+
+func _stop_demo() -> void:
+	if demo != null and demo.is_playing():
+		demo.stop()
+	if demo != null and demo.event_ready.is_connected(_on_event):
+		demo.event_ready.disconnect(_on_event)
+
+
+## Toggle between the synthetic office and a live service.
+##
+## The address comes from the local service registration the CLI already writes,
+## so the user does not retype a URL the product already knows.
+func _on_mode_toggle() -> void:
+	if store.mode == OfficeStore.MODE_LIVE:
+		start_demo_mode()
+		return
+	var registration := _read_service_registration()
+	if registration.is_empty():
+		store.last_error = "No local service registration found. Start the server first."
+		_refresh_ui()
+		return
+	var error := start_live(
+		str(registration.get("url", "")),
+		str(registration.get("password", ""))
+	)
+	if not error.is_empty():
+		store.last_error = error
+		_refresh_ui()
+
+
+## The local service registration, as the CLI writes it.
+##
+## Read-only, best effort, and never fatal: an absent or unreadable file simply
+## means there is nothing to attach to. Attaching never starts or stops the
+## daemon, so closing the office leaves a running service exactly as it was.
+func _read_service_registration() -> Dictionary:
+	for path in ServiceRegistration.candidates(
+		OS.get_environment("YCODING_SERVICE_FILE"),
+		OS.get_environment("XDG_STATE_HOME"),
+		OS.get_environment("HOME")
+	):
+		if not FileAccess.file_exists(path):
+			continue
+		var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+		if parsed is Dictionary and not str(parsed.get("url", "")).is_empty():
+			return parsed
+	return {}
+
+
+func _on_connection_changed(state: String) -> void:
+	store.connection_state = state
+	_refresh_ui()
+
+
+## The feed could not be resumed, so the projection is discarded and reloaded.
+##
+## The office keeps drawing while this happens; it just stops claiming the
+## projection is complete, which is what the stale flag records.
+func _on_reload_required(epoch: String) -> void:
+	store.mark_stale()
+	_refresh_ui()
+	# Only a COMPLETED reload may clear staleness. The projection stays marked
+	# incomplete until the session list and every session log have answered, so a
+	# partial read can never be presented as a whole one.
+	live.reload()
+
+
+## The canonical reload finished: replace the projection with what the service
+## actually reports, in the order its logs gave.
+func _on_reload_ready(frames: Array, epoch: String) -> void:
+	store.adopt_reload(frames, epoch)
+	_refresh_ui()
+
+
+## A reload that could not finish leaves the projection stale and says why.
+func _on_reload_failed(reason: String) -> void:
+	store.mark_stale()
+	store.last_error = reason
+	_refresh_ui()
+
+
+## Answer a pending request from the UI.
+##
+## In DEMO there is nothing to answer: a synthetic office asks for nothing, and
+## approving on the user's behalf would be inventing consent.
+func answer_attention(request_id: String, body: Dictionary) -> String:
+	if store.mode != OfficeStore.MODE_LIVE:
+		return "DEMO preview — no request can be answered."
+	var request := store.attention.for_session("")
+	for entry in store.attention.pending():
+		if str(entry["id"]) == request_id:
+			request = entry
+	if request.is_empty():
+		return "That request is no longer pending."
+	var error := live.reply(request, body)
+	if not error.is_empty():
+		return error
+	# The runtime answers once; retiring it here stops the UI offering it again
+	# before the confirmation event arrives.
+	store.attention.resolve(request_id)
+	_refresh_ui()
+	return ""
+
+
+func _on_live_failure(message: String) -> void:
+	store.last_error = message
+	_refresh_ui()
 
 
 func _on_event(event: Dictionary) -> void:
@@ -195,10 +365,17 @@ func _process(delta: float) -> void:
 	var delta_ms := int(delta * 1000.0)
 	if capture_mode:
 		# The harness owns the clock: advance nothing, but keep the world drawn.
-		demo.advance(0)
+		if store.mode == OfficeStore.MODE_LIVE:
+			live.advance(0)
+		else:
+			demo.advance(0)
 		return
 	_elapsed_ms += delta_ms
-	demo.advance(delta_ms)
+	if store.mode == OfficeStore.MODE_LIVE:
+		# LIVE polls a socket; it has no synthetic clock to advance.
+		live.advance(delta_ms)
+	else:
+		demo.advance(delta_ms)
 	_ambient_accumulator += delta_ms
 	if _ambient_accumulator < AMBIENT_INTERVAL_MS:
 		return
@@ -217,9 +394,49 @@ func _tick_ambient() -> void:
 		office_view.apply_ambient(actor, str(ambient.get("ambient", "")))
 
 
+## Submit the composer text.
+##
+## DEMO is a preview and says so. LIVE admits the prompt as real work, and reports
+## a refusal from the service instead of swallowing it. The message id is derived
+## from the text and the second-resolution clock so a repeated submission is a
+## deliberate new input rather than an accidental duplicate.
 func _on_prompt_submitted(text: String) -> void:
-	# In DEMO the composer is a preview: it never mutates backend state.
-	prompt_panel.show_demo_notice(text)
+	if store.mode != OfficeStore.MODE_LIVE:
+		prompt_panel.show_notice("DEMO preview — nothing was sent: " + text)
+		return
+	var session_id := _prompt_target()
+	if session_id.is_empty():
+		prompt_panel.show_notice("No session is selected to receive that prompt")
+		return
+	var reason := live.submit_prompt(session_id, text, _prompt_message_id(text))
+	if reason.is_empty():
+		prompt_panel.show_notice("Sent to " + _session_label(session_id))
+		return
+	prompt_panel.show_notice(reason)
+
+
+## The session a prompt goes to: the selected actor when there is one, else the
+## root session, which is what the office is about when nothing is selected.
+func _prompt_target() -> String:
+	var actor := store.selected_actor()
+	if actor != null and not actor.identity.session_id.is_empty():
+		return actor.identity.session_id
+	return store.root_session_id
+
+
+## A stable id for a submitted prompt, so the service can reconcile an exact
+## retry of the same input instead of admitting it twice.
+func _prompt_message_id(text: String) -> String:
+	return "msg_office_%d_%d" % [Time.get_unix_time_from_system(), text.hash()]
+
+
+## How the composer names the session it sent to. Falls back to the id so the
+## notice never claims a role the projection did not produce.
+func _session_label(session_id: String) -> String:
+	var actor := store.actor_for(session_id)
+	if actor != null and not actor.display_role.is_empty():
+		return actor.display_role
+	return session_id
 
 
 ## The model references actually in play. DEMO has no server, so the synthetic
@@ -241,8 +458,21 @@ func _default_model_ref() -> String:
 	return ""
 
 
+## Adopt the chosen model for the next submission.
+##
+## In LIVE this is a real request: the service refuses a switch the current
+## context cannot fit, and that refusal is reported rather than hidden. DEMO has
+## no service, so it only moves the selection.
 func _on_model_selected(ref: String) -> void:
 	composer_model_ref = ref
+	if store.mode != OfficeStore.MODE_LIVE:
+		return
+	var session_id := _prompt_target()
+	if session_id.is_empty():
+		return
+	var reason := live.switch_model(session_id, ref)
+	if not reason.is_empty():
+		prompt_panel.show_notice(reason)
 
 
 ## A new session is a real backend mutation, which DEMO must never perform. The
@@ -250,7 +480,7 @@ func _on_model_selected(ref: String) -> void:
 func _on_new_session() -> void:
 	if store.mode == OfficeStore.MODE_LIVE:
 		return
-	prompt_panel.show_demo_notice("DEMO preview — a new session is not created")
+	prompt_panel.show_notice("DEMO preview — a new session is not created")
 
 
 func _on_agent_selected(agent_id: String) -> void:
@@ -278,6 +508,26 @@ func _apply_chrome_visibility() -> void:
 		return
 	sidebar.visible = not chrome_toggles.is_hidden("sidebar")
 	prompt_panel.visible = not chrome_toggles.is_hidden("composer")
+	# Reduced motion is the same kind of presentation choice as hiding a panel,
+	# so it lives beside them rather than in a separate settings surface.
+	var reduced := chrome_toggles.is_hidden("motion")
+	if motion.reduced() != reduced:
+		motion.set_reduced(reduced)
+		motion.save()
+	_apply_motion()
+
+
+## Hand the shared preference to the actors actually in the world.
+##
+## The projection list is not the scene: the animated nodes live in the world, so
+## assigning to a projection silently did nothing and the office kept animating.
+func _apply_motion() -> void:
+	if office_view == null or office_view.world == null:
+		return
+	for key in office_view.world.actors:
+		var node = office_view.world.actors[key]
+		if node is OfficeActor:
+			node.motion = motion
 
 
 ## Which room an actor currently occupies, derived from its assigned desk.
@@ -292,7 +542,7 @@ func _refresh_ui() -> void:
 	# recomputed by the world or re-derived by each panel.
 	store.sync_presence()
 	prompt_panel.set_models(_model_catalog(), _default_model_ref())
-	prompt_panel.set_location(store)
+	sidebar.set_location(store)
 	if selected_agent_id.is_empty():
 		selected_agent_id = _default_agent_id()
 	sidebar.set_agents(_agent_ids(), selected_agent_id)

@@ -1,33 +1,62 @@
 # Current handoff
 
-**State:** M0, M1 and the M2 implementation are complete. TASK-024 is `in_review` pending user visual acceptance.
-**Approved direction:** native Godot client → existing local YCoding HTTP/SSE; normal prompts; automatic honest office behavior; high fidelity; bubbles/history.
-**Next task:** TASK-025 (live integration) after TASK-024 review; or art iteration if the reviewer rejects the current fidelity.
-**Current milestone:** M2 (gate open).
-**Last completed implementation task:** TASK-023.
+**State:** implementation complete; **two user acceptance gates open**.
 
-## Tracking summary
+**Approved direction:** native Godot client → existing local YCoding service. The
+office is a presentation layer with no execution authority.
 
-23 done · 23 todo · 1 in_review (TASK-024) · 1 blocked (TASK-044).
+## Ledger
 
-TASK-044 is blocked on its declared TASK-040 dependency, but its capability is already proven: the macOS export produces a launching `.app`. Re-run and re-verify against the accepted M4 build.
+31 / 48 tasks done. The remaining 17 are held **only** by two user-owned gates:
 
-## Local continuation fields
+| Gate | What it needs |
+| --- | --- |
+| **TASK-024** | User acceptance of the fidelity captures |
+| **TASK-040** | User acceptance of the four-role MVP |
 
-- Repository: `/Users/viadz/Workspace/Project/ycoding`, branch `main`, HEAD `8544ea9fa55e0c86dcc09ac7d4b43dc7ee6dba10`.
-- Changed paths: pack corrections; repository boundary docs and injected agent prompt; `.gitignore`; `apps/office/` (native client); `.memory/godot-office/memory.md`.
-- Checks: `apps/office/tools/verify.sh` → `VERIFY: PASSED` (import 0 errors, 302 assertions, 18 flow checks, 0 engine errors). Pack `validate_pack.py` PASS, `test_tools.py` 14/14. Core `agent.test.ts` 13/13, workspace check PASS, Core typecheck PASS, scoped oxlint exit 0.
-- Evidence: `tracking/evidence/M0-audit.md`, `M1-gate.md`, `M2-slice.md`, `tracking/asset_manifest.json`.
-- Captures (git-ignored): `dist/office/captures/m2_slice_1600x900.png` and others; export at `dist/office/export/ycoding-office.zip`.
-- Environment: Godot 4.7.2 with export templates installed (SHA-512 verified).
-- Blockers: none for M3. `ffmpeg` absent, which blocks only optional MP4 conversion.
+Every held task has its work complete and verified; it is held because a
+prerequisite gate has not passed. Nothing is blocked on the agent.
 
-## What the M2 captures show and what they do not
+## Verification
 
-Show: 3 distinct scoped actors on separate desks, real props, a labelled status panel, a source-backed question bubble, DEMO mode with no live mutation.
+| Check | Result |
+| --- | --- |
+| `apps/office/tools/verify.sh` | import / tests / flow, **0 engine errors**, `VERIFY: PASSED` |
+| Unit + scene suite | **4966 assertions, 0 failed** |
+| End-to-end flow | **18 checks, 0 failures** |
+| `apps/office/tools/verify-integration.sh` | **21 contract + 14 live-attach**, 0 engine errors |
+| Pack validator | `PASS` |
 
-Do not show: live integration, approvals, five office zones, or the ≥15/18 fidelity target (self-score 13/18, art polish is the gap).
+## What was built
 
-## Next local action
+- A 41x23 tile world (aspect 1.783) that fills 99.7% of a 16:9 window at zoom 1.0.
+- A full-bleed office with floating, hideable chrome: a sidebar carrying mode,
+  sessions, team and agent, and a composer carrying the prompt, model pill and
+  location.
+- A live service attachment, verified end to end against a loopback fixture
+  server.
+- Durable human attention: questions, permissions and guardrails are answerable.
+- Shift changes: working agents hold seats, idle ones play, finished sessions
+  leave and free the seat, and a finished subagent reports to the CEO.
+- A native macOS export that launches without the editor.
 
-Obtain the user's decision on `dist/office/captures/m2_slice_1600x900.png` and the M1 stills. On acceptance, begin TASK-025; on rejection, iterate art before expanding the world.
+## Design rule
+
+**Every room earns its footprint.** A zone is kept only if something actually
+sends an actor there. That rule is why the plan lost a library, an archive, a
+kitchen and a meeting room, all of which were decoration with no driver.
+
+## Known gaps
+
+| Item | Detail |
+| --- | --- |
+| Live prompt submission | The composer is a DEMO preview; it does not issue a prompt to a live service. Transport and contract are implemented and verified. |
+| Reduced motion | Unimplemented. No OS preference is read. |
+| Canonical reload | `adopt_reload` replaces the projection with whatever the caller passes. Wiring the session-list and per-session log reads into it is outstanding. |
+| Signing | The export is unsigned and un-notarized. |
+
+## Where to continue
+
+1. User review of `dist/office/captures/v4_1600x900.png` against the reference.
+2. On acceptance, close TASK-040, which releases the 17 held tasks.
+3. Then wire live prompt submission and the canonical reload.
