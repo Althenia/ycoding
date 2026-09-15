@@ -10,6 +10,8 @@
 class_name OfficeViewport
 extends SubViewportContainer
 
+signal actor_clicked(session_id: String)
+
 const WORLD_SIZE := Vector2(OfficeWorld.MAP_WIDTH * OfficeWorld.TILE, OfficeWorld.MAP_HEIGHT * OfficeWorld.TILE)
 
 ## Zoom bounds. The lower bound must not override the fit calculation, or a map
@@ -51,8 +53,17 @@ func bind_store(store: OfficeStore) -> void:
 
 
 ## Pan the view with the arrow keys or WASD, then recenter on a double press.
+## A left click selects the actor or notice bubble under the pointer, which is
+## how a user opens the full source for something they can see.
 func _unhandled_input(event: InputEvent) -> void:
-	if _camera == null or not (event is InputEventKey):
+	if _camera == null:
+		return
+	if event is InputEventMouseButton:
+		var button := event as InputEventMouseButton
+		if button.pressed and button.button_index == MOUSE_BUTTON_LEFT:
+			_select_at(button.position)
+		return
+	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
 	if not key.pressed:
@@ -73,6 +84,17 @@ func _unhandled_input(event: InputEvent) -> void:
 	_camera.position = (_camera.position + pan * step).clamp(
 		Vector2.ZERO, WORLD_SIZE
 	)
+
+
+## Convert a container-space click to world space and report the actor under it.
+func _select_at(container_point: Vector2) -> void:
+	if world == null:
+		return
+	var zoom := maxf(_camera.zoom.x, 0.01)
+	var world_point := (container_point - size * 0.5) / zoom + _camera.position
+	var session_id := world.actor_at(world_point)
+	if not session_id.is_empty():
+		actor_clicked.emit(session_id)
 
 
 func refresh(store: OfficeStore) -> void:

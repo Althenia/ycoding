@@ -106,7 +106,10 @@ static func is_current(action: Dictionary, actor: ActorPresentation) -> bool:
 func plan_ambient(actor: ActorPresentation, tick: int) -> Dictionary:
 	if actor == null or actor.is_running() or actor.attention_required:
 		return {}
-	var options: Array[String] = ["coffee", "stretch", "read"]
+	# Every option must have a real destination, or the ambient action is a
+	# no-op. "read" goes to the focus chair, "stretch" to the play room, and
+	# "pause" stays put, which is the one case where staying is the behaviour.
+	var options: Array[String] = ["read", "stretch", "pause"]
 	var pick: String = options[tick % options.size()]
 	return {
 		"action": ACTION_AMBIENT,

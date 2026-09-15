@@ -17,6 +17,11 @@ const CONNECTION_DISCONNECTED := "disconnected"
 
 ## Tunable bound from the handoff integration defaults.
 const MAX_CONVERSATION_ITEMS := 512
+
+## How many agents can play in the play room at once. The lounge holds a
+## ping-pong table and a pair of sofas, so this is a real floor limit rather than
+## an arbitrary cap.
+const PLAY_SPOTS := 4
 const MAX_MESSAGE_EXCERPT := 240
 
 var mode: String = MODE_DEMO
@@ -56,12 +61,21 @@ func selected_actor() -> ActorPresentation:
 
 
 ## Current-state labels for the status panel. Reads from canonical fields only.
+## Refresh the derived presence on every actor. Called after any mutation so the
+## world never has to ask the store per-frame.
+func sync_presence() -> void:
+	for actor in actor_list():
+		actor.presence = station_of(actor.identity.session_id)
+
+
 func status_rows() -> Array[Dictionary]:
 	var rows: Array[Dictionary] = []
 	for actor in actor_list():
 		rows.append(
 			{
 				"name": actor.identity.display_name,
+				"presence": actor.presence,
+				"presence_label": Presence.label(actor.presence),
 				"session_id": actor.identity.session_id,
 				"state": actor.status_label,
 				"glyph": WorkState.glyph(actor.work_state),
@@ -70,6 +84,100 @@ func status_rows() -> Array[Dictionary]:
 			}
 		)
 	return rows
+
+
+## Where an actor is in the office. Derived from canonical state rather than
+## stored, so presence cannot drift from work state or departure.
+func presence_of(session_id: String) -> String:
+	var actor := actor_for(session_id)
+	if actor == null:
+		return ""
+	if actor.departed:
+		return Presence.LEFT
+	if Presence.is_working(actor.work_state):
+		return Presence.AT_WORK
+	return Presence.PLAYING if has_play_spot(session_id) else Presence.WAITING
+
+
+## The station an actor belongs at, by presence AND work state.
+##
+## Presence answers "on shift or not"; the work state answers "doing what". The
+## world only moves an actor when this changes, so it needs both.
+func station_of(session_id: String) -> String:
+	var actor := actor_for(session_id)
+	if actor == null:
+		return ""
+	if actor.departed:
+		return "left"
+	match presence_of(session_id):
+		Presence.AT_WORK:
+			# Consolidating context is retreading what it has seen, which is what
+			# the focus station is for. Everything else works at its desk.
+			return "focus" if actor.work_state == WorkState.Kind.COMPACTING else "desk"
+		Presence.PLAYING:
+			return "play"
+		Presence.WAITING:
+			return "waiting"
+	return ""
+
+
+## The actor a report should be delivered to: its parent session, or the root.
+##
+## `session.task.updated` already carries the change; parentage is what decides
+## where the report physically goes.
+func report_target_for(session_id: String) -> String:
+	var actor := actor_for(session_id)
+	if actor == null:
+		return ""
+	var parent := actor.identity.parent_session_id
+	if not parent.is_empty() and actor_for(parent) != null:
+		return parent
+	return root_session_id
+
+
+## Seat holders, in a stable order. Only actors on shift occupy the floor.
+func seated_actors() -> Array[ActorPresentation]:
+	var out: Array[ActorPresentation] = []
+	for actor in actor_list():
+		if presence_of(actor.identity.session_id) == Presence.AT_WORK:
+			out.append(actor)
+	return out
+
+
+## Actors playing in the play room.
+func playing_actors() -> Array[ActorPresentation]:
+	var out: Array[ActorPresentation] = []
+	for actor in actor_list():
+		if presence_of(actor.identity.session_id) == Presence.PLAYING:
+			out.append(actor)
+	return out
+
+
+## Actors who have ended and left the office.
+func departed_actors() -> Array[ActorPresentation]:
+	var out: Array[ActorPresentation] = []
+	for actor in actor_list():
+		if actor.departed:
+			out.append(actor)
+	return out
+
+
+## Whether this actor holds one of the bounded play spots.
+##
+## Deterministic: the earliest actors by id take the spots, so the same roster
+## always produces the same arrangement and a viewer sees no unexplained churn.
+func has_play_spot(session_id: String) -> bool:
+	var idle: Array[ActorPresentation] = []
+	for actor in actor_list():
+		if actor.departed or Presence.is_working(actor.work_state):
+			continue
+		idle.append(actor)
+	if idle.size() > PLAY_SPOTS:
+		idle = idle.slice(0, PLAY_SPOTS)
+	for actor in idle:
+		if actor.identity.session_id == session_id:
+			return true
+	return false
 
 
 ## Conversation items for the history drawer, oldest first.
@@ -120,6 +228,14 @@ func apply(event: Dictionary) -> bool:
 			return apply_activity(session_id, WorkState.Kind.PROCESSING, type)
 		Wire.FILE_CHANGE:
 			return apply_activity(session_id, WorkState.Kind.TYPING, type)
+		Wire.COMPACTION_STARTED, Wire.COMPACTION_ADMITTED:
+			return apply_activity(session_id, WorkState.Kind.COMPACTING, type)
+		Wire.COMPACTION_ENDED, Wire.COMPACTION_FAILED:
+			return apply_activity(session_id, WorkState.Kind.PROCESSING, type)
+		Wire.SESSION_DELETED, Wire.SESSION_ARCHIVED:
+			return apply_departure(session_id, true)
+		Wire.SESSION_UNARCHIVED:
+			return apply_departure(session_id, false)
 	return false
 
 
@@ -131,11 +247,69 @@ func apply_session_created(session_id: String, data: Dictionary) -> bool:
 	var identity := ActorIdentity.new(session_id, agent, parent, agent.capitalize())
 	if actors.has(session_id):
 		actors[session_id].identity = identity
+		_apply_placement(actors[session_id] as ActorPresentation, data)
 		return true
-	actors[session_id] = ActorPresentation.new(identity)
+	var actor := ActorPresentation.new(identity)
+	_apply_placement(actor, data)
+	actors[session_id] = actor
 	if parent.is_empty():
 		root_session_id = session_id
 	assign_ordinals()
+	return true
+
+
+## Adopt the durable placement carried by `session.created`.
+##
+## The real event carries `location: {directory}` and `model: {providerID,id,
+## variant}`. A session's location is its own and does not follow a later
+## directory change, so it is stored per actor. Values are only taken when the
+## event actually carries them; nothing is invented, and a partial event leaves
+## the previous value intact rather than blanking it.
+func _apply_placement(actor: ActorPresentation, data: Dictionary) -> void:
+	var location: Variant = data.get("location")
+	if location is Dictionary:
+		var directory := str((location as Dictionary).get("directory", ""))
+		if not directory.is_empty():
+			actor.location_directory = directory
+	var model: Variant = data.get("model")
+	if model is Dictionary:
+		var ref := str((model as Dictionary).get("ref", ""))
+		if not ref.is_empty():
+			actor.model_ref = ref
+	# Demo data is synthetic; it must never be presented as a real location.
+	if bool(data.get("synthetic", false)):
+		actor.synthetic = true
+
+
+## The locations currently represented, sorted. More than one means the roster is
+## not location-scoped and the UI must not claim a single directory.
+func locations() -> Array[String]:
+	var seen := {}
+	for actor in actor_list():
+		if not actor.location_directory.is_empty():
+			seen[actor.location_directory] = true
+	var out: Array[String] = []
+	for directory in seen:
+		out.append(str(directory))
+	out.sort()
+	return out
+
+
+## True when every placed session agrees on one directory.
+func has_single_location() -> bool:
+	return locations().size() == 1
+
+
+## A session has ended and its actor leaves the office, or has been restored and
+## returns. Leaving does not erase the session: history stays, the seat frees.
+func apply_departure(session_id: String, departed: bool) -> bool:
+	var actor := actor_for(session_id)
+	if actor == null:
+		return false
+	actor.departed = departed
+	if departed:
+		actor.attention_required = false
+		actor.set_work(WorkState.Kind.IDLE)
 	return true
 
 

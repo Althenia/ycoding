@@ -28,10 +28,13 @@ Grid contract
   - Character rows: idle(2), walk(6), sit(2), type(2), read(2), talk(2)
 
 Outputs (relative to --out, default apps/office/office/art):
-  tiles_floor.png      floor materials atlas (wood x2, carpet x2, tile x2, concrete x2)
+  tiles_floor.png      floor materials atlas: 0-1 wood, 2-3 carpet A, 4-5 carpet B,
+                       6-7 tile, 8 concrete, 9-10 grey checker, 11 grey-blue plank
   wall_top.png         horizontal wall run: cap + face + skirting + floor shadow
   wall_side.png        vertical wall strip (left and right variants)
-  door_frame.png       doorway with a visible frame, reveal and threshold
+  door_frame.png       one 4-tile wall module with a doorway through its middle
+  wall_*.png           flat wall-mounted decoration: poster, clock, sign, screen,
+                       pinboard and framed art
   prop_*.png           desks, chairs, plants, sofa, table, shelf, coffee, board, ...
   char_*.png           four role character sheets
 """
@@ -73,7 +76,10 @@ CARPET_B = [(178, 186, 202, 255), (170, 179, 196, 255)]
 CARPET_SEAM = (162, 165, 178, 255)
 TILE_A = [(242, 238, 228, 255), (234, 229, 218, 255)]
 TILE_SEAM = (214, 208, 196, 255)
-CONCRETE = [(212, 209, 200, 255), (204, 201, 192, 255)]
+# Concrete is the one material with a single atlas column: the plan's FLOOR_TONES
+# pins it to one tone, so a second entry here would silently shadow the column
+# appended after it.
+CONCRETE = [(212, 209, 200, 255)]
 CONCRETE_SEAM = (184, 181, 172, 255)
 
 WALL_TOP = (244, 240, 234, 255)
@@ -102,6 +108,20 @@ FABRIC_BLUE_D = (96, 128, 190, 255)
 FABRIC_BLUE = (134, 168, 222, 255)
 FABRIC_PINK = (232, 168, 190, 255)
 FABRIC_YELLOW = (240, 210, 130, 255)
+
+# Wall decoration: hung flat on the pale wall face, so these tones are darker and
+# more saturated than the furniture materials they hang above.
+SIGN_PLATE = (58, 66, 86, 255)
+CORK = (198, 156, 104, 255)
+CORK_D = (162, 120, 74, 255)
+PAPER = (250, 247, 236, 255)
+PAPER_D = (224, 217, 200, 255)
+SKY = (150, 206, 242, 255)
+SKY_L = (206, 234, 252, 255)
+SKYLINE = (116, 134, 162, 255)
+SKYLINE_D = (84, 100, 128, 255)
+DAYLIGHT = (252, 240, 200, 255)
+POSTER_RED = (204, 92, 104, 255)
 
 # Material micro-tones derived from the palette, so props share one light model.
 CABLE = (52, 50, 56, 255)
@@ -259,6 +279,11 @@ def seam(base, t: float = 0.32):
 def lit(base, t: float = 0.4):
     """A highlight edge catching the daylight from the upper left."""
     return mix(base, P["white"], t)
+
+
+# The mount of a wall-hung panel: dark enough to separate a pale panel from the
+# pale wall it hangs on, which no prop material is.
+MOUNT = seam(WALL_FACE, 0.42)
 
 
 def box(c: Canvas, x: int, y: int, w: int, h: int, top, front, side_l, side_d, cap: int) -> None:
@@ -476,23 +501,54 @@ def ground_shadow(c: Canvas, x0: int, x1: int, base: int) -> None:
 
 # ── Environment ──────────────────────────────────────────────────────────────
 
+# Open-plan floors: grey checker in two values, and a cool grey-blue plank. Each
+# seam is taken off its own base tone the way the materials above derive theirs,
+# so the two new families sit in the palette instead of importing new colours.
+# A checker entry holds the two 16px square tones of its single column.
+CHECKER_A = [(206, 207, 210, 255), (197, 199, 204, 255)]
+CHECKER_B = [(192, 194, 199, 255), (183, 186, 192, 255)]
+CHECKER_SEAM = mix(CHECKER_A[0], P["outline"], 0.15)
+PLANK_BLUE = [(186, 196, 210, 255)]
+PLANK_BLUE_SEAM = mix(PLANK_BLUE[0], P["outline"], 0.22)
+
+
+def _checker_tile(c: Canvas, x: int, squares, grout) -> None:
+    """One checker column: 16px alternating squares with a grout line at every join."""
+    light, dark = squares
+    c.rect(x, 0, TILE, TILE, light)
+    c.rect(x, 0, 16, 16, dark)
+    c.rect(x + 16, 16, 16, 16, dark)
+    for edge in (15, 31):
+        c.hline(x, edge, TILE, grout)
+        c.vline(x + edge, 0, TILE, grout)
+
+
 def build_floor_tiles() -> Canvas:
-    """Atlas: 0-1 wood, 2-3 carpet A, 4-5 carpet B, 6-7 tile, 8 concrete."""
+    """Atlas: 0-1 wood, 2-3 carpet A, 4-5 carpet B, 6-7 tile, 8 concrete,
+    9-10 grey checker, 11 cool grey-blue plank."""
     materials = [
-        (WOOD_FLOOR, WOOD_SEAM, True),
-        (CARPET_A, CARPET_SEAM, False),
-        (CARPET_B, CARPET_SEAM, False),
-        (TILE_A, TILE_SEAM, True),
-        (CONCRETE, CONCRETE_SEAM, False),
+        (WOOD_FLOOR, WOOD_SEAM, "plank"),
+        (CARPET_A, CARPET_SEAM, "carpet"),
+        (CARPET_B, CARPET_SEAM, "carpet"),
+        (TILE_A, TILE_SEAM, "plank"),
+        (CONCRETE, CONCRETE_SEAM, "carpet"),
+        (CHECKER_A, CHECKER_SEAM, "checker"),
+        (CHECKER_B, CHECKER_SEAM, "checker"),
+        (PLANK_BLUE, PLANK_BLUE_SEAM, "plank"),
     ]
-    cols = 9
+    cols = 12
     sheet = Canvas(TILE * cols, TILE)
     index = 0
-    for tones, seam_col, plank in materials:
+    for tones, seam_col, pattern in materials:
+        if pattern == "checker":
+            # Both square tones live in one column, alternating 16px at a time.
+            _checker_tile(sheet, index * TILE, tones, seam_col)
+            index += 1
+            continue
         for tone in tones:
             x = index * TILE
             sheet.rect(x, 0, TILE, TILE, tone)
-            if plank:
+            if pattern == "plank":
                 sheet.hline(x, 15, TILE, seam_col)
                 sheet.vline(x + 15, 0, 15, seam_col)
                 sheet.vline(x + 7, 16, 16, seam_col)
@@ -516,6 +572,34 @@ def _wall_joint(c: Canvas, x: int, top: int, bottom: int) -> None:
     c.vline(x + 2, top, bottom, lit(mix(WALL_FACE, WALL_BASE, 0.4), 0.35))
 
 
+def _wall_run(c: Canvas, x: int, w: int) -> None:
+    """Paint the shared wall band over one x range: cap, face, skirting, shadow.
+
+    wall_top.png and door_frame.png meet edge to edge on the north wall, so both
+    paint their wall segments through here; a piece that kept its own copy of the
+    band would drift out of flush with the run beside it.
+    """
+    c.rect(x, 0, w, 16, WALL_TOP)
+    c.hline(x, 0, w, P["white"])
+    c.hline(x, 1, w, P["white"])
+    c.hline(x, 2, w, lit(WALL_TOP, 0.25))
+    c.hline(x, 13, w, mix(WALL_TOP, WALL_TRIM, 0.6))
+    c.hline(x, 14, w, WALL_TRIM)
+    c.hline(x, 15, w, seam(WALL_TRIM, 0.28))
+    c.rect(x, 16, w, 32, WALL_FACE)
+    c.hline(x, 16, w, P["white"])
+    c.hline(x, 17, w, lit(WALL_FACE, 0.35))
+    c.hline(x, 18, w, lit(WALL_FACE, 0.12))
+    # Skirting: a slightly proud baseboard with its own top shadow.
+    c.hline(x, 38, w, seam(WALL_FACE, 0.16))
+    c.rect(x, 39, w, 8, mix(WALL_FACE, WALL_BASE, 0.72))
+    c.hline(x, 39, w, lit(mix(WALL_FACE, WALL_BASE, 0.72), 0.18))
+    c.hline(x, 46, w, mix(WALL_BASE, P["outline"], 0.35))
+    c.hline(x, 47, w, mix(WALL_BASE, P["outline"], 0.5))
+    c.rect(x, 48, w, 8, P["shadow_soft"])
+    c.rect(x, 48, w, 2, P["shadow"])
+
+
 def build_wall_top() -> Canvas:
     """A horizontal wall run drawn top-down in 3/4 view.
 
@@ -527,25 +611,7 @@ def build_wall_top() -> Canvas:
     """
     w = TILE * 4
     c = Canvas(w, 56)
-    c.rect(0, 0, w, 16, WALL_TOP)
-    c.hline(0, 0, w, P["white"])
-    c.hline(0, 1, w, P["white"])
-    c.hline(0, 2, w, lit(WALL_TOP, 0.25))
-    c.hline(0, 13, w, mix(WALL_TOP, WALL_TRIM, 0.6))
-    c.hline(0, 14, w, WALL_TRIM)
-    c.hline(0, 15, w, seam(WALL_TRIM, 0.28))
-    c.rect(0, 16, w, 32, WALL_FACE)
-    c.hline(0, 16, w, P["white"])
-    c.hline(0, 17, w, lit(WALL_FACE, 0.35))
-    c.hline(0, 18, w, lit(WALL_FACE, 0.12))
-    # Skirting: a slightly proud baseboard with its own top shadow.
-    c.hline(0, 38, w, seam(WALL_FACE, 0.16))
-    c.rect(0, 39, w, 8, mix(WALL_FACE, WALL_BASE, 0.72))
-    c.hline(0, 39, w, lit(mix(WALL_FACE, WALL_BASE, 0.72), 0.18))
-    c.hline(0, 46, w, mix(WALL_BASE, P["outline"], 0.35))
-    c.hline(0, 47, w, mix(WALL_BASE, P["outline"], 0.5))
-    c.rect(0, 48, w, 8, P["shadow_soft"])
-    c.rect(0, 48, w, 2, P["shadow"])
+    _wall_run(c, 0, w)
     for x in range(0, w, TILE):
         _wall_joint(c, x, 16, 32)
     return c
@@ -578,48 +644,50 @@ def build_wall_side() -> Canvas:
 
 
 def build_door_frame() -> Canvas:
-    """Doorway: a wall run with a gap, jambs, a reveal and a threshold.
+    """One 4-tile wall module with a doorway cut through its middle.
 
-    Kept at the wall run's 56px height because the world places it by height.
+    32px wall, a 64px opening, 32px wall: the opening lands on the two map
+    columns the navigation grid leaves walkable, so the piece replaces exactly one
+    wall_top piece and butts against its neighbours without a seam. The wall band
+    comes from the same `_wall_run` as wall_top.png, so the cap keeps running
+    across the header and face, skirting band and cast shadow all stay flush.
     """
-    c = Canvas(TILE * 2, 56)
-    for x in range(0, TILE * 2, TILE):
-        c.rect(x, 0, TILE, 16, WALL_TOP)
-    c.hline(0, 0, TILE * 2, P["white"])
-    c.hline(0, 1, TILE * 2, P["white"])
-    c.hline(0, 14, TILE * 2, WALL_TRIM)
-    c.hline(0, 15, TILE * 2, seam(WALL_TRIM, 0.28))
-    c.rect(0, 16, TILE * 2, 32, WALL_FACE)
-    c.hline(0, 16, TILE * 2, P["white"])
-    c.hline(0, 17, TILE * 2, lit(WALL_FACE, 0.3))
-    # Lit corridor seen through the opening, so the gap reads as depth.
-    c.rect(12, 16, TILE * 2 - 24, 24, lit(WALL_FACE, 0.2))
-    c.rect(12, 16, TILE * 2 - 24, 4, lit(WALL_FACE, 0.4))
-    c.hline(12, 39, TILE * 2 - 24, seam(WALL_FACE, 0.2))
-    # Door posts with a bevel, plus the reveal each jamb casts into the opening.
-    c.rect(0, 0, 8, 48, WALL_FACE)
-    c.rect(TILE * 2 - 8, 0, 8, 48, WALL_FACE)
-    c.rect(0, 0, 8, 4, P["white"])
-    c.vline(1, 0, 48, lit(WALL_FACE, 0.35))
-    c.vline(TILE * 2 - 8, 0, 48, lit(WALL_FACE, 0.2))
-    c.vline(7, 16, 32, seam(WALL_FACE, 0.3))
-    c.vline(8, 16, 32, seam(WALL_FACE, 0.45))
-    c.vline(9, 16, 32, P["shadow"])
-    c.vline(TILE * 2 - 8, 16, 32, seam(WALL_FACE, 0.45))
-    c.vline(TILE * 2 - 9, 16, 32, P["shadow"])
-    # Threshold: a metal strip with a lit nose and a shadow at the floor line.
-    c.rect(10, 40, TILE * 2 - 20, 8, (188, 158, 122, 255))
-    c.hline(10, 40, TILE * 2 - 20, lit((188, 158, 122, 255), 0.35))
-    c.hline(10, 43, TILE * 2 - 20, seam((188, 158, 122, 255), 0.3))
-    c.hline(10, 47, TILE * 2 - 20, mix(WALL_BASE, P["outline"], 0.45))
-    c.rect(0, 48, TILE * 2, 8, P["shadow_soft"])
-    c.rect(0, 48, TILE * 2, 2, P["shadow"])
-    c.hline(0, 46, 10, mix(WALL_BASE, P["outline"], 0.4))
-    c.hline(TILE * 2 - 10, 46, 10, mix(WALL_BASE, P["outline"], 0.4))
-    # Skirting stops against the posts, exactly as on a wall run.
-    for x in (8, TILE * 2 - 10):
-        c.vline(x, 38, 8, seam(WALL_FACE, 0.5))
-    c.hline(8, 38, TILE * 2 - 16, seam(WALL_FACE, 0.16))
+    w = TILE * 4
+    open_x, open_w = TILE, TILE * 2
+    post_w, head_h = 6, 5
+    c = Canvas(w, 56)
+    _wall_run(c, 0, w)
+    for x in (0, w - TILE):
+        _wall_joint(c, x, 16, 32)
+    # Cut face: the corridor beyond shows through, dark under the head and lit
+    # where its floor catches the daylight, so the gap reads as depth.
+    corridor = mix(WALL_FACE, P["outline"], 0.42)
+    c.rect(open_x, 16, open_w, 32, corridor)
+    floor_d = mix(WOOD_FLOOR[0], P["outline"], 0.35)
+    c.rect(open_x + post_w, 30, open_w - post_w * 2, 10, floor_d)
+    c.hline(open_x + post_w, 34, open_w - post_w * 2, mix(WOOD_FLOOR[0], P["outline"], 0.5))
+    # Threshold: a bright floor plate at the doorway, on the rows the skirting
+    # band occupies either side, so the room floor reads as continuing through.
+    c.rect(open_x + post_w, 40, open_w - post_w * 2, 8, WOOD_FLOOR[0])
+    c.hline(open_x + post_w, 40, open_w - post_w * 2, lit(WOOD_FLOOR[0], 0.45))
+    c.hline(open_x + post_w, 43, open_w - post_w * 2, seam(WOOD_FLOOR[0], 0.25))
+    c.hline(open_x + post_w, 46, open_w - post_w * 2, seam(WOOD_FLOOR[0], 0.4))
+    c.hline(open_x + post_w, 47, open_w - post_w * 2, mix(WOOD_FLOOR[0], P["outline"], 0.5))
+    # A timber casing round the opening: head first, then a post each side, lit
+    # from the upper left. The casing is the one warm tone on the wall band, so
+    # the doorway stays visible from across the room.
+    casing = mix(WOOD, WOOD_L, 0.35)
+    c.rect(open_x, 16, open_w, head_h, casing)
+    c.hline(open_x, 16, open_w, lit(casing, 0.35))
+    c.hline(open_x, 16 + head_h - 1, open_w, seam(casing, 0.45))
+    for post_x in (open_x, open_x + open_w - post_w):
+        c.rect(post_x, 16, post_w, 32, casing)
+        c.vline(post_x, 16, 32, lit(casing, 0.4))
+        c.vline(post_x + post_w - 1, 16, 32, seam(casing, 0.5))
+    # The shadow each jamb throws into the opening.
+    c.hline(open_x + post_w, 21, open_w - post_w * 2, mix(corridor, P["outline"], 0.5))
+    c.vline(open_x + post_w, 21, 19, mix(corridor, P["outline"], 0.5))
+    c.vline(open_x + open_w - post_w - 1, 21, 19, mix(corridor, P["outline"], 0.5))
     return c
 
 
@@ -1031,36 +1099,59 @@ def build_whiteboard() -> Canvas:
 
 
 def build_window() -> Canvas:
-    """Window: mullioned frame, daylight glazing, sill and light spill."""
+    """Window: casing, 2x2 mullioned glazing, daylight skyline and a sill.
+
+    Hung flat on the north wall face rather than stood on the floor, so the only
+    shadow is the short spill under the projecting sill, and the bottom raster row
+    stays shadow-only like every ground-contact prop.
+    """
     w, h = TILE * 2, 48
     base = art_bottom(h)
     c = Canvas(w, h)
-    # A wall-hung pane only drops a soft sill shadow, not a furniture footprint.
-    c.rect(2, base, w - 4, h - base - 1, P["shadow_soft"])
-    box(c, 2, 2, w - 4, 38, WALL_TOP, mix(WALL_TRIM, P["white"], 0.35), P["white"], WALL_TRIM, 6)
-    # Daylight wash, cloud, distant skyline behind the glass.
-    c.rect(6, 10, w - 12, 28, (162, 214, 244, 255))
-    c.rect(6, 10, w - 12, 12, (198, 232, 252, 255))
-    c.ellipse(20, 17, 9, 4, (242, 249, 254, 255))
-    c.ellipse(34, 15, 11, 5, (232, 244, 252, 255))
-    for bx, by, bw, bh in ((8, 28, 8, 10), (17, 24, 7, 14), (25, 30, 9, 8), (36, 26, 7, 12), (45, 29, 9, 9)):
-        c.rect(bx, by, bw, bh, (150, 168, 190, 255))
-        c.hline(bx, by, bw, (120, 140, 166, 255))
-    c.rect(6, 36, w - 12, 2, (128, 146, 170, 255))
-    # Mullions: a centre bar and a transom, each with a shadow on the glass.
-    c.rect(w // 2 - 2, 8, 4, 32, mix(WALL_TRIM, P["white"], 0.35))
-    c.vline(w // 2 - 2, 8, 32, P["white"])
-    c.vline(w // 2 + 1, 8, 32, WALL_TRIM)
-    c.vline(w // 2 + 2, 8, 32, P["shadow"])
-    c.rect(4, 24, w - 8, 3, mix(WALL_TRIM, P["white"], 0.35))
-    c.hline(4, 24, w - 8, P["white"])
-    c.hline(4, 27, w - 8, P["shadow"])
-    # Sill, wider than the casing, with a lit nose.
-    c.rect(2, 38, w - 4, 5, WALL_TOP)
-    c.hline(2, 38, w - 4, P["white"])
-    c.hline(2, 40, w - 4, mix(WALL_TOP, WALL_TRIM, 0.5))
-    c.hline(2, 42, w - 4, WALL_BASE)
-    c.blend_rect(4, 43, w - 8, 5, (250, 244, 220, 45))
+    c.rect(2, base, w - 4, h - base, P["shadow_soft"])
+    box(c, 3, 2, w - 6, 38, WALL_TOP, mix(WALL_TRIM, P["white"], 0.35), P["white"], WALL_TRIM, 6)
+    # Glazing, held 5px inside the casing so a frame reads all the way round.
+    c.rect(8, 8, 48, 28, SKY)
+    c.rect(8, 8, 48, 11, SKY_L)
+    c.ellipse(17, 15, 5, 5, DAYLIGHT)
+    c.ellipse(16, 14, 3, 3, P["white"])
+    c.ellipse(46, 14, 6, 3, P["white"])
+    c.ellipse(40, 15, 4, 2, mix(P["white"], SKY_L, 0.4))
+    # A simple skyline of shaded towers over a street line, behind the bars.
+    towers = ((10, 25, 8, 9), (20, 24, 9, 10), (31, 26, 7, 8), (40, 25, 8, 9), (50, 28, 6, 6))
+    for index, (bx, by, bw, bh) in enumerate(towers):
+        c.rect(bx, by, bw, bh, SKYLINE if index % 2 == 0 else mix(SKYLINE, SKYLINE_D, 0.5))
+        c.hline(bx, by, bw, SKYLINE_D)
+        c.vline(bx + bw - 1, by, bh, SKYLINE_D)
+        for wy in range(by + 3, by + bh - 2, 3):
+            for wx in range(bx + 1, bx + bw - 2, 4):
+                c.rect(wx, wy, 2, 1, P["white"])
+    c.rect(8, 34, 48, 2, mix(SKYLINE, P["white"], 0.45))
+    # Daylight falling across the glass.
+    for step in range(7):
+        c.blend(12 + step, 9 + step, (252, 254, 255, 54))
+    for step in range(4):
+        c.blend(40 + step, 10 + step, (252, 254, 255, 40))
+    c.outline_rect(8, 8, 48, 28, mix(SKY, P["outline"], 0.3))
+    # Mullions: a centre bar and a transom, over the view, with the shadow each
+    # drops onto the glass behind it.
+    mullion = mix(WALL_TRIM, P["white"], 0.35)
+    c.rect(30, 8, 4, 28, mullion)
+    c.rect(8, 20, 48, 4, mullion)
+    c.vline(30, 8, 28, P["white"])
+    c.vline(33, 8, 28, WALL_TRIM)
+    c.hline(8, 20, 48, P["white"])
+    c.hline(8, 23, 48, WALL_TRIM)
+    c.vline(34, 8, 28, P["shadow"])
+    c.hline(8, 24, 48, P["shadow"])
+    # Sill: wider than the casing, so it reads as projecting past both jambs.
+    c.rect(0, 36, w, 6, WALL_TOP)
+    c.hline(0, 36, w, P["white"])
+    c.hline(0, 37, w, lit(WALL_TOP, 0.35))
+    c.hline(0, 39, w, mix(WALL_TOP, WALL_TRIM, 0.55))
+    c.hline(0, 40, w, WALL_TRIM)
+    c.hline(0, 41, w, WALL_BASE)
+    c.blend_rect(1, 41, w - 2, 6, (250, 244, 220, 46))
     outline_silhouette(c)
     return c
 
@@ -1167,6 +1258,486 @@ def build_cooler() -> Canvas:
     return c
 
 
+def build_cabinet() -> Canvas:
+    """Filing cabinet: three drawers with recessed pulls, lit top, plinth."""
+    w, h = TILE, 64
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 3, w - 4, base)
+    body = mix(METAL_D, METAL, 0.2)
+    body_d = mix(body, P["outline"], 0.3)
+    box(c, 3, 2, w - 6, base - 2 + 1, lit(body, 0.24), body, lit(body, 0.34), body_d, 5)
+    c.hline(4, 4, w - 8, lit(body, 0.52))
+    for index in range(3):
+        dy = 8 + index * 16
+        c.rect(6, dy, w - 12, 14, lit(body, 0.07))
+        c.outline_rect(6, dy, w - 12, 14, seam(body, 0.42))
+        c.hline(7, dy + 1, w - 14, lit(body, 0.42))
+        c.hline(7, dy + 13, w - 14, seam(body, 0.55))
+        # Finger pull: a recessed slot with a lit lower lip and a small catch.
+        c.rect(11, dy + 4, w - 22, 4, mix(body_d, P["outline"], 0.45))
+        c.hline(11, dy + 4, w - 22, mix(body_d, P["outline"], 0.62))
+        c.hline(11, dy + 7, w - 22, lit(body, 0.4))
+        c.rect(13, dy + 8, 6, 2, METAL_D)
+        c.hline(13, dy + 8, 6, METAL)
+    # Plinth, slightly recessed under the last drawer.
+    c.rect(4, base - 4, w - 8, 5, mix(body_d, P["outline"], 0.28))
+    c.hline(4, base - 4, w - 8, seam(body, 0.5))
+    outline_silhouette(c)
+    return c
+
+
+def build_rack() -> Canvas:
+    """Server rack: dark enclosure, four unit slots, vent grilles, LED clusters."""
+    w, h = 48, 80
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 4, w - 5, base)
+    shell = mix(SCREEN_D, P["outline"], 0.2)
+    unit = mix(shell, SCREEN, 0.12)
+    box(c, 3, 2, w - 6, base - 2 + 1, lit(shell, 0.26), shell, lit(shell, 0.38), seam(shell, 0.4), 6)
+    c.hline(4, 4, w - 8, lit(shell, 0.48))
+    c.hline(4, 8, w - 8, seam(shell, 0.5))
+    for index in range(4):
+        uy = 11 + index * 15
+        # One unit is a pale patch panel, so the stack is not four identical faces.
+        tone = mix(unit, METAL_D, 0.3) if index == 2 else unit
+        c.rect(6, uy, w - 12, 12, tone)
+        c.outline_rect(6, uy, w - 12, 12, seam(shell, 0.5))
+        c.hline(7, uy + 1, w - 14, lit(tone, 0.34))
+        c.hline(7, uy + 11, w - 14, seam(tone, 0.55))
+        if index == 3:
+            for port_x in range(9, 29, 4):
+                c.rect(port_x, uy + 4, 2, 6, mix(METAL_D, P["outline"], 0.5))
+                c.set(port_x, uy + 4, METAL_L)
+        else:
+            for vent_y in range(uy + 3, uy + 10, 2):
+                c.hline(9, vent_y, 14, shade(tone, -30))
+        for led_x, led in ((32, LEAF_L), (36, DAYLIGHT), (40, SCREEN_L)):
+            c.rect(led_x, uy + 4, 2, 2, led)
+            c.set(led_x, uy + 4, lit(led, 0.5))
+            c.rect(led_x, uy + 8, 2, 2, mix(led, P["outline"], 0.45))
+    c.rect(4, base - 4, w - 8, 5, mix(shell, P["outline"], 0.3))
+    c.hline(4, base - 4, w - 8, seam(shell, 0.55))
+    outline_silhouette(c)
+    return c
+
+
+def build_vending() -> Canvas:
+    """Vending machine: glazed front over stocked shelves, side panel, slot."""
+    w, h = 48, 72
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 4, w - 5, base)
+    shell = mix(POSTER_RED, P["outline"], 0.26)
+    box(c, 3, 2, w - 6, base - 2 + 1, mix(POSTER_RED, P["white"], 0.3), shell, mix(POSTER_RED, P["white"], 0.42), seam(shell, 0.4), 6)
+    c.hline(4, 4, w - 8, mix(POSTER_RED, P["white"], 0.62))
+    # Glazing: a dark interior with three stocked shelves, then the reflections.
+    c.rect(7, 10, 24, 40, mix(SCREEN_D, P["outline"], 0.44))
+    c.rect(8, 11, 22, 38, mix(SCREEN_D, SCREEN, 0.16))
+    stock = (
+        FABRIC_YELLOW, LEAF, SCREEN, FABRIC_PINK,
+        DAYLIGHT, mix(POT, P["white"], 0.3), POSTER_RED, mix(FABRIC_BLUE, P["white"], 0.2),
+    )
+    for row in range(3):
+        shelf_y = 15 + row * 12
+        for col in range(4):
+            tone = stock[(row * 4 + col) % len(stock)]
+            px = 9 + col * 5
+            c.rect(px, shelf_y, 4, 8, tone)
+            c.hline(px, shelf_y, 4, lit(tone, 0.45))
+            c.vline(px + 3, shelf_y, 8, seam(tone, 0.42))
+        c.hline(7, shelf_y + 8, 24, mix(METAL_D, P["outline"], 0.4))
+        c.hline(7, shelf_y + 9, 24, METAL_D)
+    c.blend_rect(8, 11, 8, 36, (238, 248, 255, 30))
+    c.blend_rect(24, 11, 3, 36, (238, 248, 255, 20))
+    c.outline_rect(7, 10, 24, 40, seam(shell, 0.55))
+    # Selection panel: cream face, button rows, coin slot.
+    c.rect(34, 10, 11, 40, mix(WALL_TOP, shell, 0.16))
+    c.outline_rect(34, 10, 11, 40, seam(shell, 0.5))
+    c.hline(35, 11, 9, P["white"])
+    for row in range(4):
+        by = 14 + row * 7
+        c.rect(36, by, 7, 4, mix(METAL_D, P["outline"], 0.32))
+        c.hline(36, by, 7, METAL)
+        c.set(36, by + 1, lit(METAL, 0.3))
+    c.rect(36, 43, 7, 5, mix(shell, P["outline"], 0.5))
+    c.hline(36, 43, 7, METAL_D)
+    # Delivery slot: a recessed mouth low on the glazed side.
+    c.rect(8, 54, 22, 9, mix(shell, P["outline"], 0.55))
+    c.rect(9, 55, 20, 7, mix(SCREEN_D, P["outline"], 0.35))
+    c.hline(9, 55, 20, METAL_D)
+    c.hline(9, 62, 20, lit(shell, 0.3))
+    c.rect(4, base - 3, w - 8, 4, mix(shell, P["outline"], 0.34))
+    c.hline(4, base - 3, w - 8, seam(shell, 0.5))
+    outline_silhouette(c)
+    return c
+
+
+def build_armchair() -> Canvas:
+    """Single armchair: narrow back, two fat arms, one cushion, stub feet."""
+    w, h = 48, 52
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 3, w - 4, base)
+    seat_top = mix(FABRIC_BLUE, P["white"], 0.3)
+    seat_front = FABRIC_BLUE_D
+    frame = mix(seat_front, P["outline"], 0.3)
+    # Back narrower than the arms, so one seat reads instead of a sofa.
+    box(c, 12, 3, 24, 27, seat_top, mix(seat_front, P["outline"], 0.06), seat_top, seat_front, 7)
+    c.ellipse(24, 5, 9, 2, lit(seat_top, 0.4))
+    c.vline(24, 11, 18, seam(frame, 0.4))
+    c.hline(14, 22, 20, seam(seat_front, 0.34))
+    # Seat cushion, its front lip proud of the base.
+    box(c, 6, 26, 36, 18, mix(seat_top, P["white"], 0.2), seat_front, seat_top, seat_front, 8)
+    c.hline(9, 35, 30, seam(seat_front, 0.4))
+    c.hline(8, 36, 32, lit(seat_top, 0.3))
+    # Base skirt and two stub feet, visible in the gap between the arms.
+    c.rect(7, 41, 34, 3, mix(seat_front, P["outline"], 0.2))
+    c.hline(7, 41, 34, seam(seat_front, 0.5))
+    for foot_x in (16, 26):
+        c.rect(foot_x, 44, 6, base - 44 + 1, WOOD_D)
+        c.hline(foot_x, 44, 6, WOOD)
+    # Arms last: they sit in front and cap both ends.
+    for arm_x in (2, w - 15):
+        box(c, arm_x, 12, 13, 32, seat_top, mix(seat_front, P["outline"], 0.1), seat_top, seat_front, 5)
+        c.ellipse(arm_x + 6, 13, 6, 3, lit(seat_top, 0.45))
+        c.hline(arm_x + 1, 20, 11, seam(seat_front, 0.35))
+        c.vline(arm_x + 12, 14, 29, seam(seat_front, 0.4))
+    outline_silhouette(c)
+    return c
+
+
+def build_counter() -> Canvas:
+    """Break-area counter: stone worktop, cabinet run, sink and tap, clutter."""
+    w, h = TILE * 3, 48
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 4, w - 5, base)
+    stone = mix(WHITE_FURN_L, METAL_L, 0.42)
+    stone_d = mix(stone, P["outline"], 0.3)
+    box(c, 3, 15, w - 6, 12, stone, stone_d, lit(stone, 0.35), stone_d, 10)
+    c.hline(4, 15, w - 8, P["white"])
+    c.hline(4, 16, w - 8, lit(stone, 0.4))
+    # Sink: a recessed basin in the worktop with a tap arching over it.
+    c.rect(10, 18, 20, 5, mix(stone_d, P["outline"], 0.35))
+    c.rect(11, 19, 18, 3, mix(stone_d, P["outline"], 0.6))
+    c.hline(10, 18, 20, lit(stone_d, 0.3))
+    c.rect(18, 7, 3, 11, METAL_D)
+    c.vline(18, 7, 11, METAL_L)
+    c.rect(18, 7, 8, 3, METAL_D)
+    c.hline(18, 7, 8, METAL_L)
+    c.rect(24, 8, 2, 4, METAL)
+    c.set(25, 12, DAYLIGHT)
+    # Clutter on the worktop: two mugs and a small potted plant.
+    for mug_x, mug_tone in ((38, WHITE_FURN), (47, FABRIC_YELLOW)):
+        c.rect(mug_x, 12, 9, 8, mug_tone)
+        c.hline(mug_x, 12, 9, P["white"])
+        c.vline(mug_x, 12, 8, lit(mug_tone, 0.45))
+        c.set(mug_x + 8, 12, seam(mug_tone, 0.4))
+        c.hline(mug_x, 19, 9, mix(mug_tone, P["outline"], 0.35))
+        c.rect(mug_x + 9, 14, 2, 4, mug_tone)
+    c.rect(80, 14, 10, 6, POT)
+    c.hline(80, 14, 10, lit(POT, 0.4))
+    c.vline(89, 14, 6, POT_D)
+    c.ellipse(84, 12, 7, 4, LEAF_D)
+    c.ellipse(82, 11, 5, 3, LEAF)
+    c.ellipse(86, 10, 4, 3, LEAF_L)
+    # Cabinet run: four doors with handles over a recessed kick.
+    c.rect(4, 27, w - 8, 16, WOOD_D)
+    c.hline(4, 27, w - 8, WOOD)
+    c.hline(4, 28, w - 8, mix(WOOD, P["white"], 0.15))
+    for door_x in (6, 28, 50, 72):
+        c.rect(door_x, 29, 19, 11, WOOD)
+        c.outline_rect(door_x, 29, 19, 11, seam(WOOD_D, 0.45))
+        c.hline(door_x + 1, 30, 17, lit(WOOD, 0.32))
+        c.rect(door_x + 7, 33, 5, 3, METAL)
+        c.hline(door_x + 7, 33, 5, METAL_L)
+        c.hline(door_x + 7, 35, 5, shade(METAL_D, -28))
+    c.rect(4, 40, w - 8, 3, mix(WOOD_D, P["outline"], 0.35))
+    c.hline(4, 40, w - 8, seam(WOOD_D, 0.5))
+    outline_silhouette(c)
+    return c
+
+
+def build_side_table() -> Canvas:
+    """Round side table: dished top on a turned pedestal over a round foot."""
+    w, h = TILE, 40
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 6, w - 7, base)
+    # Foot: a small round plinth under the pedestal, contact shadow at its edge.
+    c.ellipse(16, 31, 7, 3, WOOD_D)
+    c.ellipse(16, 30, 6, 2, WOOD)
+    c.hline(11, 30, 5, lit(WOOD, 0.4))
+    # Pedestal: a turned column, lit on the left, with a collar and a bead.
+    c.rect(13, 16, 5, 15, WOOD_D)
+    c.vline(13, 16, 15, WOOD)
+    c.vline(14, 16, 15, WOOD_L)
+    c.vline(17, 16, 15, seam(WOOD_D, 0.35))
+    c.rect(12, 21, 7, 2, mix(WOOD_D, P["outline"], 0.3))
+    c.rect(11, 16, 10, 3, mix(WOOD_D, P["outline"], 0.3))
+    c.hline(11, 16, 10, WOOD)
+    # Top: a darker disc peeking below a lit disc gives the round edge depth.
+    c.ellipse(16, 12, 13, 4, WOOD_D)
+    c.ellipse(16, 10, 13, 4, WOOD_L)
+    c.hline(4, 8, 9, lit(WOOD_L, 0.5))
+    c.hline(18, 8, 7, lit(WOOD_L, 0.35))
+    c.ellipse(16, 10, 9, 3, mix(WOOD_L, WOOD, 0.28))
+    c.ellipse(16, 10, 4, 2, mix(WOOD_L, WOOD, 0.16))
+    outline_silhouette(c)
+    return c
+
+
+def build_filing_cabinet() -> Canvas:
+    """Filing cabinet: a dark steel body, three drawers on bar pulls, lit top.
+
+    Reads as the heavy archive unit beside the lighter `cabinet` pedestal: same
+    footprint, darker enclosure, plated handles instead of recessed pulls.
+    """
+    w, h = TILE, 64
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 3, w - 4, base)
+    body = mix(METAL_D, P["outline"], 0.3)
+    body_d = mix(body, P["outline"], 0.34)
+    box(c, 3, 2, w - 6, base - 2 + 1, lit(body, 0.26), body, lit(body, 0.4), body_d, 5)
+    c.hline(4, 4, w - 8, lit(body, 0.6))
+    for index in range(3):
+        dy = 9 + index * 16
+        c.rect(6, dy, w - 12, 14, lit(body, 0.06))
+        c.outline_rect(6, dy, w - 12, 14, seam(body, 0.45))
+        c.hline(7, dy + 1, w - 14, lit(body, 0.42))
+        c.hline(7, dy + 13, w - 14, seam(body, 0.55))
+        # Bar pull: a plated handle on two posts, catching the light on its top.
+        for post_x in (10, 20):
+            c.rect(post_x, dy + 4, 2, 3, body_d)
+        c.rect(9, dy + 5, 14, 4, METAL)
+        c.hline(9, dy + 5, 14, METAL_L)
+        c.hline(9, dy + 8, 14, shade(METAL_D, -34))
+    c.rect(4, base - 3, w - 8, 4, mix(body_d, P["outline"], 0.3))
+    c.hline(4, base - 3, w - 8, seam(body, 0.5))
+    outline_silhouette(c)
+    return c
+
+
+def build_water_cooler() -> Canvas:
+    """Bottle dispenser: an inverted translucent bottle over a slim cabinet.
+
+    Distinct from `cooler`: one large bottle on a narrow column, a single tap
+    and a drip tray, where the wide cooler carries two taps on a low cabinet.
+    """
+    w, h = TILE, 56
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 8, 23, base)
+    glass = (150, 196, 224, 255)
+    glass_l = (196, 228, 244, 255)
+    water = (128, 178, 214, 255)
+    # Bottle: cap, neck, stepped shoulders, then the tapered glass body.
+    c.rect(13, 0, 6, 3, METAL_L)
+    c.hline(13, 0, 6, P["white"])
+    c.hline(13, 2, 6, shade(METAL_D, -20))
+    c.rect(14, 3, 4, 4, glass_l)
+    c.vline(14, 3, 4, P["white"])
+    for y, inset in ((7, 3), (9, 5), (11, 7)):
+        c.rect(16 - inset, y, inset * 2, 2, glass)
+        c.hline(16 - inset, y, 2, glass_l)
+    c.rect(8, 13, 16, 13, glass)
+    c.vline(9, 13, 12, glass_l)
+    c.rect(10, 14, 2, 7, (216, 238, 250, 255))
+    c.rect(9, 19, 14, 5, water)
+    c.hline(9, 19, 14, mix(water, P["white"], 0.45))
+    for bubble_x, bubble_y in ((12, 21), (18, 17), (20, 22), (14, 16)):
+        c.set(bubble_x, bubble_y, P["white"])
+    # Cabinet: a pale shell under the bottle, so the glass reads as glass rather
+    # than as more of the appliance.
+    box(c, 8, 25, 16, base - 25 + 1, (222, 230, 236, 255), (192, 204, 214, 255), (238, 244, 248, 255), (164, 180, 192, 255), 5)
+    c.rect(10, 33, 12, 6, (128, 156, 178, 255))
+    c.rect(11, 34, 10, 4, (162, 192, 212, 255))
+    c.hline(11, 34, 10, P["white"])
+    c.rect(15, 40, 3, 3, METAL_D)
+    c.hline(15, 40, 3, METAL_L)
+    c.rect(18, 39, 5, 2, METAL)
+    c.hline(18, 39, 5, METAL_L)
+    c.rect(10, 44, 12, 4, shade(METAL_D, -46))
+    c.hline(10, 44, 12, METAL)
+    for slot_x in (12, 16, 20):
+        c.rect(slot_x, 45, 2, 2, CABLE)
+    c.rect(9, base - 2, 14, 3, mix(METAL_D, P["outline"], 0.45))
+    outline_silhouette(c)
+    return c
+
+
+def build_fridge() -> Canvas:
+    """Break-room fridge: one door on a bar handle with a gasket seam, base shadow."""
+    w, h = TILE, 68
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 4, w - 5, base)
+    shell = mix(WHITE_FURN, METAL_L, 0.18)
+    shell_d = mix(WHITE_FURN_D, METAL_D, 0.24)
+    box(c, 3, 2, w - 6, base - 2 + 1, lit(WHITE_FURN_L, 0.2), shell, P["white"], shell_d, 5)
+    c.hline(4, 4, w - 8, P["white"])
+    # Door: a lit panel inside the body, its top edge read as the gasket seam.
+    c.rect(6, 10, w - 12, base - 10 - 5, mix(shell, P["white"], 0.24))
+    c.outline_rect(6, 10, w - 12, base - 10 - 5, seam(shell_d, 0.4))
+    c.hline(7, 11, w - 14, lit(WHITE_FURN_L, 0.35))
+    c.hline(6, 15, w - 12, seam(shell_d, 0.28))
+    c.vline(w - 7, 16, base - 21, seam(shell_d, 0.22))
+    # Bar handle, standing proud of the door on two posts.
+    for post_y in (20, 31):
+        c.rect(20, post_y, 2, 3, shell_d)
+    c.rect(19, 21, 4, 12, METAL)
+    c.vline(19, 21, 12, METAL_L)
+    c.vline(22, 21, 12, shade(METAL_D, -30))
+    # Base: a recessed plinth shadow, so the fridge does not sit flat on the tile.
+    c.rect(4, base - 4, w - 8, 5, mix(shell_d, P["outline"], 0.3))
+    c.hline(4, base - 4, w - 8, seam(shell_d, 0.5))
+    outline_silhouette(c)
+    return c
+
+
+def build_tv_stand() -> Canvas:
+    """TV on a low stand: dark bezel over a lit screen carrying content blocks."""
+    w, h = TILE * 3, 48
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 4, w - 5, base)
+    # Stand first: a low unit with two doors and a plinth. The screen is drawn
+    # after it, so the bezel overlaps the top face it rests on.
+    box(c, 2, 26, w - 4, base - 26 + 1, WOOD_L, WOOD_D, WOOD_L, WOOD_D, 5)
+    c.hline(4, 27, w - 8, lit(WOOD_L, 0.5))
+    c.hline(4, 31, w - 8, mix(WOOD_L, WOOD, 0.4))
+    for door_x in (6, 52):
+        c.rect(door_x, 33, 38, 6, WOOD)
+        c.outline_rect(door_x, 33, 38, 6, seam(WOOD_D, 0.45))
+        c.hline(door_x + 1, 34, 36, lit(WOOD, 0.3))
+        c.rect(door_x + 17, 35, 4, 3, METAL)
+        c.hline(door_x + 17, 35, 4, METAL_L)
+    c.rect(4, base - 2, w - 8, 3, mix(WOOD_D, P["outline"], 0.35))
+    # Screen: a dark bezel around a lit panel, standing on the stand's top face.
+    bezel = mix(SCREEN_D, P["outline"], 0.25)
+    c.rect(14, 3, 68, 28, bezel)
+    c.hline(14, 3, 68, lit(bezel, 0.35))
+    c.vline(14, 3, 28, lit(bezel, 0.4))
+    c.rect(17, 6, 62, 22, SCREEN_D)
+    c.rect(18, 7, 60, 20, SCREEN)
+    c.hline(18, 7, 60, SCREEN_L)
+    # Abstract content: a panel of lines, a bar chart, and a colour strip.
+    c.rect(20, 9, 24, 16, mix(SCREEN_L, P["white"], 0.4))
+    c.hline(20, 9, 24, P["white"])
+    for row, width in ((13, 18), (16, 14), (19, 16), (22, 9)):
+        c.hline(22, row, width, mix(SCREEN_D, SCREEN_L, 0.5))
+    for index, bar_h in enumerate((5, 9, 14, 8)):
+        c.rect(52 + index * 7, 25 - bar_h, 5, bar_h, mix(SCREEN_L, P["white"], 0.5))
+        c.hline(52 + index * 7, 25 - bar_h, 5, P["white"])
+    c.hline(52, 25, 24, mix(SCREEN_D, P["white"], 0.4))
+    c.rect(45, 9, 4, 16, FABRIC_YELLOW)
+    c.vline(45, 9, 16, lit(FABRIC_YELLOW, 0.45))
+    c.blend_rect(19, 8, 58, 18, (240, 250, 255, 24))
+    outline_silhouette(c)
+    return c
+
+
+def build_reading_chair() -> Canvas:
+    """Armless lounge chair: a tall narrow back over a deep seat on stub legs.
+
+    The silhouette is the point: no arms, a crown well above the seat, and
+    wooden stubs instead of the task chair's gas lift and five-star base.
+    """
+    w, h = TILE, 48
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 5, w - 6, base)
+    fabric_top = mix(FABRIC_BLUE, P["white"], 0.14)
+    fabric_front = FABRIC_BLUE_D
+    frame = mix(fabric_front, P["outline"], 0.3)
+    box(c, 9, 3, 14, 25, fabric_top, mix(fabric_front, P["outline"], 0.05), fabric_top, fabric_front, 6)
+    c.ellipse(16, 5, 6, 3, lit(fabric_top, 0.45))
+    c.vline(16, 11, 17, seam(frame, 0.32))
+    c.hline(10, 19, 12, seam(fabric_front, 0.3))
+    # Seat: deeper than the back is wide, with a front lip over the stub legs.
+    box(c, 6, 26, 20, 13, fabric_top, fabric_front, fabric_top, fabric_front, 7)
+    c.hline(8, 34, 16, seam(fabric_front, 0.42))
+    c.hline(7, 35, 18, lit(fabric_top, 0.28))
+    for leg_x in (8, 21):
+        c.rect(leg_x, 38, 4, base - 38 + 1, WOOD_D)
+        c.hline(leg_x, 38, 4, WOOD)
+    outline_silhouette(c)
+    return c
+
+
+def _tank_fish(c: Canvas, cx: int, cy: int, tone) -> None:
+    """One tank fish: a lens body, a forked tail and a lit back."""
+    c.ellipse(cx, cy, 4, 2, mix(tone, P["outline"], 0.15))
+    c.ellipse(cx, cy, 3, 2, tone)
+    c.hline(cx - 6, cy - 1, 3, mix(tone, P["outline"], 0.2))
+    c.hline(cx - 6, cy + 1, 3, mix(tone, P["outline"], 0.2))
+    c.hline(cx - 2, cy - 1, 3, lit(tone, 0.5))
+    c.set(cx + 2, cy, P["outline"])
+
+
+def build_aquarium() -> Canvas:
+    """Floor aquarium: a glazed tank on a cabinet, with hood, gravel and fish."""
+    w, h = TILE * 2, 56
+    base = art_bottom(h)
+    c = Canvas(w, h)
+    ground_shadow(c, 3, w - 4, base)
+    frame = mix(METAL_D, P["outline"], 0.42)
+    glass = (150, 196, 224, 255)
+    gravel = mix(CONCRETE[0], P["outline"], 0.25)
+    # Cabinet: a wooden stand with two doors and a recessed plinth.
+    box(c, 2, 33, w - 4, base - 33 + 1, WOOD_L, WOOD_D, WOOD_L, WOOD_D, 6)
+    c.hline(4, 34, w - 8, lit(WOOD_L, 0.45))
+    for door_x in (5, 34):
+        c.rect(door_x, 40, 25, 7, WOOD)
+        c.outline_rect(door_x, 40, 25, 7, seam(WOOD_D, 0.45))
+        c.hline(door_x + 1, 41, 23, lit(WOOD, 0.3))
+        c.rect(door_x + 10, 42, 5, 3, METAL)
+        c.hline(door_x + 10, 42, 5, METAL_L)
+    c.rect(3, base - 3, w - 6, 4, mix(WOOD_D, P["outline"], 0.35))
+    c.hline(3, base - 3, w - 6, seam(WOOD_D, 0.5))
+    # Tank: a metal-framed glass box sitting on the stand's top face.
+    c.rect(2, 6, w - 4, 27, frame)
+    c.hline(2, 6, w - 4, lit(frame, 0.4))
+    c.hline(2, 32, w - 4, seam(frame, 0.5))
+    c.rect(4, 8, w - 8, 23, glass)
+    c.rect(4, 8, w - 8, 2, (192, 226, 244, 255))
+    c.hline(4, 10, w - 8, mix(glass, P["white"], 0.5))
+    # Planting: leaf clusters rooted at the gravel line.
+    for lx, ly, size, tone in (
+        (10, 24, 7, LEAF_D), (15, 22, 6, LEAF), (20, 24, 5, LEAF_L),
+        (44, 21, 8, LEAF_D), (38, 24, 5, LEAF), (50, 24, 6, LEAF_L), (33, 25, 4, LEAF),
+    ):
+        leaf(c, lx, ly, size, tone, lit(tone, 0.55))
+    # Gravel bed, drawn over the roots so the plants are planted, not floating.
+    c.rect(4, 27, w - 8, 4, gravel)
+    c.hline(4, 27, w - 8, lit(gravel, 0.35))
+    for pebble_x, pebble_y, tone in (
+        (8, 29, POT_D), (14, 28, METAL), (21, 30, DAYLIGHT), (27, 28, CORK_D),
+        (33, 29, METAL_L), (40, 30, POT), (47, 28, DAYLIGHT), (54, 29, METAL),
+    ):
+        c.rect(pebble_x, pebble_y, 2, 1, tone)
+    # Fish and the bubble trail from the airstone.
+    _tank_fish(c, 22, 15, DAYLIGHT)
+    _tank_fish(c, 40, 18, POSTER_RED)
+    _tank_fish(c, 31, 23, FABRIC_YELLOW)
+    for bubble_x, bubble_y in ((30, 25), (31, 21), (30, 18), (32, 13)):
+        c.set(bubble_x, bubble_y, P["white"])
+    # Daylight raking across the glass, then the hood over the top.
+    for step in range(6):
+        c.blend(7 + step, 11 + step, (252, 254, 255, 46))
+    hood = mix(SCREEN_D, P["outline"], 0.3)
+    c.rect(1, 0, w - 2, 6, hood)
+    c.hline(1, 0, w - 2, P["white"])
+    c.hline(1, 1, w - 2, lit(hood, 0.4))
+    c.hline(1, 5, w - 2, seam(hood, 0.5))
+    c.rect(6, 5, w - 12, 2, mix(DAYLIGHT, P["white"], 0.35))
+    outline_silhouette(c)
+    return c
+
+
 def _rug(w: int, h: int, field, trim, accent) -> Canvas:
     """Woven rug: weft rows, a border band and a soft fringe at both short edges."""
     c = Canvas(w, h)
@@ -1187,6 +1758,203 @@ def _rug(w: int, h: int, field, trim, accent) -> Canvas:
     return c
 
 
+def build_rug_checker() -> Canvas:
+    """Checker rug: the office grey checker under a darker border.
+
+    A floor decal like the other rugs, so it is opaque edge to edge, carries no
+    cast shadow and never reads as standing furniture.
+    """
+    w, h = TILE * 3, TILE * 2
+    c = Canvas(w, h)
+    light, dark = CHECKER_A
+    for gy in range(0, h, 16):
+        for gx in range(0, w, 16):
+            c.rect(gx, gy, 16, 16, light if (gx // 16 + gy // 16) % 2 == 0 else dark)
+    for edge in range(0, h, 16):
+        c.hline(0, edge, w, CHECKER_SEAM)
+    for edge in range(0, w, 16):
+        c.vline(edge, 0, h, CHECKER_SEAM)
+    trim = mix(CHECKER_A[0], P["outline"], 0.26)
+    c.outline_rect(1, 1, w - 2, h - 2, trim)
+    c.outline_rect(3, 3, w - 6, h - 6, mix(trim, CHECKER_A[0], 0.55))
+    c.outline_rect(5, 5, w - 10, h - 10, mix(trim, CHECKER_A[0], 0.3))
+    for fringe_x in range(3, w - 3, 5):
+        c.rect(fringe_x, 0, 2, 3, mix(CHECKER_A[0], P["white"], 0.45))
+        c.rect(fringe_x, h - 3, 2, 3, mix(CHECKER_A[0], P["white"], 0.45))
+    return c
+
+
+# ── Wall decoration ──────────────────────────────────────────────────────────
+
+def _mount(c: Canvas, w: int, h: int, mount) -> None:
+    """Cast shadow and dark mount for one flat panel hung on the wall face.
+
+    Decoration is drawn straight on, so it carries no 3/4 box: the panel is the
+    canvas less one pixel of shadow down and right, and the mount is what keeps a
+    pale panel legible against the pale wall. These pieces deliberately skip
+    `outline_silhouette`: the specified 1-2px mount already sets their border
+    weight, and the shared 2px rim would overwrite their soft shadow.
+    """
+    c.rect(1, h - 1, w - 1, 1, P["shadow_soft"])
+    c.vline(w - 1, 1, h - 1, P["shadow_soft"])
+    c.rect(0, 0, w - 1, h - 1, mount)
+
+
+def _note(c: Canvas, x: int, y: int, w: int, h: int, tone) -> None:
+    """One pinned note: a flat slip, a shadowed edge, faint lines and a pin."""
+    c.rect(x + 1, y + 1, w, h, P["shadow_soft"])
+    c.rect(x, y, w, h, tone)
+    c.hline(x, y, w, lit(tone, 0.4))
+    c.vline(x + w - 1, y, h, seam(tone, 0.4))
+    c.hline(x, y + h - 1, w, seam(tone, 0.35))
+    for row in range(y + 3, y + h - 2, 3):
+        c.hline(x + 2, row, w - 4, seam(tone, 0.24))
+    c.rect(x + w // 2 - 1, y + 1, 2, 2, P["outline"])
+
+
+def build_wall_poster() -> Canvas:
+    """Poster: a bold graphic over a headline and body lines."""
+    w, h = 28, 36
+    c = Canvas(w, h)
+    _mount(c, w, h, MOUNT)
+    c.rect(2, 2, w - 5, h - 5, POSTER_RED)
+    for step in range(7):
+        c.hline(11 - step, 6 + step, step * 2 + 1, mix(POSTER_RED, P["outline"], 0.5))
+    for step in range(4):
+        c.hline(7 - step, 12 + step, step * 2 + 1, mix(POSTER_RED, P["outline"], 0.3))
+    c.ellipse(21, 8, 3, 3, FABRIC_YELLOW)
+    c.set(20, 7, lit(FABRIC_YELLOW, 0.5))
+    c.hline(2, 17, w - 5, mix(POSTER_RED, P["outline"], 0.62))
+    c.rect(2, 19, w - 5, 14, PAPER)
+    c.hline(5, 21, 17, POSTER_RED)
+    c.hline(5, 22, 17, POSTER_RED)
+    for row, width in ((25, 18), (27, 14), (29, 16), (31, 11)):
+        c.hline(5, row, width, PAPER_D)
+    return c
+
+
+def build_wall_clock() -> Canvas:
+    """Wall clock: round bezel, white face, cardinal ticks and two hands."""
+    w, h = 24, 24
+    c = Canvas(w, h)
+    c.ellipse(12, 12, 11, 11, P["shadow_soft"])
+    c.ellipse(11, 11, 11, 11, MOUNT)
+    c.ellipse(10, 10, 10, 10, lit(MOUNT, 0.42))
+    c.ellipse(11, 11, 9, 9, WHITE_FURN_L)
+    tick = seam(WHITE_FURN_L, 0.6)
+    c.vline(11, 3, 2, tick)
+    c.vline(11, 18, 2, tick)
+    c.hline(3, 11, 2, tick)
+    c.hline(18, 11, 2, tick)
+    for step in range(7):
+        c.vline(11 + step, 9 - step, 2, P["outline"])
+    for step in range(4):
+        c.vline(10 - step, 9 - step, 2, P["outline"])
+    c.rect(9, 8, 4, 4, P["outline"])
+    return c
+
+
+def build_wall_sign() -> Canvas:
+    """Wall sign: a dark plate with a logo block and two lines of text blocks."""
+    w, h = 64, 20
+    c = Canvas(w, h)
+    _mount(c, w, h, MOUNT)
+    c.rect(2, 2, w - 5, h - 5, SIGN_PLATE)
+    c.hline(2, 2, w - 5, lit(SIGN_PLATE, 0.4))
+    c.vline(2, 2, h - 5, lit(SIGN_PLATE, 0.45))
+    c.hline(2, h - 4, w - 5, seam(SIGN_PLATE, 0.45))
+    c.rect(5, 6, 7, 7, FABRIC_YELLOW)
+    c.hline(5, 6, 7, lit(FABRIC_YELLOW, 0.45))
+    for x, width in ((16, 6), (24, 4), (30, 8), (40, 5), (47, 7)):
+        c.rect(x, 5, width, 3, P["white"])
+    for x, width in ((16, 9), (27, 4), (33, 6), (41, 3)):
+        c.rect(x, 11, width, 3, mix(P["white"], SIGN_PLATE, 0.3))
+    return c
+
+
+def build_wall_screen() -> Canvas:
+    """Wall display: dark bezel around a lit panel carrying a simple dark UI."""
+    w, h = 48, 32
+    c = Canvas(w, h)
+    _mount(c, w, h, MOUNT)
+    c.rect(2, 2, w - 5, h - 5, SIGN_PLATE)
+    c.hline(2, 2, w - 5, lit(SIGN_PLATE, 0.4))
+    c.vline(2, 2, h - 5, lit(SIGN_PLATE, 0.45))
+    c.hline(2, h - 4, w - 5, seam(SIGN_PLATE, 0.4))
+    c.vline(w - 4, 2, h - 5, seam(SIGN_PLATE, 0.35))
+    c.rect(5, 5, 37, 20, SCREEN)
+    c.rect(5, 5, 37, 7, SCREEN_L)
+    c.rect(7, 7, 33, 3, mix(SCREEN_D, P["white"], 0.22))
+    c.rect(8, 8, 12, 1, SCREEN_L)
+    c.rect(22, 8, 7, 1, SCREEN_L)
+    c.rect(7, 12, 14, 11, mix(SCREEN_L, P["white"], 0.55))
+    for index, width in enumerate((10, 7, 4)):
+        c.hline(9, 14 + index * 3, width, SCREEN)
+    for index, bar in enumerate((4, 7, 9, 6)):
+        c.rect(24 + index * 5, 23 - bar, 3, bar, mix(SCREEN_L, P["white"], 0.35))
+        c.hline(24 + index * 5, 23 - bar, 3, P["white"])
+    c.hline(24, 23, 18, mix(SCREEN_D, P["white"], 0.3))
+    c.blend_rect(6, 6, 14, 18, (240, 250, 255, 26))
+    return c
+
+
+def build_wall_pinboard() -> Canvas:
+    """Pinboard: a cork field in a wood frame with four pinned notes."""
+    w, h = 56, 32
+    c = Canvas(w, h)
+    _mount(c, w, h, WOOD)
+    c.hline(0, 0, w - 1, lit(WOOD, 0.45))
+    c.vline(0, 1, h - 2, lit(WOOD, 0.5))
+    c.hline(0, h - 2, w - 1, WOOD_D)
+    c.vline(w - 2, 1, h - 2, WOOD_D)
+    c.rect(3, 3, w - 7, h - 7, CORK)
+    c.hline(3, 3, w - 7, seam(CORK, 0.3))
+    c.vline(3, 3, h - 7, seam(CORK, 0.25))
+    for dot_x in range(5, w - 5, 4):
+        c.set(dot_x, 5 + (dot_x * 7) % (h - 11), CORK_D)
+    _note(c, 6, 6, 13, 12, FABRIC_YELLOW)
+    _note(c, 22, 5, 12, 11, FABRIC_PINK)
+    _note(c, 38, 7, 12, 13, mix(FABRIC_BLUE, P["white"], 0.45))
+    _note(c, 12, 18, 15, 10, PAPER)
+    return c
+
+
+def build_wall_frame_art() -> Canvas:
+    """Framed art: a mat around a small sun-over-hills scene."""
+    w, h = 32, 28
+    c = Canvas(w, h)
+    _mount(c, w, h, WOOD_D)
+    c.hline(0, 0, w - 1, lit(WOOD_D, 0.5))
+    c.vline(0, 1, h - 2, lit(WOOD_D, 0.55))
+    c.hline(0, h - 2, w - 1, seam(WOOD_D, 0.45))
+    c.vline(w - 2, 1, h - 2, seam(WOOD_D, 0.35))
+    c.rect(3, 3, w - 7, h - 7, PAPER_D)
+    c.rect(5, 5, w - 11, h - 11, SKY)
+    c.rect(5, 5, w - 11, 6, SKY_L)
+    c.ellipse(21, 9, 3, 3, FABRIC_YELLOW)
+    c.set(20, 8, lit(FABRIC_YELLOW, 0.5))
+    for step in range(7):
+        c.hline(11 - step, 10 + step, step * 2 + 1, mix(LEAF, P["white"], 0.35))
+    for step in range(5):
+        c.hline(20 - step, 13 + step, step * 2 + 1, LEAF)
+    c.rect(5, 18, w - 11, 4, mix(LEAF_D, P["outline"], 0.18))
+    c.set(9, 7, P["outline"])
+    c.set(11, 8, P["outline"])
+    return c
+
+
+def build_wall_decor() -> dict:
+    """The six flat panels hung on the north wall face, written as wall_<key>.png."""
+    return {
+        "poster": build_wall_poster(),
+        "clock": build_wall_clock(),
+        "sign": build_wall_sign(),
+        "screen": build_wall_screen(),
+        "pinboard": build_wall_pinboard(),
+        "frame_art": build_wall_frame_art(),
+    }
+
+
 def build_props() -> dict:
     props = {}
     props["desk"] = build_desk()
@@ -1202,11 +1970,23 @@ def build_props() -> dict:
     props["pingpong"] = build_pingpong()
     props["lamp"] = build_lamp()
     props["cooler"] = build_cooler()
+    props["cabinet"] = build_cabinet()
+    props["rack"] = build_rack()
+    props["vending"] = build_vending()
+    props["armchair"] = build_armchair()
+    props["counter"] = build_counter()
+    props["side_table"] = build_side_table()
+    props["filing_cabinet"] = build_filing_cabinet()
+    props["water_cooler"] = build_water_cooler()
+    props["fridge"] = build_fridge()
+    props["tv_stand"] = build_tv_stand()
+    props["reading_chair"] = build_reading_chair()
+    props["aquarium"] = build_aquarium()
     # Rug variants so rooms do not all share one floor accent.
-    props["rug"] = _rug(TILE * 3, TILE * 2, (206, 196, 222, 255), (168, 152, 198, 255), (236, 230, 248, 255))
     props["rug_blue"] = _rug(TILE * 3, TILE * 2, (198, 212, 236, 255), (150, 172, 212, 255), (230, 238, 250, 255))
     props["rug_warm"] = _rug(TILE * 3, TILE * 2, (240, 222, 198, 255), (208, 178, 142, 255), (252, 240, 222, 255))
     props["rug_pink"] = _rug(TILE * 3, TILE * 2, (238, 206, 216, 255), (208, 160, 178, 255), (250, 232, 238, 255))
+    props["rug_checker"] = build_rug_checker()
     return props
 
 
@@ -1223,9 +2003,15 @@ def main() -> int:
     props = build_props()
     for name, canvas in props.items():
         canvas.to_png(out / f"prop_{name}.png")
+    decor = build_wall_decor()
+    for name, canvas in decor.items():
+        canvas.to_png(out / f"wall_{name}.png")
     for role in ROLE_PALETTE:
         build_character_sheet(role).to_png(out / f"char_{role}.png")
-    print(f"wrote {len(ROLE_PALETTE)} characters, floor atlas, 3 wall pieces and {len(props)} props to {out}")
+    print(
+        f"wrote {len(ROLE_PALETTE)} characters, floor atlas, 3 wall pieces, "
+        f"{len(decor)} wall decorations and {len(props)} props to {out}"
+    )
     return 0
 
 

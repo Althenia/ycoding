@@ -47,6 +47,42 @@ static func button_style(bg: Color) -> StyleBoxFlat:
 	return style
 
 
+## The visible keyboard-focus ring.
+##
+## Focus must be distinguishable from the unfocused state by more than a shade,
+## so the ring is wider, uses the accent hue, and carries an outer margin that
+## pushes it clear of the control's own border.
+static func focus_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.draw_center = false
+	style.bg_color = Color(0, 0, 0, 0)
+	style.border_color = ACCENT
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(7)
+	style.set_expand_margin_all(2.0)
+	return style
+
+
+## Focus ring for a control that also carries a background, so the focused state
+## keeps the filled surface and gains the accent border.
+static func focus_fill_style(bg: Color) -> StyleBoxFlat:
+	var style := panel_style(bg)
+	style.border_color = ACCENT
+	style.set_border_width_all(2)
+	return style
+
+
+## Apply the focus ring to any control that can take keyboard focus.
+static func apply_focus_style(control: Control, filled_bg: Variant = null) -> void:
+	if control == null:
+		return
+	control.focus_mode = Control.FOCUS_ALL
+	control.add_theme_stylebox_override(
+		"focus",
+		focus_style() if filled_bg == null else focus_fill_style(filled_bg)
+	)
+
+
 ## Apply the base font sizes and colors to a Control tree.
 static func apply(root: Control) -> void:
 	root.add_theme_font_size_override("font_size", 13)
@@ -83,4 +119,5 @@ static func button(text: String, primary: bool = false) -> Button:
 	control.add_theme_color_override(
 		"font_color", Color("1b1d23") if primary else TEXT
 	)
+	apply_focus_style(control)
 	return control

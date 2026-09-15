@@ -8,97 +8,233 @@ class_name OfficeWorld
 extends Node2D
 
 const TILE := 32
-const MAP_WIDTH := 34
-const MAP_HEIGHT := 24
 
-## Floor atlas columns from tools/generate_art.py (two tones per material).
+## --- Layout design ---------------------------------------------------------
+##
+## One deliberate module: a 41x23 tile world (1312x736 px, aspect 1.783).
+##
+## The aspect is chosen to match the window. Every common desktop window is 16:9
+## (1.778), so a 41x23 world fills 99.7% of it: the office really is full bleed
+## in both dimensions. A 40x21 world was 1.905 and letterboxed about 30px at
+## 1600x900.
+##
+##   rows  0-1   north wall band   (wall art and its mounted decoration)
+##   rows  2-10  north rooms       (9 rows)
+##   rows 11-12  central corridor  (2 rows; the only way between columns)
+##   rows 13-21  south rooms       (9 rows)
+##   row  22     south wall
+##
+##   col  0       west wall
+##   cols 1-12    lobby             (the sidebar floats over this band)
+##   col  13      divider
+##   cols 14-21   lead office
+##   col  22      divider
+##   cols 23-30   engineering
+##   col  31      divider
+##   cols 32-39   lounge / QA
+##   col  40      east wall
+##
+## The lobby carries no anchors. The sidebar is always open, and at 1024x768 it
+## covers cols 0-13, so an anchor there would be permanently hidden. For the same
+## reason every anchor sits at row 16 or above, clear of the floating composer.
+## test_shell_layout.gd proves both, and test_layout.gd proves the plan still
+## hangs together.
+##
+## The doorway pierces the north wall band at cols 9-10. OfficeNavigation
+## discovers the entrance as the first passable cell in the wall band rather than
+## hardcoding it, so the two cannot disagree.
+const MAP_WIDTH := 41
+const MAP_HEIGHT := 23
+
+## Room and corridor extents, in rows.
+const WALL_BAND := 2
+const CORRIDOR_TOP := 11
+const CORRIDOR_BOTTOM := 12
+const SOUTH_WALL := MAP_HEIGHT - 1
+const EAST_WALL := MAP_WIDTH - 1
+
+## Divider columns. Each divider is solid through both room bands and open at
+## the corridor, so the corridor is the only route between columns.
+const DIVIDERS := [26]
+
+## The doorway pierces the north wall band at these columns.
+const DOOR_COLS := [9, 10]
+
+## Floor atlas columns from tools/generate_art.py.
+##
+## The atlas is 12 columns: 0-1 wood, 2-3 carpet A, 4-5 carpet B, 6-7 tile, a
+## single 8 for concrete, 9-10 grey checker and a single 11 for cool plank.
+##
+## Tones vary per material, which is why the checkerboard below cannot simply add
+## one to every base: indexing past a material's last tone would draw nothing at
+## all. FLOOR_TONES is what keeps that honest, and test_layout.gd proves every
+## indexed column exists.
 const FLOOR_WOOD := 0
 const FLOOR_CARPET_A := 2
 const FLOOR_CARPET_B := 4
 const FLOOR_TILE := 6
 const FLOOR_CONCRETE := 8
+const FLOOR_CHECKER := 9
+const FLOOR_PLANK := 11
 
-## Room zones: id -> {rect (tiles), floor column, label}.
+## Tones per material, matching the atlas exactly.
+const FLOOR_TONES := {
+	FLOOR_WOOD: 2,
+	FLOOR_CARPET_A: 2,
+	FLOOR_CARPET_B: 2,
+	FLOOR_TILE: 2,
+	FLOOR_CONCRETE: 1,
+	FLOOR_CHECKER: 2,
+	FLOOR_PLANK: 1,
+}
+
+## Room zones: id -> {rect (tiles), floor column}. The rects tile the floor
+## exactly except along the divider column, where the CEO office wall stands;
+## test_layout.gd enforces both.
 const ZONES := [
-	{"id": "lead", "rect": Rect2i(1, 2, 9, 9), "floor": FLOOR_CARPET_A},
-	{"id": "engineering", "rect": Rect2i(11, 2, 8, 12), "floor": FLOOR_CARPET_B},
-	{"id": "lounge", "rect": Rect2i(20, 2, 13, 11), "floor": FLOOR_TILE},
-	{"id": "meeting", "rect": Rect2i(1, 12, 9, 11), "floor": FLOOR_TILE},
-	{"id": "break", "rect": Rect2i(11, 14, 8, 9), "floor": FLOOR_WOOD},
-	{"id": "qa", "rect": Rect2i(20, 13, 13, 11), "floor": FLOOR_TILE},
+	{"id": "reception_n", "rect": Rect2i(1, 2, 12, 9), "floor": FLOOR_TILE},
+	{"id": "reception_s", "rect": Rect2i(1, 13, 12, 9), "floor": FLOOR_TILE},
+	{"id": "corridor", "rect": Rect2i(1, 11, 39, 2), "floor": FLOOR_CONCRETE},
+	{"id": "product", "rect": Rect2i(13, 2, 13, 9), "floor": FLOOR_CHECKER},
+	{"id": "ops", "rect": Rect2i(27, 2, 13, 9), "floor": FLOOR_CHECKER},
+	{"id": "engineering", "rect": Rect2i(13, 13, 13, 9), "floor": FLOOR_CHECKER},
+	{"id": "ceo", "rect": Rect2i(27, 13, 13, 9), "floor": FLOOR_CARPET_A},
 ]
 
 ## Furniture: grid cell, footprint, prop sprite. `solid` blocks navigation.
+##
+## Every cluster here exists because something sends an actor to it. Reception is
+## circulation, the desks take working agents, the play room takes idle ones, the
+## focus chair takes an agent consolidating context, the huddle table takes a
+## question, and the CEO office receives reports.
 const FURNITURE := [
-	# --- Lead office (rows 3-9) ---
-	{"id": "rug_lead", "cell": Vector2i(2, 4), "prop": "rug_warm", "solid": false},
-	{"id": "desk_lead", "cell": Vector2i(3, 5), "prop": "desk", "solid": true},
-	{"id": "chair_lead", "cell": Vector2i(4, 8), "prop": "chair", "solid": false},
-	{"id": "shelf_lead", "cell": Vector2i(7, 3), "prop": "shelf", "solid": true},
-	{"id": "plant_lead", "cell": Vector2i(8, 8), "prop": "plant", "solid": true},
-	{"id": "lamp_lead", "cell": Vector2i(2, 8), "prop": "lamp", "solid": true},
-	# --- Engineering (rows 3-11) ---
-	{"id": "rug_eng", "cell": Vector2i(11, 4), "prop": "rug_blue", "solid": false},
-	{"id": "desk_backend", "cell": Vector2i(11, 4), "prop": "desk", "solid": true},
-	{"id": "chair_backend", "cell": Vector2i(12, 7), "prop": "chair", "solid": false},
-	{"id": "desk_frontend", "cell": Vector2i(15, 4), "prop": "desk", "solid": true},
-	{"id": "chair_frontend", "cell": Vector2i(16, 7), "prop": "chair", "solid": false},
-	{"id": "desk_qa_a", "cell": Vector2i(11, 9), "prop": "desk", "solid": true},
-	{"id": "chair_qa_a", "cell": Vector2i(12, 12), "prop": "chair", "solid": false},
-	{"id": "bookshelf_eng", "cell": Vector2i(18, 4), "prop": "bookshelf", "solid": true},
-	{"id": "cooler_eng", "cell": Vector2i(18, 8), "prop": "cooler", "solid": true},
-	# --- Lounge (rows 3-11, right column) ---
-	{"id": "rug_lounge", "cell": Vector2i(21, 4), "prop": "rug_pink", "solid": false},
-	{"id": "sofa_lounge", "cell": Vector2i(21, 3), "prop": "sofa", "solid": true},
-	{"id": "table_lounge", "cell": Vector2i(22, 6), "prop": "table", "solid": true},
-	{"id": "pingpong", "cell": Vector2i(21, 10), "prop": "pingpong", "solid": true},
-	{"id": "plant_lounge", "cell": Vector2i(31, 3), "prop": "plant", "solid": true},
-	{"id": "plant_lounge_b", "cell": Vector2i(31, 11), "prop": "plant", "solid": true},
-	# --- Meeting room (rows 14-20, left) ---
-	{"id": "board_meeting", "cell": Vector2i(2, 14), "prop": "whiteboard", "solid": true},
-	{"id": "rug_meeting", "cell": Vector2i(2, 17), "prop": "rug_blue", "solid": false},
-	{"id": "table_meeting", "cell": Vector2i(3, 17), "prop": "table", "solid": true},
-	{"id": "chair_meeting_a", "cell": Vector2i(2, 16), "prop": "chair", "solid": false},
-	{"id": "chair_meeting_b", "cell": Vector2i(5, 16), "prop": "chair", "solid": false},
-	{"id": "chair_meeting_c", "cell": Vector2i(2, 19), "prop": "chair", "solid": false},
-	{"id": "chair_meeting_d", "cell": Vector2i(5, 19), "prop": "chair", "solid": false},
-	{"id": "shelf_meeting", "cell": Vector2i(7, 15), "prop": "shelf", "solid": true},
-	# --- Break area (rows 14-20, middle) ---
-	{"id": "coffee", "cell": Vector2i(11, 14), "prop": "coffee", "solid": true},
-	{"id": "rug_break", "cell": Vector2i(14, 17), "prop": "rug_warm", "solid": false},
-	{"id": "sofa_break", "cell": Vector2i(14, 16), "prop": "sofa", "solid": true},
-	{"id": "table_break", "cell": Vector2i(15, 19), "prop": "table", "solid": true},
-	{"id": "plant_break", "cell": Vector2i(18, 15), "prop": "plant", "solid": true},
-	{"id": "cooler_break", "cell": Vector2i(18, 19), "prop": "cooler", "solid": true},
-	# --- QA lab (rows 14-20, right) ---
-	{"id": "desk_qa_b", "cell": Vector2i(21, 14), "prop": "desk", "solid": true},
-	{"id": "chair_qa_b", "cell": Vector2i(22, 17), "prop": "chair", "solid": false},
-	{"id": "desk_qa_c", "cell": Vector2i(25, 14), "prop": "desk", "solid": true},
-	{"id": "chair_qa_c", "cell": Vector2i(26, 17), "prop": "chair", "solid": false},
-	{"id": "bookshelf_qa", "cell": Vector2i(30, 15), "prop": "bookshelf", "solid": true},
+	# --- Reception: cols 1-11, both bands. This is circulation: it is the band the doorway opens
+## into and the band the sidebar covers, so nothing anchored lives here and
+## losing those columns costs nothing real. ---
+	{"id": "rec_rug_n", "cell": Vector2i(3, 4), "prop": "rug_warm", "solid": false},
+	{"id": "rec_sofa_a", "cell": Vector2i(2, 3), "prop": "sofa", "solid": true},
+	{"id": "rec_sofa_b", "cell": Vector2i(6, 3), "prop": "sofa", "solid": true},
+	{"id": "rec_counter", "cell": Vector2i(2, 7), "prop": "counter", "solid": true},
+	{"id": "rec_cooler", "cell": Vector2i(9, 3), "prop": "water_cooler", "solid": true},
+	{"id": "rec_plant_a", "cell": Vector2i(1, 2), "prop": "plant", "solid": true},
+	{"id": "rec_plant_b", "cell": Vector2i(11, 2), "prop": "plant", "solid": true},
+	{"id": "rec_cabinet", "cell": Vector2i(11, 7), "prop": "filing_cabinet", "solid": true},
+	{"id": "rec_fridge", "cell": Vector2i(11, 4), "prop": "fridge", "solid": true},
+	{"id": "rec_vending", "cell": Vector2i(9, 7), "prop": "vending", "solid": true},
+	{"id": "rec_rug_s", "cell": Vector2i(3, 15), "prop": "rug_blue", "solid": false},
+	{"id": "rec_sofa_s", "cell": Vector2i(2, 15), "prop": "sofa", "solid": true},
+	{"id": "rec_armchair", "cell": Vector2i(7, 15), "prop": "armchair", "solid": true},
+	{"id": "rec_side", "cell": Vector2i(4, 18), "prop": "side_table", "solid": true},
+	{"id": "rec_plant_c", "cell": Vector2i(1, 20), "prop": "plant", "solid": true},
+	{"id": "rec_plant_d", "cell": Vector2i(11, 20), "prop": "plant", "solid": true},
+	{"id": "rec_shelf", "cell": Vector2i(9, 17), "prop": "bookshelf", "solid": true},
+	# --- Product team: cols 13-25, rows 2-5. Four desks; anchors sit on each desk base row. ---
+	{"id": "desk_prod_0", "cell": Vector2i(13, 2), "prop": "desk", "solid": true},
+	{"id": "chair_prod_0", "cell": Vector2i(14, 4), "prop": "chair", "solid": false},
+	{"id": "desk_prod_1", "cell": Vector2i(16, 2), "prop": "desk", "solid": true},
+	{"id": "chair_prod_1", "cell": Vector2i(17, 4), "prop": "chair", "solid": false},
+	{"id": "desk_prod_2", "cell": Vector2i(19, 2), "prop": "desk", "solid": true},
+	{"id": "chair_prod_2", "cell": Vector2i(20, 4), "prop": "chair", "solid": false},
+	{"id": "desk_prod_3", "cell": Vector2i(22, 2), "prop": "desk", "solid": true},
+	{"id": "chair_prod_3", "cell": Vector2i(23, 4), "prop": "chair", "solid": false},
+	{"id": "plant_prod_0", "cell": Vector2i(13, 5), "prop": "plant", "solid": true},
+	{"id": "plant_prod_1", "cell": Vector2i(16, 5), "prop": "plant", "solid": true},
+	{"id": "plant_prod_2", "cell": Vector2i(19, 5), "prop": "plant", "solid": true},
+	{"id": "plant_prod_3", "cell": Vector2i(22, 5), "prop": "plant", "solid": true},
+	# --- Play room: cols 13-25, rows 6-10. Where idle agents go: ping-pong, sofas, a screen. ---
+	{"id": "play_rug", "cell": Vector2i(13, 7), "prop": "rug_pink", "solid": false},
+	{"id": "play_pingpong", "cell": Vector2i(13, 6), "prop": "pingpong", "solid": true},
+	{"id": "play_sofa_a", "cell": Vector2i(18, 6), "prop": "sofa", "solid": true},
+	{"id": "play_sofa_b", "cell": Vector2i(22, 6), "prop": "sofa", "solid": true},
+	{"id": "play_tv", "cell": Vector2i(19, 10), "prop": "tv_stand", "solid": true},
+	{"id": "play_plant", "cell": Vector2i(25, 6), "prop": "plant", "solid": true},
+	# --- Focus: col 24-25, rows 7-8. Where an agent consolidating context retires to. ---
+	{"id": "focus_rug", "cell": Vector2i(25, 8), "prop": "rug_warm", "solid": false},
+	{"id": "focus_chair", "cell": Vector2i(25, 8), "prop": "reading_chair", "solid": false},
+	{"id": "focus_side", "cell": Vector2i(24, 8), "prop": "side_table", "solid": true},
+	{"id": "focus_lamp", "cell": Vector2i(25, 7), "prop": "lamp", "solid": true},
+	# --- Ops team: cols 27-38, rows 2-10. Four desks plus the huddle board. ---
+	{"id": "desk_ops_0", "cell": Vector2i(27, 2), "prop": "desk", "solid": true},
+	{"id": "chair_ops_0", "cell": Vector2i(28, 4), "prop": "chair", "solid": false},
+	{"id": "desk_ops_1", "cell": Vector2i(30, 2), "prop": "desk", "solid": true},
+	{"id": "chair_ops_1", "cell": Vector2i(31, 4), "prop": "chair", "solid": false},
+	{"id": "desk_ops_2", "cell": Vector2i(33, 2), "prop": "desk", "solid": true},
+	{"id": "chair_ops_2", "cell": Vector2i(34, 4), "prop": "chair", "solid": false},
+	{"id": "desk_ops_3", "cell": Vector2i(36, 2), "prop": "desk", "solid": true},
+	{"id": "chair_ops_3", "cell": Vector2i(37, 4), "prop": "chair", "solid": false},
+	{"id": "hud_whiteboard", "cell": Vector2i(28, 9), "prop": "whiteboard", "solid": true},
+	{"id": "hud_rug", "cell": Vector2i(33, 7), "prop": "rug_checker", "solid": false},
+	{"id": "hud_table", "cell": Vector2i(34, 7), "prop": "table", "solid": true},
+	{"id": "hud_cabinet", "cell": Vector2i(38, 6), "prop": "filing_cabinet", "solid": true},
+	{"id": "hud_plant", "cell": Vector2i(27, 6), "prop": "plant", "solid": true},
+	# --- Engineering: cols 13-25, rows 13-17. Four desks plus storage. ---
+	{"id": "desk_eng_0", "cell": Vector2i(13, 13), "prop": "desk", "solid": true},
+	{"id": "chair_eng_0", "cell": Vector2i(14, 15), "prop": "chair", "solid": false},
+	{"id": "desk_eng_1", "cell": Vector2i(16, 13), "prop": "desk", "solid": true},
+	{"id": "chair_eng_1", "cell": Vector2i(17, 15), "prop": "chair", "solid": false},
+	{"id": "desk_eng_2", "cell": Vector2i(19, 13), "prop": "desk", "solid": true},
+	{"id": "chair_eng_2", "cell": Vector2i(20, 15), "prop": "chair", "solid": false},
+	{"id": "desk_eng_3", "cell": Vector2i(22, 13), "prop": "desk", "solid": true},
+	{"id": "chair_eng_3", "cell": Vector2i(23, 15), "prop": "chair", "solid": false},
+	{"id": "eng_cabinet", "cell": Vector2i(25, 13), "prop": "filing_cabinet", "solid": true},
+	{"id": "eng_plant", "cell": Vector2i(13, 16), "prop": "plant", "solid": true},
+	{"id": "eng_plant_b", "cell": Vector2i(25, 20), "prop": "plant", "solid": true},
+	{"id": "eng_racks", "cell": Vector2i(24, 17), "prop": "rack", "solid": true},
+	# --- CEO office: cols 27-38, rows 13-19, walled at col 26. Subagents report back here. ---
+	{"id": "desk_ceo", "cell": Vector2i(33, 13), "prop": "desk", "solid": false},
+	{"id": "ceo_chair", "cell": Vector2i(34, 16), "prop": "chair", "solid": false},
+	{"id": "ceo_aquarium", "cell": Vector2i(37, 13), "prop": "aquarium", "solid": true},
+	{"id": "ceo_sofa", "cell": Vector2i(27, 18), "prop": "sofa", "solid": true},
+	{"id": "ceo_side", "cell": Vector2i(30, 18), "prop": "side_table", "solid": true},
+	{"id": "ceo_plant", "cell": Vector2i(38, 20), "prop": "plant", "solid": true},
+	{"id": "ceo_rug", "cell": Vector2i(33, 17), "prop": "rug_warm", "solid": false},
 ]
 
-## Interior wall dividers by tile column, separating the floor into rooms.
-const INTERIOR_WALLS := [10, 19]
-
-## Work/visitor anchors per desk.
+## Mounted wall decoration, drawn on the north wall band above the wall art.
 ##
-## The work anchor is the desk's front row so the seated actor's base line is at
-## or below the desk base and Y-sorting draws them in front of it. A work anchor
-## above the desk base makes the actor disappear behind the desk.
+## Each entry is a tile column and a PROP_TEXTURES key, so decoration shares
+## one registry and one naming scheme with floor props. Decoration never blocks
+## navigation.
+const WALL_DECOR := [
+	{"id": "decor_window_a", "x": 3, "prop": "window"},
+	{"id": "decor_poster", "x": 7, "prop": "wall_poster"},
+	{"id": "decor_sign", "x": 15, "prop": "wall_sign"},
+	{"id": "decor_sign_b", "x": 18, "prop": "wall_sign"},
+	{"id": "decor_clock", "x": 21, "prop": "wall_clock"},
+	{"id": "decor_screen", "x": 23, "prop": "wall_screen"},
+	{"id": "decor_window_b", "x": 29, "prop": "window"},
+	{"id": "decor_pinboard", "x": 32, "prop": "wall_pinboard"},
+	{"id": "decor_art", "x": 36, "prop": "wall_frame_art"},
+]
+
+## Work/visitor anchors per prop.
+##
+## A work anchor sits at its desk's base row, so the seated actor's base line is
+## at or below the desk base and Y-sorting draws them in front of it.
+##
+## Every anchor also sits east of the sidebar and above the composer, so no
+## floating panel can hide a working agent at any supported window size.
 const ANCHORS := {
-	"desk_lead": {"work": Vector2i(4, 8), "visitor": Vector2i(4, 9)},
-	"desk_backend": {"work": Vector2i(12, 7), "visitor": Vector2i(12, 8)},
-	"desk_frontend": {"work": Vector2i(16, 7), "visitor": Vector2i(16, 8)},
-	"desk_qa_a": {"work": Vector2i(12, 12), "visitor": Vector2i(12, 13)},
-	"desk_qa_b": {"work": Vector2i(22, 17), "visitor": Vector2i(22, 18)},
-	"desk_qa_c": {"work": Vector2i(26, 17), "visitor": Vector2i(26, 18)},
-	"coffee": {"work": Vector2i(12, 17), "visitor": Vector2i(13, 17)},
-	"table_meeting": {"work": Vector2i(3, 20), "visitor": Vector2i(6, 20)},
-	"table_lounge": {"work": Vector2i(23, 8), "visitor": Vector2i(24, 8)},
-	"table_break": {"work": Vector2i(15, 22), "visitor": Vector2i(17, 22)},
-	"bookshelf_eng": {"work": Vector2i(17, 7), "visitor": Vector2i(17, 8)},
-	"bookshelf_qa": {"work": Vector2i(30, 18), "visitor": Vector2i(31, 18)},
+	"desk_prod_0": {"work": Vector2i(14, 4), "visitor": Vector2i(14, 5)},
+	"desk_prod_1": {"work": Vector2i(17, 4), "visitor": Vector2i(17, 5)},
+	"desk_prod_2": {"work": Vector2i(20, 4), "visitor": Vector2i(20, 5)},
+	"desk_prod_3": {"work": Vector2i(23, 4), "visitor": Vector2i(23, 5)},
+	"desk_ops_0": {"work": Vector2i(28, 4), "visitor": Vector2i(28, 5)},
+	"desk_ops_1": {"work": Vector2i(31, 4), "visitor": Vector2i(31, 5)},
+	"desk_ops_2": {"work": Vector2i(34, 4), "visitor": Vector2i(34, 5)},
+	"desk_ops_3": {"work": Vector2i(37, 4), "visitor": Vector2i(37, 5)},
+	"desk_eng_0": {"work": Vector2i(14, 15), "visitor": Vector2i(14, 16)},
+	"desk_eng_1": {"work": Vector2i(17, 15), "visitor": Vector2i(17, 16)},
+	"desk_eng_2": {"work": Vector2i(20, 15), "visitor": Vector2i(20, 16)},
+	"desk_eng_3": {"work": Vector2i(23, 15), "visitor": Vector2i(23, 16)},
+	"desk_ceo": {"work": Vector2i(34, 15), "visitor": Vector2i(34, 16)},
+	"play_pingpong": {"work": Vector2i(14, 8), "visitor": Vector2i(14, 9)},
+	"play_sofa_a": {"work": Vector2i(19, 8), "visitor": Vector2i(19, 9)},
+	"play_sofa_b": {"work": Vector2i(23, 8), "visitor": Vector2i(23, 9)},
+	"play_tv": {"work": Vector2i(19, 11), "visitor": Vector2i(20, 11)},
+	"hud_table": {"work": Vector2i(34, 9), "visitor": Vector2i(35, 9)},
+	"hud_whiteboard": {"work": Vector2i(29, 10), "visitor": Vector2i(30, 10)},
+	"focus_side": {"work": Vector2i(24, 10), "visitor": Vector2i(25, 10)},
 }
 
 
@@ -109,10 +245,7 @@ const PROP_TEXTURES := {
 	"plant": "res://office/art/prop_plant.png",
 	"sofa": "res://office/art/prop_sofa.png",
 	"table": "res://office/art/prop_table.png",
-	"shelf": "res://office/art/prop_shelf.png",
-	"coffee": "res://office/art/prop_coffee.png",
 	"whiteboard": "res://office/art/prop_whiteboard.png",
-	"rug": "res://office/art/prop_rug.png",
 	"rug_blue": "res://office/art/prop_rug_blue.png",
 	"rug_warm": "res://office/art/prop_rug_warm.png",
 	"rug_pink": "res://office/art/prop_rug_pink.png",
@@ -120,7 +253,24 @@ const PROP_TEXTURES := {
 	"bookshelf": "res://office/art/prop_bookshelf.png",
 	"pingpong": "res://office/art/prop_pingpong.png",
 	"lamp": "res://office/art/prop_lamp.png",
-	"cooler": "res://office/art/prop_cooler.png",
+	"aquarium": "res://office/art/prop_aquarium.png",
+	"filing_cabinet": "res://office/art/prop_filing_cabinet.png",
+	"water_cooler": "res://office/art/prop_water_cooler.png",
+	"fridge": "res://office/art/prop_fridge.png",
+	"tv_stand": "res://office/art/prop_tv_stand.png",
+	"reading_chair": "res://office/art/prop_reading_chair.png",
+	"rug_checker": "res://office/art/prop_rug_checker.png",
+	"wall_poster": "res://office/art/wall_poster.png",
+	"wall_clock": "res://office/art/wall_clock.png",
+	"wall_sign": "res://office/art/wall_sign.png",
+	"wall_screen": "res://office/art/wall_screen.png",
+	"wall_pinboard": "res://office/art/wall_pinboard.png",
+	"wall_frame_art": "res://office/art/wall_frame_art.png",
+	"rack": "res://office/art/prop_rack.png",
+	"vending": "res://office/art/prop_vending.png",
+	"armchair": "res://office/art/prop_armchair.png",
+	"counter": "res://office/art/prop_counter.png",
+	"side_table": "res://office/art/prop_side_table.png",
 }
 
 ## Prop footprint in tiles, used for routing blockers and anchor placement.
@@ -130,10 +280,7 @@ const PROP_FOOTPRINT := {
 	"plant": Vector2i(1, 1),
 	"sofa": Vector2i(3, 2),
 	"table": Vector2i(2, 2),
-	"shelf": Vector2i(2, 2),
-	"coffee": Vector2i(2, 2),
 	"whiteboard": Vector2i(3, 1),
-	"rug": Vector2i(3, 2),
 	"rug_blue": Vector2i(3, 2),
 	"rug_warm": Vector2i(3, 2),
 	"rug_pink": Vector2i(3, 2),
@@ -141,7 +288,18 @@ const PROP_FOOTPRINT := {
 	"bookshelf": Vector2i(2, 2),
 	"pingpong": Vector2i(3, 2),
 	"lamp": Vector2i(1, 1),
-	"cooler": Vector2i(1, 1),
+	"aquarium": Vector2i(2, 1),
+	"filing_cabinet": Vector2i(1, 2),
+	"water_cooler": Vector2i(1, 1),
+	"fridge": Vector2i(1, 2),
+	"tv_stand": Vector2i(3, 1),
+	"reading_chair": Vector2i(1, 1),
+	"rug_checker": Vector2i(3, 2),
+	"rack": Vector2i(1, 3),
+	"vending": Vector2i(1, 2),
+	"armchair": Vector2i(1, 2),
+	"counter": Vector2i(3, 2),
+	"side_table": Vector2i(1, 1),
 }
 
 var navigation: OfficeNavigation
@@ -163,54 +321,73 @@ func setup(_viewport: OfficeViewport) -> void:
 	_build_walls()
 	# Bubbles and glyphs live on their own node added last, so they always draw
 	# above the Y-sorted furniture and actors.
+	# Bubbles, glyphs and the selection highlight are signals, not scenery: they
+	# must sit above the floor, the walls and the Y-sorted furniture. Setting the
+	# layer explicitly is required because the wall and prop layers raise their
+	# own z_index, which overrides sibling draw order.
 	_overlay = OfficeOverlay.new()
 	_overlay.name = "Overlay"
 	_overlay.world = self
+	_overlay.z_index = 3
 	add_child(_overlay)
 	queue_redraw()
 
 
-## Routable blockers derived from each prop's real footprint, plus the interior
-## wall dividers so paths route around them instead of through a wall.
+## Routable blockers: the building shell, both divider columns, and each solid
+## prop's real footprint.
+##
+## The layout owns this plan; OfficeNavigation only rasterizes it, so there is
+## one authority for where solid geometry is.
 func _blockers() -> Array:
 	var list: Array = []
 	for item in FURNITURE:
 		if not bool(item.get("solid", false)):
 			continue
 		var footprint: Vector2i = PROP_FOOTPRINT.get(str(item["prop"]), Vector2i(1, 1))
-		list.append(
-			{"id": item["id"], "cell": item["cell"], "size": footprint, "blocking": true}
-		)
-	# Dividers block their column from the wall band down to the last floor row,
-	# leaving the rows around the doorway corridors passable.
-	for x in INTERIOR_WALLS:
-		list.append({"id": "wall_%d" % x, "cell": Vector2i(x, 2), "size": Vector2i(1, MAP_HEIGHT - 3), "blocking": true})
+		list.append({"id": item["id"], "cell": item["cell"], "size": footprint, "blocking": true})
+	# The shell. Rows 0-1 are the north wall band and are interrupted only by the
+	# doorway, which is what makes the doorway penetrable from outside.
+	for y in range(WALL_BAND + 1):
+		for x in MAP_WIDTH:
+			if DOOR_COLS.has(x):
+				continue
+			list.append({"id": "shell_%d_%d" % [x, y], "cell": Vector2i(x, y), "size": Vector2i(1, 1), "blocking": true})
+	for y in range(WALL_BAND, MAP_HEIGHT):
+		list.append({"id": "shell_w%d" % y, "cell": Vector2i(0, y), "size": Vector2i(1, 1), "blocking": true})
+		list.append({"id": "shell_e%d" % y, "cell": Vector2i(EAST_WALL, y), "size": Vector2i(1, 1), "blocking": true})
+	for x in MAP_WIDTH:
+		list.append({"id": "shell_s%d" % x, "cell": Vector2i(x, SOUTH_WALL), "size": Vector2i(1, 1), "blocking": true})
+	# Dividers: solid through both room bands, open across the corridor.
+	for x in DIVIDERS:
+		list.append({"id": "divider_n_%d" % x, "cell": Vector2i(x, WALL_BAND), "size": Vector2i(1, CORRIDOR_TOP - WALL_BAND), "blocking": true})
+		list.append({"id": "divider_s_%d" % x, "cell": Vector2i(x, CORRIDOR_BOTTOM + 1), "size": Vector2i(1, SOUTH_WALL - CORRIDOR_BOTTOM - 1), "blocking": true})
 	return list
 
 
 ## Floors are drawn per zone with the material that zone uses, so the plan reads
-## as furnished rooms rather than one flat plane. Row 0 is a wall band: the north
-## wall art covers it and casts its shadow onto row 1.
+## as furnished rooms rather than one flat plane. Rows 0-1 are the wall band: the
+## north wall art covers them and casts its shadow onto the floor below.
 func _build_tiles() -> void:
 	_floor = TileMapLayer.new()
 	_floor.name = "Floor"
 	_floor.tile_set = load("res://office/maps/hq/hq_tileset.tres")
 	add_child(_floor)
 	move_child(_floor, 0)
-	# Wall band rows 0-1 sit underneath the north wall art.
+	# The shell band sits underneath the north wall art.
 	for x in MAP_WIDTH:
-		for band in range(2):
-			_floor.set_cell(Vector2i(x, band), 0, Vector2i(FLOOR_CONCRETE, 0))
-	for y in range(2, MAP_HEIGHT):
+		for y in range(WALL_BAND):
+			_floor.set_cell(Vector2i(x, y), 0, Vector2i(FLOOR_CONCRETE, 0))
+	for y in range(WALL_BAND, MAP_HEIGHT):
 		for x in MAP_WIDTH:
 			_floor.set_cell(Vector2i(x, y), 0, Vector2i(FLOOR_CONCRETE, 0))
 	for zone in ZONES:
 		var rect: Rect2i = zone["rect"]
 		var base: int = zone["floor"]
-		for y in range(maxi(rect.position.y, 2), rect.position.y + rect.size.y):
+		var tones: int = FLOOR_TONES.get(base, 2)
+		for y in range(maxi(rect.position.y, WALL_BAND), rect.position.y + rect.size.y):
 			for x in range(rect.position.x, rect.position.x + rect.size.x):
-				# Alternate the two tones of the material for a woven surface.
-				var column := base + ((x + y) % 2)
+				# Alternate the material's own tones for a woven surface.
+				var column := base + ((x + y) % tones)
 				_floor.set_cell(Vector2i(x, y), 0, Vector2i(column, 0))
 
 
@@ -242,20 +419,34 @@ func _build_props() -> void:
 
 
 ## Walls are drawn as one node above the floor so their cast shadows land on it.
+##
+## The south wall is deliberately absent: the near walls are cut away so the
+## floor plan stays readable, which is the same convention the reference art
+## uses. Only the far (north) wall and the two dividers are built.
 func _build_walls() -> void:
 	_walls = Node2D.new()
 	_walls.name = "Walls"
 	# Walls are architecture: they draw above the floor and below actors, so a
-	# character standing on the top row still renders in front of the wall base.
+	# character standing on the top room row still renders in front of the wall.
 	_walls.z_index = 1
 	add_child(_walls)
 	var top: Texture2D = load("res://office/art/wall_top.png")
 	var side: Texture2D = load("res://office/art/wall_side.png")
 	var door: Texture2D = load("res://office/art/door_frame.png")
 	# Wall art reads cap -> face -> cast shadow downward (56 px tall), so its top
-	# edge sits at y = 0 and the cast shadow lands on the floor's wall band.
+	# edge sits at y = 0 and the cast shadow lands on the wall band.
 	var wall_h := top.get_height()
+	var door_center := (DOOR_COLS[0] + DOOR_COLS[1] + 1) * 0.5 * TILE
+	var door_span := Rect2(
+		door_center - door.get_width() * 0.5, 0.0, door.get_width(), wall_h
+	)
+	# The north wall runs the full width. Wall pieces are 4 tiles wide, so the
+	# piece behind the doorway is skipped and the door art supplies that segment
+	# instead, including its own wall either side of the opening.
 	for x in range(0, MAP_WIDTH, 4):
+		var piece := Rect2(x * TILE, 0.0, TILE * 4, wall_h)
+		if piece.intersects(door_span):
+			continue
 		var sprite := Sprite2D.new()
 		sprite.texture = top
 		sprite.position = Vector2(x * TILE + TILE * 2, wall_h * 0.5)
@@ -263,19 +454,41 @@ func _build_walls() -> void:
 		_walls.add_child(sprite)
 	var doorway := Sprite2D.new()
 	doorway.texture = door
-	doorway.position = Vector2(15 * TILE, door.get_height() * 0.5)
+	doorway.position = Vector2(door_center, wall_h * 0.5)
 	doorway.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_walls.add_child(doorway)
-	# Vertical wall runs divide the floor into rooms. Each divider starts below
-	# the north wall band and runs down the map.
-	for divider in INTERIOR_WALLS:
-		var x: int = divider
-		for y in range(2, MAP_HEIGHT - 1, 2):
-			var sprite := Sprite2D.new()
-			sprite.texture = side
-			sprite.position = Vector2(x * TILE - side.get_width() * 0.5, y * TILE + TILE)
-			sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-			_walls.add_child(sprite)
+	# Dividers run the two room bands and stop either side of the corridor, which
+	# mirrors the divider blockers exactly so the art never covers a walkable row.
+	for x in DIVIDERS:
+		for run in [
+			Vector2i(WALL_BAND, CORRIDOR_TOP),
+			Vector2i(CORRIDOR_BOTTOM + 1, SOUTH_WALL),
+		]:
+			for y in range(run.x, run.y, 2):
+				var sprite := Sprite2D.new()
+				sprite.texture = side
+				sprite.position = Vector2(x * TILE - side.get_width() * 0.5, y * TILE + TILE)
+				sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+				_walls.add_child(sprite)
+	_build_wall_decor()
+
+
+## Mounted decoration sits on the north wall face, above the wall art but below
+## the furniture layer, and never blocks navigation. Missing art is skipped so a
+## new decoration can be specified before its sprite exists.
+func _build_wall_decor() -> void:
+	const FACE_CENTER := 28.0
+	for entry in WALL_DECOR:
+		var path := str(PROP_TEXTURES.get(str(entry["prop"]), ""))
+		if path.is_empty() or not ResourceLoader.exists(path):
+			continue
+		var texture: Texture2D = load(path)
+		var sprite := Sprite2D.new()
+		sprite.name = str(entry["id"])
+		sprite.texture = texture
+		sprite.position = Vector2(int(entry["x"]) * TILE + texture.get_width() * 0.5, FACE_CENTER)
+		sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+		_walls.add_child(sprite)
 
 
 func refresh(store: OfficeStore) -> void:
@@ -299,13 +512,41 @@ func _anchor_for(actor: ActorPresentation) -> Vector2:
 
 
 ## Deterministic desk assignment: repeated agents get distinct desks.
+## Named station groups. The director routes by intent; the layout decides where
+## that intent physically is, so a plan change never rewrites behaviour.
+const STATIONS := {
+	"play": ["play_pingpong", "play_sofa_a", "play_sofa_b", "play_tv"],
+	"focus": ["focus_side"],
+	"huddle": ["hud_table", "hud_whiteboard"],
+	"ceo": ["desk_ceo"],
+}
+
+
+## The anchor position for a named station, or the origin when unknown.
+func station_position(station: String, which: String = "work") -> Vector2:
+	var group: Array = STATIONS.get(station, [])
+	for desk_id in group:
+		if ANCHORS.has(desk_id):
+			return navigation.anchor_position(str(desk_id), which)
+	return Vector2.ZERO
+
+
+## Preference order for assigning an agent to a desk, after the lead office.
+## Every id here must be a real anchor; test_layout.gd enforces that, so the
+## order cannot drift away from the plan.
+const DESK_ORDER := [
+	"desk_prod_0", "desk_prod_1", "desk_prod_2", "desk_prod_3",
+	"desk_ops_0", "desk_ops_1", "desk_ops_2", "desk_ops_3",
+	"desk_eng_0", "desk_eng_1", "desk_eng_2", "desk_eng_3",
+]
+
 func _next_slot(actor: ActorPresentation) -> Dictionary:
 	var used := {}
 	for slot in _assignments.values():
 		used[slot["desk"]] = true
 	if actor.identity.is_root():
 		return {"desk": "desk_lead", "anchor": "work"}
-	for desk in ["desk_backend", "desk_frontend", "desk_qa_a", "desk_qa_b", "desk_qa_c", "coffee"]:
+	for desk in DESK_ORDER:
 		if not used.has(desk):
 			return {"desk": desk, "anchor": "work"}
 	return {"desk": "coffee", "anchor": "visitor"}
@@ -349,13 +590,61 @@ func _refresh_overlay() -> void:
 		_overlay.queue_redraw()
 
 
+## Move an actor to wherever its work now puts it.
+##
+## A working agent sits at its desk, except while consolidating context, when it
+## retires to the focus chair. Idle agents go to the play room. The route is
+## recomputed from the CURRENT position, so a preempted actor resumes from where
+## it actually is rather than teleporting.
 func apply_work_state(actor: ActorPresentation) -> void:
 	var node := actors.get(actor.identity.session_id) as OfficeActor
 	if node == null:
 		return
-	node.set_route(navigation.route(node.position, _anchor_for(actor)))
-	node.update_from(actor, _anchor_for(actor))
+	var target := _station_target(actor)
+	node.set_route(navigation.route(node.position, target))
+	node.update_from(actor, target)
 	_refresh_overlay()
+
+
+## Send an actor to a named station. Used by ambient behaviour and by reporting.
+func apply_station(actor: ActorPresentation, station: String, which: String = "work") -> void:
+	var node := actors.get(actor.identity.session_id) as OfficeActor
+	if node == null:
+		return
+	var target := station_position(station, which)
+	if target == Vector2.ZERO:
+		return
+	node.set_route(navigation.route(node.position, target))
+	_refresh_overlay()
+
+
+## Send a finished subagent to report to whoever it worked for.
+##
+## This is cosmetic movement only. The report's content is a source-backed
+## interaction recorded from `session.task.updated`; the walk adds no words.
+func apply_report(actor: ActorPresentation) -> void:
+	var node := actors.get(actor.identity.session_id) as OfficeActor
+	if node == null:
+		return
+	var target := station_position("ceo", "visitor")
+	if target == Vector2.ZERO:
+		return
+	node.set_route(navigation.route(node.position, target))
+	_refresh_overlay()
+
+
+## Where this actor belongs right now, by work state and presence.
+func _station_target(actor: ActorPresentation) -> Vector2:
+	match actor.presence:
+		"focus":
+			var focus := station_position("focus", "work")
+			if focus != Vector2.ZERO:
+				return focus
+		"play":
+			var play := station_position("play", "work")
+			if play != Vector2.ZERO:
+				return play
+	return _anchor_for(actor)
 
 
 func apply_ambient(actor: ActorPresentation, kind: String) -> void:
@@ -363,9 +652,17 @@ func apply_ambient(actor: ActorPresentation, kind: String) -> void:
 	if node == null:
 		return
 	node.set_ambient(kind)
-	var target := navigation.anchor_position("coffee", "visitor") if kind == "coffee" else node.position
-	node.set_route(navigation.route(node.position, target))
-	_refresh_overlay()
+	# Every ambient option names a real station. An option with no destination
+	# would be an action that does nothing, which is what "stretch" and "read"
+	# silently were before the stations existed.
+	match kind:
+		"read":
+			apply_station(actor, "focus", "work")
+		"stretch":
+			apply_station(actor, "play", "visitor")
+		_:
+			# "pause" is the one option whose behaviour is to stay put.
+			_refresh_overlay()
 
 
 func show_notice(actor: ActorPresentation, text: String) -> void:
@@ -376,6 +673,38 @@ func show_notice(actor: ActorPresentation, text: String) -> void:
 func clear_notice(session_id: String) -> void:
 	notices.erase(session_id)
 	_refresh_overlay()
+
+
+## The actor whose clickable bounds contain a world-space point, or "".
+##
+## Bounds cover the sprite column and, when the actor has a notice, the bubble
+## above it. Later actors win ties so the visually front-most one is selected,
+## matching what the user sees in the Y-sorted layer.
+func actor_at(point: Vector2) -> String:
+	var found := ""
+	for session_id in actors:
+		var node := actors[session_id] as OfficeActor
+		if node == null:
+			continue
+		if _actor_bounds(node, str(session_id)).has_point(point):
+			found = str(session_id)
+	return found
+
+
+## Clickable bounds for one actor: its sprite footprint plus its notice bubble.
+func _actor_bounds(node: OfficeActor, session_id: String) -> Rect2:
+	var half := OfficeActor.FRAME_W * 0.5
+	var top := node.position.y - OfficeActor.FRAME_H
+	var bounds := Rect2(
+		Vector2(node.position.x - half, top),
+		Vector2(OfficeActor.FRAME_W, node.position.y - top)
+	)
+	if not notices.has(session_id):
+		return bounds
+	var bubble := OfficeOverlay.notice_box(
+		ThemeDB.fallback_font, str(notices[session_id]), node.position
+	)
+	return bounds.merge(bubble)
 
 
 func select_actor(session_id: String) -> void:

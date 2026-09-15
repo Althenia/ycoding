@@ -14,6 +14,25 @@ var attention_required: bool = false
 var settled_status: String = ""
 var selected: bool = false
 
+## Canonical session placement and model, taken from `session.created`.
+##
+## A session's location is durable and its own: sessions do not inherit a later
+## directory change, which is why this is per-actor rather than one office-wide
+## value. `location_directory` is the absolute path; `model_ref` is the
+## "provider/id#variant" config string, not a display label.
+var location_directory: String = ""
+var model_ref: String = ""
+## True when these came from synthetic demo data rather than a real server.
+var synthetic: bool = false
+
+## Where this actor is in the office, set by the store each refresh. Presentation
+## reads it; it does not compute it, so presence has one authority.
+var presence: String = ""
+
+## True once the session has ended (deleted or archived). A departed actor leaves
+## the office and frees its seat, which is what lets a new agent take the shift.
+var departed: bool = false
+
 ## Presentation-only fields. Never a backend command.
 var map_position: Vector2 = Vector2.ZERO
 var destination: Vector2 = Vector2.ZERO
@@ -47,5 +66,6 @@ func to_dictionary() -> Dictionary:
 		"activity_label": activity_label,
 		"attention_required": attention_required,
 		"settled_status": settled_status,
+		"departed": departed,
 		"map_position": [map_position.x, map_position.y],
 	}

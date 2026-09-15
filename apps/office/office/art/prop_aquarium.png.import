@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://sfy3yr0ioca"
-path="res://.godot/imported/prop_rug.png-a3ca0e3385f7eae483f0fb6fce3e0b6e.ctex"
+uid="uid://cw7xgvw33snrs"
+path="res://.godot/imported/prop_aquarium.png-67f57aabbc94a1d1ce8ec748db214ade.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://office/art/prop_rug.png"
-dest_files=["res://.godot/imported/prop_rug.png-a3ca0e3385f7eae483f0fb6fce3e0b6e.ctex"]
+source_file="res://office/art/prop_aquarium.png"
+dest_files=["res://.godot/imported/prop_aquarium.png-67f57aabbc94a1d1ce8ec748db214ade.ctex"]
 
 [params]
 

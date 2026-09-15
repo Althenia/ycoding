@@ -15,6 +15,51 @@ YCoding remains the sole authority for prompts, sessions, agents, provider/tool 
 - Keep UI text at readable screen resolution; keep pixel-world assets on one integer grid.
 - Do not grow a general-purpose workflow framework, and do not add autoloads without a genuine lifecycle need.
 
+## Designed dimensions and regions
+
+Change a dimension here and nowhere else. Both designs have exactly one authority,
+and a test pins each one, so an edit that breaks the design fails loudly instead
+of appearing as a visual defect later.
+
+**World** — `office/maps/hq/office_world.gd` owns the plan; `OfficeNavigation`
+only rasterizes the blockers it is handed, and `main.tscn` carries no layout.
+
+| Region | Extent |
+| --- | --- |
+| Map | 40 x 21 tiles = 1280 x 672 px, aspect 1.905 |
+| Rows 0-1 | north wall band, pierced only by the doorway |
+| Rows 2-9 | north room band (8 rows) |
+| Rows 10-11 | central corridor (2 rows) |
+| Rows 12-19 | south room band (8 rows) |
+| Row 20 | south wall (solid, not drawn) |
+| Cols 1-11, 13-25, 27-38 | three room columns, split by dividers at cols 12 and 26 |
+| Col 0, col 39 | west and east walls |
+
+Six rooms of equal height share one corridor, and every room opens onto it.
+Dividers are solid across both room bands and open at the corridor, so the
+corridor is the only route between columns. Near walls are cut away so the plan
+stays readable. `test_layout.gd` proves the zones tile the floor exactly, the
+shell is closed, the doorway is the only opening, and the corridor is clear.
+
+**Shell** — `ui/shell/office_shell_layout.gd` owns the window frame;
+`main.gd` applies it on start and on every resize.
+
+| Region | Size |
+| --- | --- |
+| Margin | 16 |
+| Gap between regions | 12 |
+| Top bar | full width x 64 |
+| Office viewport | derived, keeps aspect near 1.905 |
+| Status panel | 336 wide x content height |
+| Prompt composer | full width x 148 |
+| Conversation drawer | 520 wide, overlays the office, never the status panel |
+
+The office region width is derived, so the content row keeps an aspect close to
+the world's at every supported window size (1280x720, 1600x900, 1920x1080).
+`test_shell_layout.gd` proves the four tiled regions never overlap, the drawer
+overlap is deliberate, the frame gaps are uniform, and the office aspect tracks
+the world.
+
 ## Truthfulness rules
 
 - `OfficeDirector` consumes presentation state and emits cosmetic actions only. It never launches subagents, approves tools, prompts models, or writes session history.

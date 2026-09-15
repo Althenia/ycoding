@@ -26,6 +26,19 @@ const REASONING_STARTED := "session.reasoning.started"
 const INPUT_ADMITTED := "session.input.admitted"
 const INPUT_PROMOTED := "session.input.promoted"
 const FILE_CHANGE := "session.file-change.recorded"
+## Context compaction. An agent consolidating its context is genuinely retreading
+## what it has already seen, which is what the focus station depicts.
+## `started`/`admitted` begin it and `ended` finishes it.
+const COMPACTION_STARTED := "session.compaction.started"
+const COMPACTION_ADMITTED := "session.compaction.admitted"
+const COMPACTION_ENDED := "session.compaction.ended"
+const COMPACTION_FAILED := "session.compaction.failed"
+
+## A session that is over. `deleted` and `archived` retire it; `unarchived`
+## brings it back, so the office must treat all three as real transitions.
+const SESSION_DELETED := "session.deleted"
+const SESSION_ARCHIVED := "session.archived"
+const SESSION_UNARCHIVED := "session.unarchived"
 
 ## `SessionOrchestration.Change` tagged-union members.
 const CHANGE_LAUNCHED := "launched"

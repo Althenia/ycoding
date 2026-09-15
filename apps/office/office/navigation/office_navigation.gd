@@ -15,6 +15,11 @@ var _anchors: Dictionary = {}
 var _blocked: Dictionary = {}
 
 
+## Rasterize the layout's blockers into an AStarGrid2D.
+##
+## This function holds no layout knowledge of its own: the building shell, the
+## dividers and the furniture footprints all arrive as blockers from OfficeWorld,
+## so there is exactly one authority for where solid geometry is.
 func build(
 	map_width: int,
 	map_height: int,
@@ -29,13 +34,6 @@ func build(
 	_grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
 	_grid.update()
 	_blocked.clear()
-	# Walls occupy the top and left band; the doorway stays passable.
-	for x in width:
-		_blocked[Vector2i(x, 0)] = true
-	for y in height:
-		_blocked[Vector2i(0, y)] = true
-	_blocked.erase(Vector2i(9, 0))
-	_blocked.erase(Vector2i(10, 0))
 	for item in furniture:
 		if not bool(item.get("blocking", false)):
 			continue
@@ -79,10 +77,11 @@ func _cell_of(position: Vector2) -> Vector2i:
 
 
 ## Reachability check used by tests: every anchor must be reachable from the
-## doorway entrance.
+## doorway. The entrance is discovered rather than hardcoded, so it is the cell
+## the shell actually leaves open in the wall band.
 func all_anchors_reachable() -> bool:
-	var entrance := Vector2i(9, 1)
-	if is_blocked(entrance):
+	var entrance := _entrance()
+	if entrance.x < 0:
 		return false
 	for desk_id in _anchors:
 		var desk: Dictionary = _anchors[desk_id]
@@ -93,6 +92,15 @@ func all_anchors_reachable() -> bool:
 			if _grid.get_point_path(entrance, cell).is_empty():
 				return false
 	return true
+
+
+## The doorway: the first passable cell in the wall band.
+func _entrance() -> Vector2i:
+	for y in range(2):
+		for x in width:
+			if not is_blocked(Vector2i(x, y)):
+				return Vector2i(x, y)
+	return Vector2i(-1, -1)
 
 
 func anchor_count() -> int:

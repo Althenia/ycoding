@@ -33,6 +33,15 @@ Memo ID chosen from the user's explicit request to persist implementation memory
 - Routes/shapes are pinned as names-only constants in `apps/office/integration/gateway_contract.gd` with unit tests in `tests/suites/test_gateway_contract.gd`.
 - Prompt retry identity requires matching session + prompt + delivery and identical data JSON.
 
+## Designed dimensions and regions (locked by tests)
+- World: 40x21 tiles = 1280x672 px, aspect 1.905. Rows 0-1 wall band, 2-9 north rooms, 10-11 corridor, 12-19 south rooms, 20 south wall. Room columns cols 1-11 / 13-25 / 27-38 with solid dividers at cols 12 and 26, open only at the corridor.
+- `office_world.gd` owns the plan. `OfficeNavigation.build` now only rasterizes the blockers it is handed — it holds no layout knowledge. `main.tscn` carries no layout.
+- Shell: margin 16, gap 12, top bar 64, prompt 148, status 336, conversation drawer 520. `ui/shell/office_shell_layout.gd` owns it; `main.gd` applies it on start and resize. The scene file has no competing offsets.
+- Pinned by `tests/suites/test_layout.gd` and `tests/suites/test_shell_layout.gd`. Design them in Python first when changing (`/tmp/layout_check.py` pattern) — it caught two real errors before any GDScript was written.
+
+## Render-order gotcha (cost a real, twice-visible defect)
+- `z_index 0` is NOT "on top". `_walls.z_index = 1` and `_props.z_index = 2` override sibling draw order, so the overlay (glyphs, selection highlight, notice bubbles) must set `z_index = 3` explicitly or its signals draw underneath furniture. A test now pins overlay > every sibling.
+
 ## Art
 - Original in-house family, no third-party license. Regenerate with `python3 apps/office/tools/generate_art.py`.
 - 32px tiles, 32x48 character frames, feet-origin, 2px contact shadow. Character rows: idle(2), walk(6), sit(2), type(2), read(2), talk(2); direction columns down/up/left/right.
@@ -41,9 +50,13 @@ Memo ID chosen from the user's explicit request to persist implementation memory
 - Pack fixes applied (wire audit, F-11 gate disambiguation, storyboard duration, TEST-037/F-08, TASK-044 blocker).
 - M0 boundary change applied across README/AGENTS/product-direction/architecture/CONTRIBUTING/specs/tui-package/docs/README + injected agent prompt and its test.
 - M1, M2 and M3 transport complete. Ledger: 25/48 tasks done (`tracking/tasks.json` is the authority).
-- `apps/office/tools/verify.sh` (import + unit + flow, fails on any engine error): 1004 assertions, 18 flow checks.
+- World design + shell region design landed and are test-pinned; every room is furnished (76 props, ~29% solid coverage, 26 anchors).
+- `apps/office/tools/verify.sh` (import + unit + flow, fails on any engine error): 3457 assertions, 18 flow checks.
 - `apps/office/tools/verify-integration.sh` (starts the fixture server, runs live checks, stops it): 21/21 pass.
-- M2 fidelity rubric self-scored 13/18, below the ≥15 target. TASK-024 stays `in_review` pending real user visual acceptance; the user rejected the first M2 capture and the matte/light-floor iteration followed.
+- TASK-024 stays `in_review` pending real user visual acceptance. The user has rejected one M2 capture and requested the layout/region design pass; latest captures are `dist/office/captures/design_v3.png` at 1600x900.
+
+## Reviewing a capture (how the last three defects were found)
+Defects that the suite could not see were found by looking at the render, not the logs. Read the PNG at full size and check: notice bubbles show their WHOLE caption; status glyphs and the selection ring are visible rather than hidden behind furniture; no sprite is clipped by its canvas; nothing is truncated or overlapping. Then pin what you see as a test.
 
 ## Test-harness gotchas (each cost a real failure)
 - The harness API is `t.check(condition, message)` only — there is no `t.eq`.

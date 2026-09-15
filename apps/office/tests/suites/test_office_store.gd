@@ -13,6 +13,9 @@ func run(t) -> void:
 	test_epoch_change_invalidates_tokens(t)
 	test_bounded_conversation(t)
 	test_demo_store_has_no_live_mutation_path(t)
+	test_placement_is_captured_from_session_created(t)
+	test_absent_placement_does_not_blank_existing(t)
+	test_location_scope_reports_when_rosters_differ(t)
 
 
 func _store() -> OfficeStore:
@@ -175,3 +178,76 @@ func test_demo_store_has_no_live_mutation_path(t) -> void:
 			not mutation_names.has(name),
 			"store must not expose a mutation method named %s" % name
 		)
+
+
+## `session.created` carries the session's durable location and model, so the
+## office can show a real path and the composer can start on the session's own
+## model instead of inventing one.
+func test_placement_is_captured_from_session_created(t) -> void:
+	var store := _store()
+	store.apply({
+		"type": Wire.SESSION_CREATED,
+		"sessionID": "ses_place",
+		"data": {
+			"agent": "lead",
+			"parentID": "",
+			"location": {"directory": "/tmp/project-one"},
+			"model": {"ref": "anthropic/claude-sonnet-4#high"},
+		},
+	})
+	var actor := store.actor_for("ses_place")
+	t.check(actor != null, "the actor exists")
+	if actor == null:
+		return
+	t.check(actor.location_directory == "/tmp/project-one", "the directory is captured")
+	t.check(actor.model_ref == "anthropic/claude-sonnet-4#high", "the model ref is captured")
+
+
+## A later event that omits placement must not erase what is already known. A
+## status update carries no location, and blanking it would lose real data.
+func test_absent_placement_does_not_blank_existing(t) -> void:
+	var store := _store()
+	store.apply({
+		"type": Wire.SESSION_CREATED,
+		"sessionID": "ses_keep",
+		"data": {
+			"agent": "lead",
+			"parentID": "",
+			"location": {"directory": "/tmp/project-two"},
+			"model": {"ref": "openrouter/deepseek/deepseek-v4.1-flash#max"},
+		},
+	})
+	# A second session.created for the same session without placement.
+	store.apply({
+		"type": Wire.SESSION_CREATED,
+		"sessionID": "ses_keep",
+		"data": {"agent": "lead", "parentID": ""},
+	})
+	var actor := store.actor_for("ses_keep")
+	t.check(actor != null, "the actor still exists")
+	if actor == null:
+		return
+	t.check(actor.location_directory == "/tmp/project-two", "the directory survives")
+	t.check(actor.model_ref.find("deepseek") != -1, "the model ref survives")
+
+
+## The office is a view over sessions and each session carries its own directory,
+## so the UI must be able to tell when the roster is not location-scoped.
+func test_location_scope_reports_when_rosters_differ(t) -> void:
+	var store := _store()
+	t.check(store.locations().is_empty(), "no locations before any session")
+	for pair in [["ses_a", "/tmp/one"], ["ses_b", "/tmp/one"]]:
+		store.apply({
+			"type": Wire.SESSION_CREATED,
+			"sessionID": pair[0],
+			"data": {"agent": "lead", "parentID": "", "location": {"directory": pair[1]}},
+		})
+	t.check(store.locations().size() == 1, "one directory for one project")
+	t.check(store.has_single_location(), "the roster is location-scoped")
+	store.apply({
+		"type": Wire.SESSION_CREATED,
+		"sessionID": "ses_c",
+		"data": {"agent": "qa", "parentID": "", "location": {"directory": "/tmp/two"}},
+	})
+	t.check(store.locations().size() == 2, "a second directory is reported")
+	t.check(not store.has_single_location(), "the roster is no longer location-scoped")

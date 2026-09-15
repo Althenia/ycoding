@@ -1,9 +1,9 @@
 [gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://app/main.gd" id="1_main"]
-[ext_resource type="Script" path="res://ui/shell/mode_badge.gd" id="2_badge"]
 [ext_resource type="Script" path="res://ui/prompt/prompt_panel.gd" id="3_prompt"]
-[ext_resource type="Script" path="res://ui/shell/status_panel.gd" id="4_status"]
+[ext_resource type="Script" path="res://ui/shell/sidebar_panel.gd" id="4_sidebar"]
+[ext_resource type="Script" path="res://ui/shell/chrome_toggles.gd" id="8_toggles"]
 [ext_resource type="Script" path="res://ui/conversation/conversation_panel.gd" id="5_conversation"]
 [ext_resource type="Script" path="res://office/viewport/office_viewport.gd" id="6_viewport"]
 [ext_resource type="Script" path="res://office/maps/hq/office_world.gd" id="7_world"]
@@ -12,6 +12,7 @@
 script = ExtResource("1_main")
 
 [node name="Backdrop" type="ColorRect" parent="."]
+layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -27,81 +28,43 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="TopBar" type="HBoxContainer" parent="Shell"]
-layout_mode = 1
-anchors_preset = 10
-anchor_right = 1.0
-offset_left = 16.0
-offset_top = 12.0
-offset_right = -16.0
-offset_bottom = 88.0
-grow_horizontal = 2
-
-[node name="ModeBadge" type="PanelContainer" parent="Shell/TopBar"]
-layout_mode = 2
-script = ExtResource("2_badge")
-
-[node name="Spacer" type="Control" parent="Shell/TopBar"]
-layout_mode = 2
-size_flags_horizontal = 3
-
 [node name="OfficeViewport" type="SubViewportContainer" parent="Shell"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 10.0
-offset_top = 92.0
-offset_right = -296.0
-offset_bottom = -140.0
-grow_horizontal = 2
-grow_vertical = 2
+layout_mode = 0
+offset_right = 1280.0
+offset_bottom = 672.0
 stretch = true
 script = ExtResource("6_viewport")
 
 [node name="SubViewport" type="SubViewport" parent="Shell/OfficeViewport"]
 handle_input_locally = false
-size = Vector2i(900, 420)
 render_target_update_mode = 4
 
 [node name="OfficeWorld" type="Node2D" parent="Shell/OfficeViewport/SubViewport"]
 script = ExtResource("7_world")
 
 [node name="Camera" type="Camera2D" parent="Shell/OfficeViewport/SubViewport/OfficeWorld"]
-position = Vector2(480, 320)
 
-[node name="StatusPanel" type="PanelContainer" parent="Shell"]
-layout_mode = 1
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -340.0
-offset_top = 100.0
-offset_right = -16.0
-offset_bottom = 470.0
-grow_horizontal = 0
-script = ExtResource("4_status")
+[node name="ChromeToggles" type="PanelContainer" parent="Shell"]
+layout_mode = 0
+offset_right = 76.0
+offset_bottom = 28.0
+script = ExtResource("8_toggles")
+
+[node name="Sidebar" type="PanelContainer" parent="Shell"]
+layout_mode = 0
+offset_right = 320.0
+offset_bottom = 700.0
+script = ExtResource("4_sidebar")
 
 [node name="ConversationPanel" type="PanelContainer" parent="Shell"]
 visible = false
-layout_mode = 1
-anchors_preset = 0
-offset_left = 24.0
-offset_top = 108.0
-offset_right = 580.0
-offset_bottom = 500.0
+layout_mode = 0
+offset_right = 520.0
+offset_bottom = 450.0
 script = ExtResource("5_conversation")
 
 [node name="PromptPanel" type="PanelContainer" parent="Shell"]
-layout_mode = 1
-anchors_preset = 12
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 16.0
-offset_top = -184.0
-offset_right = -16.0
-offset_bottom = -12.0
-grow_horizontal = 2
-grow_vertical = 0
+layout_mode = 0
+offset_right = 700.0
+offset_bottom = 112.0
 script = ExtResource("3_prompt")

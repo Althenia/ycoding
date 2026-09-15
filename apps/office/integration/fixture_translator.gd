@@ -89,6 +89,15 @@ static func _connection(
 
 
 ## session.observed -> session.created + an explicit status, both real events.
+##
+## The real `session.created` also carries `location` and `model`. The fixture has
+## no server, so these are SYNTHETIC stand-ins, flagged with `synthetic: true` so
+## the UI can label them rather than passing them off as real placement. They use
+## the repository's own workspace so the demo path is recognisable, and a model
+## that genuinely exists in this project's config.
+const DEMO_DIRECTORY := "~/Workspace/Project/ycoding"
+const DEMO_MODEL_REF := "openrouter/deepseek/deepseek-v4.1-flash#high"
+
 static func _observed(session_id: Variant, payload: Dictionary, at_ms: int, epoch: String) -> Dictionary:
 	# JSON null must normalize to an empty parent, never the literal "<null>".
 	var parent: Variant = payload.get("parent_session_id")
@@ -97,6 +106,9 @@ static func _observed(session_id: Variant, payload: Dictionary, at_ms: int, epoc
 		"parentID": "" if parent == null else str(parent),
 		"agent": str(payload.get("agent_id", "agent")),
 		"title": str(payload.get("display_role", "")),
+		"location": {"directory": DEMO_DIRECTORY},
+		"model": {"ref": DEMO_MODEL_REF},
+		"synthetic": true,
 	}
 	return _base("session.created", str(session_id), data, at_ms, epoch, {"event_id": "observed:%s" % str(session_id)})
 

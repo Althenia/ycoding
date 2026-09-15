@@ -21,6 +21,14 @@ func _init() -> void:
 		preload("res://tests/suites/test_sse_parser.gd"),
 		preload("res://tests/suites/test_http_transport.gd"),
 		preload("res://tests/suites/test_gateway_contract.gd"),
+		preload("res://tests/suites/test_layout.gd"),
+		preload("res://tests/suites/test_shell_layout.gd"),
+		preload("res://tests/suites/test_prop_art.gd"),
+		preload("res://tests/suites/test_focus_visibility.gd"),
+		preload("res://tests/suites/test_model_catalog.gd"),
+		preload("res://tests/suites/test_sidebar.gd"),
+		preload("res://tests/suites/test_chrome_toggles.gd"),
+		preload("res://tests/suites/test_shift_change.gd"),
 	]
 	for suite_script in suites:
 		var suite = suite_script.new()

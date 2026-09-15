@@ -91,8 +91,8 @@ func test_route_avoids_blocked_cells(t) -> void:
 	var world := _world()
 	var nav := world.navigation
 	var route := nav.route(
-		nav.anchor_position("desk_lead", "work"),
-		nav.anchor_position("whiteboard", "work")
+		nav.anchor_position("desk_prod_0", "work"),
+		nav.anchor_position("hud_whiteboard", "work")
 	)
 	t.check(route.size() > 1, "a multi-step route exists across the office")
 	for point in route:
@@ -104,7 +104,7 @@ func test_route_avoids_blocked_cells(t) -> void:
 func test_route_between_same_cell(t) -> void:
 	var world := _world()
 	var nav := world.navigation
-	var here := nav.anchor_position("desk_backend", "work")
+	var here := nav.anchor_position("desk_eng_0", "work")
 	var route := nav.route(here, here)
 	t.check(route.size() >= 1, "same-cell route returns the destination")
 	t.check(route[0] == here, "same-cell route lands on the destination")

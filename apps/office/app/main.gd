@@ -14,10 +14,16 @@ var demo: DemoTransport
 
 var office_view: OfficeViewport
 var prompt_panel: PromptPanel
-var status_panel: StatusPanel
 var conversation_panel: ConversationPanel
-var mode_badge: ModeBadge
+var sidebar: SidebarPanel
+var chrome_toggles: ChromeToggles
 
+var _shell: Control
+## The agent chosen in the sidebar. DEMO has no runtime agent to select, so this
+## stays empty there rather than naming one the runtime did not choose.
+var selected_agent_id: String = ""
+## The model chosen in the composer, once the user picks one.
+var composer_model_ref: String = ""
 var _elapsed_ms: int = 0
 var _ambient_accumulator: int = 0
 var _ambient_tick: int = 0
@@ -36,17 +42,66 @@ func _ready() -> void:
 
 	office_view = $Shell/OfficeViewport
 	prompt_panel = $Shell/PromptPanel
-	status_panel = $Shell/StatusPanel
 	conversation_panel = $Shell/ConversationPanel
-	mode_badge = $Shell/TopBar/ModeBadge
+	sidebar = $Shell/Sidebar
+	chrome_toggles = $Shell/ChromeToggles
 
 	office_view.bind_store(store)
 	prompt_panel.prompt_submitted.connect(_on_prompt_submitted)
+	prompt_panel.model_selected.connect(_on_model_selected)
 	conversation_panel.close_requested.connect(func(): conversation_panel.visible = false)
-	status_panel.actor_selected.connect(_on_actor_selected)
+	sidebar.session_selected.connect(_on_actor_selected)
+	sidebar.new_session_requested.connect(_on_new_session)
+	sidebar.agent_selected.connect(_on_agent_selected)
+	# The sidebar shows each actor's room without reaching into the scene.
+	sidebar.zone_provider = func(session_id: String) -> String:
+		return zone_for(session_id)
+	# Clicking an actor or its notice bubble in the world opens the same
+	# source-backed drawer as selecting it in the team list.
+	office_view.actor_clicked.connect(_on_actor_selected)
+	# Hiding the chrome is presentation only: it never reaches the store.
+	chrome_toggles.toggled.connect(_on_chrome_toggled)
+
+	# The shell design owns every region; the scene file carries no layout.
+	_shell = $Shell
+	_shell.resized.connect(_apply_regions)
+	_apply_regions()
+	# A shell that has not been laid out yet reports zero size, so apply again
+	# once the tree is ready rather than leaving the first frame collapsed.
+	call_deferred("_apply_regions")
 
 	_start_demo()
 	_refresh_ui()
+
+
+## Apply the shell overlay design.
+##
+## The office is full-bleed and reaches the window edges; the panels float over
+## it. There is no header and no tiled frame: the sidebar carries the mode badge,
+## the sessions, the team and the agent selector.
+func _apply_regions() -> void:
+	if _shell == null or _shell.size.x < 1.0 or _shell.size.y < 1.0:
+		return
+	var overlays := OfficeShellLayout.overlays(_shell.size)
+	OfficeShellLayout.place($Backdrop, Rect2(Vector2.ZERO, _shell.size))
+	OfficeShellLayout.place(office_view, OfficeShellLayout.office_region(_shell.size))
+	OfficeShellLayout.place(prompt_panel, overlays["composer"])
+
+	OfficeShellLayout.place(sidebar, overlays["sidebar"])
+	OfficeShellLayout.place(chrome_toggles, overlays["toggles"])
+	_apply_chrome_visibility()
+	# The source drawer floats above the composer on the right. Its placement is
+	# provisional: it was not part of the reviewed overlay design.
+	OfficeShellLayout.place(
+		conversation_panel,
+		Rect2(
+			Vector2(
+				_shell.size.x - 552.0,
+				maxf(_shell.size.y - 200.0 - 552.0 * 0.6, 16.0)
+			),
+			Vector2(536.0, minf(552.0 * 0.6, _shell.size.y - 200.0))
+		)
+	)
 
 
 ## DEMO is the initial default. LIVE requires an explicit connection and is not
@@ -167,11 +222,62 @@ func _on_prompt_submitted(text: String) -> void:
 	prompt_panel.show_demo_notice(text)
 
 
+## The model references actually in play. DEMO has no server, so the synthetic
+## catalogue stands in and is labelled as such by ModelCatalog.is_demo_catalog.
+##
+## TODO(LIVE): read /api/model instead of the synthetic set once LIVE is wired.
+func _model_catalog() -> Array:
+	return ModelCatalog.demo_catalog()
+
+
+## The composer starts on the model a session already reports, so switching work
+## does not silently change the model in use.
+func _default_model_ref() -> String:
+	if not composer_model_ref.is_empty():
+		return composer_model_ref
+	for actor in store.actor_list():
+		if not actor.model_ref.is_empty():
+			return actor.model_ref
+	return ""
+
+
+func _on_model_selected(ref: String) -> void:
+	composer_model_ref = ref
+
+
+## A new session is a real backend mutation, which DEMO must never perform. The
+## demo path states that boundary rather than pretending to create one.
+func _on_new_session() -> void:
+	if store.mode == OfficeStore.MODE_LIVE:
+		return
+	prompt_panel.show_demo_notice("DEMO preview — a new session is not created")
+
+
+func _on_agent_selected(agent_id: String) -> void:
+	if agent_id.is_empty():
+		return
+	selected_agent_id = agent_id
+	_refresh_ui()
+
+
 func _on_actor_selected(session_id: String) -> void:
 	store.select_actor(session_id)
 	conversation_panel.show_actor(store, session_id, zone_for(session_id))
 	office_view.select_actor(session_id)
 	_refresh_ui()
+
+
+## Show or hide a floating panel. The office is a full-bleed scene, so a user who
+## wants an unobstructed view hides the chrome rather than resizing anything.
+func _on_chrome_toggled(_name: String, _hidden: bool) -> void:
+	_apply_chrome_visibility()
+
+
+func _apply_chrome_visibility() -> void:
+	if chrome_toggles == null:
+		return
+	sidebar.visible = not chrome_toggles.is_hidden("sidebar")
+	prompt_panel.visible = not chrome_toggles.is_hidden("composer")
 
 
 ## Which room an actor currently occupies, derived from its assigned desk.
@@ -182,6 +288,42 @@ func zone_for(session_id: String) -> String:
 
 
 func _refresh_ui() -> void:
-	status_panel.refresh(store)
-	mode_badge.refresh(store, demo.is_playing())
+	# Presence is derived state, so it is recomputed once per change rather than
+	# recomputed by the world or re-derived by each panel.
+	store.sync_presence()
+	prompt_panel.set_models(_model_catalog(), _default_model_ref())
+	prompt_panel.set_location(store)
+	if selected_agent_id.is_empty():
+		selected_agent_id = _default_agent_id()
+	sidebar.set_agents(_agent_ids(), selected_agent_id)
+	sidebar.refresh(store, demo.is_playing())
 	office_view.refresh(store)
+
+
+## The agent new work starts as: the root session's agent when there is one, else
+## the first observed agent.
+func _default_agent_id() -> String:
+	var root := store.actor_for(store.root_session_id)
+	if root != null and not root.identity.agent_id.is_empty():
+		return root.identity.agent_id
+	var agents := _agent_ids()
+	return agents[0] if not agents.is_empty() else ""
+
+
+## The agents the office can currently speak as.
+##
+## In DEMO these are the agents actually present in the fixture, so the selector
+## never names an agent the runtime did not produce. In LIVE the list would come
+## from the provider's agent inventory; until that is wired, the observed agents
+## remain the honest source.
+func _agent_ids() -> Array[String]:
+	var seen := {}
+	for actor in store.actor_list():
+		var agent_id := actor.identity.agent_id
+		if not agent_id.is_empty():
+			seen[agent_id] = true
+	var out: Array[String] = []
+	for agent_id in seen:
+		out.append(str(agent_id))
+	out.sort()
+	return out

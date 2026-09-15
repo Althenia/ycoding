@@ -12,6 +12,7 @@ enum Kind {
 	PROCESSING,
 	WAITING,
 	BLOCKED,
+	COMPACTING,
 }
 
 const LABELS := {
@@ -23,6 +24,7 @@ const LABELS := {
 	Kind.PROCESSING: "Processing",
 	Kind.WAITING: "Waiting",
 	Kind.BLOCKED: "Blocked",
+	Kind.COMPACTING: "Compacting",
 }
 
 ## Distinct glyph per state so the distinction never depends on color alone.
@@ -35,6 +37,7 @@ const GLYPHS := {
 	Kind.PROCESSING: "*",
 	Kind.WAITING: "?",
 	Kind.BLOCKED: "!",
+	Kind.COMPACTING: "~",
 }
 
 
