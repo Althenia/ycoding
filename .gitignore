@@ -47,3 +47,10 @@ service-*.json
 
 .aphrodite
 output/
+
+# Native Godot desktop client (apps/office)
+.godot/
+godot-export/
+*.translation
+__pycache__/
+*.pyc

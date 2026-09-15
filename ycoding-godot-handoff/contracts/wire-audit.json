@@ -1,0 +1,263 @@
+{
+  "schema_version": 2,
+  "remote_reference": {
+    "repository": "Althenia/ycoding",
+    "commit": "8544ea9fa55e0c86dcc09ac7d4b43dc7ee6dba10",
+    "inspection_date": "2026-09-15"
+  },
+  "local_checkout": {
+    "verified": true,
+    "commit": "8544ea9fa55e0c86dcc09ac7d4b43dc7ee6dba10",
+    "branch": "main",
+    "dirty_paths_record": "clean except untracked ycoding-godot-handoff/",
+    "engine_version": "4.7.2.stable.official.ed1daf0bf",
+    "verified_on": "2026-09-15",
+    "verification_method": "direct source read plus executed targeted tests in the live checkout"
+  },
+  "warning": "Remote source observations were replaced by local verification for every entry below. Presentation fixture labels are still NOT wire event names; see proposed_vs_actual.",
+  "auth_and_discovery": {
+    "mechanism": "Read the 0600 registration JSON from the state directory; it is the complete discovery contract.",
+    "registration_fields": ["id?", "version?", "url", "pid", "password?"],
+    "authorization": "HTTP Basic, fixed username 'ycoding', password from the registration file",
+    "alternate_auth": "?auth_token=<base64(user:pass)> query parameter",
+    "health_route": "GET /api/health -> { healthy: true, version, pid, sourceEpoch }",
+    "stop_route": "POST /api/service/stop -> { accepted }  (never call this on desktop exit)",
+    "local_sources": [
+      "packages/client/src/effect/service.ts:199-206",
+      "packages/server/src/auth.ts:36-53",
+      "packages/server/src/middleware/authorization.ts:11-61",
+      "packages/protocol/src/groups/health.ts:7-48"
+    ]
+  },
+  "location_scope": {
+    "query": "location[directory]=<absolute path>&location[workspace]=<id> (deepObject)",
+    "headers": ["x-ycoding-directory", "x-ycoding-workspace"],
+    "session_routes": "Session-scoped routes do NOT take location from the client; SessionLocationMiddleware derives it from the session row.",
+    "default": "process.cwd() when neither is supplied",
+    "local_sources": ["packages/server/src/location.ts:29-42", "packages/server/src/middleware/session-location.ts"]
+  },
+  "operations": [
+    {
+      "capability": "session_list",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:263; packages/protocol/src/groups/session.ts:55-78; packages/server/src/handlers/session.ts:31,53",
+      "method": "GET",
+      "path": "/api/session",
+      "request_shape": "query: workspace?, limit? (default 50), order? ('asc'|'desc'), search?, parentID? ('null' = roots only), directory? | project?+subpath?, cursor?",
+      "response_shape": "{ data: Session.Info[], cursor: { previous?, next? } }",
+      "scope_and_auth": "Global Basic auth. No location middleware; scope comes from stored session columns.",
+      "tests": []
+    },
+    {
+      "capability": "session_create",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:283; packages/core/src/session.ts:516-570",
+      "method": "POST",
+      "path": "/api/session",
+      "request_shape": "{ id?, parentID?, agent?, model?, location? }",
+      "response_shape": "{ data: Session.Info }",
+      "scope_and_auth": "Global Basic auth. Location comes from the body for roots; a child inherits the parent's location. Reusing a recorded id adopts the existing session.",
+      "tests": []
+    },
+    {
+      "capability": "session_active",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:302; packages/protocol/src/groups/session.ts:140-142; packages/core/src/session/run-coordinator.ts",
+      "method": "GET",
+      "path": "/api/session/active",
+      "request_shape": "none",
+      "response_shape": "{ data: { [sessionID]: { type: 'running' } } }",
+      "scope_and_auth": "Process-local foreground drains owned by THIS server process. Sessions absent are inactive. This is process ownership, NOT task success. Global Basic auth.",
+      "tests": ["packages/core/test/session-run-coordinator.test.ts"]
+    },
+    {
+      "capability": "session_snapshot",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:329; packages/protocol/src/groups/session.ts:247-252; packages/core/src/session.ts:601-620",
+      "method": "GET",
+      "path": "/api/session/:sessionID/snapshot",
+      "request_shape": "path param sessionID (prefix 'ses')",
+      "response_shape": "{ sourceEpoch, session: Session.Info, messages: SessionMessage.Info[], watermark: { type: 'log.synced', aggregateID, seq? } }  (top-level fields, NOT wrapped in 'data')",
+      "scope_and_auth": "Session-scoped location middleware. Session + messages + watermark are produced inside one DB transaction, so the timestamp is single-epoch atomic. Global Basic auth.",
+      "tests": ["packages/core/test/session-projector.test.ts"]
+    },
+    {
+      "capability": "session_log_replay",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:948-968; packages/core/src/session.ts:292-302,875-879; packages/schema/src/event-log.ts:12-22",
+      "method": "GET",
+      "path": "/api/experimental/session/:sessionID/log",
+      "request_shape": "query: after? (exclusive Event.Seq), follow? (boolean)",
+      "response_shape": "SSE stream of SessionLogItem = public durable session events | { type: 'log.synced', aggregateID, seq? }",
+      "scope_and_auth": "Session-scoped location middleware. REPLAY IS SUPPORTED here: events after the exclusive cursor are replayed, a log.synced marker is emitted at the captured watermark, then live events follow when follow=true. The marker seq may exceed the last emitted event because other durable events share the aggregate sequence space. Global Basic auth.",
+      "tests": [
+        "packages/core/test/session-log.test.ts (7 pass / 0 fail, executed)",
+        "replays public session events and marks synced at the aggregate watermark",
+        "continues with live public events when following"
+      ],
+      "verdict": "This is the durable replay path the earlier pack revision claimed did not exist."
+    },
+    {
+      "capability": "global_events",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/event.ts:36-46; packages/server/src/event-feed.ts:11,29-36,60-92; packages/server/src/handlers/event.ts:14-40; specs/v2/event-stream-architecture.md",
+      "method": "GET",
+      "path": "/api/event",
+      "request_shape": "none",
+      "response_shape": "text/event-stream. Frames are exactly 'data: <V2Event JSON>\\n\\n'. Heartbeats are comment lines (': heartbeat' from the handler, ': keep-alive' from the feed).",
+      "scope_and_auth": "Server-global, intentionally cross-location (outside LocationMiddleware). Volatile by contract. Overflow (capacity 4096) fails only that connection. Global Basic auth.",
+      "replay_supported": false,
+      "replay_evidence": "No 'id:' or 'retry:' field is emitted and no Last-Event-ID handling exists in packages/server/src. `server.connected` carries sourceEpoch and is prepended per connection.",
+      "tests": ["packages/server/test/event-feed.test.ts (5 pass / 0 fail, executed)"]
+    },
+    {
+      "capability": "prompt",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:610; packages/core/src/session.ts:886-930; packages/schema/src/session-delivery.ts:5; specs/v2/session.md:15-17",
+      "method": "POST",
+      "path": "/api/session/:sessionID/prompt",
+      "request_shape": "{ id? (SessionMessage.ID), text, files?, agents?, metadata?, delivery? ('steer'|'queue', default 'steer'), resume? (boolean, default true) }",
+      "response_shape": "{ data: SessionPending.User }",
+      "scope_and_auth": "Session-scoped location middleware. Errors: ConflictError | InvalidRequestError | SessionNotFoundError.",
+      "retry_identity_rule": "Reusing a prompt message ID reconciles an exact retry only when session, prompt, and delivery all match; the comparison requires identical data JSON. A conflicting reuse raises PromptConflictError. A retry of an already-promoted input reconciles against projected history plus its durable session.input.admitted event.",
+      "tests": [
+        "packages/core/test/session-prompt.test.ts (37 pass / 0 fail, executed)",
+        "rejects a prompt ID already used by visible Session history",
+        "treats prompt metadata as durable retry identity"
+      ]
+    },
+    {
+      "capability": "interrupt",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:970; packages/core/src/session.ts:1474-1475,383",
+      "method": "POST",
+      "path": "/api/session/:sessionID/interrupt",
+      "request_shape": "none",
+      "response_shape": "204 No Content",
+      "scope_and_auth": "Session-scoped location middleware. Interruption targets the active process-local ownership chain; an idle or locally unowned Session is a no-op. An unknown Session is rejected with SessionNotFoundError.",
+      "tests": []
+    },
+    {
+      "capability": "subagents",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/session.ts:437-511; packages/schema/src/session-orchestration.ts",
+      "method": "GET|POST",
+      "path": "/api/session/:parentID/subagent, /launch, /:childID/message, /:childID/question/:questionID/answer, /:childID/cancel, /:childID/resume",
+      "request_shape": "launch: { parentAssistantMessageID, toolCallID, agent, description, prompt, background?, model? }; message: { messageID, text, delivery }; answer: { text?, data? }",
+      "response_shape": "{ data: SessionOrchestration.Task } ; list returns SessionOrchestration.Page { data: Task[], summary, cursor }",
+      "scope_and_auth": "Session-scoped location middleware. List page limit is capped at 10. Task carries sessionID, parentID, description, agent, model, state, progress?, question?, revision, time.",
+      "tests": []
+    },
+    {
+      "capability": "human_attention",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/question.ts:20-68; packages/protocol/src/groups/form.ts:39-131; packages/protocol/src/groups/permission.ts:23-119; packages/protocol/src/groups/guardrail.ts:13-62; packages/schema/src/permission.ts:40; packages/schema/src/guardrail.ts:59-63; packages/core/src/session/guardrail.ts:417-430",
+      "method": "GET|POST",
+      "path": "/api/question/request, /api/form/request, /api/permission/request, /api/session/:sessionID/question, /form, /permission, /guardrail/request, plus their /reply and /reject operations",
+      "request_shape": "permission reply: { reply }; guardrail reply: { reply }; question reply carries the selected option(s); form reply carries form data",
+      "response_shape": "list operations return { data: [...] }; replies return 204 or the updated resource",
+      "scope_and_auth": "Session-scoped location middleware. Permission.Reply = 'once'|'always'|'reject'. Guardrail.Reply = 'once'|'always'|'reject', BUT a hard review downgrades 'always' to 'reject' server-side (packages/core/src/session/guardrail.ts:428). Ordinary guardrail reviews allow one-time or session-scoped Always; hard reviews allow only one-time approval or rejection.",
+      "tests": ["packages/core/test/session-guardrail.test.ts"]
+    },
+    {
+      "capability": "details",
+      "local_verified": true,
+      "local_source": "packages/protocol/src/groups/message.ts:8-25; packages/protocol/src/groups/session.ts:679,851,866,1001; packages/protocol/src/groups/vcs.ts:17-57; packages/protocol/src/groups/shell.ts:79-95; packages/protocol/src/groups/fs.ts:22-55; packages/protocol/src/groups/provider-usage.ts:23-38",
+      "method": "GET",
+      "path": "/api/session/:sessionID/message, /message/:messageID, /session/:sessionID/usage, /file-change, /pending, /api/vcs/status|branch|diff, /api/shell/:id/output, /api/fs/read|list|find, /api/provider/usage",
+      "request_shape": "message.list takes only sessionID; shell.output pages by absolute byte cursor",
+      "response_shape": "message.list returns ALL current projected messages in canonical ascending order (no pagination). file-change returns { path, patch, additions, deletions }. vcs.diff returns FileDiff.Info { file, patch, additions, deletions, status }. session.usage returns ProviderRequest.Summary and includes the descendant subagent family for a root session.",
+      "scope_and_auth": "Session-scoped routes use SessionLocationMiddleware; vcs/shell/fs/provider-usage use LocationQuery.",
+      "notes": "There is no PTY emulation requirement for the desktop: shell.output is a paged captured-output read, not a terminal."
+    }
+  ],
+  "actual_event_vocabulary": {
+    "comment": "These are the real names emitted on GET /api/event and replayed on the session log. The office read model must map these, not the proposal names below.",
+    "durable": [
+      "session.created",
+      "session.agent.selected",
+      "session.model.selected",
+      "session.moved",
+      "session.renamed",
+      "session.deleted",
+      "session.archived",
+      "session.unarchived",
+      "session.forked",
+      "session.input.admitted",
+      "session.input.promoted",
+      "session.input.consumed",
+      "session.execution.started",
+      "session.execution.succeeded",
+      "session.execution.failed",
+      "session.execution.interrupted",
+      "session.task.updated",
+      "session.step.started",
+      "session.step.ended",
+      "session.step.failed",
+      "session.tool.called",
+      "session.tool.progress",
+      "session.tool.success",
+      "session.tool.failed",
+      "session.file-change.recorded",
+      "session.text.started",
+      "session.text.delta",
+      "session.text.ended",
+      "session.reasoning.started",
+      "session.reasoning.delta",
+      "session.reasoning.ended",
+      "session.shell.started",
+      "session.shell.ended",
+      "session.retry.scheduled",
+      "session.synthetic",
+      "session.context.observed",
+      "session.instructions.updated",
+      "session.skill.activated",
+      "session.skill.deactivated",
+      "session.compaction.admitted",
+      "session.compaction.started",
+      "session.compaction.ended",
+      "session.compaction.failed",
+      "session.revert.staged",
+      "session.revert.cleared",
+      "session.revert.committed"
+    ],
+    "ephemeral": ["session.status (idle|busy|retry)", "session.idle (deprecated)"],
+    "task_change_kinds": [
+      "launched",
+      "started",
+      "backgrounded",
+      "progressed",
+      "question_asked",
+      "question_answered",
+      "cancel_requested",
+      "cancelled",
+      "completed",
+      "failed",
+      "lost"
+    ],
+    "offline_marker": ["log.synced (session log replay watermark)"],
+    "local_sources": [
+      "packages/schema/src/session-event.ts:766-790",
+      "packages/schema/src/session-orchestration.ts (Change union)",
+      "packages/schema/src/session-status-event.ts"
+    ]
+  },
+  "proposed_vs_actual": {
+    "comment": "The shipped fixtures use these client-internal names. None of them exists on the wire. The M1 DemoTransport must translate fixture records into the real names listed above before they reach OfficeStore, so demo and live share one reducer.",
+    "connection.changed": "No wire equivalent. Use transport state locally; bind epoch from server.connected / /api/health.",
+    "session.observed": "No wire equivalent. Use session.created plus Session.Info from session.list/create/snapshot.",
+    "activity.changed": "No wire equivalent. Derive activity from session.step.*, session.tool.*, session.text.*, session.reasoning.*, session.shell.*.",
+    "interaction.created": "No wire equivalent. Derive delegation/report/question/answer from session.task.updated change kinds.",
+    "session.settled": "No direct wire equivalent. Derive terminal state from session.execution.succeeded|failed|interrupted and session.task.updated completed|failed|cancelled|lost. Inactive is NOT success."
+  },
+  "sync_guarantees": {
+    "global_stream_replay_assumed": false,
+    "global_stream_replay_supported": false,
+    "session_log_replay_supported": true,
+    "session_log_cursor": "exclusive Event.Seq in the `after` query parameter",
+    "session_log_terminal_marker": "log.synced carries the captured aggregate seq",
+    "source_epoch_rules_verified_locally": true,
+    "source_epoch_meaning": "Stable identity of one running server process; returned by /api/health and stamped on server.connected and snapshot responses.",
+    "proven_strategy": "Snapshot-first: on connect/reconnect load the canonical session snapshot (atomic per epoch) plus session.active, then attach the volatile feed and treat it as an invalidation signal. Use GET /api/session/:id/log?after=<lastSeq>&follow=false for gap-free durable history within one epoch; discard cursors when sourceEpoch changes. Never numerically compare Event IDs or epochs."
+  }
+}

@@ -2,7 +2,7 @@
 
 Status: **implemented**
 
-This document describes the current TUI-only package boundaries and runtime flow. Exact public shapes remain owned by `packages/schema` and `packages/protocol`.
+This document describes the current package boundaries and runtime flow. Exact public shapes remain owned by `packages/schema` and `packages/protocol`.
 
 ## Workspace boundary
 
@@ -27,6 +27,12 @@ The active package set is explicit and enforced by `script/ycoding-workspace.ts`
 - `ui`
 
 Desktop, browser, console, website, statistics, hosted-application, and legacy SDK packages are outside the product boundary and must not be restored accidentally.
+
+### Native desktop client
+
+`apps/office/` is an approved native Godot client of the existing public HTTP/SSE contracts. It is intentionally **not** a Bun workspace package: it contains no JavaScript, so it stays outside `workspaces.packages` and outside the `script/ycoding-workspace.ts` allowlist, which scans `packages/` only. This matches the existing precedent of `extensions/chrome`, a tracked non-package client surface.
+
+Dependency direction into the desktop app is one-way: it consumes the public service contract and imports no Core, Server, Protocol, or Client implementation module. Its own guide is `apps/office/AGENTS.md`.
 
 ## Dependency direction
 

@@ -2,7 +2,7 @@
 
 Status: **implemented direction**
 
-YCoding is a standalone, TUI-only coding agent. This document defines maintained product scope; it is not a roadmap and does not promise unimplemented features.
+YCoding is a standalone coding agent. The terminal application is the primary supported surface. This document defines maintained product scope; it is not a roadmap and does not promise unimplemented features.
 
 ## Product identity
 
@@ -12,11 +12,13 @@ The product goal is a dependable, highly customizable coding-agent runtime with 
 
 ## Priorities
 
-### 1. TUI-only delivery
+### 1. Terminal-first delivery
 
-The terminal application is the sole product and release surface.
+The terminal application is the primary product and release surface. A native Godot desktop client is an explicitly approved additional presentation surface and is in development under `apps/office/`; it is a client of the existing public service contracts, never a second runtime.
 
-Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path. Do not restore desktop, browser, console, website, or hosted-application products.
+Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path. The desktop client consumes those same contracts and owns no execution authority.
+
+Do not restore desktop, browser, console, website, or hosted-application packages from the removed Electron/browser product. The native Godot client is not that product and must not become an Electron or embedded-browser shell.
 
 ### 2. Current runtime architecture
 

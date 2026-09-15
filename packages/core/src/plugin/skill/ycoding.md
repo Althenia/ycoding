@@ -4,7 +4,7 @@ Use this guide for work involving YCoding itself: configuration, terminal behavi
 
 ## Authority
 
-YCoding is TUI-only and V2-only. Use sources in this order:
+YCoding is terminal-first and V2-only. Use sources in this order:
 
 1. Current executable behavior and targeted tests.
 2. Public shapes in `packages/schema`.
@@ -14,7 +14,7 @@ YCoding is TUI-only and V2-only. Use sources in this order:
 6. Root documentation in `docs` and contracts in `specs/v2`.
 7. Historical upstream material only when a migration or comparison explicitly requires it.
 
-Do not use removed V1, desktop, web, console, website, or legacy SDK paths as current behavior.
+Do not use removed V1, Electron, browser-product, console, website, or legacy SDK paths as current behavior. The native Godot client under `apps/office/` is not a removed product.
 
 ## Product identity
 
@@ -53,7 +53,7 @@ Subagents are durable child sessions and run in the background. Parent notificat
 
 ## Terminal application
 
-The terminal application is the only product surface. Build it with:
+The terminal application is the primary product surface. A native Godot desktop client under `apps/office/` consumes the same public service contract and owns no execution authority. Build the terminal application with:
 
 ```sh
 bun run build:tui

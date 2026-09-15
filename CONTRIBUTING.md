@@ -17,7 +17,7 @@ Verify user-supplied paths, symbols, causes, and expected behavior against the l
 
 The active workspace is defined explicitly in [`package.json`](./package.json) and enforced by [`script/ycoding-workspace.ts`](./script/ycoding-workspace.ts).
 
-Do not restore removed desktop, web, console, website, statistics, or legacy SDK products. A proposal to change the product boundary must update the workspace test, root documentation, build scripts, and release plan in the same change.
+Do not restore removed desktop, web, console, website, statistics, or legacy SDK products. A native Godot desktop client under `apps/office/` is an approved presentation surface and is deliberately outside the Bun workspace; it consumes the public service contract and owns no execution authority. A proposal to change the product boundary must update the workspace test, root documentation, build scripts, and release plan in the same change.
 
 ## Development setup
 

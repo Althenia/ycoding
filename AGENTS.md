@@ -5,7 +5,7 @@
 - This repository is the YCoding product and source of truth.
 - The default branch is `main`.
 - Maintain one current runtime. Do not restore removed session, configuration, plugin, SDK, package, event, or TUI compatibility paths unless the user explicitly requests a migration design.
-- The TUI is the only product, release, and behavior surface. Do not restore desktop, web, console, or website packages.
+- The TUI is the primary product, release, and behavior surface. A native Godot desktop client under `apps/office/` is an explicitly approved additional presentation surface; it is not a workspace package and owns no execution authority. Do not restore Electron, browser, console, website, or hosted-application packages.
 - Durable sessions, explicit autonomy, durable background subagents, session skills, project artifacts, Session-wide guardrails, provider-efficient caching, and normalized provider usage are current product contracts.
 - Historical upstream material never overrides current code, tests, Schema, Protocol, or root `docs`.
 

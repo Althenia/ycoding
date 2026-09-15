@@ -21,7 +21,7 @@ A plan, deleted package, or stale generated file does not override current code.
 
 | Document                                               | Purpose                                                                                                |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| [`product-direction.md`](./product-direction.md)       | TUI-only product scope, priorities, and compatibility policy.                                          |
+| [`product-direction.md`](./product-direction.md)       | Terminal-first product scope, priorities, and compatibility policy.                                    |
 | [`architecture.md`](./architecture.md)                 | Active package graph, ownership, runtime flow, and constraints.                                        |
 | [`runtime.md`](./runtime.md)                           | Implemented Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior. |
 | [`browser-extension.md`](./browser-extension.md)       | Selected-tab Chrome bridge installation, isolation boundary, operations, and validation limits.       |

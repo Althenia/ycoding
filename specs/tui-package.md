@@ -19,6 +19,8 @@ The standalone terminal artifact may include only packages in the enforced YCodi
 - private source paths from another package;
 - a removed legacy SDK facade.
 
+This artifact contract is unchanged by the native desktop client. `apps/office/` is not part of this closure and never enters the terminal artifact.
+
 The TUI consumes public Client and Plugin contracts. Shared wire values belong in Schema and Protocol.
 
 ## Runtime construction

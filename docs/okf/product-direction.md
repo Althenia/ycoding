@@ -1,11 +1,12 @@
 ---
 type: Decision
-title: TUI-Only Product Direction
-description: YCoding is a standalone TUI-only coding agent with durable execution,
-  explicit autonomy, background orchestration, and provider-efficient model usage.
+title: Terminal-First Product Direction
+description: YCoding is a standalone terminal-first coding agent with durable execution,
+  explicit autonomy, background orchestration, provider-efficient model usage, and
+  an approved native Godot desktop client.
 tags:
 - product
-- tui-only
+- terminal-first
 - scope
 - compatibility
 sources:
@@ -15,11 +16,15 @@ sources:
   resource: repo:///README.md
 - id: migration
   resource: repo:///docs/ycoding-migration.md
+- id: office-agents
+  resource: repo:///apps/office/AGENTS.md
 ---
 
 ## Product Identity
 
-YCoding is a standalone TUI-only coding agent and the terminal application is the sole product and release surface; desktop, browser, console, website, hosted-application, and legacy SDK products must not be restored.[^product-dir]
+YCoding is a standalone coding agent; the terminal application is the primary product and release surface, and a native Godot desktop client under `apps/office/` is an explicitly approved additional presentation surface in development that consumes the same public service contracts and owns no execution authority.[^product-dir] Electron, browser-product, console, website, hosted-application, and legacy SDK products must not be restored and are not the native client.[^product-dir]
+
+The desktop client is deliberately outside the Bun workspace and outside the `script/ycoding-workspace.ts` allowlist, so the terminal artifact closure is unchanged.[^office-agents]
 
 The product goal is a dependable, highly customizable coding-agent runtime with durable execution state, explicit orchestration, and provider-efficient model usage.[^product-dir]
 
@@ -47,3 +52,4 @@ A product change is complete only with the real runtime path, targeted regressio
 - [Package Architecture](./architecture.md)
 
 [^product-dir]: repo:///docs/product-direction.md
+[^office-agents]: repo:///apps/office/AGENTS.md

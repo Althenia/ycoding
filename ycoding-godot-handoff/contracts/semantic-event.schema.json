@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Proposed client-internal office observation (not a YCoding wire DTO)",
+  "description": "Relative playback time is fixture scheduling metadata. LIVE adapters must use verified canonical source references and ordering semantics, not assume these labels exist on the service.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "at_ms",
+    "event_id",
+    "source_epoch",
+    "session_id",
+    "kind",
+    "payload",
+    "source"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "mode": {
+      "enum": [
+        "DEMO",
+        "LIVE"
+      ]
+    },
+    "at_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_epoch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "enum": [
+        "connection.changed",
+        "session.observed",
+        "activity.changed",
+        "interaction.created",
+        "session.settled"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "synthetic_fixture",
+            "canonical_message",
+            "canonical_state",
+            "transport"
+          ]
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind",
+        "message_id",
+        "label"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "connection.changed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "enum": [
+                  "syncing",
+                  "live",
+                  "reconnecting",
+                  "disconnected"
+                ]
+              }
+            },
+            "required": [
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "session.observed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "agent_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "parent_session_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "display_role": {
+                "type": "string",
+                "minLength": 1
+              },
+              "status": {
+                "enum": [
+                  "idle",
+                  "running",
+                  "waiting_for_parent",
+                  "waiting_for_user",
+                  "inactive"
+                ]
+              }
+            },
+            "required": [
+              "agent_id",
+              "parent_session_id",
+              "display_role",
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "activity.changed"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "activity": {
+                "enum": [
+                  "idle",
+                  "reading",
+                  "typing",
+                  "testing",
+                  "reviewing",
+                  "processing",
+                  "waiting"
+                ]
+              }
+            },
+            "required": [
+              "activity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "interaction.created"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "interaction_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "thread_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "from_session_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "to_session_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "interaction_kind": {
+                "enum": [
+                  "delegation",
+                  "question",
+                  "answer",
+                  "report",
+                  "review",
+                  "inform"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1
+              },
+              "details": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "interaction_id",
+              "thread_id",
+              "from_session_id",
+              "to_session_id",
+              "interaction_kind",
+              "summary",
+              "details"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "session.settled"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "enum": [
+                  "succeeded",
+                  "failed",
+                  "cancelled",
+                  "inactive"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ]
+}

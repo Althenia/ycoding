@@ -1,0 +1,8 @@
+# Local handoff execution artifacts; source planning/tracking files remain versionable.
+__pycache__/
+*.pyc
+.env
+.env.*
+*.local.json
+tracking/evidence/private/
+tracking/evidence/raw/

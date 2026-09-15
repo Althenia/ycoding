@@ -225,8 +225,8 @@ describe("AgentV2", () => {
       const zeus = yield* agent.get(AgentV2.ID.make("zeus"))
       if (!god?.system || !zeus?.system) throw new Error("expected built-in agents with system prompts")
 
-      expect(god.system.startsWith("YCoding is the TUI-only V2 runtime")).toBe(true)
-      expect(zeus.system.startsWith("YCoding is the TUI-only V2 runtime")).toBe(true)
+      expect(god.system.startsWith("YCoding is the terminal-first V2 runtime")).toBe(true)
+      expect(zeus.system.startsWith("YCoding is the terminal-first V2 runtime")).toBe(true)
       expect(god.system).toContain("Follow the user's prompt or inquiry strictly")
       expect(zeus.system).toContain("Do not perform work the user did not request")
       expect(god.system).toContain("concrete evidence")

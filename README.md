@@ -10,7 +10,7 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 - **Background subagents:** delegate work with inherited permission limits.
 - **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
 
-YCoding is terminal-only—there is no desktop or web application.
+YCoding is terminal-first—the TUI is the primary surface. An approved native Godot desktop client is in development under [`apps/office`](./apps/office); it is a presentation client of the same local service and owns no execution authority.
 
 ## Install
 
