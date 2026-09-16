@@ -148,6 +148,25 @@ test("attaches a clipboard image when an image-only clipboard arrives as an empt
   }
 }, 30_000)
 
+test("attaches a clipboard image from super+v", async () => {
+  const attachment = await image()
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => attachment },
+    kittyKeyboard: true,
+    settle: "Message YCoding…",
+  })
+  try {
+    await pasteInto(screen, () => screen.input.pressKey("v", { super: true }), "[Image 1]")
+  } finally {
+    await screen.dispose()
+    await attachment.temporary.cleanup()
+  }
+}, 30_000)
+
 // Terminals whose paste gesture only transfers text still deliver a file path when the user copies
 // an image file rather than image data (Finder copies a URL; Ghostty pastes its path). That paste
 // must become a real attachment instead of literal text.

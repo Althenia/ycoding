@@ -162,7 +162,13 @@ export const Definitions = {
   input_clear: keybind("ctrl+c", "Clear input field"),
   // The terminal must forward the gesture: YCoding reads the host clipboard itself, because a
   // terminal paste only ever transfers text and cannot carry an image.
-  input_paste: keybind({ key: "ctrl+v", preventDefault: false }, "Paste from clipboard"),
+  input_paste: keybind(
+    [
+      { key: "ctrl+v", preventDefault: false },
+      { key: "super+v", preventDefault: false },
+    ],
+    "Paste from clipboard",
+  ),
   input_submit: keybind("return", "Submit input"),
   input_newline: keybind("shift+return,ctrl+return,alt+return,ctrl+j", "Insert newline in input"),
   input_move_left: keybind("left,ctrl+b", "Move cursor left in input"),
