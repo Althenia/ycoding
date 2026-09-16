@@ -31,6 +31,10 @@ const MARK_GROUP_CLOSED := "▸"
 const WRAP_MIN_WIDTH := 200.0
 
 ## Optional room lookup, injected by the composition root.
+## The interface text scale. The window's content scale enlarges the drawn text;
+## a minimum size is logical and must shrink with the shell or it overflows.
+var ui_scale: float = UiScale.MIN
+
 var zone_provider: Callable = Callable()
 
 var _product_button: Button
@@ -77,15 +81,15 @@ func _ensure_built() -> void:
 	head_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(head_spacer)
 	_mode_label = Label.new()
-	_mode_label.add_theme_font_size_override("font_size", 12)
+	OfficeTheme.apply_font(_mode_label, 12)
 	head.add_child(_mode_label)
 	outer.add_child(head)
 
 	_detail_label = Label.new()
-	_detail_label.add_theme_font_size_override("font_size", 11)
-	_detail_label.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	OfficeTheme.apply_font(_detail_label, 11)
+	_detail_label.add_theme_color_override("font_color", OfficeTheme.text_muted())
 	_detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_detail_label.custom_minimum_size = Vector2(WRAP_MIN_WIDTH, 0.0)
+	_detail_label.custom_minimum_size = Vector2(WRAP_MIN_WIDTH * ui_scale, 0.0)
 	outer.add_child(_detail_label)
 
 	_new_button = OfficeTheme.pill_button("✎   New session")
@@ -123,14 +127,20 @@ func _ensure_built() -> void:
 	_agent_button = OfficeTheme.pill_button("No agent  ⌄")
 	_agent_button.custom_minimum_size = Vector2(0, 32)
 	_agent_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_agent_button.add_theme_font_size_override("font_size", 13)
+	OfficeTheme.apply_font(_agent_button, 13)
 	_agent_button.pressed.connect(_on_agent_pressed)
 	outer.add_child(_agent_button)
 
 	# --- status bar ---------------------------------------------------------
 	_status_label = Label.new()
-	_status_label.add_theme_font_size_override("font_size", 11)
-	_status_label.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	OfficeTheme.apply_font(_status_label, 11)
+	_status_label.add_theme_color_override("font_color", OfficeTheme.text_muted())
+	# The footer carries a filesystem path, which is long and unbreakable. A Label
+	# without wrapping takes its full text as its minimum width, which silently made
+	# the rail 25px wider than the layout declares and pushed it over the composer.
+	# It shortens instead, and the tooltip keeps the whole value readable.
+	_status_label.clip_text = true
+	_status_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	outer.add_child(_status_label)
 
 	add_child(outer)
@@ -144,6 +154,23 @@ func _ensure_built() -> void:
 
 func _ready() -> void:
 	_ensure_built()
+
+
+
+## Re-apply what `_ready` baked into styleboxes and colours.
+##
+## A palette change alters the palette, not the nodes: colours read at paint time
+## follow on their own, but a StyleBox and an override capture their value once, so
+## the surfaces carrying one are restyled explicitly.
+## Adopt a new text scale and re-apply the minimums that depend on it.
+func set_ui_scale(value: float) -> void:
+	ui_scale = UiScale.clamp_scale(value)
+	if _detail_label != null:
+		_detail_label.custom_minimum_size = Vector2(WRAP_MIN_WIDTH * ui_scale, 0.0)
+
+
+func restyle() -> void:
+	add_theme_stylebox_override("panel", OfficeTheme.card_style())
 
 
 ## Rebuild the whole rail from the store.
@@ -229,14 +256,14 @@ func _refresh_mode(store: OfficeStore, playing: bool) -> void:
 	# DEMO is a hard visual boundary, never a quiet label.
 	var demo := store.mode == OfficeStore.MODE_DEMO
 	_mode_label.add_theme_color_override(
-		"font_color", OfficeTheme.ACCENT_WARM if demo else OfficeTheme.OK
+		"font_color", OfficeTheme.accent_warm() if demo else OfficeTheme.ok()
 	)
 	if store.last_error.is_empty():
 		_detail_label.text = _detail_text(store, playing)
-		_detail_label.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+		_detail_label.add_theme_color_override("font_color", OfficeTheme.text_muted())
 		return
 	_detail_label.text = store.last_error
-	_detail_label.add_theme_color_override("font_color", OfficeTheme.DANGER)
+	_detail_label.add_theme_color_override("font_color", OfficeTheme.danger())
 
 
 func _detail_text(store: OfficeStore, playing: bool) -> String:
@@ -265,10 +292,29 @@ func _refresh_status(store: OfficeStore) -> void:
 		]
 	)
 	_status_label.text = "  ·  ".join(parts)
+	_status_label.tooltip_text = _status_label.text
 	_status_label.add_theme_color_override(
 		"font_color",
-		OfficeTheme.OK if connected else OfficeTheme.TEXT_MUTED
+		OfficeTheme.ok() if connected else OfficeTheme.text_muted()
 	)
+
+
+## A wire event name rendered for a person.
+##
+## The store records the event name verbatim, because that is the fact. Reading it
+## raw in the rail shows an implementation detail: "session.step.started" is noise
+## beside "Frontend". The namespace is dropped and the remainder spaced, so an
+## unknown name still reads sensibly rather than being invented into a word.
+##
+## A tool name is already a plain word ("read", "edit"), so it passes through.
+func _readable_activity(activity: String) -> String:
+	var text := activity.strip_edges()
+	if text.is_empty():
+		return ""
+	if not text.contains("."):
+		return text
+	var tail := text.split(".")[-1]
+	return tail.replace("_", " ")
 
 
 ## --- sessions ---------------------------------------------------------------
@@ -310,8 +356,8 @@ func _group_row(actor: ActorPresentation, child_count: int) -> Control:
 		var twisty := Button.new()
 		twisty.flat = true
 		twisty.text = MARK_GROUP_CLOSED if is_group_collapsed(actor.identity.session_id) else MARK_GROUP_OPEN
-		twisty.add_theme_font_size_override("font_size", 11)
-		twisty.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+		OfficeTheme.apply_font(twisty, 11)
+		twisty.add_theme_color_override("font_color", OfficeTheme.text_muted())
 		var group_id := actor.identity.session_id
 		twisty.pressed.connect(func(): toggle_group(group_id))
 		row.add_child(twisty)
@@ -324,9 +370,9 @@ func _group_row(actor: ActorPresentation, child_count: int) -> Control:
 	button.flat = true
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.text = _session_label(actor)
-	button.add_theme_font_size_override("font_size", 14)
+	OfficeTheme.apply_font(button, 14)
 	button.add_theme_color_override(
-		"font_color", OfficeTheme.TEXT if selected else OfficeTheme.TEXT_DIM
+		"font_color", OfficeTheme.text() if selected else OfficeTheme.text_dim()
 	)
 	var session_id := actor.identity.session_id
 	button.pressed.connect(func(): session_selected.emit(session_id))
@@ -352,9 +398,9 @@ func _session_row(actor: ActorPresentation, nested: bool) -> Control:
 	button.flat = true
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.text = text
-	button.add_theme_font_size_override("font_size", 13)
+	OfficeTheme.apply_font(button, 13)
 	button.add_theme_color_override(
-		"font_color", OfficeTheme.TEXT if selected else OfficeTheme.TEXT_MUTED
+		"font_color", OfficeTheme.text() if selected else OfficeTheme.text_muted()
 	)
 	var session_id := actor.identity.session_id
 	button.pressed.connect(func(): session_selected.emit(session_id))
@@ -365,10 +411,10 @@ func _session_row(actor: ActorPresentation, nested: bool) -> Control:
 func _marker(selected: bool) -> Label:
 	var marker := Label.new()
 	marker.text = MARK_SELECTED if selected else MARK_UNSELECTED
-	marker.add_theme_font_size_override("font_size", 11)
+	OfficeTheme.apply_font(marker, 11)
 	marker.custom_minimum_size = Vector2(14, 0)
 	marker.add_theme_color_override(
-		"font_color", OfficeTheme.ACCENT if selected else OfficeTheme.TEXT_MUTED
+		"font_color", OfficeTheme.accent() if selected else OfficeTheme.text_muted()
 	)
 	return marker
 
@@ -404,12 +450,12 @@ func _team_row(row: Dictionary) -> Control:
 	var line := Button.new()
 	line.flat = true
 	line.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	line.add_theme_font_size_override("font_size", 13)
+	OfficeTheme.apply_font(line, 13)
 	line.text = "%s  %s" % [str(row["glyph"]), _team_line(row, selected, attention)]
 	line.add_theme_color_override(
 		"font_color",
-		OfficeTheme.ACCENT_WARM if attention
-		else (OfficeTheme.TEXT if selected else OfficeTheme.TEXT_DIM)
+		OfficeTheme.accent_warm() if attention
+		else (OfficeTheme.text() if selected else OfficeTheme.text_dim())
 	)
 	line.pressed.connect(func(): session_selected.emit(session_id))
 	return line
@@ -424,7 +470,7 @@ func _team_line(row: Dictionary, selected: bool, attention: bool) -> String:
 		parts.append(presence)
 	# What the agent is doing right now, when the runtime reported it. An empty
 	# activity is omitted rather than rendered as a blank separator.
-	var activity := str(row.get("activity", "")).strip_edges()
+	var activity := _readable_activity(str(row.get("activity", "")))
 	if not activity.is_empty() and not attention:
 		parts.append(activity)
 	if attention:

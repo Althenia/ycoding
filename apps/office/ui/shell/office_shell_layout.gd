@@ -31,6 +31,9 @@ extends RefCounted
 ## The rail takes about a fifth of the frame at 1600x900. At 320 it read as a
 ## dominant column rather than a floating panel; 264 leaves the office legible.
 const SIDEBAR_W := 272.0
+## The narrowest the sidebar's own CONTENT can render at 100%: its widest child
+## plus the panel padding. It grows with the text scale.
+const SIDEBAR_CONTENT_FLOOR := 297.0
 const SIDEBAR_MARGIN := 16.0
 ## The sidebar spans the window height minus its margins.
 const SIDEBAR_MARGIN_Y := 16.0
@@ -45,6 +48,12 @@ const GAP := 12.0
 ## reference this design follows centres it in the content area too.
 const COMPOSER_SHARE := 0.50
 const COMPOSER_MIN_W := 460.0
+## The narrowest the composer's OWN CONTENT can render: its control row plus the
+## padding around it. Below this the composer takes the full content width rather
+## than clipping a control.
+const COMPOSER_CONTENT_FLOOR := 477.0
+## The height the composer's rows need at 100%. It grows with the text scale.
+const COMPOSER_CONTENT_HEIGHT := 116.0
 const COMPOSER_MAX_W := 720.0
 const COMPOSER_H := 116.0
 const COMPOSER_BOTTOM := 40.0
@@ -65,22 +74,32 @@ const OVERLAYS := ["sidebar", "composer", "toggles"]
 const HIDEABLE := ["sidebar", "composer"]
 
 ## Every overlay for a window of `size`, in the shell's coordinate space.
-static func overlays(size: Vector2) -> Dictionary:
+##
+## `scale` is the interface TEXT scale. It grows the metrics that come from text —
+## the width a panel's contents need, and the height a row of controls occupies —
+## while the gutters between overlays stay fixed, because a gutter is spacing rather
+## than content. A panel narrower than its own text would clip the state it exists
+## to show, so a content floor always wins over a designed width.
+static func overlays(size: Vector2, scale: float = 1.0) -> Dictionary:
+	var safe := UiScale.clamp_scale(scale)
+	var sidebar_w := maxf(SIDEBAR_W, SIDEBAR_CONTENT_FLOOR * safe)
 	var sidebar_h := maxf(size.y - SIDEBAR_MARGIN_Y * 2.0, 1.0)
-	var content_x := SIDEBAR_MARGIN + SIDEBAR_W + GAP
+	var content_x := SIDEBAR_MARGIN + sidebar_w + GAP
 	var content_w := maxf(size.x - content_x - SIDEBAR_MARGIN, 1.0)
-	var composer_w := minf(
-		clampf(content_w * COMPOSER_SHARE, COMPOSER_MIN_W, COMPOSER_MAX_W),
-		content_w
-	)
+	var composer_h := maxf(COMPOSER_H, COMPOSER_CONTENT_HEIGHT * safe)
+	var desired := clampf(content_w * COMPOSER_SHARE, COMPOSER_MIN_W, COMPOSER_MAX_W)
+	# The composer's controls cannot render below their own content floor. When the
+	# preferred share is narrower, the composer takes the room it needs rather than
+	# clipping a control the user would then not see.
+	var composer_w := minf(maxf(desired, COMPOSER_CONTENT_FLOOR * safe), content_w)
 	return {
 		"sidebar": Rect2(
 			Vector2(SIDEBAR_MARGIN, SIDEBAR_MARGIN_Y),
-			Vector2(SIDEBAR_W, sidebar_h)
+			Vector2(sidebar_w, sidebar_h)
 		),
 		"composer": Rect2(
-			Vector2(content_x + (content_w - composer_w) * 0.5, size.y - COMPOSER_BOTTOM - COMPOSER_H),
-			Vector2(composer_w, COMPOSER_H)
+			Vector2(content_x + (content_w - composer_w) * 0.5, size.y - COMPOSER_BOTTOM - composer_h),
+			Vector2(composer_w, composer_h)
 		),
 		"toggles": Rect2(
 			Vector2(size.x - TOGGLES_MARGIN - TOGGLES_W, TOGGLES_MARGIN),

@@ -45,7 +45,7 @@ func _build() -> void:
 		return
 	_built = true
 	custom_minimum_size = Vector2(CARD_W, CARD_H)
-	add_theme_stylebox_override("panel", OfficeTheme.card_style(OfficeTheme.BG_PANEL_ALT))
+	add_theme_stylebox_override("panel", OfficeTheme.card_style(OfficeTheme.bg_panel_alt()))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 4)
 
@@ -53,8 +53,8 @@ func _build() -> void:
 	head.add_theme_constant_override("separation", 8)
 	var bolt := Label.new()
 	bolt.text = "⚡"
-	bolt.add_theme_font_size_override("font_size", 15)
-	bolt.add_theme_color_override("font_color", OfficeTheme.TEXT_DIM)
+	OfficeTheme.apply_font(bolt, 15)
+	bolt.add_theme_color_override("font_color", OfficeTheme.text_dim())
 	head.add_child(bolt)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -71,13 +71,13 @@ func _build() -> void:
 	name_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	names.add_child(name_spacer)
 	_title = Label.new()
-	_title.add_theme_font_size_override("font_size", 16)
-	_title.add_theme_color_override("font_color", OfficeTheme.ACCENT)
+	OfficeTheme.apply_font(_title, 16)
+	_title.add_theme_color_override("font_color", OfficeTheme.accent())
 	names.add_child(_title)
 	var arrow := Label.new()
 	arrow.text = ">"
-	arrow.add_theme_font_size_override("font_size", 14)
-	arrow.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	OfficeTheme.apply_font(arrow, 14)
+	arrow.add_theme_color_override("font_color", OfficeTheme.text_muted())
 	names.add_child(arrow)
 	var tail := Control.new()
 	tail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -85,8 +85,8 @@ func _build() -> void:
 	box.add_child(names)
 
 	_model = Label.new()
-	_model.add_theme_font_size_override("font_size", 15)
-	_model.add_theme_color_override("font_color", OfficeTheme.TEXT)
+	OfficeTheme.apply_font(_model, 15)
+	_model.add_theme_color_override("font_color", OfficeTheme.text())
 	_model.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(_model)
 

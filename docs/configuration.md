@@ -590,6 +590,64 @@ directory, not the config directory.
 The client holds no credentials of its own, writes no runtime configuration, and
 never starts or stops a service.
 
+### Installation
+
+The desktop client is an optional part of the release. `install.sh` installs the
+terminal executable by default and adds the client only when asked:
+
+```sh
+curl -fsSL https://althenia.github.io/ycoding/install.sh | sh -s -- --office
+```
+
+On macOS the release artifact is a disk image: mount it and drag `YCoding Office.app`
+into Applications, or let `install.sh` do the same move into `/Applications` when
+that is writable and into `~/Applications` otherwise. `YCODING_OFFICE_DIR` chooses
+the directory explicitly. On Linux the executable and its data pack go beside
+`ycoding` in `~/.local/bin`. `install.sh` supports macOS and Linux only, matching
+the terminal installer.
+
+A downloaded bundle is not notarized, so macOS may refuse it as coming from an
+unidentified developer. Allow it deliberately in System Settings → Privacy &
+Security. Building with `apps/office/tools/build-release.sh` avoids the warning,
+and signing stays disabled until a Developer ID certificate and notarization
+credentials are supplied.
+
+### Keyboard
+
+The office answers these keys. Every shortcut carries the modifier (Cmd on macOS,
+Ctrl elsewhere) because the arrows and WASD already pan the view, and Alt is
+unused because macOS composes characters with it.
+
+| Key | Action |
+|---|---|
+| Cmd/Ctrl + 1 | Show or hide the sidebar |
+| Cmd/Ctrl + 2 | Show or hide the prompt composer |
+| Cmd/Ctrl + 3 | Reduce motion |
+| Cmd/Ctrl + I | Open the source drawer for the selection |
+| Cmd/Ctrl + T | Switch between light and dark panels |
+| Cmd/Ctrl + = | Enlarge the interface text |
+| Cmd/Ctrl + Down / Up | Select the next or previous session |
+| Escape | Close the drawer, or leave the composer |
+
+Typing wins: while the caret is in the composer only Escape is acted on, so a
+shortcut can never take a keystroke from the text being written. Escape undoes the
+innermost thing first — it releases the caret, and closes the drawer only when the
+caret is not in the composer.
+
+Revealing the composer hands it the caret, so the shortcut ends in a prompt rather
+than in a panel the user must then click.
+
+### Text scale
+
+The interface text scale is bounded to 100–200%, in steps, and cycles. A request
+outside that range is clamped rather than honoured: past the ceiling the shell
+cannot lay itself out and a panel would be clipped, which hides runtime state
+instead of enlarging it. A corrupt stored value falls back to 100%.
+
+The scale enlarges text and the panels containing it. It does not magnify the
+office art, because the world is not interface. There is no separate light/dark
+setting to persist: the mode is chosen for the session and cycles with Cmd/Ctrl+T.
+
 It persists exactly one presentation preference: reduced motion, under the
 Godot-managed `user://` path. It carries no runtime state.
 

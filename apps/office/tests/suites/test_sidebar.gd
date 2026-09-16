@@ -21,6 +21,7 @@ func run(t) -> void:
 	test_a_shared_location_is_reported_and_a_split_one_is_not(t)
 	test_demo_never_reports_a_live_connection(t)
 	test_the_team_row_surfaces_the_reported_activity(t)
+	test_a_wire_activity_name_reads_as_words(t)
 
 
 func _store_with(events: Array) -> OfficeStore:
@@ -69,10 +70,10 @@ func test_demo_and_live_use_different_accent(t) -> void:
 	var live_colour := panel._mode_label.get_theme_color("font_color")
 	t.check(demo_colour != live_colour, "DEMO and LIVE use different accents")
 	t.check(
-		demo_colour == OfficeTheme.ACCENT_WARM,
+		demo_colour == OfficeTheme.accent_warm(),
 		"DEMO uses the warm accent"
 	)
-	t.check(live_colour == OfficeTheme.OK, "LIVE uses the ok accent")
+	t.check(live_colour == OfficeTheme.ok(), "LIVE uses the ok accent")
 	panel.free()
 
 
@@ -107,7 +108,7 @@ func test_error_overrides_the_detail_line(t) -> void:
 	panel.refresh(store, false)
 	t.check(panel._detail_label.text == "fixture missing", "the error replaces the detail line")
 	t.check(
-		panel._detail_label.get_theme_color("font_color") == OfficeTheme.DANGER,
+		panel._detail_label.get_theme_color("font_color") == OfficeTheme.danger(),
 		"the error is shown in the danger colour"
 	)
 	panel.free()
@@ -321,3 +322,34 @@ func test_the_team_row_surfaces_the_reported_activity(t) -> void:
 		not str(rows[0].get("activity", "")).is_empty(),
 		"the status row carries what the agent is doing"
 	)
+
+
+## The rail shows a wire event name to a person. Reading it raw puts an
+## implementation detail in front of the user, so the namespace is dropped and the
+## remainder spaced — and an unknown name still reads sensibly rather than being
+## invented into a word.
+func test_a_wire_activity_name_reads_as_words(t) -> void:
+	var panel := SidebarPanel.new()
+	t.check_equal(
+		panel._readable_activity("session.step.started"),
+		"started",
+		"the namespace is dropped for a person"
+	)
+	t.check_equal(
+		panel._readable_activity("session.execution.succeeded"),
+		"succeeded",
+		"the terminal event reads as a plain word"
+	)
+	t.check_equal(
+		panel._readable_activity("session.compaction.started"),
+		"started",
+		"a compaction event reads as a plain word"
+	)
+	t.check_equal(
+		panel._readable_activity("multi_step_tool"),
+		"multi_step_tool",
+		"a tool name with no namespace is left exactly as it is"
+	)
+	t.check_equal(panel._readable_activity("read"), "read", "a tool name passes through")
+	t.check_equal(panel._readable_activity(""), "", "an empty activity stays empty")
+	panel.free()

@@ -36,6 +36,7 @@ func run(t) -> void:
 	test_the_export_preset_declares_icon_and_version(t)
 	test_the_icon_is_not_a_blank_plate(t)
 	test_the_icon_generator_is_hermetic(t)
+	test_every_export_preset_declares_the_icon(t)
 
 
 ## The shipped icon is a 512x512 image on disk. The IHDR chunk is the file's own
@@ -104,9 +105,19 @@ func test_the_export_preset_declares_icon_and_version(t) -> void:
 	t.check(not icon.is_empty(), "the macOS preset declares application/icon")
 	t.check_equal(icon, ICON_PATH, "the preset's icon is the shipped icon")
 	t.check(ResourceLoader.exists(icon), "the preset's icon %s resolves" % icon)
+	# The preset inherits the project version by leaving this empty, which is what
+	# makes the release build script the single place a version is set. A literal
+	# here would ship a build whose identity disagrees with its filename.
 	var version := str(config.get_value(options, "application/version", ""))
-	t.check(not version.is_empty(), "the macOS preset declares application/version")
-	t.check_equal(version, VERSION, "the preset's version is the release version")
+	t.check(
+		version.is_empty() or version == VERSION,
+		"the macOS preset either inherits the project version or declares %s, not a stale literal" % VERSION
+	)
+	if version.is_empty():
+		t.check(
+			not str(ProjectSettings.get_setting("application/config/version", "")).is_empty(),
+			"an empty preset version inherits a project version that is declared"
+		)
 
 
 ## A single-tone or nearly empty image satisfies every path check above and still
@@ -182,3 +193,30 @@ func _png_size(path: String) -> Vector2i:
 
 func _be32(bytes: PackedByteArray, offset: int) -> int:
 	return (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]
+
+
+## The app exports to three platforms. Each preset must carry the icon, or a
+## release for that platform ships a blank generic app.
+func test_every_export_preset_declares_the_icon(t) -> void:
+	var config := ConfigFile.new()
+	var error := config.load(PRESETS)
+	t.check_equal(error, OK, "%s loads as a ConfigFile" % PRESETS)
+	if error != OK:
+		return
+	var platforms := {}
+	for section in config.get_sections():
+		if not section.begins_with("preset.") or section.ends_with(".options"):
+			continue
+		var platform := str(config.get_value(section, "platform", ""))
+		platforms[platform] = section
+	for platform in ["macOS", "Linux", "Windows Desktop"]:
+		t.check(platforms.has(platform), "the %s preset exists" % platform)
+		if not platforms.has(platform):
+			continue
+		var options := str(platforms[platform]) + ".options"
+		var icon := str(config.get_value(options, "application/icon", ""))
+		t.check_equal(
+			icon,
+			ICON_PATH,
+			"the %s preset declares the shipped icon" % platform
+		)

@@ -34,6 +34,8 @@ func _init() -> void:
 		preload("res://tests/suites/test_motion.gd"),
 		preload("res://tests/suites/test_conversation.gd"),
 		preload("res://tests/suites/test_release_identity.gd"),
+		preload("res://tests/suites/test_shortcuts.gd"),
+		preload("res://tests/suites/test_ui_scale.gd"),
 		preload("res://tests/suites/test_session_api.gd"),
 		preload("res://tests/suites/test_model_catalog_api.gd"),
 		preload("res://tests/suites/test_concurrent_actors.gd"),

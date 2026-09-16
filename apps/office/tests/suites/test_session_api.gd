@@ -156,14 +156,12 @@ func test_the_created_session_id_is_read_from_the_response(t) -> void:
 	t.check_equal(api.last_created_session(), "ses_new", "the id comes from the data envelope")
 	t.check_equal(created, ["ses_new"] as Array, "the id is reported to the caller")
 	t.check(not api.is_creating(), "the create is no longer in flight")
-	# The module routes only its own entries. The transport here was pointed at a
-	# closed port, so it may still be holding that connection open; what must be
-	# true is that nothing this module owns is left unsettleable.
-	for entry in api.poll(1):
-		t.check(
-			int(entry.get("request_id", -1)) != api._last_request_id,
-			"the settled request is not left for the caller to poll again"
-		)
+	# A settled request must not be reported a second time. The transport may still
+	# emit a `closed` entry for the finished connection, which carries no answer, so
+	# the property is that polling again produces no further report rather than that
+	# the transport is silent.
+	api.poll(1)
+	t.check_equal(created, ["ses_new"] as Array, "the create is reported exactly once")
 
 
 ## A refusal from the service is a result, not a swallowed error.

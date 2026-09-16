@@ -70,6 +70,11 @@ neither overlay hides an anchor that something routes to.
 - A fabricated or placeholder value must be labelled as such wherever it renders. The synthetic model catalogue is marked in the composer; DEX/discovery values are never presented as the runtime's own.
 - Reduced motion removes interpolation and the walk cycle, never an actor's arrival or its facing. An actor that is told to move still ends at its destination.
 - A control that cannot act is disabled and states why. An enabled affordance that silently does nothing is a defect.
+- Keyboard shortcuts live in `app/shortcuts.gd` as a pure event-to-intent map. The registry never grabs input and never touches a node; `app/main.gd` owns what an intent does. Every shortcut carries the shortcut modifier because the arrows and WASD already pan the view, and the viewport ignores a modified key so one keystroke cannot pan and toggle at once. Typing wins: while the composer holds the caret only Escape is acted on.
+- Colours come from `OfficePalette` through `OfficeTheme`, never from a literal. A palette mode changes contrast only: no state may become invisible by switching modes.
+- Font sizes go through `OfficeTheme.font`, which applies the interface text scale. The scale is a FONT factor, not the window's content scale, because a content scale would magnify the office art along with the text.
+- The text scale is bounded by `UiScale` and a request outside the range is clamped. Past the ceiling the shell cannot lay itself out, and a clipped panel hides state instead of enlarging it.
+- A layout metric derived from text (a panel's content floor, a row's height) grows with the text scale; spacing between overlays does not. Re-apply the regions AFTER a rescale, or panels are placed against the sizes they had a moment ago.
 - Assignment identity is scoped by real session, not by reusable agent definition.
 - The client-internal fixture names are not wire names. Translate them to the real vocabulary before they reach the store; a fixture name inside a reducer is a defect.
 
@@ -81,3 +86,14 @@ neither overlay hides an anchor that something routes to.
 - A parse success is not visual or functional correctness. Greybox is M1 only; fidelity claims require genuine captures and user review.
 - Do not commit generated cache, export, or secret files. One owner at a time edits shared scene/tileset resources.
 - Never stage, commit, reset, or switch branches without explicit authorization.
+
+## Release artifacts
+
+- Build a release artifact with `tools/build-release.sh --version <X.Y.Z> --target <target> --outdir <dir>`. Targets are `darwin-universal`, `linux-x64`, and `windows-x64`; the script requires a Godot 4.7.x binary and its export templates, overridable with `GODOT_BIN`.
+- Archive names and their layouts are a contract with `script/install.sh` and with the release workflow. Changing a name or a layout requires changing every consumer in the same change.
+- `config/version` in `project.godot` is the only place the build script sets a version, and it restores the file afterwards. The export presets leave `application/version` empty so they inherit it; a literal in a preset ships a build whose identity disagrees with its filename.
+- A release build reports the version it was built with. Verify by reading `CFBundleShortVersionString` from the exported macOS bundle or by finding the version string in the exported data pack, not by running the binary's `--version`, which prints the engine version.
+- The macOS artifact is a disk image built with `hdiutil`, holding the bundle and a shortcut to Applications so it can be dragged in. `hdiutil` and `ditto` have no equivalent off macOS, so the `darwin-universal` target must be built on macOS; the Linux and Windows targets build anywhere. The installer mounts the image, copies the bundle out with `ditto`, and releases the image on every path including failure.
+- Signing and notarization stay disabled in the presets (`codesign/codesign=0`, `notarization/notarization=0`), so a bundle a user downloaded may be quarantined by Gatekeeper until they allow it. Do not strip the quarantine attribute on a user's behalf; the installer states the situation instead.
+- Enabling signing needs three things that do not exist in the repository: an Apple Developer ID Application certificate with its password, an App Store Connect API key (or Apple ID credentials) for notarization, and those values stored as release secrets. Then set the `codesign/*` and `notarization/*` preset options and add the certificate import and notarization steps to `.github/workflows/release.yml`. Until then a release artifact is unsigned and that is the accurate description of it.
+- `tools/verify.sh` and `tools/verify-integration.sh` are the app's test gates; a release build does not replace them.

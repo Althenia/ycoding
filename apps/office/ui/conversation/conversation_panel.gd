@@ -20,14 +20,23 @@ const KIND_LABELS := {
 	"file_change": "File change",
 }
 
-const KIND_COLORS := {
-	"file_change": OfficeTheme.TEXT_DIM,
-	"delegation": OfficeTheme.ACCENT,
-	"question": OfficeTheme.ACCENT_WARM,
-	"answer": OfficeTheme.OK,
-	"report": OfficeTheme.TEXT,
-	"review": OfficeTheme.TEXT_DIM,
-}
+## A kind's accent, resolved against the active palette. A function rather than a
+## constant because the palette can change mode at runtime.
+func _kind_color(kind: String) -> Color:
+	match kind:
+		"file_change":
+			return OfficeTheme.text_dim()
+		"delegation":
+			return OfficeTheme.accent()
+		"question":
+			return OfficeTheme.accent_warm()
+		"answer":
+			return OfficeTheme.ok()
+		"report":
+			return OfficeTheme.text()
+		"review":
+			return OfficeTheme.text_dim()
+	return OfficeTheme.text_dim()
 
 const KIND_ORDER := [
 	"delegation", "question", "answer", "report", "review", "file_change",
@@ -71,11 +80,11 @@ func _ready() -> void:
 	titles.add_theme_constant_override("separation", 1)
 	titles.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_title = Label.new()
-	_title.add_theme_font_size_override("font_size", 15)
-	_title.add_theme_color_override("font_color", OfficeTheme.TEXT)
+	OfficeTheme.apply_font(_title, 15)
+	_title.add_theme_color_override("font_color", OfficeTheme.text())
 	_subtitle = Label.new()
-	_subtitle.add_theme_font_size_override("font_size", 11)
-	_subtitle.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	OfficeTheme.apply_font(_subtitle, 11)
+	_subtitle.add_theme_color_override("font_color", OfficeTheme.text_muted())
 	titles.add_child(_title)
 	titles.add_child(_subtitle)
 	header.add_child(titles)
@@ -88,11 +97,11 @@ func _ready() -> void:
 	filters.add_theme_constant_override("separation", 6)
 	_thread_filter = OptionButton.new()
 	_thread_filter.name = "ThreadFilter"
-	_thread_filter.add_theme_font_size_override("font_size", 11)
+	OfficeTheme.apply_font(_thread_filter, 11)
 	_thread_filter.item_selected.connect(func(_index: int): _render())
 	_kind_filter = OptionButton.new()
 	_kind_filter.name = "KindFilter"
-	_kind_filter.add_theme_font_size_override("font_size", 11)
+	OfficeTheme.apply_font(_kind_filter, 11)
 	_kind_filter.item_selected.connect(func(_index: int): _render())
 	filters.add_child(_thread_filter)
 	filters.add_child(_kind_filter)
@@ -106,8 +115,8 @@ func _ready() -> void:
 	scroll.add_child(_list)
 
 	_source = Label.new()
-	_source.add_theme_font_size_override("font_size", 10)
-	_source.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	OfficeTheme.apply_font(_source, 10)
+	_source.add_theme_color_override("font_color", OfficeTheme.text_muted())
 	_source.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 	# Pending human attention sits above the history, because a blocked session is
@@ -122,6 +131,16 @@ func _ready() -> void:
 	box.add_child(_source)
 	add_child(box)
 
+
+
+
+## Re-apply what `_ready` baked into styleboxes and colours.
+##
+## A palette change alters the palette, not the nodes: colours read at paint time
+## follow on their own, but a StyleBox and an override capture their value once, so
+## the surfaces carrying one are restyled explicitly.
+func restyle() -> void:
+	add_theme_stylebox_override("panel", OfficeTheme.panel_style())
 
 func show_actor(store: OfficeStore, session_id: String, room: String = "") -> void:
 	visible = true
@@ -230,19 +249,19 @@ func _build_attention(store: OfficeStore, session_id: String) -> void:
 	var kind := str(request.get("kind", ""))
 	var data: Dictionary = request.get("data", {})
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", OfficeTheme.panel_style(OfficeTheme.BG_PANEL_ELEVATED))
+	card.add_theme_stylebox_override("panel", OfficeTheme.panel_style(OfficeTheme.bg_elevated()))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
 
 	var tag := Label.new()
 	tag.text = "Needs you · %s" % str(KIND_LABELS.get(kind, kind)).capitalize()
-	tag.add_theme_font_size_override("font_size", 11)
-	tag.add_theme_color_override("font_color", OfficeTheme.ACCENT_WARM)
+	OfficeTheme.apply_font(tag, 11)
+	tag.add_theme_color_override("font_color", OfficeTheme.accent_warm())
 
 	var prompt := Label.new()
 	prompt.text = str(data.get("summary", ""))
-	prompt.add_theme_font_size_override("font_size", 12)
-	prompt.add_theme_color_override("font_color", OfficeTheme.TEXT)
+	OfficeTheme.apply_font(prompt, 12)
+	prompt.add_theme_color_override("font_color", OfficeTheme.text())
 	prompt.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 	var row := HBoxContainer.new()
@@ -299,7 +318,7 @@ func _reply_label(reply: String) -> String:
 func _build_item(item: Dictionary) -> Control:
 	var kind := str(item.get("kind", "item"))
 	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", OfficeTheme.panel_style(OfficeTheme.BG_PANEL_ALT))
+	card.add_theme_stylebox_override("panel", OfficeTheme.panel_style(OfficeTheme.bg_panel_alt()))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
 	var tag := Label.new()
@@ -311,8 +330,8 @@ func _build_item(item: Dictionary) -> Control:
 		if not owner.is_empty()
 		else str(KIND_LABELS.get(kind, kind.capitalize()))
 	)
-	tag.add_theme_font_size_override("font_size", 11)
-	tag.add_theme_color_override("font_color", KIND_COLORS.get(kind, OfficeTheme.TEXT_DIM))
+	OfficeTheme.apply_font(tag, 11)
+	tag.add_theme_color_override("font_color", _kind_color(kind))
 	box.add_child(tag)
 	box.add_child(OfficeTheme.body(str(item.get("description", "")), true))
 	if kind == "file_change":
@@ -342,15 +361,15 @@ func _add_change_detail(box: VBoxContainer, item: Dictionary) -> void:
 		CHANGE_KIND_UNREPORTED,
 		str(item.get("source", "")),
 	]
-	counts.add_theme_font_size_override("font_size", 10)
-	counts.add_theme_color_override("font_color", OfficeTheme.TEXT_MUTED)
+	OfficeTheme.apply_font(counts, 10)
+	counts.add_theme_color_override("font_color", OfficeTheme.text_muted())
 	box.add_child(counts)
 	var patch := str(item.get("patch", ""))
 	if patch.is_empty():
 		return
 	var detail := Label.new()
 	detail.text = patch
-	detail.add_theme_font_size_override("font_size", 10)
-	detail.add_theme_color_override("font_color", OfficeTheme.TEXT_DIM)
+	OfficeTheme.apply_font(detail, 10)
+	detail.add_theme_color_override("font_color", OfficeTheme.text_dim())
 	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(detail)

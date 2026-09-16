@@ -22,10 +22,18 @@ signal effort_selected(variant: String)
 const INPUT_H := 44.0
 const CONTROL_H := 34.0
 const CARD_H := 116.0
-const PILL_W := 208.0
+## The pill expands into the row's slack, so its minimum is only what it needs to
+## stay readable when the row is tight. Its text is allowed to shorten, because a
+## long model name must never force the composer wider than the room it has.
+const PILL_MIN_W := 96.0
 ## A wrapping label needs a known minimum width, or at zero width it reports one
 ## glyph per line and inflates the card's minimum height.
 const WRAP_MIN_WIDTH := 200.0
+
+## The interface text scale. The window's content scale already enlarges the drawn
+## text; this is needed because a minimum size is expressed in logical units and
+## must shrink with the shell or it overflows the window.
+var ui_scale: float = UiScale.MIN
 
 var _input: TextEdit
 var _send: Button
@@ -50,12 +58,12 @@ func _ready() -> void:
 	_input.custom_minimum_size = Vector2(0, INPUT_H)
 	_input.placeholder_text = "Do anything"
 	_input.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
-	_input.add_theme_font_size_override("font_size", 15)
+	OfficeTheme.apply_font(_input, 15)
 	_input.add_theme_stylebox_override("normal", OfficeTheme.input_style())
 	_input.add_theme_stylebox_override("focus", OfficeTheme.input_focus_style())
-	_input.add_theme_color_override("font_color", OfficeTheme.TEXT)
-	_input.add_theme_color_override("caret_color", OfficeTheme.ACCENT)
-	_input.add_theme_color_override("font_placeholder_color", OfficeTheme.TEXT_MUTED)
+	_input.add_theme_color_override("font_color", OfficeTheme.text())
+	_input.add_theme_color_override("caret_color", OfficeTheme.accent())
+	_input.add_theme_color_override("font_placeholder_color", OfficeTheme.text_muted())
 	_input.focus_mode = Control.FOCUS_ALL
 	_input.gui_input.connect(_on_input_event)
 	box.add_child(_input)
@@ -75,18 +83,26 @@ func _ready() -> void:
 	# states its own status rather than silently swallowing a click.
 	_approval = OfficeTheme.icon_button("Ask for approval")
 	_approval.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_approval.add_theme_font_size_override("font_size", 13)
-	_approval.add_theme_color_override("font_color", OfficeTheme.TEXT_DIM)
+	OfficeTheme.apply_font(_approval, 13)
+	_approval.add_theme_color_override("font_color", OfficeTheme.text_dim())
 	_approval.disabled = true
 	_approval.tooltip_text = "Approval mode is not implemented"
 	row.add_child(_approval)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
+	# No expanding spacer: the pill takes the slack, so the row fills the composer
+	# at any text scale instead of leaving a gap that grows with the fonts.
+
 
 	_pill = OfficeTheme.pill_button("Default")
-	_pill.custom_minimum_size = Vector2(PILL_W, CONTROL_H)
+	# A Button's minimum INCLUDES its text, so a long model name would force the
+	# whole composer wider than the window and clip its own controls. The text is
+	# allowed to shorten instead: the full name is in the menu and the tooltip.
+	_pill.clip_text = true
+	_pill.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	# The pill takes a share of the control row rather than a fixed width, so a
+	# larger text scale gives it more room without starving the buttons beside it.
+	_pill.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pill.custom_minimum_size = Vector2(PILL_MIN_W, CONTROL_H * ui_scale)
 	_pill.pressed.connect(_on_pill_pressed)
 	row.add_child(_pill)
 
@@ -98,10 +114,10 @@ func _ready() -> void:
 
 	# --- notice line ---------------------------------------------------------
 	_notice = Label.new()
-	_notice.add_theme_font_size_override("font_size", 11)
-	_notice.add_theme_color_override("font_color", OfficeTheme.ACCENT_WARM)
+	OfficeTheme.apply_font(_notice, 11)
+	_notice.add_theme_color_override("font_color", OfficeTheme.accent_warm())
 	_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_notice.custom_minimum_size = Vector2(WRAP_MIN_WIDTH, 0.0)
+	_notice.custom_minimum_size = Vector2(WRAP_MIN_WIDTH * ui_scale, 0.0)
 	box.add_child(_notice)
 
 	add_child(box)
@@ -118,6 +134,25 @@ func _ready() -> void:
 	_effort.z_index = 10
 	_effort.variant_chosen.connect(_on_effort_chosen)
 	call_deferred("_attach_effort")
+
+
+
+## Re-apply what `_ready` baked into styleboxes and colours.
+##
+## A palette change alters the palette, not the nodes: colours read at paint time
+## follow on their own, but a StyleBox and an override capture their value once, so
+## the surfaces carrying one are restyled explicitly.
+## Adopt a new text scale and re-apply the minimums that depend on it.
+func set_ui_scale(value: float) -> void:
+	ui_scale = UiScale.clamp_scale(value)
+	if _pill != null:
+		_pill.custom_minimum_size = Vector2(PILL_MIN_W, CONTROL_H * ui_scale)
+	if _notice != null:
+		_notice.custom_minimum_size = Vector2(WRAP_MIN_WIDTH * ui_scale, 0.0)
+
+
+func restyle() -> void:
+	add_theme_stylebox_override("panel", OfficeTheme.card_style())
 
 
 ## Attach the popover above the composer once both are in the tree.
@@ -189,6 +224,9 @@ func _refresh_pill() -> void:
 	if ModelCatalog.is_demo_catalog(_models):
 		label += "  ·  demo list"
 	_pill.text = label
+	# The pill may shorten the text to fit, so the full name is always available
+	# without opening the menu.
+	_pill.tooltip_text = label
 
 
 func _entry_for(ref: Dictionary) -> Dictionary:
@@ -334,6 +372,29 @@ func _on_effort_chosen(variant: String) -> void:
 	_refresh_pill()
 	effort_selected.emit(variant)
 	model_selected.emit(_model_ref)
+
+
+## Put the caret in the composer.
+##
+## The panel owns the text editor, so focus is its business rather than the
+## composition root reaching into a child.
+func focus_input() -> void:
+	if _input != null:
+		_input.grab_focus()
+
+
+## Take the caret out of the composer, so a further Escape reaches the drawer.
+func release_input_focus() -> void:
+	if _input != null:
+		_input.release_focus()
+
+
+## Whether the caret is currently in the composer.
+##
+## A shortcut that only makes sense outside text entry checks this rather than
+## assuming; typing must never be interrupted.
+func has_input_focus() -> bool:
+	return _input != null and _input.has_focus()
 
 
 ## State a boundary or an outcome next to the composer. Used for the DEMO

@@ -27,6 +27,9 @@ var _shell: Control
 ## The presentation preference shared by every actor. Loaded once at startup and
 ## applied on every refresh, so a change reaches actors created later too.
 var motion: Motion = Motion.new()
+## The interface text scale. Bounded by UiScale, because past the ceiling the shell
+## cannot lay itself out and a panel would be clipped.
+var ui_scale: float = UiScale.MIN
 ## The agent chosen in the sidebar. DEMO has no runtime agent to select, so this
 ## stays empty there rather than naming one the runtime did not choose.
 var selected_agent_id: String = ""
@@ -67,6 +70,7 @@ func _ready() -> void:
 	prompt_panel.model_selected.connect(_on_model_selected)
 	conversation_panel.close_requested.connect(func(): conversation_panel.visible = false)
 	conversation_panel.attention_replied.connect(_on_attention_replied)
+	chrome_toggles.action_requested.connect(_on_chrome_action)
 	sidebar.session_selected.connect(_on_actor_selected)
 	sidebar.new_session_requested.connect(_on_new_session)
 	sidebar.agent_selected.connect(_on_agent_selected)
@@ -100,7 +104,7 @@ func _ready() -> void:
 func _apply_regions() -> void:
 	if _shell == null or _shell.size.x < 1.0 or _shell.size.y < 1.0:
 		return
-	var overlays := OfficeShellLayout.overlays(_shell.size)
+	var overlays := OfficeShellLayout.overlays(_shell.size, ui_scale)
 	OfficeShellLayout.place($Backdrop, Rect2(Vector2.ZERO, _shell.size))
 	OfficeShellLayout.place(office_view, OfficeShellLayout.office_region(_shell.size))
 	OfficeShellLayout.place(prompt_panel, overlays["composer"])
@@ -676,6 +680,145 @@ func _on_actor_selected(session_id: String) -> void:
 ## wants an unobstructed view hides the chrome rather than resizing anything.
 func _on_chrome_toggled(_name: String, _hidden: bool) -> void:
 	_apply_chrome_visibility()
+
+
+## Keyboard shortcuts.
+##
+## The registry decides WHAT an input means; this decides what it does, which is
+## the only place that can, because it owns the panels. Typing always wins: while
+## the composer has the caret, only Escape is acted on, so a shortcut can never
+## steal a keystroke from the text being written.
+func _unhandled_input(event: InputEvent) -> void:
+	if capture_mode:
+		return
+	var action := Shortcuts.intent(event)
+	if action.is_empty():
+		return
+	if prompt_panel.has_input_focus() and action != Shortcuts.DISMISS:
+		return
+	_apply_shortcut(action)
+	get_viewport().set_input_as_handled()
+
+
+## Perform one shortcut. Each intent maps to a real action the shell already has,
+## so a shortcut is never a second path to a different behaviour.
+func _apply_shortcut(action: String) -> void:
+	var chrome := Shortcuts.chrome_name(action)
+	if not chrome.is_empty():
+		var hiding := not chrome_toggles.is_hidden(chrome)
+		chrome_toggles.set_hidden(chrome, hiding)
+		_apply_chrome_visibility()
+		# Revealing the composer puts the caret in it, so the shortcut actually ends
+		# in a prompt rather than in a panel the user must then click.
+		if chrome == "composer" and not hiding:
+			prompt_panel.focus_input()
+		return
+	if Shortcuts.is_selection(action):
+		_move_selection(Shortcuts.selection_step(action))
+		return
+	if action == Shortcuts.TOGGLE_THEME:
+		_cycle_theme()
+		return
+	if action == Shortcuts.TOGGLE_SCALE:
+		_cycle_scale()
+		return
+	if action == Shortcuts.INSPECT:
+		# Inspecting with nothing chosen opens the lead, so the shortcut is never a
+		# dead key on a fresh window. With nothing in the office at all there is
+		# nothing to inspect and the key does nothing.
+		var target := store.selected_actor()
+		if target == null:
+			# The lead is what the office is about when nothing is chosen.
+			target = store.actor_for(store.root_session_id)
+		if target == null:
+			var roster := store.actor_list()
+			if roster.is_empty():
+				return
+			target = roster[0]
+		_on_actor_selected(target.identity.session_id)
+		return
+	if action == Shortcuts.DISMISS:
+		# Escape releases what is open, innermost first: the caret, then the drawer.
+		if prompt_panel.has_input_focus():
+			prompt_panel.release_input_focus()
+			return
+		if conversation_panel.visible:
+			conversation_panel.visible = false
+
+
+## Switch the palette mode and repaint.
+##
+## The palette changes tones, never presence: every label keeps its colour role, so
+## no runtime state is hidden by switching.
+func _cycle_theme() -> void:
+	OfficeTheme.set_mode(OfficePalette.next_mode(OfficeTheme.mode()))
+	_repaint_theme()
+
+
+## Change the text scale and apply it.
+##
+## This is a FONT factor, not the window's content scale: a content scale would
+## zoom the office art along with the text, so enlarging the interface would also
+## magnify the world it exists to present. Every font override resolves through
+## `OfficeTheme.font`, so raising this enlarges all text together and the panels
+## grow with it.
+func _cycle_scale(step: float = -1.0) -> void:
+	var next := UiScale.next_scale(ui_scale) if step < 0.0 else UiScale.clamp_scale(step)
+	if not OfficeTheme.set_text_scale(next):
+		return
+	ui_scale = OfficeTheme.text_scale()
+	chrome_toggles.set_ui_scale(ui_scale)
+	sidebar.set_ui_scale(ui_scale)
+	prompt_panel.set_ui_scale(ui_scale)
+	# Every font override and every minimum that depends on one is now different, so
+	# the surfaces are rebuilt and the regions re-applied.
+	_repaint_theme()
+
+
+## Repaint the surfaces that captured a colour.
+##
+## Colours read at paint time follow the palette on their own; a StyleBox and a
+## theme override capture their value once, so the panels that carry one are
+## restyled explicitly. Nothing is rebuilt and no state is reloaded, so switching
+## mode cannot change what the office reports.
+func _repaint_theme() -> void:
+	# A font size is baked into an override when it is set, so every surface is
+	# re-scaled before it repaints; otherwise existing text keeps the old size.
+	OfficeTheme.rescale(_shell)
+	for surface in [sidebar, prompt_panel, conversation_panel, chrome_toggles]:
+		if surface != null:
+			surface.restyle()
+	# Re-scaling changes how wide a panel's contents are, so the regions are applied
+	# AFTER the rescale. Applying them first would place the panels against the
+	# sizes they had a moment ago, which is how the composer ended up over the rail.
+	_apply_regions()
+	_refresh_ui()
+
+
+## A momentary chrome control was pressed.
+func _on_chrome_action(name: String) -> void:
+	match name:
+		"theme":
+			_cycle_theme()
+		"scale":
+			_cycle_scale()
+
+
+## Move the selection along the roster, wrapping at both ends so the shortcut is
+## always useful and never a dead key at the edge.
+func _move_selection(step: int) -> void:
+	var roster := store.actor_list()
+	if roster.is_empty():
+		return
+	var current := store.selected_actor()
+	var index := 0
+	if current != null:
+		for position in roster.size():
+			if roster[position].identity.session_id == current.identity.session_id:
+				index = position
+				break
+	var target := wrapi(index + step, 0, roster.size())
+	_on_actor_selected(roster[target].identity.session_id)
 
 
 func _apply_chrome_visibility() -> void:

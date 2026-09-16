@@ -9,6 +9,11 @@ candidate=
 helper_candidate=
 binary_backup=
 helper_backup=
+office_candidate=
+office_pck_candidate=
+office_staged=
+office_mount=
+office_attached=false
 install_transaction=false
 binary_backed_up=false
 helper_backed_up=false
@@ -56,6 +61,15 @@ cleanup() {
   if [ -n "$helper_candidate" ]; then rm -f "$helper_candidate"; fi
   if [ -n "$binary_backup" ] && [ "$binary_backed_up" = false ]; then rm -f "$binary_backup"; fi
   if [ -n "$helper_backup" ] && [ "$helper_backed_up" = false ]; then rm -f "$helper_backup"; fi
+  # A mounted image must be released even when the install failed, or the user is
+  # left with a volume they did not mount.
+  if [ "$office_attached" = true ] && [ -n "$office_mount" ]; then
+    hdiutil detach "$office_mount" >/dev/null 2>&1 || true
+    office_attached=false
+  fi
+  if [ -n "$office_candidate" ]; then rm -f "$office_candidate"; fi
+  if [ -n "$office_pck_candidate" ]; then rm -f "$office_pck_candidate"; fi
+  if [ -n "$office_staged" ]; then rm -rf "$office_staged"; fi
   if [ -n "$temporary" ]; then rm -rf "$temporary"; fi
   exit "$status"
 }
@@ -69,6 +83,19 @@ fail() {
 
 command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v tar >/dev/null 2>&1 || fail "tar is required"
+
+# The native desktop client is opt-in so the terminal install is unchanged:
+#   curl -fsSL <url> | sh -s -- --office
+# An unknown argument fails rather than being ignored, because silently accepting
+# a misspelled flag would install less than the user asked for.
+install_office=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --office) install_office=true ;;
+    *) fail "Unknown argument: $1 (supported: --office)" ;;
+  esac
+  shift
+done
 
 version=${YCODING_VERSION:-}
 if [ -z "$version" ]; then
@@ -103,30 +130,151 @@ esac
 
 asset="ycoding-$version-$target.tar.gz"
 checksums="ycoding-$version-checksums.txt"
+case "$operating_system" in
+  darwin) office_asset_suffix=darwin-universal.dmg ;;
+  *) office_asset_suffix=linux-x64.tar.gz ;;
+esac
 release_url="https://github.com/$repository/releases/download/v$version"
 temporary=$(mktemp -d "${TMPDIR:-/tmp}/ycoding-install.XXXXXX") || fail "Failed to create a temporary directory"
 
+# Download one release asset and verify it against the release checksum file.
+# Every artifact goes through here so a second artifact cannot be verified by a
+# weaker rule than the first.
+fetch_verified() {
+  file=$1
+  curl --proto '=https' --proto-redir '=https' -fsSL -o "$temporary/$file" "$release_url/$file" ||
+    fail "Failed to download $file"
+  expected=$(awk -v wanted="$file" '
+    ($2 == wanted || $2 == "*" wanted) {
+      if (found) exit 2
+      print $1
+      found = 1
+    }
+    END { if (!found) exit 1 }
+  ' "$temporary/$checksums") || fail "Checksum file does not contain exactly one entry for $file"
+  printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' || fail "Checksum file contains an invalid SHA256 value"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$temporary/$file" | awk '{ print $1 }')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$temporary/$file" | awk '{ print $1 }')
+  else
+    fail "sha256sum or shasum is required"
+  fi
+  [ "$actual" = "$expected" ] || fail "Checksum verification failed for $file"
+}
+
+# The desktop client is a separate artifact from the CLI. It is installed into a
+# per-user location so no installer step needs administrator rights.
+install_office_client() {
+  office_asset="ycoding-office-$version-$office_asset_suffix"
+  printf 'Downloading %s\n' "$office_asset"
+  fetch_verified "$office_asset"
+  mkdir "$temporary/app" || fail "Failed to create an extraction directory"
+  if [ "$operating_system" = "darwin" ]; then
+    install_office_bundle "$office_asset"
+  else
+    install_office_linux "$office_asset"
+  fi
+}
+
+# macOS ships a disk image holding the bundle and a shortcut to Applications, so a
+# user can drag the app in. The installer does the same move itself, then releases
+# the image.
+install_office_bundle() {
+  file=$1
+  command -v hdiutil >/dev/null 2>&1 || fail "hdiutil is required to install the desktop app"
+  command -v ditto >/dev/null 2>&1 || fail "ditto is required to install the desktop app"
+
+  # An explicit mount point avoids having to guess the volume name, and keeps the
+  # image out of the user's Finder sidebar while it is in use.
+  office_mount="$temporary/mount"
+  mkdir "$office_mount" || fail "Failed to create a mount point"
+  hdiutil attach -nobrowse -readonly -mountpoint "$office_mount" "$temporary/$file" >/dev/null ||
+    fail "Failed to mount $file"
+  office_attached=true
+
+  bundle="$office_mount/YCoding Office.app"
+  [ -d "$bundle" ] || fail "The disk image did not contain YCoding Office.app"
+
+  # A bundle with no runnable executable inside is a directory of files, and
+  # installing it would look successful while launching nothing. The loop variable
+  # is deliberately not `candidate`: that name belongs to the terminal install's
+  # transaction and cleanup removes it.
+  office_binary=
+  for bundle_binary in "$bundle/Contents/MacOS/"*; do
+    if [ -f "$bundle_binary" ] && [ -x "$bundle_binary" ] && [ -s "$bundle_binary" ]; then
+      office_binary=$bundle_binary
+      break
+    fi
+  done
+  [ -n "$office_binary" ] || fail "The desktop app bundle has no runnable executable"
+
+  # /Applications is group-writable by admin on macOS, so a normal user needs no
+  # elevation there. YCODING_OFFICE_DIR relocates the bundle when it is not
+  # writable, or when the user wants it elsewhere.
+  if [ -n "${YCODING_OFFICE_DIR:-}" ]; then
+    office_dir=$YCODING_OFFICE_DIR
+    mkdir -p "$office_dir" || fail "Failed to create $office_dir"
+  elif [ -w /Applications ]; then
+    office_dir=/Applications
+  else
+    office_dir="$HOME/Applications"
+    mkdir -p "$office_dir" || fail "Failed to create $office_dir"
+  fi
+
+  # Staged beside its destination so a partially copied bundle never replaces a
+  # working one, and copied with ditto because that is what preserves a bundle's
+  # extended attributes and permissions.
+  office_staged="$office_dir/.YCoding Office.app.$"
+  rm -rf "$office_staged"
+  ditto "$bundle" "$office_staged" || fail "Failed to stage the desktop app"
+
+  # The destination must be gone before the move. Moving onto an existing directory
+  # would nest the new bundle inside the old one and report success.
+  if [ -e "$office_dir/YCoding Office.app" ]; then
+    rm -rf "$office_dir/YCoding Office.app" || fail "Failed to remove the previous desktop app"
+  fi
+  [ ! -e "$office_dir/YCoding Office.app" ] ||
+    fail "Could not replace the existing desktop app at $office_dir/YCoding Office.app"
+
+  mv "$office_staged" "$office_dir/YCoding Office.app" || fail "Failed to install the desktop app"
+  office_staged=
+
+  hdiutil detach "$office_mount" >/dev/null || fail "Failed to release the mounted disk image"
+  office_attached=false
+
+  printf 'Installed YCoding Office %s to %s/YCoding Office.app\n' "$version" "$office_dir"
+}
+
+# Linux ships the executable and its data pack as a pair. The data pack is moved
+# first so the installed executable is never runnable without its data.
+install_office_linux() {
+  file=$1
+  tar -tzf "$temporary/$file" >"$temporary/app-entries" || fail "Failed to inspect $file"
+  app_entries=$(LC_ALL=C sort "$temporary/app-entries")
+  expected_app_entries=$(printf '%s\n' ycoding-office ycoding-office.pck | LC_ALL=C sort)
+  [ "$app_entries" = "$expected_app_entries" ] || fail "Desktop app archive has invalid direct entries"
+  tar -xzf "$temporary/$file" -C "$temporary/app" || fail "Failed to extract $file"
+  [ -f "$temporary/app/ycoding-office" ] && [ ! -L "$temporary/app/ycoding-office" ] && [ -s "$temporary/app/ycoding-office" ] ||
+    fail "Release archive did not contain a regular ycoding-office executable"
+  [ -f "$temporary/app/ycoding-office.pck" ] && [ ! -L "$temporary/app/ycoding-office.pck" ] && [ -s "$temporary/app/ycoding-office.pck" ] ||
+    fail "Release archive did not contain the desktop app data pack"
+
+  office_candidate=$(mktemp "$install_dir/.ycoding-office.XXXXXX") || fail "Failed to create a desktop app install candidate"
+  cp "$temporary/app/ycoding-office" "$office_candidate" || fail "Failed to prepare the desktop app"
+  chmod 755 "$office_candidate" || fail "Failed to make the desktop app runnable"
+  office_pck_candidate=$(mktemp "$install_dir/.ycoding-office-pck.XXXXXX") || fail "Failed to create a desktop app data candidate"
+  cp "$temporary/app/ycoding-office.pck" "$office_pck_candidate" || fail "Failed to prepare the desktop app data"
+  mv -f "$office_pck_candidate" "$install_dir/ycoding-office.pck" || fail "Failed to install the desktop app data"
+  office_pck_candidate=
+  mv -f "$office_candidate" "$install_dir/ycoding-office" || fail "Failed to install the desktop app"
+  office_candidate=
+  printf 'Installed YCoding Office %s to %s/ycoding-office\n' "$version" "$install_dir"
+}
+
 curl --proto '=https' --proto-redir '=https' -fsSL -o "$temporary/$checksums" "$release_url/$checksums" || fail "Failed to download $checksums"
-curl --proto '=https' --proto-redir '=https' -fsSL -o "$temporary/$asset" "$release_url/$asset" || fail "Failed to download $asset"
-
-expected=$(awk -v file="$asset" '
-  ($2 == file || $2 == "*" file) {
-    if (found) exit 2
-    print $1
-    found = 1
-  }
-  END { if (!found) exit 1 }
-' "$temporary/$checksums") || fail "Checksum file does not contain exactly one entry for $asset"
-printf '%s\n' "$expected" | grep -Eq '^[0-9a-fA-F]{64}$' || fail "Checksum file contains an invalid SHA256 value"
-
-if command -v sha256sum >/dev/null 2>&1; then
-  actual=$(sha256sum "$temporary/$asset" | awk '{ print $1 }')
-elif command -v shasum >/dev/null 2>&1; then
-  actual=$(shasum -a 256 "$temporary/$asset" | awk '{ print $1 }')
-else
-  fail "sha256sum or shasum is required"
-fi
-[ "$actual" = "$expected" ] || fail "Checksum verification failed for $asset"
+fetch_verified "$asset"
 
 tar -tzf "$temporary/$asset" >"$temporary/entries" || fail "Failed to inspect $asset"
 entries=$(LC_ALL=C sort "$temporary/entries")
@@ -185,6 +333,10 @@ binary_backup=
 helper_backup=
 
 printf 'Installed ycoding %s to %s/ycoding\n' "$version" "$install_dir"
+
+if [ "$install_office" = true ]; then
+  install_office_client
+fi
 
 case ":${PATH:-}:" in
   *":$install_dir:"*) exit 0 ;;

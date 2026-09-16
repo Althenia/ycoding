@@ -28,6 +28,9 @@ func run(t) -> void:
 	test_sidebar_never_covers_an_anchor(t)
 	test_overlays_scale_across_windows(t)
 	test_occlusion_maps_to_real_tiles(t)
+	test_a_text_scale_grows_the_panels_that_carry_text(t)
+	test_every_scale_fits_and_never_overlaps(t)
+	test_the_composer_never_covers_the_sidebar_at_any_scale(t)
 
 
 func _overlays(size: Vector2) -> Dictionary:
@@ -135,7 +138,10 @@ func test_composer_is_centred_and_clear_of_the_sidebar(t) -> void:
 		var overlays := _overlays(size)
 		var composer: Rect2 = overlays["composer"]
 		var sidebar: Rect2 = overlays["sidebar"]
-		var content_x: float = OfficeShellLayout.SIDEBAR_MARGIN + OfficeShellLayout.SIDEBAR_W + OfficeShellLayout.GAP
+		# The content area starts where the sidebar actually ends, not where its
+		# designed width would put it: the sidebar takes a floor when the text scale
+		# needs more room than the design allows.
+		var content_x: float = sidebar.position.x + sidebar.size.x + OfficeShellLayout.GAP
 		var content_w: float = size.x - content_x - OfficeShellLayout.SIDEBAR_MARGIN
 		t.check(
 			is_equal_approx(
@@ -317,3 +323,74 @@ func test_occlusion_maps_to_real_tiles(t) -> void:
 	var sidebar_hidden := OfficeShellLayout.occludes(_overlays(size)["sidebar"], size)
 	t.check(sidebar_hidden.position.x <= 1, "the sidebar hides the west edge of the map")
 	t.check(sidebar_hidden.size.x > 0, "the sidebar hides a non-empty column")
+
+
+## A text scale grows the metrics that come from text, so a panel never becomes
+## narrower than its own contents and clips them. The gutters stay fixed, because a
+## gutter is spacing rather than content.
+func test_a_text_scale_grows_the_panels_that_carry_text(t) -> void:
+	var shell := Vector2(1600, 900)
+	var base := OfficeShellLayout.overlays(shell, 1.0)
+	var doubled := OfficeShellLayout.overlays(shell, 2.0)
+	t.check(
+		doubled["sidebar"].size.x > base["sidebar"].size.x,
+		"the sidebar grows with the text scale"
+	)
+	t.check(
+		doubled["sidebar"].size.x >= OfficeShellLayout.SIDEBAR_CONTENT_FLOOR * 2.0 - 0.5,
+		"and is at least as wide as its contents need at 200%"
+	)
+	t.check(
+		is_equal_approx(doubled["sidebar"].position.x, base["sidebar"].position.x),
+		"the gutter does not grow with the text"
+	)
+	t.check(
+		doubled["composer"].size.y > base["composer"].size.y,
+		"the composer grows taller with the text"
+	)
+	t.check(
+		doubled["composer"].size.x >= OfficeShellLayout.COMPOSER_CONTENT_FLOOR * 2.0 - 0.5
+		or doubled["composer"].size.x >= shell.x
+		- (OfficeShellLayout.SIDEBAR_MARGIN + doubled["sidebar"].size.x + OfficeShellLayout.GAP)
+		- OfficeShellLayout.SIDEBAR_MARGIN - 0.5,
+		"the composer is never narrower than its controls need"
+	)
+
+
+## At every supported scale, on every supported window, the overlays fit inside the
+## window and the composer clears the sidebar. A panel that overflows or overlaps
+## hides runtime state, which enlarging the interface must never cause.
+func test_every_scale_fits_and_never_overlaps(t) -> void:
+	for scale in UiScale.STEPS:
+		for size in [Vector2(1280, 720), Vector2(1600, 900), Vector2(1920, 1080)]:
+			var rects := OfficeShellLayout.overlays(size, scale)
+			var sidebar: Rect2 = rects["sidebar"]
+			var composer: Rect2 = rects["composer"]
+			t.check(
+				sidebar.position.x + sidebar.size.x <= size.x + 0.5,
+				"the sidebar fits at %s x%.2f" % [str(size), scale]
+			)
+			t.check(
+				composer.position.x + composer.size.x <= size.x + 0.5,
+				"the composer fits at %s x%.2f" % [str(size), scale]
+			)
+			t.check(
+				composer.position.x >= sidebar.position.x + sidebar.size.x - 0.5,
+				"the composer clears the sidebar at %s x%.2f" % [str(size), scale]
+			)
+
+
+## The sidebar and the composer must never overlap: the composer would cover the
+## rail it is meant to sit beside, hiding the roster at the scale where the user
+## most needs to read it.
+func test_the_composer_never_covers_the_sidebar_at_any_scale(t) -> void:
+	for scale in UiScale.STEPS:
+		for size in [Vector2(1280, 720), Vector2(1600, 900), Vector2(1024, 768)]:
+			var logical: Vector2 = size / scale
+			var rects := OfficeShellLayout.overlays(logical, scale)
+			var sidebar: Rect2 = rects["sidebar"]
+			var composer: Rect2 = rects["composer"]
+			t.check(
+				composer.position.x >= sidebar.position.x + sidebar.size.x - 0.5,
+				"the composer clears the sidebar at %s x%.2f" % [str(size), scale]
+			)

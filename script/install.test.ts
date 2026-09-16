@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
@@ -11,6 +11,11 @@ setDefaultTimeout(30_000)
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
+
+// ditto and hdiutil only exist on macOS, so the disk image path cannot be
+// exercised on the Linux runner that also runs this suite. The skip is declared
+// once here so the gap is visible in the report instead of passing quietly.
+const macTest = process.platform === "darwin" ? test : test.skip
 
 describe("curl installer", () => {
   test("installs the verified release in ~/.local/bin and adds zsh PATH once", async () => {
@@ -233,9 +238,105 @@ exec /bin/mv "$@"
     expect(unsupportedResult.stderr).toContain("Unsupported platform: linux-arm64")
     expect(await Bun.file(path.join(unsupported.fixture, "curl-called")).exists()).toBe(false)
   })
+
+  test("leaves the desktop app uninstalled unless it is requested", async () => {
+    const fixture = await setup(undefined, { office: true })
+    const apps = path.join(fixture.home, "Applications")
+    const result = await runInstaller(fixture, { YCODING_OFFICE_DIR: apps })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).not.toContain("YCoding Office")
+    expect(await Bun.file(path.join(apps, "YCoding Office.app")).exists()).toBe(false)
+  })
+
+  macTest("installs the desktop app bundle when asked", async () => {
+    const fixture = await setup(undefined, { office: true })
+    const apps = path.join(fixture.home, "Applications")
+    const result = await runInstaller(fixture, { YCODING_OFFICE_DIR: apps }, ["--office"])
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain(`Installed YCoding Office ${fixtureVersion} to ${apps}/YCoding Office.app`)
+    const binary = path.join(apps, "YCoding Office.app/Contents/MacOS/YCoding Office")
+    expect(await Bun.file(binary).exists()).toBe(true)
+    expect((await Bun.file(binary).stat()).mode & 0o111).not.toBe(0)
+    // Asking for the app must not cost the terminal install.
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(true)
+  })
+
+  test("installs the Linux desktop app beside the terminal executable", async () => {
+    const fixture = await setup({ system: "Linux", machine: "x86_64" }, { office: true })
+    const result = await runInstaller(fixture, {}, ["--office"])
+
+    expect(result.exitCode).toBe(0)
+    const installed = path.join(fixture.home, ".local/bin/ycoding-office")
+    expect(await Bun.file(installed).exists()).toBe(true)
+    expect((await Bun.file(installed).stat()).mode & 0o111).not.toBe(0)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-office.pck")).exists()).toBe(true)
+  })
+
+  test("fails a requested app install without undoing the terminal install", async () => {
+    // No app artifact in the fixture, so the download cannot succeed.
+    const fixture = await setup()
+    const result = await runInstaller(
+      fixture,
+      { YCODING_OFFICE_DIR: path.join(fixture.home, "Applications") },
+      ["--office"],
+    )
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("Failed to download ycoding-office-")
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(true)
+  })
+
+  macTest("replaces an already installed desktop app instead of nesting it", async () => {
+    const fixture = await setup(undefined, { office: true })
+    const apps = path.join(fixture.home, "Applications")
+    const previous = path.join(apps, "YCoding Office.app/Contents")
+    await mkdir(previous, { recursive: true })
+    await writeFile(path.join(previous, "stale"), "previous install\n")
+
+    const result = await runInstaller(fixture, { YCODING_OFFICE_DIR: apps }, ["--office"])
+
+    expect(result.exitCode).toBe(0)
+    const installed = path.join(apps, "YCoding Office.app")
+    expect(await Bun.file(path.join(installed, "Contents/stale")).exists()).toBe(false)
+    expect(await Bun.file(path.join(installed, "Contents/MacOS/YCoding Office")).exists()).toBe(true)
+    // A move onto an existing directory would leave the new bundle inside the old.
+    const nested = await Array.fromAsync(new Bun.Glob("YCoding Office.app/.YCoding Office.app.*").scan(apps))
+    expect(nested).toHaveLength(0)
+  })
+
+  macTest("releases the mounted image when the app bundle is unusable", async () => {
+    const fixture = await setup(undefined, { office: true, unusableBundle: true })
+    const result = await runInstaller(
+      fixture,
+      { YCODING_OFFICE_DIR: path.join(fixture.home, "Applications") },
+      ["--office"],
+    )
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("The desktop app bundle has no runnable executable")
+    // The failed attempt must not leave a mounted volume behind.
+    const mounted = Bun.spawnSync(["mount"]).stdout.toString()
+    expect(mounted).not.toContain(fixture.fixture)
+    // And it must not cost the terminal install that already succeeded.
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(true)
+  })
+
+  test("rejects an unsupported argument instead of installing less than asked", async () => {
+    const fixture = await setup()
+    const result = await runInstaller(fixture, {}, ["--ofice"])
+
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("Unknown argument: --ofice")
+    expect(await Bun.file(path.join(fixture.fixture, "curl-called")).exists()).toBe(false)
+  })
 })
 
-async function setup(platform: { system: string; machine: string } = { system: "Darwin", machine: "arm64" }) {
+async function setup(
+  platform: { system: string; machine: string } = { system: "Darwin", machine: "arm64" },
+  options: { office?: boolean; unusableBundle?: boolean } = {},
+) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-installer-test-"))
   temporary.push(root)
   const home = path.join(root, "home")
@@ -255,10 +356,16 @@ async function setup(platform: { system: string; machine: string } = { system: "
   const tar = Bun.spawnSync(["tar", "-C", fixture, "-czf", archive, ...entries])
   expect(tar.exitCode).toBe(0)
   await writeChecksum(fixture, asset)
+  const officeAsset = options.office
+    ? await writeOfficeArtifact(fixture, platform.system, { unusableBundle: options.unusableBundle })
+    : undefined
   await writeExecutable(
     path.join(bin, "uname"),
     `#!/bin/sh\ncase "$1" in\n  -s) printf '%s\\n' '${platform.system}' ;;\n  -m) printf '%s\\n' '${platform.machine}' ;;\n  *) exit 1 ;;\nesac\n`,
   )
+  const officeCase = officeAsset
+    ? `  https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/${officeAsset})\n    cp "$FIXTURE/${officeAsset}" "$output" ;;\n`
+    : ""
   await writeExecutable(
     path.join(bin, "curl"),
     `#!/bin/sh
@@ -286,17 +393,21 @@ case "$url" in
     cp "$FIXTURE/checksums" "$output" ;;
   https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/${asset})
     cp "$FIXTURE/${asset}" "$output" ;;
-  *)
+${officeCase}  *)
     printf 'unexpected URL: %s\\n' "$url" >&2
     exit 42 ;;
 esac
 `,
   )
-  return { home, fixture, tmp, asset, path: `${bin}:/usr/bin:/bin` }
+  return { home, fixture, tmp, asset, officeAsset, path: `${bin}:/usr/bin:/bin` }
 }
 
-async function runInstaller(fixture: Awaited<ReturnType<typeof setup>>, environment: Record<string, string> = {}) {
-  const child = Bun.spawn(["/bin/sh", installer], {
+async function runInstaller(
+  fixture: Awaited<ReturnType<typeof setup>>,
+  environment: Record<string, string> = {},
+  args: string[] = [],
+) {
+  const child = Bun.spawn(["/bin/sh", installer, ...args], {
     env: {
       HOME: fixture.home,
       SHELL: "/bin/zsh",
@@ -327,4 +438,63 @@ async function writeChecksum(fixture: string, asset: string) {
     .update(await Bun.file(path.join(fixture, asset)).arrayBuffer())
     .digest("hex")
   await writeFile(path.join(fixture, "checksums"), `${digest}  ${asset}\n`)
+}
+
+// Build an app artifact shaped like the released one and append its checksum to
+// the release checksum file, which covers every asset in the release.
+async function writeOfficeArtifact(fixture: string, system: string, options: { unusableBundle?: boolean } = {}) {
+  if (system === "Darwin") {
+    const stage = path.join(fixture, "stage")
+    const macos = path.join(stage, "YCoding Office.app/Contents/MacOS")
+    await mkdir(macos, { recursive: true })
+    // An image whose bundle has no executable mounts fine and only fails once the
+    // installer inspects it, which is the path that must still release the image.
+    if (!options.unusableBundle) {
+      const binary = path.join(macos, "YCoding Office")
+      await writeFile(binary, "#!/bin/sh\nexit 0\n")
+      await chmod(binary, 0o755)
+    }
+    await symlink("/Applications", path.join(stage, "Applications"))
+    const officeAsset = `ycoding-office-${fixtureVersion}-darwin-universal.dmg`
+    const archive = Bun.spawnSync([
+      "hdiutil",
+      "create",
+      "-volname",
+      "YCoding Office",
+      "-srcfolder",
+      stage,
+      "-ov",
+      "-format",
+      "UDZO",
+      path.join(fixture, officeAsset),
+    ])
+    expect(archive.exitCode).toBe(0)
+    await appendChecksum(fixture, officeAsset)
+    return officeAsset
+  }
+  const binary = path.join(fixture, "ycoding-office")
+  await writeFile(binary, "#!/bin/sh\nexit 0\n")
+  await chmod(binary, 0o755)
+  await writeFile(path.join(fixture, "ycoding-office.pck"), "synthetic data pack\n")
+  const officeAsset = `ycoding-office-${fixtureVersion}-linux-x64.tar.gz`
+  const archive = Bun.spawnSync([
+    "tar",
+    "-C",
+    fixture,
+    "-czf",
+    path.join(fixture, officeAsset),
+    "ycoding-office",
+    "ycoding-office.pck",
+  ])
+  expect(archive.exitCode).toBe(0)
+  await appendChecksum(fixture, officeAsset)
+  return officeAsset
+}
+
+async function appendChecksum(fixture: string, asset: string) {
+  const digest = new Bun.CryptoHasher("sha256")
+    .update(await Bun.file(path.join(fixture, asset)).arrayBuffer())
+    .digest("hex")
+  const existing = await readFile(path.join(fixture, "checksums"), "utf8")
+  await writeFile(path.join(fixture, "checksums"), `${existing}${digest}  ${asset}\n`)
 }

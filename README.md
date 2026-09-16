@@ -28,7 +28,21 @@ ycoding
 
 [Configure a provider](./docs/configuration.md) before sending your first model request.
 
-**Windows (x64):** download the ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), extract `ycoding.exe`, and run it in your terminal. Native archives for all supported platforms are available there too.
+### Desktop client
+
+The native desktop client is an opt-in addition to the same install. It presents the same local service in a window; it does not replace the terminal application.
+
+```sh
+curl -fsSL https://althenia.github.io/ycoding/install.sh | sh -s -- --office
+```
+
+macOS ships a disk image (`ycoding-office-<version>-darwin-universal.dmg`). Double-click it and drag `YCoding Office.app` into Applications, or let the installer do the same move. The installer puts the bundle in `/Applications` when that is writable and in `~/Applications` otherwise; set `YCODING_OFFICE_DIR` to choose the directory. Linux installs `ycoding-office` and its data pack beside `ycoding`.
+
+The desktop client is not notarized. On macOS the app opens without a warning when it is built from source; a bundle you downloaded may instead be refused as coming from an unidentified developer. Allow it deliberately in System Settings → Privacy & Security, or build it yourself with `apps/office/tools/build-release.sh`.
+
+The client is a presentation surface: it needs a running `ycoding` service for live sessions and works offline with synthetic playback otherwise.
+
+**Windows (x64):** download the ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), extract `ycoding.exe`, and run it in your terminal. Native archives for all supported platforms are available there too, including `ycoding-office-*-windows-x64.zip` for the desktop client.
 
 Update installer-supported binaries with `ycoding update`; replace development builds and Windows binaries manually.
 

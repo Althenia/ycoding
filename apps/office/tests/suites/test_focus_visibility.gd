@@ -16,7 +16,7 @@ func run(t) -> void:
 
 
 func test_focus_ring_differs_from_resting_button(t) -> void:
-	var rest := OfficeTheme.button_style(OfficeTheme.BG_PANEL_ALT)
+	var rest := OfficeTheme.button_style(OfficeTheme.bg_panel_alt())
 	var focus := OfficeTheme.focus_style()
 	t.check(
 		focus.border_color != rest.border_color,
@@ -33,8 +33,8 @@ func test_focus_ring_differs_from_resting_button(t) -> void:
 
 
 func test_focus_fill_keeps_the_surface_and_adds_the_ring(t) -> void:
-	var resting := OfficeTheme.panel_style(OfficeTheme.BG_INPUT)
-	var focused := OfficeTheme.focus_fill_style(OfficeTheme.BG_INPUT)
+	var resting := OfficeTheme.panel_style(OfficeTheme.bg_input())
+	var focused := OfficeTheme.focus_fill_style(OfficeTheme.bg_input())
 	t.check(
 		focused.bg_color == resting.bg_color,
 		"the focused composer keeps its filled surface"
@@ -81,7 +81,7 @@ func test_button_exposes_the_overridden_focus_style(t) -> void:
 	t.check(overridden != null, "the button resolves a focus stylebox")
 	if overridden != null:
 		t.check(
-			overridden.border_color == OfficeTheme.ACCENT,
+			overridden.border_color == OfficeTheme.accent(),
 			"the button's focus ring uses the accent colour"
 		)
 	control.free()

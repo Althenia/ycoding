@@ -68,6 +68,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if not key.pressed:
 		return
+	# A modified key belongs to a shortcut, not to panning. Without this the shell
+	# and the viewport would both act on one keystroke.
+	if Shortcuts.is_modified(key):
+		return
 	var pan := Vector2.ZERO
 	match key.keycode:
 		KEY_LEFT, KEY_A:
