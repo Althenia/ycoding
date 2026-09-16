@@ -552,6 +552,10 @@ func _anchor_for(actor: ActorPresentation) -> Vector2:
 	return navigation.anchor_position(str(slot["desk"]), str(slot["anchor"]))
 
 
+## The desk the root session occupies. It must name a desk the plan actually
+## places, or navigation falls back to a default cell.
+const ROOT_DESK := "desk_ceo"
+
 ## Deterministic desk assignment: repeated agents get distinct desks.
 ## Named station groups. The director routes by intent; the layout decides where
 ## that intent physically is, so a plan change never rewrites behaviour.
@@ -585,12 +589,17 @@ func _next_slot(actor: ActorPresentation) -> Dictionary:
 	var used := {}
 	for slot in _assignments.values():
 		used[slot["desk"]] = true
+	# The root session leads, and the plan gives the lead the CEO office. Naming a
+	# desk that is not in the plan resolves to the navigation default cell, which
+	# put the lead in a corner rather than in the office.
 	if actor.identity.is_root():
-		return {"desk": "desk_lead", "anchor": "work"}
+		return {"desk": ROOT_DESK, "anchor": "work"}
 	for desk in DESK_ORDER:
 		if not used.has(desk):
 			return {"desk": desk, "anchor": "work"}
-	return {"desk": "coffee", "anchor": "visitor"}
+	# Past the desks, an actor visits rather than being given a desk that does not
+	# exist. Sharing a station is honest; inventing one is not.
+	return {"desk": DESK_ORDER[0], "anchor": "visitor"}
 
 
 func _add_actor(actor: ActorPresentation) -> void:

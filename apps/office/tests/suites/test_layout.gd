@@ -20,6 +20,7 @@ func run(t) -> void:
 	test_corridor_is_clear_of_furniture(t)
 	test_every_room_is_reachable(t)
 	test_desk_order_matches_real_anchors(t)
+	test_every_assignable_desk_is_placed_in_the_plan(t)
 	test_floor_columns_exist_in_the_atlas_and_tileset(t)
 
 
@@ -241,4 +242,32 @@ func test_every_room_is_reachable(t) -> void:
 			if connected:
 				break
 		t.check(connected, "room %s has floor connected to the entrance" % zone["id"])
+	world.free()
+
+
+## Every desk an actor can be assigned must exist in the plan. A desk name the
+## plan does not place resolves to the navigation default cell instead of failing,
+## so a wrong name silently parks an actor in a corner of the floor.
+func test_every_assignable_desk_is_placed_in_the_plan(t) -> void:
+	var placed := {}
+	for item in OfficeWorld.FURNITURE:
+		placed[str(item["id"])] = true
+	t.check(
+		placed.has(OfficeWorld.ROOT_DESK),
+		"the root desk is a desk the plan actually places"
+	)
+	for desk in OfficeWorld.DESK_ORDER:
+		t.check(placed.has(desk), "the desk %s is placed in the plan" % desk)
+
+	# The default cell is what a missing desk falls back to, so the root desk must
+	# resolve somewhere distinguishably different from it.
+	var world := OfficeWorld.new()
+	world.setup(null)
+	var nav := world.navigation
+	var root := nav.anchor_position(OfficeWorld.ROOT_DESK, "work")
+	var missing := nav.anchor_position("a_desk_that_does_not_exist", "work")
+	t.check(
+		root != missing,
+		"the root desk resolves to a real anchor, not the missing-desk default"
+	)
 	world.free()

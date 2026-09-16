@@ -21,6 +21,7 @@ func run(t) -> void:
 	test_reports_go_to_the_parent(t)
 	test_departed_agent_stations_at_left(t)
 	test_every_station_exists_in_the_world(t)
+	test_a_finished_child_walks_to_the_ceo(t)
 
 
 func _store_with(events: Array) -> OfficeStore:
@@ -231,3 +232,44 @@ func test_every_station_exists_in_the_world(t) -> void:
 				OfficeWorld.ANCHORS.has(str(desk_id)),
 				"station %s names a real anchor: %s" % [station, desk_id]
 			)
+
+
+## A subagent that finishes its assignment reports to the CEO by walking there.
+##
+## This is the movement the user asked for ("when subagents finished their tasks
+## it walk report back to ceo"). The durable report text is not narrated; the walk
+## is the signal, so the test asserts the route, not a caption.
+func test_a_finished_child_walks_to_the_ceo(t) -> void:
+	var world := OfficeWorld.new()
+	world.setup(null)
+	var store := OfficeStore.new()
+	for entry in [
+		["ses_root", "", "lead"],
+		["ses_child", "ses_root", "backend"],
+	]:
+		store.actors[entry[0]] = ActorPresentation.new(
+			ActorIdentity.new(entry[0], entry[2], entry[1], entry[2])
+		)
+	world.refresh(store)
+	t.check(world.actors.has("ses_child"), "the child is in the world")
+	var node := world.actors.get("ses_child") as OfficeActor
+	t.check(node != null, "the child has a node")
+	if node == null:
+		world.free()
+		return
+	t.check(not node.is_walking(), "the child starts at rest")
+	world.apply_report(store.actors["ses_child"])
+	t.check(node.is_walking(), "completing an assignment sends the child to report")
+
+	var ceo := world.station_position("ceo", "visitor")
+	t.check(ceo != Vector2.ZERO, "the CEO station resolves to a real position")
+	# Drive the walk to completion with large steps so the test stays fast.
+	for step in 400:
+		if not node.is_walking():
+			break
+		node._walk(1.0)
+	t.check(
+		node.position.is_equal_approx(ceo),
+		"the child arrives at the CEO office, not beside it"
+	)
+	world.free()

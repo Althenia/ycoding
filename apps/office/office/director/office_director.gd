@@ -65,7 +65,17 @@ func plan(actor: ActorPresentation, previous_state: int) -> Dictionary:
 
 
 ## Queue a decorative action with bounds and aging.
+## Queue a decorative action with bounds, aging and coalescing.
+##
+## Coalescing is per actor and keeps only the newest: two pending movements for one
+## actor would make it walk to a place it has already been told to leave, so the
+## older intent is dropped rather than performed.
 func enqueue(action: Dictionary, now_ms: int) -> bool:
+	var actor_id := str(action.get("actor", ""))
+	if actor_id.is_empty():
+		return false
+	_queue = _queue.filter(func(entry: Dictionary) -> bool:
+		return str(entry.get("actor", "")) != actor_id)
 	if _queue.size() >= MAX_QUEUED_ACTIONS:
 		return false
 	var entry := action.duplicate()

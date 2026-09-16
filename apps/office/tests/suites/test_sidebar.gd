@@ -19,6 +19,8 @@ func run(t) -> void:
 	test_a_group_can_be_collapsed(t)
 	test_the_status_bar_carries_the_location(t)
 	test_a_shared_location_is_reported_and_a_split_one_is_not(t)
+	test_demo_never_reports_a_live_connection(t)
+	test_the_team_row_surfaces_the_reported_activity(t)
 
 
 func _store_with(events: Array) -> OfficeStore:
@@ -277,3 +279,45 @@ func test_a_shared_location_is_reported_and_a_split_one_is_not(t) -> void:
 	)
 	t.check(text.find("2") != -1, "the count names how many there are")
 	panel.free()
+
+
+## DEMO performs no network work, so the footer must not claim a live connection.
+## Synthetic playback sets the same store field a real connection does, which is
+## why the mode has to be consulted rather than the connection state alone.
+func test_demo_never_reports_a_live_connection(t) -> void:
+	var store := OfficeStore.new()
+	store.apply({"type": Wire.CONNECTED, "sessionID": "", "data": {}, "sourceEpoch": "e"})
+	t.check(
+		store.connection_state == OfficeStore.CONNECTION_LIVE,
+		"synthetic playback sets the connection field, which is the trap"
+	)
+	var panel := SidebarPanel.new()
+	t.check_equal(panel.MODE_NOTE_DEMO, "synthetic", "DEMO states its own condition")
+
+	store.mode = OfficeStore.MODE_LIVE
+	t.check(
+		store.connection_state == OfficeStore.CONNECTION_LIVE,
+		"LIVE reports the real connection state"
+	)
+	panel.free()
+
+
+## The runtime reports what an agent is doing through activity_label. It was
+## populated but shown nowhere, so the inspector could not answer "what is this
+## agent doing" beyond a coarse work state.
+func test_the_team_row_surfaces_the_reported_activity(t) -> void:
+	var store := OfficeStore.new()
+	store.apply(
+		{
+			"type": Wire.SESSION_CREATED,
+			"sessionID": "ses_a",
+			"data": {"agent": "backend", "parentID": ""},
+		}
+	)
+	store.apply({"type": Wire.TOOL_CALLED, "sessionID": "ses_a", "data": {"tool": "read"}})
+	var rows := store.status_rows()
+	t.check(rows.size() == 1, "one actor is reported")
+	t.check(
+		not str(rows[0].get("activity", "")).is_empty(),
+		"the status row carries what the agent is doing"
+	)

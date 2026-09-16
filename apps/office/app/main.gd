@@ -310,10 +310,26 @@ func _react(event: Dictionary, previous: Dictionary) -> void:
 	var actor := store.actor_for(session_id)
 	if actor == null:
 		return
+	# The report is decided from the event, not from the cosmetic action, because
+	# an already-idle actor produces no action at all. A report supersedes the
+	# settle that follows it: settling routes the actor back to its desk, which
+	# would cancel the walk to the lead it is on.
+	if _maybe_report(actor, event):
+		return
 	var action := director.plan(actor, int(previous.get(session_id, WorkState.Kind.IDLE)))
 	if action.is_empty():
 		return
 	office_view.clear_notice(session_id)
+	# A burst of events for one actor must not interrupt a walk already in progress:
+	# the mover would stutter between destinations. The action is queued instead,
+	# where it is bounded, aged out and coalesced per actor, and promoted when the
+	# actor is free.
+	if (
+		str(action.get("action", "")) == OfficeDirector.ACTION_WORK
+		and _is_moving(actor.identity.session_id)
+	):
+		_enqueue(action)
+		return
 	match str(action.get("action", "")):
 		OfficeDirector.ACTION_WORK:
 			_enact_work(actor, action)
@@ -321,6 +337,29 @@ func _react(event: Dictionary, previous: Dictionary) -> void:
 			_show_bubble(actor, action)
 		OfficeDirector.ACTION_SETTLE:
 			_settle(actor)
+
+
+## A finished child walks to the CEO to report, the way a person would.
+##
+## The report is the office's own reading of a real event: a subagent that
+## completes its assignment crosses to the lead's office. Nothing is narrated —
+## the movement is the signal, and the durable report stays in the source drawer.
+func _maybe_report(actor: ActorPresentation, event: Dictionary) -> bool:
+	if actor.identity.is_root():
+		return false
+	# A completed assignment is a CHANGE inside session.task.updated, not a
+	# top-level event type.
+	if str(event.get("type", "")) != Wire.TASK_UPDATED:
+		return false
+	var change: Dictionary = (event.get("data", {}) as Dictionary).get("change", {})
+	if str(change.get("type", "")) != Wire.CHANGE_COMPLETED:
+		return false
+	# The store has already settled this actor to IDLE, so it is available to move.
+	# A still-running actor keeps its seat instead of leaving its work.
+	if actor.is_running():
+		return false
+	office_view.apply_report(actor)
+	return true
 
 
 ## Real movement: route the actor to its work anchor, then adopt the work pose.
@@ -345,20 +384,36 @@ func _settle(actor: ActorPresentation) -> void:
 	office_view.apply_work_state(actor)
 
 
-## Queue a bounded cosmetic action for later; over-age entries are dropped.
+## Whether this actor is currently travelling, and so must not be redirected.
+func _is_moving(session_id: String) -> bool:
+	var node = office_view.world.actors.get(session_id) if office_view.world != null else null
+	return node != null and node.is_walking()
+
+
+## Queue a bounded cosmetic action for later; over-age entries are dropped and a
+## newer intent for the same actor supersedes the older one.
 func _enqueue(action: Dictionary) -> void:
 	if director.enqueue(action, _elapsed_ms):
 		_pending.append(action)
 
 
+## Promote one queued action, if it is still meaningful.
+##
+## A stale action is dropped rather than played late: the actor may have moved on,
+## and `is_current` is what makes the actor's own token and generation decide.
 func _promote_next() -> void:
-	var action := director.dequeue(_elapsed_ms)
-	if action.is_empty():
+	for attempt in OfficeDirector.MAX_QUEUED_ACTIONS:
+		var action := director.dequeue(_elapsed_ms)
+		if action.is_empty():
+			return
+		var actor := store.actor_for(str(action.get("actor", "")))
+		if actor == null or not OfficeDirector.is_current(action, actor):
+			continue
+		if str(action.get("action", "")) == OfficeDirector.ACTION_WORK:
+			_enact_work(actor, action)
+			return
+		_show_bubble(actor, action)
 		return
-	var actor := store.actor_for(str(action.get("actor", "")))
-	if actor == null or not OfficeDirector.is_current(action, actor):
-		return
-	_show_bubble(actor, action)
 
 
 func _process(delta: float) -> void:
@@ -376,6 +431,9 @@ func _process(delta: float) -> void:
 		live.advance(delta_ms)
 	else:
 		demo.advance(delta_ms)
+	# Promote queued work as soon as the actor stops moving, so a burst settles
+	# instead of waiting for the next unrelated event.
+	_promote_next()
 	_ambient_accumulator += delta_ms
 	if _ambient_accumulator < AMBIENT_INTERVAL_MS:
 		return
@@ -384,9 +442,16 @@ func _process(delta: float) -> void:
 
 
 ## Ambient life is cosmetic and preemptible; real work and attention cancel it.
+##
+## An actor that needs a human decision is not available for ambient life, and its
+## notice is a real signal rather than scenery. Clearing unconditionally erased
+## "waiting for your decision" within one ambient tick, so the one thing the user
+## had to act on disappeared on its own.
 func _tick_ambient() -> void:
 	_ambient_tick += 1
 	for actor in store.actor_list():
+		if actor.attention_required:
+			continue
 		var ambient := director.plan_ambient(actor, _ambient_tick)
 		if ambient.is_empty():
 			office_view.clear_notice(actor.identity.session_id)

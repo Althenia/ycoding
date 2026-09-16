@@ -32,6 +32,7 @@ func _init() -> void:
 		preload("res://tests/suites/test_live_transport.gd"),
 		preload("res://tests/suites/test_service_registration.gd"),
 		preload("res://tests/suites/test_motion.gd"),
+		preload("res://tests/suites/test_concurrent_actors.gd"),
 		preload("res://tests/suites/test_attention_queue.gd"),
 		preload("res://tests/suites/test_effort_slider.gd"),
 		preload("res://tests/suites/test_asset_provenance.gd"),

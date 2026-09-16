@@ -112,6 +112,11 @@ func apply_ambient(actor: ActorPresentation, kind: String) -> void:
 		world.apply_ambient(actor, kind)
 
 
+func apply_report(actor: ActorPresentation) -> void:
+	if world != null:
+		world.apply_report(actor)
+
+
 func show_notice(actor: ActorPresentation, text: String) -> void:
 	if world != null:
 		world.show_notice(actor, text)

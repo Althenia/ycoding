@@ -7,6 +7,8 @@ class_name OfficeNavigation
 extends RefCounted
 
 const TILE := 32
+## Half a tile: the distance from a cell origin to its centre.
+const CENTRE_OFFSET := Vector2(TILE * 0.5, TILE * 0.5)
 
 var width: int = 0
 var height: int = 0
@@ -66,7 +68,14 @@ func route(from: Vector2, to: Vector2) -> Array[Vector2]:
 		return [to]
 	var points := _grid.get_point_path(from_cell, to_cell)
 	var path: Array[Vector2] = []
-	for point in points:
+	# AStarGrid2D returns cell ORIGINS while anchors are cell CENTRES, so the last
+	# waypoint must be converted or every arrival lands half a tile up-left of the
+	# anchor it was routed to.
+	for index in points.size():
+		var point: Vector2 = points[index]
+		if index == points.size() - 1:
+			path.append(point + CENTRE_OFFSET)
+			continue
 		path.append(point)
 	return path
 

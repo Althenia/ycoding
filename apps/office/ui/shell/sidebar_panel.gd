@@ -18,6 +18,9 @@ signal mode_toggle_requested()
 
 ## Text markers. These are what make state legible without colour (F-08).
 const MARK_SELECTED := "●"
+const MODE_NOTE_DEMO := "synthetic"
+
+## The selection marker, so selection is readable without colour.
 const MARK_UNSELECTED := "○"
 const MARK_ATTENTION := "!"
 const MARK_GROUP_OPEN := "▾"
@@ -244,16 +247,27 @@ func _detail_text(store: OfficeStore, playing: bool) -> String:
 
 ## The status bar states the connection, so the reference's bottom strip has
 ## something real to say.
+## The footer reports the mode and what is actually in the office.
+##
+## In DEMO the store's connection state is set by synthetic playback, so echoing
+## it would claim a live connection the client never made and contradict the mode
+## badge beside it. DEMO states its own condition instead.
 func _refresh_status(store: OfficeStore) -> void:
-	var connection := store.connection_state
 	var parts: Array[String] = []
 	if not _location.is_empty():
 		parts.append(_location)
-	parts.append("%s · %d active" % [connection, store.actor_list().size()])
+	var connected := store.mode == OfficeStore.MODE_LIVE \
+		and store.connection_state == OfficeStore.CONNECTION_LIVE
+	parts.append(
+		"%s · %d active" % [
+			store.connection_state if store.mode == OfficeStore.MODE_LIVE else MODE_NOTE_DEMO,
+			store.actor_list().size(),
+		]
+	)
 	_status_label.text = "  ·  ".join(parts)
 	_status_label.add_theme_color_override(
 		"font_color",
-		OfficeTheme.OK if connection == OfficeStore.CONNECTION_LIVE else OfficeTheme.TEXT_MUTED
+		OfficeTheme.OK if connected else OfficeTheme.TEXT_MUTED
 	)
 
 
@@ -408,6 +422,11 @@ func _team_line(row: Dictionary, selected: bool, attention: bool) -> String:
 	var presence := str(row.get("presence_label", ""))
 	if not presence.is_empty():
 		parts.append(presence)
+	# What the agent is doing right now, when the runtime reported it. An empty
+	# activity is omitted rather than rendered as a blank separator.
+	var activity := str(row.get("activity", "")).strip_edges()
+	if not activity.is_empty() and not attention:
+		parts.append(activity)
 	if attention:
 		parts.append("needs you")
 	if selected:

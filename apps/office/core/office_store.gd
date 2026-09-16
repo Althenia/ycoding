@@ -88,6 +88,7 @@ func status_rows() -> Array[Dictionary]:
 				"glyph": WorkState.glyph(actor.work_state),
 				"attention": actor.attention_required,
 				"settled": actor.settled_status,
+				"activity": actor.activity_label,
 			}
 		)
 	return rows

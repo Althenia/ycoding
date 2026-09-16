@@ -70,11 +70,15 @@ func _ready() -> void:
 	_attach.pressed.connect(_on_attach)
 	row.add_child(_attach)
 
+	# Approval mode is not implemented. A control that looks live but does nothing
+	# is worse than an absent one, so it is present as a disabled affordance that
+	# states its own status rather than silently swallowing a click.
 	_approval = OfficeTheme.icon_button("Ask for approval")
 	_approval.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_approval.add_theme_font_size_override("font_size", 13)
 	_approval.add_theme_color_override("font_color", OfficeTheme.TEXT_DIM)
-	_approval.tooltip_text = "DEMO: approvals are not requested"
+	_approval.disabled = true
+	_approval.tooltip_text = "Approval mode is not implemented"
 	row.add_child(_approval)
 
 	var spacer := Control.new()
@@ -179,7 +183,12 @@ func _refresh_pill() -> void:
 	if ref.is_empty():
 		_pill.text = "Default"
 		return
-	_pill.text = ModelCatalog.display_label(_entry_for(ref), str(ref["variant"]))
+	var label := ModelCatalog.display_label(_entry_for(ref), str(ref["variant"]))
+	# A fabricated catalogue must say so wherever it is shown, or the office claims
+	# a model the runtime never offered.
+	if ModelCatalog.is_demo_catalog(_models):
+		label += "  ·  demo list"
+	_pill.text = label
 
 
 func _entry_for(ref: Dictionary) -> Dictionary:

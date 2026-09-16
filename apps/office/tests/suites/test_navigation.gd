@@ -17,6 +17,7 @@ func run(t) -> void:
 	test_actor_walks_to_anchor(t)
 	test_actor_reports_walking_then_stops(t)
 	test_facing_follows_travel_direction(t)
+	test_a_route_ends_on_its_destination(t)
 
 
 func _world() -> OfficeWorld:
@@ -150,3 +151,24 @@ func test_facing_follows_travel_direction(t) -> void:
 	actor._process(0.01)
 	t.check_equal(actor.facing(), OfficeActor.DIR_DOWN, "moving down faces down")
 	actor.free()
+
+
+## A route must end exactly ON its destination. AStarGrid2D returns cell origins
+## while anchors are cell centres, so without converting the final waypoint every
+## actor arrives half a tile up-left of the desk it was sent to.
+func test_a_route_ends_on_its_destination(t) -> void:
+	var world := OfficeWorld.new()
+	world.setup(null)
+	var nav := world.navigation
+	var from := nav.anchor_position("play_pingpong", "work")
+	var to := nav.anchor_position("desk_prod_0", "work")
+	var path := nav.route(from, to)
+	t.check(path.size() > 0, "a route between two anchors exists")
+	if path.is_empty():
+		world.free()
+		return
+	t.check(
+		path[path.size() - 1].is_equal_approx(to),
+		"the route ends on the destination, not half a tile off it"
+	)
+	world.free()

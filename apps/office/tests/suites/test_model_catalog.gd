@@ -21,6 +21,7 @@ func run(t) -> void:
 	test_demo_catalog_is_synthetic_and_wire_shaped(t)
 	test_provider_and_variant_labels(t)
 	test_display_label_composes_from_fields(t)
+	test_the_synthetic_catalogue_is_identifiable(t)
 
 
 ## The config string form is what config files and the CLI carry. A value that
@@ -282,3 +283,23 @@ func _demo_entry(id: String) -> Dictionary:
 		if str(entry.get("id", "")) == id:
 			return entry
 	return {}
+
+
+## A fabricated catalogue must never be presented as the runtime's own. The pill
+## is the one place a user reads which model is in use, so the synthetic set is
+## marked there; this pins the predicate the pill relies on.
+func test_the_synthetic_catalogue_is_identifiable(t) -> void:
+	var demo := ModelCatalog.demo_catalog()
+	t.check(demo.size() > 0, "the demo catalogue is not empty")
+	t.check(
+		ModelCatalog.is_demo_catalog(demo),
+		"the synthetic catalogue identifies itself"
+	)
+	# A real catalogue has no synthetic marker, so the same call must not claim
+	# otherwise.
+	var real := [{"id": "real-id", "providerID": "openrouter", "name": "Real"}]
+	t.check(
+		not ModelCatalog.is_demo_catalog(real),
+		"a real catalogue is not marked synthetic"
+	)
+	t.check(not ModelCatalog.is_demo_catalog([]), "an empty catalogue is not synthetic")

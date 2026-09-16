@@ -16,6 +16,7 @@ func run(t) -> void:
 	test_placement_is_captured_from_session_created(t)
 	test_absent_placement_does_not_blank_existing(t)
 	test_location_scope_reports_when_rosters_differ(t)
+	test_a_reload_evicts_the_previous_generation(t)
 
 
 func _store() -> OfficeStore:
@@ -251,3 +252,51 @@ func test_location_scope_reports_when_rosters_differ(t) -> void:
 	})
 	t.check(store.locations().size() == 2, "a second directory is reported")
 	t.check(not store.has_single_location(), "the roster is no longer location-scoped")
+
+
+## A reload replaces the projection rather than merging into it, so no actor or
+## interaction from the previous generation can survive into the new one. If it
+## merged, a session from another workspace would keep a place in the office after
+## the office had been pointed somewhere else.
+func test_a_reload_evicts_the_previous_generation(t) -> void:
+	var store := _store()
+	store.apply(
+		{
+			"type": Wire.SESSION_CREATED,
+			"sessionID": "ses_old",
+			"data": {"agent": "backend", "parentID": ""},
+			"sourceEpoch": "epoch-a",
+		}
+	)
+	store.record_interaction(
+		{
+			"id": "report:ses_old",
+			"kind": "report",
+			"session_id": "ses_old",
+			"description": "From the previous generation",
+		}
+	)
+	t.check_equal(store.actors.size(), 1, "the old generation has one actor")
+	t.check(store.interactions.size() > 0, "the old generation has history")
+
+	store.adopt_reload(
+		[
+			{
+				"type": Wire.SESSION_CREATED,
+				"sessionID": "ses_new",
+				"data": {"agent": "frontend", "parentID": ""},
+				"sourceEpoch": "epoch-b",
+			}
+		],
+		"epoch-b"
+	)
+	t.check(not store.actors.has("ses_old"), "the old actor is evicted")
+	t.check(store.actors.has("ses_new"), "the reloaded actor is present")
+	t.check_equal(store.actors.size(), 1, "the projection is replaced, not merged")
+	for item in store.interactions:
+		t.check(
+			str(item.get("session_id", "")) != "ses_old",
+			"no interaction from the previous generation survives"
+		)
+	t.check(not store.is_stale(), "a completed reload clears the stale marking")
+	t.check_equal(store.source_epoch, "epoch-b", "the reload adopts its own epoch")
