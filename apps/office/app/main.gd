@@ -12,6 +12,10 @@ var store: OfficeStore
 var director: OfficeDirector
 var demo: DemoTransport
 var live: LiveTransport
+## Separate transports, because a transport is a poller: sharing one would make
+## two owners each see half the entries.
+var models_api: ModelCatalogApi
+var sessions_api: SessionApi
 
 var office_view: OfficeViewport
 var prompt_panel: PromptPanel
@@ -47,6 +51,8 @@ func _ready() -> void:
 	director = OfficeDirector.new()
 	demo = DemoTransport.new()
 	live = LiveTransport.new()
+	models_api = ModelCatalogApi.new()
+	sessions_api = SessionApi.new()
 
 	office_view = $Shell/OfficeViewport
 	prompt_panel = $Shell/PromptPanel
@@ -60,6 +66,7 @@ func _ready() -> void:
 	prompt_panel.prompt_submitted.connect(_on_prompt_submitted)
 	prompt_panel.model_selected.connect(_on_model_selected)
 	conversation_panel.close_requested.connect(func(): conversation_panel.visible = false)
+	conversation_panel.attention_replied.connect(_on_attention_replied)
 	sidebar.session_selected.connect(_on_actor_selected)
 	sidebar.new_session_requested.connect(_on_new_session)
 	sidebar.agent_selected.connect(_on_agent_selected)
@@ -161,10 +168,47 @@ func start_live(base_url: String, password: String = "") -> String:
 	live.reload_required.connect(_on_reload_required)
 	live.reload_ready.connect(_on_reload_ready)
 	live.reload_failed.connect(_on_reload_failed)
+	sessions_api = SessionApi.new(_side_transport())
+	sessions_api.session_created.connect(_on_session_created)
+	sessions_api.create_failed.connect(_on_session_create_failed)
+	sessions_api.interrupt_failed.connect(_on_interrupt_failed)
+	models_api = ModelCatalogApi.new()
+	models_api.configure(_side_transport())
 	live.play()
+	_refresh_models()
 	prompt_panel.set_mode(OfficeStore.MODE_LIVE)
 	_refresh_ui()
 	return ""
+
+
+## A transport dedicated to this module's own requests.
+##
+## It points at the same service as the live feed but polls independently, which
+## is what keeps two owners from stealing each other's answers.
+func _side_transport() -> HttpTransport:
+	var transport := HttpTransport.new()
+	transport.configure(live.base_url(), Gateway.AUTH_USERNAME, str(live.credentials()["password"]))
+	return transport
+
+
+## Read the service's real models.
+##
+## DEMO has no service, so the synthetic set stands in and is labelled as such by
+## the composer. LIVE asks the service, and a refusal leaves the list empty rather
+## than showing fabricated models as if the runtime had offered them.
+func _refresh_models() -> void:
+	if store.mode != OfficeStore.MODE_LIVE:
+		prompt_panel.set_models(_model_catalog(), _default_model_ref())
+		return
+	var fetched := models_api.fetch()
+	if fetched.is_empty():
+		var reason := models_api.last_error()
+		prompt_panel.set_models([], "")
+		if not reason.is_empty():
+			store.last_error = reason
+		_refresh_ui()
+		return
+	prompt_panel.set_models(fetched, _default_model_ref())
 
 
 ## Return to synthetic playback, discarding live state.
@@ -258,6 +302,25 @@ func _on_reload_failed(reason: String) -> void:
 	store.mark_stale()
 	store.last_error = reason
 	_refresh_ui()
+
+
+## Answer a pending request from the drawer, and report a refusal.
+##
+## The chosen reply is already a schema literal when it arrives, so this only has
+## to carry it. DEMO has nothing to answer, and the helper says so rather than
+## pretending an approval happened.
+func _on_attention_replied(request_id: String, body: Dictionary) -> void:
+	var error := answer_attention(request_id, body)
+	if not error.is_empty():
+		prompt_panel.show_notice(error)
+		return
+	_refresh_ui()
+	if conversation_panel.visible and store.selected_actor() != null:
+		conversation_panel.show_actor(
+			store,
+			store.selected_actor().identity.session_id,
+			zone_for(store.selected_actor().identity.session_id)
+		)
 
 
 ## Answer a pending request from the UI.
@@ -429,6 +492,10 @@ func _process(delta: float) -> void:
 	if store.mode == OfficeStore.MODE_LIVE:
 		# LIVE polls a socket; it has no synthetic clock to advance.
 		live.advance(delta_ms)
+		# Each module owns its own transport, so each is polled once per frame.
+		# They are bounded and return promptly when there is nothing to read.
+		sessions_api.poll()
+		models_api.poll()
 	else:
 		demo.advance(delta_ms)
 	# Promote queued work as soon as the actor stops moving, so a burst settles
@@ -504,10 +571,11 @@ func _session_label(session_id: String) -> String:
 	return session_id
 
 
-## The model references actually in play. DEMO has no server, so the synthetic
-## catalogue stands in and is labelled as such by ModelCatalog.is_demo_catalog.
+## The model references in play.
 ##
-## TODO(LIVE): read /api/model instead of the synthetic set once LIVE is wired.
+## DEMO has no server, so the synthetic catalogue stands in and is labelled as such
+## by `ModelCatalog.is_demo_catalog`. LIVE reads the service's own list through
+## `_refresh_models`, so a fabricated entry is never presented as the runtime's.
 func _model_catalog() -> Array:
 	return ModelCatalog.demo_catalog()
 
@@ -542,10 +610,52 @@ func _on_model_selected(ref: String) -> void:
 
 ## A new session is a real backend mutation, which DEMO must never perform. The
 ## demo path states that boundary rather than pretending to create one.
+## Create a session, or say why one was not created.
+##
+## A new session needs a place to run. The office takes the directory it already
+## knows — the one its actors report — so the user is not asked to retype a path
+## the product can see. When nothing reports a directory, the create is refused
+## with the reason rather than guessing one.
 func _on_new_session() -> void:
-	if store.mode == OfficeStore.MODE_LIVE:
+	if store.mode != OfficeStore.MODE_LIVE:
+		prompt_panel.show_notice("DEMO preview — a new session is not created")
 		return
-	prompt_panel.show_notice("DEMO preview — a new session is not created")
+	var directory := _known_directory()
+	var reason := sessions_api.create_session(directory, selected_agent_id, composer_model_ref)
+	if not reason.is_empty():
+		prompt_panel.show_notice(reason)
+		return
+	prompt_panel.show_notice("Creating a session…")
+
+
+## A directory the office has actually observed. Empty when none is known, which
+## the caller reports rather than substituting the process directory.
+func _known_directory() -> String:
+	var observed := store.locations()
+	return observed[0] if not observed.is_empty() else ""
+
+
+## The service created a session. It arrives on the feed too; this only reports it.
+func _on_session_created(session_id: String) -> void:
+	prompt_panel.show_notice("Session created: " + session_id)
+
+
+func _on_session_create_failed(reason: String) -> void:
+	prompt_panel.show_notice(reason)
+
+
+func _on_interrupt_failed(session_id: String, reason: String) -> void:
+	prompt_panel.show_notice(reason)
+
+
+## Stop the work a session is running.
+##
+## Interrupting an idle session is a no-op the service accepts, so the guard here
+## is only that a session was named.
+func stop_session(session_id: String) -> String:
+	if store.mode != OfficeStore.MODE_LIVE:
+		return "DEMO preview — there is no running work to stop."
+	return sessions_api.interrupt_session(session_id)
 
 
 func _on_agent_selected(agent_id: String) -> void:

@@ -8,6 +8,10 @@ config_version=5
 config/name="YCoding Office"
 config/description="Native Godot presentation client for the YCoding service."
 config/features=PackedStringArray("4.7", "GL Compatibility")
+config/icon="res://office/art/icon_512.png"
+; The release this client reports, matching the newest docs/releases entry.
+; A user reporting a problem names the release they actually have.
+config/version="0.2.4"
 run/main_scene="res://app/main.tscn"
 
 [display]

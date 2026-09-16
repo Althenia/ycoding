@@ -44,6 +44,74 @@ STREAM_HEADERS = [
     ("connection", "close"),
 ]
 
+## The model catalogue the route publishes, newest-first and enabled-only, as
+## `catalog.model.available()` filters and orders it
+## (packages/core/src/catalog.ts:190-202). Every entry is a full Model.Info, and
+## ids may contain slashes (`openrouter/deepseek/deepseek-v4.1-flash`), so the
+## config form `provider/id` splits on the first slash only.
+MODELS = [
+    {
+        "id": "gpt-5.6-luna",
+        "modelID": "gpt-5.6-luna",
+        "providerID": "openai",
+        "family": "gpt",
+        "name": "GPT-5.6 Luna",
+        "package": "@ycoding-ai/model-gpt",
+        "capabilities": {"tools": True, "input": ["text", "image"], "output": ["text"]},
+        "variants": [{"id": "low"}, {"id": "medium"}, {"id": "high"}],
+        "time": {"released": 1_767_571_200_000},
+        "cost": [{"input": 1.25, "output": 10, "cache": {"read": 0.125, "write": 1.5}}],
+        "status": "active",
+        "enabled": True,
+        "limit": {"context": 400_000, "output": 128_000},
+    },
+    {
+        "id": "claude-sonnet-4",
+        "modelID": "claude-sonnet-4",
+        "providerID": "anthropic",
+        "family": "claude",
+        "name": "Claude Sonnet 4",
+        "package": "@ycoding-ai/model-anthropic",
+        "capabilities": {"tools": True, "input": ["text", "image"], "output": ["text"]},
+        "variants": [{"id": "low"}, {"id": "medium"}, {"id": "high"}],
+        "time": {"released": 1_761_955_200_000},
+        "cost": [{"input": 3, "output": 15, "cache": {"read": 0.3, "write": 3.75}}],
+        "status": "active",
+        "enabled": True,
+        "limit": {"context": 200_000, "output": 64_000},
+    },
+    {
+        "id": "deepseek/deepseek-v4.1-flash",
+        "modelID": "deepseek/deepseek-v4.1-flash",
+        "providerID": "openrouter",
+        "family": "deepseek",
+        "name": "DeepSeek V4.1 Flash",
+        "package": "@ycoding-ai/model-openrouter",
+        "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
+        "variants": [{"id": "low"}, {"id": "high"}, {"id": "max"}],
+        "time": {"released": 1_759_276_800_000},
+        "cost": [{"input": 0.14, "output": 0.28, "cache": {"read": 0.014, "write": 0.14}}],
+        "status": "active",
+        "enabled": True,
+        "limit": {"context": 131_072, "output": 32_768},
+    },
+    {
+        "id": "deepseek/deepseek-v4-pro",
+        "modelID": "deepseek/deepseek-v4-pro",
+        "providerID": "openrouter",
+        "family": "deepseek",
+        "name": "DeepSeek V4 Pro",
+        "package": "@ycoding-ai/model-openrouter",
+        "capabilities": {"tools": True, "input": ["text"], "output": ["text"]},
+        "variants": [],
+        "time": {"released": 1_756_684_800_000},
+        "cost": [{"input": 0.55, "output": 2.19, "cache": {"read": 0.055, "write": 0.55}}],
+        "status": "active",
+        "enabled": True,
+        "limit": {"context": 131_072, "output": 32_768},
+    },
+]
+
 
 def sse_frame(payload):
     return ("data: " + json.dumps(payload, separators=(",", ":")) + "\n\n").encode("utf-8")
@@ -170,6 +238,21 @@ class FixtureState:
     def list_sessions(self):
         with self.lock:
             return [record["info"] for record in self.sessions.values()]
+
+    def model_response(self):
+        """The model route's body, in the verified `Location.response` envelope.
+
+        The payload is nested under `data` and the body also carries the location
+        the list was resolved for, so `{"data": [...]}` alone is not the contract.
+        """
+        with self.lock:
+            return {
+                "location": {
+                    "directory": LOCATION_DIRECTORY,
+                    "project": {"id": "global", "directory": LOCATION_DIRECTORY},
+                },
+                "data": [dict(model) for model in MODELS],
+            }
 
     def active_sessions(self):
         with self.lock:
@@ -354,6 +437,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
                     "sourceEpoch": state.source_epoch,
                 },
             )
+        if url.path == "/api/model":
+            return self._json(200, state.model_response())
         if url.path == "/api/session/active":
             return self._json(200, {"data": state.active_sessions()})
         if url.path == "/api/session":
@@ -528,6 +613,32 @@ def decode_json(raw):
     return parsed if isinstance(parsed, dict) else {}
 
 
+def model_problems(data):
+    """Every reason `data` is not a usable list of Model.Info entries."""
+    if not isinstance(data, list) or not data:
+        return ["data is not a non-empty list"]
+    problems = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            problems.append("entry is not an object: %r" % (entry,))
+            continue
+        label = entry.get("id") if isinstance(entry.get("id"), str) else "?"
+        for field in ("id", "providerID", "name"):
+            if not isinstance(entry.get(field), str) or not entry[field]:
+                problems.append("%s has no %s" % (label, field))
+        variants = entry.get("variants")
+        if not isinstance(variants, list):
+            problems.append("%s has no variants list" % label)
+        elif any(not isinstance(variant, dict) or not variant.get("id") for variant in variants):
+            problems.append("%s declares a variant with no id" % label)
+        released = entry.get("time")
+        if not isinstance(released, dict) or not isinstance(released.get("released"), (int, float)):
+            problems.append("%s has no numeric time.released" % label)
+        if "synthetic" in entry:
+            problems.append("%s carries the synthetic marker" % label)
+    return problems
+
+
 def request(method, url, password=None, payload=None, timeout=10):
     data = None
     headers = {}
@@ -590,6 +701,33 @@ def run_selftest():
             "auth",
             status == 401 and bool(challenge) and authed_status == 200,
             "unauth=%s challenge=%r authed=%s" % (status, challenge, authed_status),
+        )
+
+        # The model list is the route the composer's model picker reads. Its body
+        # is `Location.response(Schema.Array(Model.Info))`, so the payload is
+        # nested under `data` alongside the location it was resolved for, and the
+        # list must be usable without guessing at any field.
+        status, _, models_body = request("GET", base + "/api/model", password)
+        data = models_body.get("data")
+        providers = (
+            {model.get("providerID") for model in data if isinstance(model, dict)}
+            if isinstance(data, list)
+            else set()
+        )
+        record(
+            "model-list envelope",
+            status == 200
+            and isinstance(models_body.get("location"), dict)
+            and isinstance(data, list)
+            and len(data) >= 3
+            and len(providers) >= 2,
+            "status=%s models=%s providers=%s"
+            % (status, len(data) if isinstance(data, list) else "?", sorted(providers)),
+        )
+        record(
+            "model-list entries are wire shaped",
+            not model_problems(data),
+            "; ".join(model_problems(data)),
         )
 
         _, _, created = request("POST", base + "/api/session", password, {})

@@ -4,10 +4,15 @@ Provenance and attribution for every shipped raster asset in this directory.
 
 ## Provenance summary
 
-Every shipped `.png` in `office/art/` is **generated in-repo** by
-`apps/office/tools/generate_art.py`. There is **no third-party, stock, purchased,
-downloaded or externally authored asset** in this directory, and therefore no
-third-party licence or redistribution restriction attaches to it.
+Every shipped `.png` in `office/art/` is **generated in-repo**:
+
+- scene, character, floor, wall and prop art by `apps/office/tools/generate_art.py`
+- the application icon by `apps/office/tools/generate_icon.py`
+
+There is **no third-party, stock, purchased, downloaded or externally authored
+asset** in this directory, and therefore no third-party licence or redistribution
+restriction attaches to it. The icon generator reuses the same palette constants
+as the scene generator, so the icon cannot drift from the office it represents.
 
 - No network access: the generator's only imports are `argparse`, `random`,
   `struct`, `zlib` and `pathlib`. There is no `urllib`, `requests`, `socket`,
@@ -54,6 +59,7 @@ Derived from the actual directory listing and the actual generator source; the
 
 | File | Size (px) | Generator function | Provenance | Generator call |
 | --- | --- | --- | --- | --- |
+| icon_512.png | 512x512 | build | build() | generated in-repo by tools/generate_icon.py; no third-party or external asset |
 | char_backend.png | 128x896 | build_character_sheet | build_character_sheet("backend") | generated in-repo by tools/generate_art.py; no third-party or external asset |
 | char_frontend.png | 128x896 | build_character_sheet | build_character_sheet("frontend") | generated in-repo by tools/generate_art.py; no third-party or external asset |
 | char_lead.png | 128x896 | build_character_sheet | build_character_sheet("lead") | generated in-repo by tools/generate_art.py; no third-party or external asset |
@@ -103,7 +109,7 @@ Derived from the actual directory listing and the actual generator source; the
 | wall_sign.png | 64x20 | build_wall_sign | build_wall_sign() | generated in-repo by tools/generate_art.py; no third-party or external asset |
 | wall_top.png | 128x56 | build_wall_top | build_wall_top() | generated in-repo by tools/generate_art.py; no third-party or external asset |
 
-Total: 48 shipped PNG assets, all generator-produced.
+Total: 49 shipped PNG assets, all generator-produced.
 
 ## Repository-local build artifacts (not assets)
 

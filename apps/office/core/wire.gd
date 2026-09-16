@@ -45,6 +45,13 @@ const CHANGE_LAUNCHED := "launched"
 const CHANGE_STARTED := "started"
 const CHANGE_PROGRESSED := "progressed"
 const CHANGE_QUESTION_ASKED := "question_asked"
+
+## Human attention that is not a question. Both are EPHEMERAL wire events rather
+## than durable history: the runtime asks, the client answers, and the durable
+## record is the effect, not the ask. A session blocked on one of these is showing
+## the user nothing unless the client subscribes to them.
+const PERMISSION_ASKED := "permission.v2.asked"
+const GUARDRAIL_ASKED := "guardrail.asked"
 const CHANGE_QUESTION_ANSWERED := "question_answered"
 const CHANGE_COMPLETED := "completed"
 const CHANGE_FAILED := "failed"

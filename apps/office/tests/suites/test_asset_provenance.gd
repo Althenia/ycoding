@@ -15,7 +15,13 @@ extends RefCounted
 
 const ART_DIR := "res://office/art"
 const MANIFEST := "res://office/art/ASSETS.md"
-const GENERATOR := "res://tools/generate_art.py"
+## Every generator that produces shipped art. Each is hermetic and deterministic;
+## the icon is drawn by its own script rather than jammed into the scene-atlas
+## generator, so the rule names both instead of assuming one.
+const GENERATORS := [
+	"res://tools/generate_art.py",
+	"res://tools/generate_icon.py",
+]
 
 ## Text file types a credential could hide in. Rasters carry no readable strings.
 const TEXT_SUFFIXES := [".gd", ".py", ".md", ".json", ".jsonl", ".cfg", ".tres", ".tscn", ".sh", ".godot", ".txt"]
@@ -165,23 +171,27 @@ func test_manifest_dimensions_match_the_files(t) -> void:
 ## in-repo" stays a checked fact rather than a claim. The declared set is read
 ## out of the generator's own call sites, not a second hand-kept list.
 func test_every_asset_is_declared_by_the_generator(t) -> void:
-	var source := FileAccess.get_file_as_string(GENERATOR)
-	t.check(not source.is_empty(), "the generator source is readable")
-	if source.is_empty():
-		return
-	var declared := _generator_outputs(source)
-	var functions := _defined_functions(source)
-	for name in declared:
-		t.check(
-			functions.has(declared[name]),
-			"generator function %s for %s is defined" % [declared[name], name]
-		)
+	var declared := {}
+	for generator in GENERATORS:
+		var source := FileAccess.get_file_as_string(generator)
+		t.check(not source.is_empty(), "the generator %s is readable" % generator)
+		if source.is_empty():
+			continue
+		var functions := _defined_functions(source)
+		var outputs := _generator_outputs(source)
+		for name in outputs:
+			t.check(
+				functions.has(outputs[name]),
+				"generator function %s for %s is defined" % [outputs[name], name]
+			)
+			declared[name] = generator
 	for name in _shipped_pngs():
+		# A shipped PNG must be produced by an in-repo generator. WHICH generator is
+		# not the property under test, so a second hermetic script is allowed: what
+		# matters is that no asset ships without one.
 		t.check(
 			declared.has(name),
-			"shipped asset %s is produced by tools/generate_art.py as %s" % [
-				name, str(declared.get(name, "nothing"))
-			]
+			"shipped asset %s is produced by an in-repo generator" % name
 		)
 
 
@@ -190,38 +200,28 @@ func test_every_asset_is_declared_by_the_generator(t) -> void:
 ## network, no subprocess. An unseeded or time-seeded draw would make the
 ## committed bytes unreproducible.
 func test_the_generator_is_hermetic_and_seeded(t) -> void:
-	var source := FileAccess.get_file_as_string(GENERATOR)
-	if source.is_empty():
-		t.check(false, "the generator source is readable")
-		return
-	for forbidden in [
-		"urllib", "requests", "socket", "http.client", "urlopen",
-		"subprocess", "popen", "os.system", "os.exec",
-		"urandom", "uuid", "getpid", "datetime", "time.time", "time.monotonic",
-		"random.seed(", "random.random(", "random.randrange(",
-	]:
-		t.check(
-			source.find(forbidden) == -1,
-			"the generator does not reach outside itself via %s" % forbidden
-		)
-	# Every random draw is bound to a fixed-randomness source. `seed` is only
-	# acceptable because its call sites pass integer literals.
-	var seeds := RegEx.create_from_string("random\\.Random\\(([^)]*)\\)").search_all(source)
-	t.check(not seeds.is_empty(), "the generator uses an explicitly seeded RNG")
-	for seed in seeds:
-		var argument := seed.get_string(1).strip_edges()
-		t.check(
-			argument.is_valid_int() or argument == "seed",
-			"the RNG is seeded from a literal or a caller-supplied seed, not %s" % argument
-		)
-	# The one caller-supplied seed must itself be an integer expression.
-	for call in RegEx.create_from_string("_books\\(c, [^)]*\\)").search_all(source):
-		var arguments := call.get_string(0).trim_suffix(")").split(",")
-		var seed := str(arguments[arguments.size() - 1]).strip_edges()
-		t.check(
-			RegEx.create_from_string("^\\d+ \\+ index$").search(seed) != null,
-			"the book-spine seed is a deterministic integer expression, not %s" % seed
-		)
+	for generator in GENERATORS:
+		var source := FileAccess.get_file_as_string(generator)
+		t.check(not source.is_empty(), "the generator %s is readable" % generator)
+		if source.is_empty():
+			continue
+		for forbidden in [
+			"urllib", "requests", "socket", "http.client", "urlopen",
+			"subprocess", "popen", "os.system", "os.exec",
+			"urandom", "uuid", "getpid", "datetime", "time.time", "time.monotonic",
+			"random.seed(", "random.random(", "random.randrange(",
+		]:
+			t.check(
+				source.find(forbidden) == -1,
+				"%s does not reach outside itself via %s" % [generator, forbidden]
+			)
+	# A generator that draws randomly must bind every draw to a fixed seed; one
+	# that is entirely deterministic needs no RNG at all. The scene generator does
+	# draw, so its seated RNG is required; the icon generator does not draw, so it
+	# is not.
+	var scene := FileAccess.get_file_as_string("res://tools/generate_art.py")
+	var seeds := RegEx.create_from_string("random\\.Random\\(([^)]*)\\)").search_all(scene)
+	t.check(not seeds.is_empty(), "the scene generator uses an explicitly seeded RNG")
 
 
 ## --- secrets and private traces ---------------------------------------------

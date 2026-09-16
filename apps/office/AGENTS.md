@@ -47,18 +47,18 @@ shell is closed, the doorway is the only opening, and the corridor is clear.
 | Region | Size |
 | --- | --- |
 | Margin | 16 |
-| Gap between regions | 12 |
-| Top bar | full width x 64 |
-| Office viewport | derived, keeps aspect near 1.905 |
-| Status panel | 336 wide x content height |
-| Prompt composer | full width x 148 |
-| Conversation drawer | 520 wide, overlays the office, never the status panel |
+| Gap between overlays | 12 |
+| Sidebar | 264 wide, floats over the office |
+| Prompt composer | derived, centred east of the sidebar |
+| Chrome toggles | float top-right |
+| Conversation drawer | floats above the composer |
 
-The office region width is derived, so the content row keeps an aspect close to
-the world's at every supported window size (1280x720, 1600x900, 1920x1080).
-`test_shell_layout.gd` proves the four tiled regions never overlap, the drawer
-overlap is deliberate, the frame gaps are uniform, and the office aspect tracks
-the world.
+There is no header. The office is full-bleed and the panels float over it, so the
+world is never letterboxed inside a tiled frame. The composer centres in the area
+east of the sidebar, which is what keeps the two from colliding on a narrow
+window. `test_shell_layout.gd` proves the overlays tile without overlapping, the
+composer clears the sidebar, the office region is exactly the world's aspect, and
+neither overlay hides an anchor that something routes to.
 
 ## Truthfulness rules
 
@@ -66,6 +66,10 @@ the world.
 - Runtime state updates and human attention never wait for travel, bubbles, or animation.
 - Speech and history entries require a canonical source. Never invent acknowledgments, test successes, meetings, or private reasoning. A status caption is not a quote.
 - `DEMO` is explicitly synthetic and cannot perform live mutations. `LIVE` preserves the same prompt admission, delivery, and approval semantics as the TUI. Never auto-switch DEMO to LIVE.
+- In LIVE the client performs the mutations the UI exposes: prompting, model switching and answering human attention. Report a service refusal; never swallow it.
+- A fabricated or placeholder value must be labelled as such wherever it renders. The synthetic model catalogue is marked in the composer; DEX/discovery values are never presented as the runtime's own.
+- Reduced motion removes interpolation and the walk cycle, never an actor's arrival or its facing. An actor that is told to move still ends at its destination.
+- A control that cannot act is disabled and states why. An enabled affordance that silently does nothing is a defect.
 - Assignment identity is scoped by real session, not by reusable agent definition.
 - The client-internal fixture names are not wire names. Translate them to the real vocabulary before they reach the store; a fixture name inside a reducer is a defect.
 

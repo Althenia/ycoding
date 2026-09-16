@@ -29,6 +29,8 @@ const POLL_BUDGET_MS := 2
 
 var _transport: HttpTransport
 var _base_url: String = ""
+var _username: String = "ycoding"
+var _password: String = ""
 var _connected := false
 var _running := false
 var _last_error := ""
@@ -54,9 +56,26 @@ func configure(base_url: String, username: String = "ycoding", password: String 
 	_base_url = base_url.strip_edges()
 	if _base_url.is_empty():
 		return "A server address is required."
+	_username = username
+	_password = password
 	_transport = HttpTransport.new()
 	_transport.configure(_base_url, username, password)
 	return ""
+
+
+## The configured address, for callers that need their own transport.
+##
+## A transport is a poller: two owners sharing one would each see half the entries.
+## A caller that needs a separate conversation with the service builds its own
+## transport from this address rather than borrowing this one.
+func base_url() -> String:
+	return _base_url
+
+
+## The credentials this transport was configured with, for the same reason. The
+## value is never logged or rendered.
+func credentials() -> Dictionary:
+	return {"username": _username, "password": _password}
 
 
 ## Forward the session scope. Session routes derive their own location, so this is

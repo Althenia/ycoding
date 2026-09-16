@@ -18,6 +18,10 @@ const CONNECTION_DISCONNECTED := "disconnected"
 ## Tunable bound from the handoff integration defaults.
 const MAX_CONVERSATION_ITEMS := 512
 
+## A guard for walking real session parentage. Deeper than any supported
+## delegation tree, and it stops a malformed cycle rather than trusting one.
+const FAMILY_DEPTH_LIMIT := 32
+
 ## How many agents can play in the play room at once. The lounge holds a
 ## ping-pong table and a pair of sofas, so this is a real floor limit rather than
 ## an arbitrary cap.
@@ -32,6 +36,9 @@ var revision: int = 0
 var actors: Dictionary = {}
 var interactions: Array[Dictionary] = []
 var seen_interaction_ids: Dictionary = {}
+## Ordinal for a file change that carries no durable seq. Only used when the wire
+## gives none, so a genuine second change to one path stays a second item.
+var _file_change_ordinal: int = 0
 var root_session_id: String = ""
 var last_error: String = ""
 ## Set when the projection is known to be incomplete, e.g. after a reconnect that
@@ -193,6 +200,53 @@ func conversation_items(session_id: String) -> Array[Dictionary]:
 	return interactions.filter(func(item): return item.get("session_id", "") == session_id)
 
 
+## The real session family for a session: the root of its delegation tree and
+## every session under that root, root first.
+##
+## Read-only and derived from durable parentage carried by `session.created`, so
+## the drawer can present one thread without inventing a relationship. An unknown
+## session is its own family, so selection never silently widens to the roster.
+func family_session_ids(session_id: String) -> Array[String]:
+	if session_id.is_empty():
+		return []
+	var root := session_id
+	for _step in FAMILY_DEPTH_LIMIT:
+		var actor := actor_for(root)
+		if actor == null:
+			break
+		var parent := actor.identity.parent_session_id
+		if parent.is_empty() or actor_for(parent) == null:
+			break
+		root = parent
+	if actor_for(root) == null:
+		return [session_id]
+	var out: Array[String] = [root]
+	var descendants: Array[String] = []
+	for actor in actor_list():
+		var id := actor.identity.session_id
+		if id != root and _descends_from(id, root):
+			descendants.append(id)
+	descendants.sort()
+	out.append_array(descendants)
+	return out
+
+
+## Whether a session sits under a given ancestor. Bounded, so a malformed
+## parentage cycle cannot hang the drawer.
+func _descends_from(session_id: String, ancestor: String) -> bool:
+	var current := session_id
+	for _step in FAMILY_DEPTH_LIMIT:
+		var actor := actor_for(current)
+		if actor == null:
+			return false
+		current = actor.identity.parent_session_id
+		if current.is_empty():
+			return false
+		if current == ancestor:
+			return true
+	return false
+
+
 ## ---- Reducer -----------------------------------------------------------------
 ## `event` uses the real shape: { type, sessionID, data, sourceEpoch }.
 func apply(event: Dictionary) -> bool:
@@ -235,16 +289,72 @@ func apply(event: Dictionary) -> bool:
 		Wire.INPUT_ADMITTED, Wire.INPUT_PROMOTED:
 			return apply_activity(session_id, WorkState.Kind.PROCESSING, type)
 		Wire.FILE_CHANGE:
-			return apply_activity(session_id, WorkState.Kind.TYPING, type)
+			return apply_file_change(session_id, data, event)
 		Wire.COMPACTION_STARTED, Wire.COMPACTION_ADMITTED:
 			return apply_activity(session_id, WorkState.Kind.COMPACTING, type)
 		Wire.COMPACTION_ENDED, Wire.COMPACTION_FAILED:
 			return apply_activity(session_id, WorkState.Kind.PROCESSING, type)
+		Wire.PERMISSION_ASKED:
+			return apply_attention(
+				AttentionQueue.KIND_PERMISSION, session_id, data, "Approve this action?"
+			)
+		Wire.GUARDRAIL_ASKED:
+			return apply_attention(
+				AttentionQueue.KIND_GUARDRAIL, session_id, data, "Review this action?"
+			)
 		Wire.SESSION_DELETED, Wire.SESSION_ARCHIVED:
 			return apply_departure(session_id, true)
 		Wire.SESSION_UNARCHIVED:
 			return apply_departure(session_id, false)
 	return false
+
+
+## Record a permission or guardrail request the runtime is blocked on.
+##
+## These are EPHEMERAL events, so they are not durable history; the queue is what
+## makes them answerable. `summary` is only a fallback caption: the real detail is
+## the action and its resources, which is what the user actually has to judge.
+func apply_attention(kind: String, session_id: String, data: Dictionary, fallback: String) -> bool:
+	var request_id := str(data.get("id", ""))
+	if request_id.is_empty():
+		return false
+	var actor := actor_for(session_id)
+	if actor != null:
+		actor.attention_required = true
+	var detail: Dictionary = data.duplicate()
+	detail["summary"] = permission_summary(data, fallback)
+	attention.push(kind, request_id, session_id, detail)
+	record_interaction(
+		{
+			"id": "%s:%s" % [kind, request_id],
+			"kind": kind,
+			"session_id": session_id,
+			"description": str(detail["summary"]),
+			"source": Wire.PERMISSION_ASKED if kind == AttentionQueue.KIND_PERMISSION else Wire.GUARDRAIL_ASKED,
+			"source_verified": true,
+		}
+	)
+	return true
+
+
+## What a request is asking for, in the terms the schema supplies.
+##
+## A permission names an action and its resources; a guardrail adds the rule's own
+## reason, which is the most useful sentence available. Nothing is invented: when
+## the wire carries no detail the caller's neutral fallback stands.
+func permission_summary(data: Dictionary, fallback: String) -> String:
+	var action := str(data.get("action", "")).strip_edges()
+	var resources: Array = data.get("resources", [])
+	var reason := str(data.get("reason", "")).strip_edges()
+	var parts: Array[String] = []
+	if not action.is_empty():
+		parts.append(action)
+	if not resources.is_empty():
+		parts.append(", ".join(resources.map(func(item: Variant) -> String: return str(item))))
+	if not reason.is_empty():
+		parts.append(reason)
+	var joined := " — ".join(parts)
+	return joined if not joined.is_empty() else fallback
 
 
 func apply_session_created(session_id: String, data: Dictionary) -> bool:
@@ -483,6 +593,46 @@ func apply_task_change(session_id: String, data: Dictionary) -> bool:
 	return true
 
 
+## `session.file-change.recorded` carries `change = {path, patch, additions,
+## deletions}` (Schema `Session.Event.FileChange.Info`). The runtime publishes it
+## from `edit`/`patch` tool results, so the path and counts are real facts.
+##
+## The wire sends no change-kind field on this event, so none is recorded or
+## rendered. The durable seq keys the item when the event carries one, so a
+## genuine second change to the same path stays a second item.
+func apply_file_change(session_id: String, data: Dictionary, event: Dictionary) -> bool:
+	var actor := actor_for(session_id)
+	if actor == null:
+		return false
+	actor.settled_status = ""
+	actor.set_work(WorkState.Kind.TYPING)
+	actor.activity_label = Wire.FILE_CHANGE
+	var change: Dictionary = data.get("change", {})
+	var path := str(change.get("path", ""))
+	if path.is_empty():
+		return false
+	var durable: Dictionary = event.get("durable", {})
+	var seq := str(durable.get("seq", ""))
+	if seq.is_empty():
+		_file_change_ordinal += 1
+		seq = str(_file_change_ordinal)
+	record_interaction(
+		{
+			"id": "file_change:%s:%s:%s" % [session_id, path, seq],
+			"kind": "file_change",
+			"session_id": session_id,
+			"path": path,
+			"additions": int(change.get("additions", 0)),
+			"deletions": int(change.get("deletions", 0)),
+			"patch": _bounded(str(change.get("patch", ""))),
+			"description": "%s  +%d  -%d" % [path, int(change.get("additions", 0)), int(change.get("deletions", 0))],
+			"source": Wire.FILE_CHANGE,
+			"source_verified": true,
+		}
+	)
+	return true
+
+
 ## Bounded, deduplicated conversation insert. A repeated source identity is one
 ## item, not two; a genuinely distinct message stays distinct.
 func record_interaction(item: Dictionary) -> void:
@@ -490,13 +640,26 @@ func record_interaction(item: Dictionary) -> void:
 	if id.is_empty() or seen_interaction_ids.has(id):
 		return
 	seen_interaction_ids[id] = true
-	var excerpt := str(item.get("description", ""))
-	if excerpt.length() > MAX_MESSAGE_EXCERPT:
-		item["description"] = excerpt.substr(0, MAX_MESSAGE_EXCERPT) + "…"
+	item["description"] = _bounded(str(item.get("description", "")))
 	interactions.append(item)
 	if interactions.size() > MAX_CONVERSATION_ITEMS:
 		var dropped: Dictionary = interactions.pop_front()
 		seen_interaction_ids.erase(str(dropped.get("id", "")))
+	# A file-change patch is tool output, so it is bounded like any other
+	# untrusted excerpt rather than stored whole.
+	if item.has("patch"):
+		item["patch"] = _bounded(str(item.get("patch", "")))
+
+
+## Truncate untrusted text to the ceiling and mark that text was removed.
+##
+## The marker is inside the ceiling, so the returned string never exceeds it, and
+## the cut is on a character boundary: GDScript `substr` indexes characters, not
+## bytes, so a multibyte message is never split mid-codepoint.
+func _bounded(text: String) -> String:
+	if text.length() <= MAX_MESSAGE_EXCERPT:
+		return text
+	return text.substr(0, MAX_MESSAGE_EXCERPT - 1) + "…"
 
 
 ## An epoch change discards comparable cursors and cosmetic sequences without

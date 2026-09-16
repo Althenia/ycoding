@@ -22,6 +22,10 @@ const SESSION_ACTIVE := "/api/session/active"
 ## comes from the durable per-session log instead.
 const EVENT_STREAM := "/api/event"
 
+## The model catalogue. Location-scoped, so a location-aware caller sets the scope
+## before reading it; the reader never guesses a location.
+const MODELS := "/api/model"
+
 static func session(session_id: String) -> String:
 	return "/api/session/%s" % session_id
 

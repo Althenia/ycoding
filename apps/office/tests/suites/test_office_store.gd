@@ -17,6 +17,9 @@ func run(t) -> void:
 	test_absent_placement_does_not_blank_existing(t)
 	test_location_scope_reports_when_rosters_differ(t)
 	test_a_reload_evicts_the_previous_generation(t)
+	test_permission_and_guardrail_requests_reach_the_queue(t)
+	test_an_attention_event_without_an_id_is_ignored(t)
+	test_an_attention_summary_falls_back_when_detail_is_absent(t)
 
 
 func _store() -> OfficeStore:
@@ -300,3 +303,89 @@ func test_a_reload_evicts_the_previous_generation(t) -> void:
 		)
 	t.check(not store.is_stale(), "a completed reload clears the stale marking")
 	t.check_equal(store.source_epoch, "epoch-b", "the reload adopts its own epoch")
+
+
+## A session blocked on a permission or guardrail review must become answerable.
+##
+## These arrive as EPHEMERAL wire events, which the store previously ignored
+## entirely, so a session waiting on approval showed nothing and could never be
+## answered. The queue is what makes them answerable.
+func test_permission_and_guardrail_requests_reach_the_queue(t) -> void:
+	var store := _store()
+	store.apply(
+		{
+			"type": Wire.SESSION_CREATED,
+			"sessionID": "ses_p",
+			"data": {"agent": "backend", "parentID": ""},
+		}
+	)
+	store.apply(
+		{
+			"type": Wire.PERMISSION_ASKED,
+			"sessionID": "ses_p",
+			"data": {
+				"id": "prq_1",
+				"sessionID": "ses_p",
+				"action": "shell",
+				"resources": ["rm -rf build"],
+			},
+		}
+	)
+	t.check(store.attention.has("prq_1"), "a permission request is pending")
+	t.check(
+		store.actor_for("ses_p").attention_required,
+		"the blocked actor is marked as needing the user"
+	)
+	var request := store.attention.for_session("ses_p")
+	t.check_equal(str(request.get("kind", "")), AttentionQueue.KIND_PERMISSION, "its kind is kept")
+	var summary := str((request.get("data", {}) as Dictionary).get("summary", ""))
+	t.check(summary.contains("shell"), "the summary names the action being judged")
+	t.check(summary.contains("rm -rf build"), "the summary names the resource")
+
+	# A guardrail review is a distinct kind, so the UI can word it differently.
+	store.apply(
+		{
+			"type": Wire.GUARDRAIL_ASKED,
+			"sessionID": "ses_p",
+			"data": {
+				"id": "grq_1",
+				"sessionID": "ses_p",
+				"action": "git.push",
+				"resources": ["main"],
+				"reason": "Protected branch",
+			},
+		}
+	)
+	t.check(store.attention.has("grq_1"), "a guardrail review is pending")
+	var kinds := {}
+	for entry in store.attention.pending():
+		kinds[str(entry["id"])] = str(entry.get("kind", ""))
+	t.check_equal(
+		kinds.get("grq_1", ""),
+		AttentionQueue.KIND_GUARDRAIL,
+		"the guardrail review is queued as its own kind"
+	)
+	t.check_equal(
+		kinds.get("prq_1", ""),
+		AttentionQueue.KIND_PERMISSION,
+		"the permission keeps its own kind beside it"
+	)
+
+
+## A malformed attention event must not invent a request the user cannot answer.
+func test_an_attention_event_without_an_id_is_ignored(t) -> void:
+	var store := _store()
+	store.apply({"type": Wire.PERMISSION_ASKED, "sessionID": "ses_x", "data": {"action": "shell"}})
+	t.check_equal(store.attention.count(), 0, "a request with no id is not queued")
+
+
+## The neutral fallback stands when the wire carries no detail, rather than an
+## empty caption that reads like a rendering bug.
+func test_an_attention_summary_falls_back_when_detail_is_absent(t) -> void:
+	var store := _store()
+	store.apply({"type": Wire.PERMISSION_ASKED, "sessionID": "ses_y", "data": {"id": "prq_2"}})
+	var request := store.attention.for_session("ses_y")
+	t.check(
+		not str((request.get("data", {}) as Dictionary).get("summary", "")).is_empty(),
+		"a request with no detail still has a readable caption"
+	)

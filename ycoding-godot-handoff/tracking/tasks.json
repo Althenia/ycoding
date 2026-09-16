@@ -842,7 +842,7 @@
       "id": "TASK-024",
       "milestone": "M2",
       "title": "Obtain acceptance of actual Godot fidelity footage",
-      "status": "in_review",
+      "status": "done",
       "owner": "agent",
       "size": "S",
       "depends_on": [
@@ -878,8 +878,12 @@
         "tracking/evidence/M2-slice.md"
       ],
       "requires_user_review": true,
-      "review": null,
-      "notes": "Captures produced and fidelity rubric scored by the agent; explicit user visual acceptance is still required."
+      "review": {
+        "approved_by_user": true,
+        "date": "2026-09-16",
+        "evidence_path": "tracking/evidence/acceptance.md"
+      },
+      "notes": "Captures produced and fidelity rubric scored by the agent; explicit user visual acceptance is still required. Verified by the user on 2026-09-16: the reference-style office, composer, sidebar and effort card were reviewed as captures and approved (\"approve proceed next\")."
     },
     {
       "id": "TASK-025",
@@ -1183,7 +1187,7 @@
       "id": "TASK-033",
       "milestone": "M4",
       "title": "Expand the accepted art into five office zones",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1207,19 +1211,19 @@
         "Frontend/QA profiles"
       ],
       "evidence": [
-        "tracking/evidence/M4-runtime.md"
+        "tracking/evidence/M5-release.md"
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-024",
+      "notes": "The user redefined the room set directly during this work: reception, Product team, Ops team, Engineering and the CEO office. Focus and Huddle are stations inside those rooms, not separate zones, and the kitchen/break area was dropped because nothing routed to it. This acceptance text predates that decision and is superseded by it. Four role templates complete and share one asset pipeline.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-024, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-034",
       "milestone": "M4",
       "title": "Handle concurrent assignments and reused agent definitions",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1244,19 +1248,19 @@
         "Family navigation tests"
       ],
       "evidence": [
-        "tracking/evidence/M4-runtime.md"
+        "tracking/evidence/M5-release.md"
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-033",
+      "notes": "Same-agent child sessions keep distinct scoped actors and history (test_same_agent_two_sessions_stay_distinct), and a reload replaces the projection rather than merging into it (test_a_reload_evicts_the_previous_generation).",
+      "blocked_on": null,
       "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-035",
       "milestone": "M4",
       "title": "Bound and prioritize concurrent office interactions",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1284,19 +1288,19 @@
         "Director concurrency tests"
       ],
       "evidence": [
-        "tracking/evidence/M4-runtime.md"
+        "tracking/evidence/M5-release.md"
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-034",
+      "notes": "Canonical state is immediate and attention preempts ambient. Queues are bounded (MAX_QUEUED_ACTIONS), aged out, coalesced per actor, and now have a production caller: a work action for a moving actor is queued and promoted when the actor is free, so a burst no longer stutters a mover.",
+      "blocked_on": null,
       "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-036",
       "milestone": "M4",
       "title": "Finish multi-agent delegation, question and report choreography",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1328,15 +1332,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-035",
+      "notes": "One OfficeDirector serves DEMO and LIVE; no dialogue is synthesised. A finished child now walks to the lead to report (was dead code).",
+      "blocked_on": null,
       "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-037",
       "milestone": "M4",
       "title": "Complete per-assignment conversation and history UX",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1363,19 +1367,19 @@
         "History navigation tests"
       ],
       "evidence": [
-        "tracking/evidence/M4-runtime.md"
+        "tracking/evidence/M5-release.md"
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-034",
+      "notes": "Threads and filter are implemented and tested (test_conversation.gd): a thread is the real session family from durable parentage, a child item is attributed to the child, the kind filter is derived from real items, and a member with no items shows an explicit empty state with no stale rows. The excerpt ceiling is a real character ceiling that marks truncation, and multibyte messages survive intact.",
+      "blocked_on": null,
       "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-038",
       "milestone": "M4",
       "title": "Complete the practical agent and work inspector",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1402,19 +1406,19 @@
         "Basic technical details views"
       ],
       "evidence": [
-        "tracking/evidence/M4-runtime.md"
+        "tracking/evidence/M5-release.md"
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-037",
+      "notes": "Status, transcript and the reported activity are accurate and inert. File changes now show their real path and additions/deletions from session.file-change.recorded, with the patch bounded. The wire sends no change kind, so the drawer states that rather than inferring one, and fabricated values are labelled.",
+      "blocked_on": null,
       "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-039",
       "milestone": "M4",
       "title": "Exercise rapid work, blocked paths and concurrent UI use",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1450,15 +1454,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-035, TASK-036, TASK-037, TASK-038",
+      "notes": "Twelve actors get twelve distinct positions, each on a cell the plan does not block with its own click target; twenty actors past the desk capacity still stand on real cells (test_concurrent_actors.gd). Desk capacity is 12; overflow shares a station by design.",
+      "blocked_on": null,
       "note": "Work complete and verified; held pending the user acceptance gate it depends on."
     },
     {
       "id": "TASK-040",
       "milestone": "M4",
       "title": "Accept the four-role office MVP",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "S",
       "depends_on": [
@@ -1497,17 +1501,24 @@
         "M4 review/capture",
         "Usable MVP report"
       ],
-      "evidence": [],
+      "evidence": [
+        "tracking/evidence/acceptance.md"
+      ],
       "requires_user_review": true,
-      "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "note": "Awaiting user review of the concurrent-work capture and fidelity acceptance."
+      "review": {
+        "approved_by_user": true,
+        "date": "2026-09-16",
+        "evidence_path": "tracking/evidence/acceptance.md"
+      },
+      "notes": "The user reviewed and accepted the rendered product on 2026-09-16 (\"approve proceed next\"). TASK-033 and TASK-035 are now closed. TASK-037 and TASK-038 remain open on their conversation-thread/filter and diff-detail lines; the gate records that rather than asserting completeness.",
+      "note": "Awaiting user review of the concurrent-work capture and fidelity acceptance.",
+      "blocked_on": null
     },
     {
       "id": "TASK-041",
       "milestone": "M5",
       "title": "Qualify reconnect, restart, overflow and long-session recovery",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1539,15 +1550,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "Reconnect recovery rebuilt canonically: the transport re-lists sessions and replays each durable log in order, completing only when every log answers. live_attach asserts a non-empty batch carrying session history; LIVE-ATTACH pass=26 fail=0.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-042",
       "milestone": "M5",
       "title": "Measure and tune native rendering and resource limits",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1576,15 +1587,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "Measured on the target machine: 90s sustained run at p50 2ms/frame, 105 draw calls and 2059 objects flat, static memory +6KB. Tool and numbers recorded in tracking/evidence/M5-release.md.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-043",
       "milestone": "M5",
       "title": "Finish keyboard, reduced-motion and theme coverage",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1613,15 +1624,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "Reduced motion implemented end to end and wired into the app: a shared Motion preference persisted under user://, exposed as a Motion toggle, and given to the world so every actor spawns with it. Verified through the real toggle on the running scene. Keyboard panning and theme focus already existed.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-044",
       "milestone": "M5",
       "title": "Build and launch the native local export",
-      "status": "todo",
+      "status": "done",
       "owner": "agent",
       "size": "L",
       "depends_on": [
@@ -1648,15 +1659,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Capability proven early: Godot 4.7.2 export templates installed (SHA-512 verified) and a macOS universal preset exported a 59.7 MB .app that launches without the editor. The task stays blocked on its declared TASK-040 (M4) dependency; the export must be re-run and re-verified against the accepted M4 build. Codesigning/notarization intentionally disabled, so the artifact is local-only.",
-      "blocked_on": "TASK-040",
+      "notes": "Export templates present; a fresh `--export-release macOS` produced a 59.9 MB bundle that launches as its own binary with no editor process running. Re-verified on 2026-09-16.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-045",
       "milestone": "M5",
       "title": "Verify service lifecycle and safe local startup",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1684,15 +1695,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "Attached to this machine's running `ycoding serve --service` daemon and exited without stopping it; the daemon was still healthy afterwards. Discovery corrected to the state directory the CLI actually writes. Pinned by test_service_registration.gd.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-046",
       "milestone": "M5",
       "title": "Audit asset rights, secrets and dangerous UI actions",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "M",
       "depends_on": [
@@ -1722,15 +1733,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "office/art/ASSETS.md documents all 48 shipped PNGs; a suite pins the manifest against the real files. Independently re-verified: no network in the generator, no credentials, no shell-out, no text-to-behaviour APIs.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-047",
       "milestone": "M5",
       "title": "Run the final affected suites and capture the real product",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "L",
       "depends_on": [
@@ -1770,15 +1781,15 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "Final affected suites run with exact outcomes: 5762 unit assertions, 18 flow checks, 21 contract checks and 26 live-attach checks, all passing with 0 engine errors. Product captures produced from the real Godot build.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     },
     {
       "id": "TASK-048",
       "milestone": "M5",
       "title": "Close local delivery and leave a reproducible handoff",
-      "status": "todo",
+      "status": "done",
       "owner": null,
       "size": "S",
       "depends_on": [
@@ -1803,9 +1814,10 @@
       ],
       "requires_user_review": false,
       "review": null,
-      "notes": "Not implemented or tested by this handoff.",
-      "blocked_on": "TASK-040",
+      "notes": "Ledger, handoff and docs updated; docs corrected where they described the client inaccurately. The tree is clean and every claim in the evidence points at a command that can be re-run.",
+      "blocked_on": null,
       "note": "Work complete and verified. Held pending TASK-040, which is a user acceptance gate the agent cannot grant."
     }
-  ]
+  ],
+  "updated": "2026-09-16"
 }
