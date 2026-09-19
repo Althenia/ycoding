@@ -39,4 +39,15 @@ describe("YCoding brand residual scanner", () => {
       },
     ])
   })
+
+  test("keeps the office client's external provider display labels", () => {
+    expect(
+      scanBrandResiduals([
+        {
+          path: "apps/office/core/model_catalog.gd",
+          content: 'const PROVIDER_LABELS := {\n\t"opencode": "OpenCode",\n\t"anthropic": "Anthropic",\n}',
+        },
+      ]),
+    ).toEqual([])
+  })
 })

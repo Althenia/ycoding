@@ -20,6 +20,7 @@ const externalPaths = [
   /^packages\/cli\/script\/models-dev\.snapshot\.json$/,
   /^packages\/core\/test\/plugin\/fixtures\/models-dev(?:-reasoning)?\.json$/,
   /^packages\/ui\/src\/assets\/icons\/provider\/opencode(?:-go)?\.svg$/,
+  /^apps\/office\/core\/model_catalog\.gd$/,
 ]
 
 const externalLinePattern = new RegExp(
@@ -34,6 +35,7 @@ const externalLinePattern = new RegExp(
     "OpenCode Console",
     "OpenCode Zen",
     "OpenCode Go",
+    "x-opencode-session",
     "ProviderV2\\.ID\\.opencode",
     'Integration\\.ID\\.make\\(\\"opencode\\"\\)',
     "integrationID\\s*[:=].*opencode",
