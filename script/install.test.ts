@@ -240,7 +240,9 @@ exec /bin/mv "$@"
   })
 
   test("leaves the desktop app uninstalled unless it is requested", async () => {
-    const fixture = await setup(undefined, { office: true })
+    // The `--office` gate is what is under test, not the bundle format, so build the Linux
+    // artifact: a disk image needs hdiutil and cannot be produced on the Linux runner.
+    const fixture = await setup({ system: "Linux", machine: "x86_64" }, { office: true })
     const apps = path.join(fixture.home, "Applications")
     const result = await runInstaller(fixture, { YCODING_OFFICE_DIR: apps })
 
