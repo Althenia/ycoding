@@ -792,6 +792,18 @@ Provider entries support:
 - request `settings`, `headers`, and `body` overlays;
 - named `models`.
 
+### Provider profiles
+
+A provider may hold several named profiles: multiple accounts or multiple API keys for the same
+provider. A profile is the stored credential's user-facing name. Connecting asks for that name
+(`/connect`, the command palette's `Connect integration`, or the model selector's connect action),
+and re-using a name updates that profile instead of replacing the provider's credentials.
+
+Exactly one profile per provider is active. The active profile is the one a model request resolves,
+the one provider usage reports, and the one named in the session header and model selector; a
+provider with a single profile keeps the plain `provider/model` label. Switching the active profile
+does not remove the others, and removing the active profile promotes the remaining one.
+
 Model entries support:
 
 - `modelID`, `family`, `name`, and `package`;

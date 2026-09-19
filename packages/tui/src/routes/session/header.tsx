@@ -60,10 +60,18 @@ const SEGMENT_HINT: Partial<Record<SessionHeaderSegmentKey, { command: string; v
   variant: { command: "variant.cycle", verb: "cycle" },
 }
 
-export function headerModelLabel(input: { providerID?: string; modelID?: string; name?: string }) {
+export function headerModelLabel(input: {
+  providerID?: string
+  modelID?: string
+  name?: string
+  profile?: string
+}) {
   const id = input.modelID ?? input.name ?? ""
   const resolvedName = input.name ?? Locale.titlecase(id.replaceAll("-", " "))
-  return input.providerID ? `${input.providerID}/${resolvedName}` : resolvedName
+  // The active profile is part of the model's identity: the same provider/model pair resolves to a
+  // different account, so the header names which profile is in use.
+  const qualified = input.profile ? `${resolvedName} · ${input.profile}` : resolvedName
+  return input.providerID ? `${input.providerID}/${qualified}` : qualified
 }
 
 /**
@@ -334,7 +342,12 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
     .model
     .list(session.location)
     ?.find((item) => item.providerID === sessionModel.providerID && item.id === sessionModel.id)
-  const modelLabel = headerModelLabel({ providerID: model?.providerID ?? sessionModel.providerID, modelID: sessionModel.id, name: model?.name })
+  const modelLabel = headerModelLabel({
+    providerID: model?.providerID ?? sessionModel.providerID,
+    modelID: sessionModel.id,
+    name: model?.name,
+    profile: activeProfile(data, session.location, sessionModel.providerID),
+  })
   return {
     ...props,
     agent: props.agent ?? (session.agent ? Locale.titlecase(session.agent) : undefined),
@@ -342,6 +355,29 @@ function resolveIdentity(props: SessionHeaderIdentity): ResolvedSessionHeaderIde
     variant: normalizeModelVariant(props.variant ?? sessionModel.variant),
     runningShells: data.shell.list(session.location).filter((shell) => shell.status === "running").length,
   }
+}
+
+/**
+ * The active profile name for a provider, when the user has stored more than one credential for it.
+ * A single profile is the historical behaviour and stays unnamed.
+ */
+function activeProfile(
+  data: ReturnType<typeof useData>,
+  location: Parameters<ReturnType<typeof useData>["location"]["integration"]["list"]>[0],
+  providerID: string,
+) {
+  const integrationID =
+    (data.location.provider.list(location) ?? []).find((provider) => provider.id === providerID)?.integrationID ??
+    providerID
+  const credentials = (data.location.integration.list(location) ?? [])
+    .filter((integration) => integration.id === integrationID)
+    .flatMap((integration) => integration.connections)
+    .filter(
+      (connection): connection is Extract<typeof connection, { type: "credential" }> =>
+        connection.type === "credential",
+    )
+  if (credentials.length <= 1) return undefined
+  return credentials.find((connection) => connection.active)?.label
 }
 
 function truncatePath(value: string | undefined, width: number) {

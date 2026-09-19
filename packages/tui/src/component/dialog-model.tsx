@@ -55,6 +55,29 @@ export function DialogModel(props: {
   const connected = useConnected()
   const providers = createMemo(() => new Map((data.location.provider.list() ?? []).map((item) => [item.id, item])))
   const models = createMemo(() => data.location.model.list() ?? [])
+  // A provider with several stored profiles names the active one on every row, so the selector
+  // states which account a chosen model would run as. A single profile stays unnamed.
+  const profiles = createMemo(() => {
+    const byProvider = new Map<string, { active?: string; count: number }>()
+    const location = data.location.default()
+    for (const provider of data.location.provider.list(location) ?? []) {
+      const integrationID = provider.integrationID ?? provider.id
+      const credentials = (data.location.integration.list(location) ?? [])
+        .filter((integration) => integration.id === integrationID)
+        .flatMap((integration) => integration.connections)
+        .filter((connection) => connection.type === "credential")
+      if (credentials.length === 0) continue
+      byProvider.set(provider.id, {
+        count: credentials.length,
+        active: credentials.find((connection) => connection.active)?.label,
+      })
+    }
+    return byProvider
+  })
+  const profileLabel = (providerID: string) => {
+    const profile = profiles().get(providerID)
+    return profile && profile.count > 1 ? profile.active : undefined
+  }
 
   const showExtra = createMemo(() => connected() && !props.providerID)
 
@@ -115,7 +138,11 @@ export function DialogModel(props: {
                 : model.capabilities.tools
                   ? "tools"
                   : undefined,
-            category: connected() ? (provider?.name ?? model.providerID) : undefined,
+            category: connected()
+              ? profileLabel(model.providerID)
+                ? `${provider?.name ?? model.providerID} · ${profileLabel(model.providerID)}`
+                : (provider?.name ?? model.providerID)
+              : undefined,
             categoryView:
               model.enabled || !connected() ? undefined : (
                 <box height={1}>

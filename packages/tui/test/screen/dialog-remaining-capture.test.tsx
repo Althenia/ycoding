@@ -307,7 +307,7 @@ const providers = [
   { id: "openai", name: "OpenAI" },
   { id: "google", name: "Not configured" },
 ]
-const credential = (label: string) => [{ type: "credential" as const, id: `cred_${label}`, label }]
+const credential = (label: string) => [{ type: "credential" as const, id: `cred_${label}`, label, active: true }]
 const integrations = [
   { id: "ycoding", name: "YCoding Go", methods: [{ type: "key" as const, label: "API key" }], connections: [] },
   { id: "openai", name: "OpenAI", methods: [{ type: "key" as const, label: "API key" }], connections: credential("default") },

@@ -127,15 +127,41 @@ function manageConnections(
           ...(methods.length
             ? [
                 {
-                  title: "Add connection",
+                  title: "Add profile",
                   value: "add",
+                  description: "Name a new account or API key",
                   onSelect: () => selectMethod(integration, methods, dialog, onConnected),
                 },
               ]
             : []),
+          ...credentialConnections(integration).flatMap((connection) =>
+            connection.active
+              ? [
+                  {
+                    title: `Use ${connection.label}`,
+                    value: `${connection.id}:use`,
+                    description: "Active profile",
+                    state: "connected" as const,
+                    onSelect: () => undefined,
+                  },
+                ]
+              : [
+                  {
+                    title: `Use ${connection.label}`,
+                    value: `${connection.id}:use`,
+                    description: "Switch this provider's active profile",
+                    onSelect: () => {
+                      void client.api.credential
+                        .activate({ credentialID: connection.id, location: location(data) })
+                        .then(() => disconnected(integration.name, data, dialog, toast, "Profile activated"))
+                        .catch(toast.error)
+                    },
+                  },
+                ],
+          ),
           ...credentialConnections(integration).map((connection) => ({
             title: `Disconnect ${connection.label}`,
-            value: connection.id,
+            value: `${connection.id}:remove`,
             onSelect: () => {
               void client.api.credential
                 .remove({ credentialID: connection.id, location: location(data) })
@@ -157,6 +183,29 @@ function selectMethod(
 ) {
   if (methods.length === 1) return openMethod(integration, methods[0], dialog, onConnected)
   dialog.replace(() => <DialogIntegrationMethods integration={integration} onConnected={onConnected} />)
+}
+
+/**
+ * A profile is the credential's user-facing name, so connecting asks for it. An empty answer keeps
+ * the existing default name instead of blocking a connect the user already started.
+ */
+async function promptProfileName(
+  integration: IntegrationInfo,
+  dialog: ReturnType<typeof useDialog>,
+  fallback: string,
+): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolve) => {
+    dialog.replace(
+      () => (
+        <DialogPrompt
+          title={`Name this ${integration.name} profile`}
+          placeholder={fallback}
+          onConfirm={(value) => resolve(value?.trim() || fallback)}
+        />
+      ),
+      () => resolve(undefined),
+    )
+  })
 }
 
 export function DialogIntegrationMethods(props: {
@@ -183,20 +232,39 @@ function openMethod(
   dialog: ReturnType<typeof useDialog>,
   onConnected?: OnIntegrationConnected,
 ) {
-  if (method.type === "key") {
-    dialog.replace(() => <KeyMethod integration={integration} method={method} onConnected={onConnected} />)
-    return
+  void (async () => {
+    const label = await promptProfileName(integration, dialog, profileFallback(integration))
+    if (label === undefined) return
+    if (method.type === "key") {
+      dialog.replace(() => (
+        <KeyMethod integration={integration} method={method} label={label} onConnected={onConnected} />
+      ))
+      return
+    }
+    if (method.type === "command") {
+      dialog.replace(() => (
+        <CommandStarting integration={integration} method={method} label={label} onConnected={onConnected} />
+      ))
+      return
+    }
+    void beginOAuth(integration, method, dialog, onConnected, label)
+  })()
+}
+
+/** A stable starting name: the first profile keeps the historical default. */
+export function profileFallback(integration: IntegrationInfo) {
+  const taken = new Set(credentialConnections(integration).map((connection) => connection.label))
+  if (!taken.has("default")) return "default"
+  for (let index = 2; ; index += 1) {
+    const candidate = `profile-${index}`
+    if (!taken.has(candidate)) return candidate
   }
-  if (method.type === "command") {
-    dialog.replace(() => <CommandStarting integration={integration} method={method} onConnected={onConnected} />)
-    return
-  }
-  void beginOAuth(integration, method, dialog, onConnected)
 }
 
 function CommandStarting(props: {
   integration: IntegrationInfo
   method: Extract<ConnectMethod, { type: "command" }>
+  label: string
   onConnected?: OnIntegrationConnected
 }) {
   const data = useData()
@@ -211,6 +279,7 @@ function CommandStarting(props: {
       .connect({
         integrationID: props.integration.id,
         methodID: props.method.id,
+        label: props.label,
         location: location(data),
       })
       .then((result) => {
@@ -339,6 +408,7 @@ function CommandView(props: { title: string; output: string; message: string }) 
 function KeyMethod(props: {
   integration: IntegrationInfo
   method: Extract<ConnectMethod, { type: "key" }>
+  label: string
   onConnected?: OnIntegrationConnected
 }) {
   const data = useData()
@@ -359,6 +429,7 @@ function KeyMethod(props: {
             integrationID: props.integration.id,
             location: location(data),
             key,
+            label: props.label,
           })
           .then(() => connected(props.integration, data, dialog, toast, props.onConnected))
           .catch((cause) => setError(message(cause)))
@@ -375,11 +446,12 @@ export async function beginOAuth(
   method: IntegrationOAuthMethod,
   dialog: ReturnType<typeof useDialog>,
   onConnected?: OnIntegrationConnected,
+  label?: string,
 ) {
   const inputs = method.prompts?.length ? await promptInputs(dialog, method.prompts) : {}
   if (inputs === null) return
   dialog.replace(() => (
-    <OAuthStarting integration={integration} method={method} inputs={inputs} onConnected={onConnected} />
+    <OAuthStarting integration={integration} method={method} inputs={inputs} label={label} onConnected={onConnected} />
   ))
 }
 
@@ -387,6 +459,7 @@ function OAuthStarting(props: {
   integration: IntegrationInfo
   method: IntegrationOAuthMethod
   inputs: Record<string, string>
+  label?: string
   onConnected?: OnIntegrationConnected
 }) {
   const data = useData()
@@ -401,6 +474,7 @@ function OAuthStarting(props: {
         location: location(data),
         methodID: props.method.id,
         inputs: props.inputs,
+        label: props.label,
       })
       .then((result) => {
         if (result.data.mode === "code") {
@@ -677,12 +751,13 @@ async function disconnected(
   data: ReturnType<typeof useData>,
   dialog: ReturnType<typeof useDialog>,
   toast: ReturnType<typeof useToast>,
+  message = `Disconnected ${name}`,
 ) {
   data.location.integration.invalidate()
   data.location.model.invalidate()
   data.location.provider.invalidate()
   await Promise.all([data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync()])
-  toast.show({ variant: "success", message: `Disconnected ${name}` })
+  toast.show({ variant: "success", message })
   dialog.clear()
 }
 

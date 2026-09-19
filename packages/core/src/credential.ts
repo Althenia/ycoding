@@ -1,6 +1,6 @@
 export * as Credential from "./credential"
 
-import { asc, eq, sql } from "drizzle-orm"
+import { and, asc, desc, eq, sql } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Credential } from "@ycoding-ai/schema/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
@@ -28,6 +28,7 @@ export class Info extends Schema.Class<Info>("Credential.Info")({
   generation: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
     Schema.withConstructorDefault(Effect.succeed(0)),
   ),
+  active: Schema.Boolean.pipe(Schema.withConstructorDefault(Effect.succeed(false))),
 }) {}
 
 export interface Interface {
@@ -37,7 +38,10 @@ export interface Interface {
   readonly list: (integrationID: Integration.ID) => Effect.Effect<Info[]>
   /** Returns one stored credential by ID. */
   readonly get: (id: ID) => Effect.Effect<Info | undefined>
-  /** Replaces any credential for an integration and returns the new record. */
+  /**
+   * Stores a credential as a named profile. Re-using an existing profile name for the same
+   * integration updates that profile in place; the stored profile becomes the active one.
+   */
   readonly create: (input: {
     readonly integrationID: Integration.ID
     readonly value: Value
@@ -45,7 +49,9 @@ export interface Interface {
   }) => Effect.Effect<Info>
   /** Updates the label or secret value of a stored credential. */
   readonly update: (id: ID, updates: Partial<Pick<Info, "label" | "value">>) => Effect.Effect<void>
-  /** Removes a stored credential. */
+  /** Makes one credential the active profile for its integration. */
+  readonly activate: (id: ID) => Effect.Effect<void>
+  /** Removes a stored credential, promoting another profile when the active one is removed. */
   readonly remove: (id: ID) => Effect.Effect<void>
 }
 
@@ -64,6 +70,7 @@ const layer = Layer.effect(
         label: row.label,
         value: decode(row.value),
         generation: row.generation,
+        active: row.active === true,
       })
     }
 
@@ -96,20 +103,43 @@ const layer = Layer.effect(
         return row ? stored(row) : undefined
       }),
       create: Effect.fn("Credential.create")(function* (input) {
+        const label = input.label ?? "default"
+        const existing = yield* db
+          .select()
+          .from(CredentialTable)
+          .where(and(eq(CredentialTable.integration_id, input.integrationID), eq(CredentialTable.label, label)))
+          .get()
+          .pipe(Effect.orDie)
         const credential = new Info({
-          id: ID.create(),
+          id: existing?.id ?? ID.create(),
           integrationID: input.integrationID,
-          label: input.label ?? "default",
+          label,
           value: input.value,
-          generation: 0,
+          generation: existing ? existing.generation : 0,
+          active: true,
         })
         yield* db
           .transaction((tx) =>
             Effect.gen(function* () {
+              // One profile per (integration, label). Re-using a name updates that profile; every
+              // other stored profile is preserved, and the written profile becomes the active one.
               yield* tx
-                .delete(CredentialTable)
-                .where(eq(CredentialTable.integration_id, credential.integrationID))
+                .update(CredentialTable)
+                .set({ active: false })
+                .where(eq(CredentialTable.integration_id, input.integrationID))
                 .run()
+              if (existing) {
+                yield* tx
+                  .update(CredentialTable)
+                  .set({
+                    value: credential.value,
+                    active: true,
+                    generation: sql`CASE WHEN ${eq(CredentialTable.value, credential.value)} THEN ${CredentialTable.generation} ELSE ${CredentialTable.generation} + 1 END`,
+                  })
+                  .where(eq(CredentialTable.id, credential.id))
+                  .run()
+                return
+              }
               yield* tx
                 .insert(CredentialTable)
                 .values({
@@ -117,12 +147,19 @@ const layer = Layer.effect(
                   integration_id: credential.integrationID,
                   label: credential.label,
                   value: credential.value,
+                  active: true,
                 })
                 .run()
             }),
           )
           .pipe(Effect.orDie)
-        return credential
+        const persisted = yield* db
+          .select()
+          .from(CredentialTable)
+          .where(eq(CredentialTable.id, credential.id))
+          .get()
+          .pipe(Effect.orDie)
+        return persisted ? (stored(persisted) ?? credential) : credential
       }),
       update: Effect.fn("Credential.update")(function* (id, updates) {
         if (updates.label === undefined && updates.value === undefined) return
@@ -141,8 +178,49 @@ const layer = Layer.effect(
           .run()
           .pipe(Effect.orDie)
       }),
+      activate: Effect.fn("Credential.activate")(function* (id) {
+        const credential = yield* db.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get().pipe(
+          Effect.orDie,
+        )
+        const integrationID = credential?.integration_id
+        if (!integrationID) return
+        yield* db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .update(CredentialTable)
+                .set({ active: false })
+                .where(eq(CredentialTable.integration_id, integrationID))
+                .run()
+              yield* tx.update(CredentialTable).set({ active: true }).where(eq(CredentialTable.id, id)).run()
+            }),
+          )
+          .pipe(Effect.orDie)
+      }),
       remove: Effect.fn("Credential.remove")(function* (id) {
-        yield* db.delete(CredentialTable).where(eq(CredentialTable.id, id)).run().pipe(Effect.orDie)
+        const credential = yield* db.select().from(CredentialTable).where(eq(CredentialTable.id, id)).get().pipe(
+          Effect.orDie,
+        )
+        yield* db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              yield* tx.delete(CredentialTable).where(eq(CredentialTable.id, id)).run()
+              if (credential?.integration_id === null || credential?.integration_id === undefined) return
+              if (credential.active !== true) return
+              // Removing the active profile must leave the integration with an active profile when
+              // another one remains; otherwise a provider would silently lose its connection.
+              const remaining = yield* tx
+                .select({ id: CredentialTable.id })
+                .from(CredentialTable)
+                .where(eq(CredentialTable.integration_id, credential.integration_id))
+                .orderBy(desc(CredentialTable.time_created))
+                .limit(1)
+                .get()
+              if (!remaining) return
+              yield* tx.update(CredentialTable).set({ active: true }).where(eq(CredentialTable.id, remaining.id)).run()
+            }),
+          )
+          .pipe(Effect.orDie)
       }),
     })
   }),

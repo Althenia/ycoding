@@ -5,6 +5,7 @@ import {
   connectMethods,
   credentialConnections,
   integrationOptions,
+  profileFallback,
 } from "../../../../src/component/dialog-integration"
 
 const integration = (value: Partial<IntegrationInfo> & Pick<IntegrationInfo, "id" | "name">): IntegrationInfo => ({
@@ -53,11 +54,11 @@ describe("credentialConnections", () => {
           name: "Example",
           connections: [
             { type: "env", name: "EXAMPLE_KEY" },
-            { type: "credential", id: "cred_1", label: "Work" },
+            { type: "credential", id: "cred_1", label: "Work", active: true },
           ],
         }),
       ),
-    ).toEqual([{ type: "credential", id: "cred_1", label: "Work" }])
+    ).toEqual([{ type: "credential", id: "cred_1", label: "Work", active: true }])
   })
 })
 
@@ -69,11 +70,29 @@ describe("connectionSummary", () => {
           id: "example",
           name: "Example",
           connections: [
-            { type: "credential", id: "cred_1", label: "Work" },
+            { type: "credential", id: "cred_1", label: "Work", active: true },
             { type: "env", name: "EXAMPLE_KEY" },
           ],
         }),
       ),
     ).toBe("Work, $EXAMPLE_KEY")
+  })
+})
+
+describe("profileFallback", () => {
+  test("offers the historical default name first and avoids one already in use", () => {
+    expect(profileFallback(integration({ id: "openai", name: "OpenAI" }))).toBe("default")
+    expect(
+      profileFallback(
+        integration({
+          id: "openai",
+          name: "OpenAI",
+          connections: [
+            { type: "credential", id: "cred_1", label: "default", active: true },
+            { type: "credential", id: "cred_2", label: "profile-2", active: false },
+          ],
+        }),
+      ),
+    ).toBe("profile-3")
   })
 })

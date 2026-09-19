@@ -20,6 +20,7 @@ const failingCredentialNode = makeGlobalNode({
       get: () => Effect.succeed(undefined),
       create: () => Effect.die(new Error("credential persistence failed")),
       update: () => Effect.void,
+      activate: () => Effect.void,
       remove: () => Effect.void,
     }),
   ),
@@ -482,12 +483,20 @@ describe("Integration", () => {
             value: Credential.Key.make({ type: "key", key: "b" }),
           })
 
-          // Stored credentials and detected env vars appear as connections.
+          // Stored credentials and detected env vars appear as connections. Both profiles are
+          // kept; the newest is active until the user activates another one.
           expect((yield* integrations.get(integrationID))?.connections).toEqual([
             {
               type: "credential",
               id: personal.id,
               label: "Personal",
+              active: true,
+            },
+            {
+              type: "credential",
+              id: work.id,
+              label: "Work",
+              active: false,
             },
             { type: "env", name: "INTEGRATION_TEST_ACME_KEY" },
           ])
@@ -495,8 +504,27 @@ describe("Integration", () => {
             type: "credential",
             id: personal.id,
             label: "Personal",
+            active: true,
           })
           expect(work.id).not.toBe(personal.id)
+
+          // Activating a profile makes it the one a request resolves, without dropping the other.
+          yield* integrations.connection.activate(work.id)
+          expect(yield* integrations.connection.active(integrationID)).toEqual({
+            type: "credential",
+            id: work.id,
+            label: "Work",
+            active: true,
+          })
+
+          // Removing the active profile promotes the remaining one.
+          yield* integrations.connection.remove(work.id)
+          expect(yield* integrations.connection.active(integrationID)).toEqual({
+            type: "credential",
+            id: personal.id,
+            label: "Personal",
+            active: true,
+          })
         }),
       (previous) =>
         Effect.sync(() => {

@@ -236,7 +236,7 @@ export type IntegrationKeyMethod = { type: "key"; label?: string }
 
 export type IntegrationEnvMethod = { type: "env"; names: Array<string> }
 
-export type ConnectionCredentialInfo = { type: "credential"; id: string; label: string }
+export type ConnectionCredentialInfo = { type: "credential"; id: string; label: string; active: boolean }
 
 export type ConnectionEnvInfo = { type: "env"; name: string }
 
@@ -4995,6 +4995,15 @@ export type CredentialUpdateInput = {
 }
 
 export type CredentialUpdateOutput = void
+
+export type CredentialActivateInput = {
+  readonly credentialID: { readonly credentialID: string }["credentialID"]
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type CredentialActivateOutput = void
 
 export type CredentialRemoveInput = {
   readonly credentialID: { readonly credentialID: string }["credentialID"]

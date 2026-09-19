@@ -993,18 +993,33 @@ const Endpoint14_0 = (raw: RawClient["server.credential"]) => (input: Endpoint14
     payload: { label: input["label"] },
   }).pipe(Effect.mapError(mapClientError))
 
-type Endpoint14_1Request = Parameters<RawClient["server.credential"]["credential.remove"]>[0]
+type Endpoint14_1Request = Parameters<RawClient["server.credential"]["credential.activate"]>[0]
 type Endpoint14_1Input = {
   readonly credentialID: Endpoint14_1Request["params"]["credentialID"]
   readonly location?: Endpoint14_1Request["query"]["location"]
 }
 const Endpoint14_1 = (raw: RawClient["server.credential"]) => (input: Endpoint14_1Input) =>
+  raw["credential.activate"]({
+    params: { credentialID: input["credentialID"] },
+    query: { location: input["location"] },
+  }).pipe(Effect.mapError(mapClientError))
+
+type Endpoint14_2Request = Parameters<RawClient["server.credential"]["credential.remove"]>[0]
+type Endpoint14_2Input = {
+  readonly credentialID: Endpoint14_2Request["params"]["credentialID"]
+  readonly location?: Endpoint14_2Request["query"]["location"]
+}
+const Endpoint14_2 = (raw: RawClient["server.credential"]) => (input: Endpoint14_2Input) =>
   raw["credential.remove"]({
     params: { credentialID: input["credentialID"] },
     query: { location: input["location"] },
   }).pipe(Effect.mapError(mapClientError))
 
-const adaptGroup14 = (raw: RawClient["server.credential"]) => ({ update: Endpoint14_0(raw), remove: Endpoint14_1(raw) })
+const adaptGroup14 = (raw: RawClient["server.credential"]) => ({
+  update: Endpoint14_0(raw),
+  activate: Endpoint14_1(raw),
+  remove: Endpoint14_2(raw),
+})
 
 const Endpoint15_0 = (raw: RawClient["server.project"]) => () =>
   raw["project.list"]({}).pipe(Effect.mapError(mapClientError))

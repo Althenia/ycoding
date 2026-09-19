@@ -329,6 +329,23 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? railWidth(dimensions().width) : 0) - 4)
   const models = createMemo(() => data.location.model.list(location()) ?? [])
+  // The active profile name for a provider, shown only when the user stores more than one profile
+  // for it. A single profile keeps the historical provider/model label.
+  const activeProfile = (providerID: string | undefined) => {
+    if (!providerID) return undefined
+    const integrationID =
+      (data.location.provider.list(location()) ?? []).find((provider) => provider.id === providerID)?.integrationID ??
+      providerID
+    const credentials = (data.location.integration.list(location()) ?? [])
+      .filter((integration) => integration.id === integrationID)
+      .flatMap((integration) => integration.connections)
+      .filter(
+        (connection): connection is Extract<typeof connection, { type: "credential" }> =>
+          connection.type === "credential",
+      )
+    if (credentials.length <= 1) return undefined
+    return credentials.find((connection) => connection.active)?.label
+  }
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
@@ -489,12 +506,16 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const message = messages().findLast((item) => item.type === "assistant")
     return message?.type === "assistant" ? message : undefined
   })
+  // The active profile is part of a model's identity, so the header names it whenever the user has
+  // more than one profile stored for that provider.
+  const headerProfile = createMemo(() => activeProfile(session()?.model?.providerID ?? headerMessage()?.model.providerID))
   const headerModel = createMemo(() => {
     const model = session()?.model ?? headerMessage()?.model
     if (!model) return
     const info = models().find((item) => item.providerID === model.providerID && item.id === model.id)
     const name = info?.name ?? Locale.titlecase(model.id.replaceAll("-", " "))
-    return `${model.providerID}/${name}`
+    const profile = headerProfile()
+    return `${model.providerID}/${profile ? `${name} · ${profile}` : name}`
   })
   const headerVariant = createMemo(() => session()?.model?.variant ?? headerMessage()?.model.variant)
   const pendingHeaderModel = createMemo(() => {
@@ -502,7 +523,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (!selected) return undefined
     const info = models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
     const name = info?.name ?? Locale.titlecase(selected.modelID.replaceAll("-", " "))
-    return `${selected.providerID}/${name}`
+    const profile = activeProfile(selected.providerID)
+    return `${selected.providerID}/${profile ? `${name} · ${profile}` : name}`
   })
   const pendingHeaderVariant = createMemo(() => local.model.variant.current())
   const headerAgent = createMemo(() => {

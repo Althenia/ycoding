@@ -99,9 +99,12 @@ export function make(input: MakeInput): Interface {
 
     const credentials = yield* input.credentials.all()
     const integrationID = Integration.ID.make(request.providerID)
+    const candidates = credentials.filter((item) => item.integrationID === integrationID)
+    // With several profiles stored for one provider, quota must follow the profile the user
+    // selected; falling back to the first row would report another account's usage.
     const selected = request.credentialID
-      ? credentials.find((item) => item.id === request.credentialID && item.integrationID === integrationID)
-      : credentials.find((item) => item.integrationID === integrationID)
+      ? candidates.find((item) => item.id === request.credentialID)
+      : (candidates.find((item) => item.active) ?? candidates[0])
     if (!selected)
       return unavailable(request.providerID, "unsupported", "No supported credential is configured")
 

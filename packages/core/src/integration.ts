@@ -183,6 +183,8 @@ export interface Interface extends State.Transformable<Draft> {
       credentialID: Credential.ID,
       updates: Partial<Pick<Credential.Info, "label">>,
     ) => Effect.Effect<void>
+    /** Makes one stored credential the active profile for its integration. */
+    readonly activate: (credentialID: Credential.ID) => Effect.Effect<void>
     /** Removes a stored credential connection. */
     readonly remove: (credentialID: Credential.ID) => Effect.Effect<void>
   }
@@ -342,13 +344,20 @@ const layer = Layer.effect(
     })
 
     const resolveConnections = (entry: Entry | undefined, saved: readonly Credential.Info[]) => {
-      const credentials = saved
-        .map((credential) => ({
-          type: "credential" as const,
-          id: credential.id,
-          label: credential.label,
-        }))
-        .toReversed()
+      // A profile is a stored credential with a user-facing name. The active profile sorts first so
+      // the connection a request resolves is the one the user selected, and every connection
+      // reports whether it is that active profile.
+      const newestFirst = saved.toReversed()
+      const active = newestFirst.find((credential) => credential.active) ?? newestFirst[0]
+      const credentials = [
+        ...(active ? [active] : []),
+        ...newestFirst.filter((credential) => credential.id !== active?.id),
+      ].map((credential) => ({
+        type: "credential" as const,
+        id: credential.id,
+        label: credential.label,
+        active: credential.id === active?.id,
+      }))
       const env = (entry?.methods ?? [])
         .filter((method) => method.type === "env")
         .flatMap((method) => method.names.filter((name) => process.env[name]))
@@ -715,6 +724,13 @@ const layer = Layer.effect(
           if (credential) {
             yield* events.publish(Event.ConnectionUpdated, { integrationID: credential.integrationID })
           }
+          yield* events.publish(Event.Updated, {})
+        }),
+        activate: Effect.fn("Integration.connection.activate")(function* (credentialID) {
+          const credential = yield* credentials.get(credentialID)
+          if (!credential) return
+          yield* credentials.activate(credentialID)
+          yield* events.publish(Event.ConnectionUpdated, { integrationID: credential.integrationID })
           yield* events.publish(Event.Updated, {})
         }),
         remove: Effect.fn("Integration.connection.remove")(function* (credentialID) {

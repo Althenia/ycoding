@@ -94,6 +94,7 @@ const generate = (input: {
             resolve: () => Effect.succeed(input.credential),
             key: () => Effect.die("unused"),
             update: () => Effect.die("unused"),
+            activate: () => Effect.die("unused"),
             remove: () => Effect.die("unused"),
           },
           oauth: {
@@ -152,6 +153,7 @@ describe("Generate", () => {
                 type: "credential",
                 id: Credential.ID.make("anthropic-claude-code"),
                 label: "Claude",
+                active: true,
               },
               credential: claudeCodeCredential,
               onLoad: (model) => (runtime = model),
