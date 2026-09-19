@@ -72,7 +72,7 @@ const make = (dependencies: Dependencies) => {
       .slice(-MAX_CONTEXT_CHARS)
     const baseRequest = LLM.request({
       model: resolved.model,
-      http: { headers: SessionModelHeaders.make(input.session, dependencies.headers) },
+      http: { headers: SessionModelHeaders.make(input.session, { ...dependencies.headers, providerID: resolved.ref.providerID }) },
       system: agent.system,
       messages: [
         Message.user(["Recent conversation context:", context || "(none)", "", "User request:", input.text].join("\n")),

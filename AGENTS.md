@@ -219,7 +219,7 @@ const table = sqliteTable("session", {
 - An explicit `queue` input remains pending until the Session would otherwise become idle; promote one queued input at that boundary, then reevaluate continuation before promoting another.
 - Promoting any new user input resets the selected agent's step allowance; a batch of steers resets it once.
 - One step is one logical LLM call; its durable record covers only the model-visible span. Do not use “provider turn”, and do not use bare “turn” for a single call. “Turn” is reserved for the future assistant-turn unit containing all steps from prompt promotion until the session would go idle.
-- Every logical Step that publishes `Step.Started` publishes exactly one terminal `Step.Ended` or `Step.Failed`, including malformed provider settlement and non-LLM stream failures.
+- Every logical Step that publishes `Step.Started` publishes exactly one terminal `Step.Ended` or `Step.Failed`, including malformed provider settlement, non-LLM stream failures, and interruption during provider retry backoff.
 - A settled terminal Step with no non-whitespace assistant text and no local-tool continuation gets exactly one additional text-only recovery Step; recovery has no tools, no synthetic prompt, and cannot start a third Step.
 - Keep EventV2 replay owner claims separate from clustered Session execution ownership.
 - Keep the Instructions algebra and built-ins in `src/instructions`; keep instruction producers with their observed domains, and keep Session History selection plus `InstructionState` and `InstructionEntry` persistence Session-owned.

@@ -79,7 +79,7 @@ const make = (dependencies: Dependencies) => {
     }
     const baseRequest = LLM.request({
       model: resolved.model,
-      http: { headers: SessionModelHeaders.make(session, dependencies.headers) },
+      http: { headers: SessionModelHeaders.make(session, { ...dependencies.headers, providerID: resolved.ref.providerID }) },
       system: agent.system,
       messages: [Message.user(firstUser.text)],
       tools: [],

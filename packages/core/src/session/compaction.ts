@@ -103,7 +103,7 @@ const make = (dependencies: Dependencies): Interface => {
     const modelRef = input.resolved.ref
     const baseRequest = LLM.request({
       model: input.resolved.model,
-      http: { headers: SessionModelHeaders.make(input.session, dependencies.headers) },
+      http: { headers: SessionModelHeaders.make(input.session, { ...dependencies.headers, providerID: modelRef.providerID }) },
       system: SUMMARY_TEMPLATE,
       messages: [...input.messages],
       tools: [],

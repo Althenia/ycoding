@@ -910,6 +910,20 @@ const layer = Layer.effect(
               Effect.andThen(Effect.fail(error.cause)),
             )
           }),
+          // An interrupt during the backoff sleep is a Cause, not a typed error, so the retry
+          // fallback above never runs for it. The retryable attempt already published
+          // Step.Started for its assistant, and every started step owes exactly one terminal
+          // event; without this the interrupted step's assistant stays open forever and the
+          // header keeps reporting the session as working.
+          Effect.onInterrupt(() =>
+            assistantMessageID === undefined
+              ? Effect.void
+              : events.publish(SessionEvent.Step.Failed, {
+                  sessionID,
+                  assistantMessageID,
+                  error: { type: "aborted", message: "Step interrupted" },
+                }),
+          ),
         )
         if (attempt._tag === "Completed")
           return {

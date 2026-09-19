@@ -1,13 +1,23 @@
 export * as SessionModelHeaders from "./model-headers"
 
 import { InstallationVersion } from "../installation/version"
+import { ProviderV2 } from "../provider"
 import { SessionSchema } from "./schema"
 import { Schema } from "effect"
 
 export const Options = Schema.Struct({
   client: Schema.optional(Schema.String),
+  /** Selected provider, when the caller knows it. Gates provider-specific client headers. */
+  providerID: Schema.optional(Schema.String),
 })
 export type Options = typeof Options.Type
+
+/**
+ * Providers whose gateway requires a stable per-conversation session header so it can route and
+ * cache prompts. The value is the Session ID: it is already stable for the conversation and
+ * survives compaction, and it is never a credential.
+ */
+const SESSION_HEADER_PROVIDERS = new Set<string>([ProviderV2.ID.opencode, ProviderV2.ID.make("opencode-go")])
 
 export const make = (
   session: Pick<SessionSchema.Info, "id" | "parentID" | "projectID">,
@@ -16,7 +26,12 @@ export const make = (
   "x-session-affinity": session.id,
   "X-Session-Id": session.id,
   ...(session.parentID ? { "x-parent-session-id": session.parentID } : {}),
+  // YCoding identifies itself with its own User-Agent. It never presents itself as another
+  // client, so this stays constant across providers.
   "User-Agent": `ycoding/${InstallationVersion}`,
+  ...(options?.providerID !== undefined && SESSION_HEADER_PROVIDERS.has(options.providerID)
+    ? { "x-opencode-session": session.id }
+    : {}),
   "x-ycoding-project": session.projectID,
   "x-ycoding-session": session.id,
   "x-ycoding-client": options?.client ?? "cli",

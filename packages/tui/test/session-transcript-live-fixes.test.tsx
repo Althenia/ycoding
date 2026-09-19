@@ -467,6 +467,25 @@ const longBubbleTranscript = [
   },
 ] as SessionMessageInfo[]
 
+/**
+ * An ordinary multi-line prompt. A one-line preview discarded everything after
+ * the first newline, so the reader could not see the prompt they had sent even
+ * though the bubble had room for every line.
+ */
+const multilinePromptLines = [
+  "I found following bugs please find root causes and fix all the issues:",
+  "- when retry occurs and I press esc to cancel, the status hangs at cooking",
+  "- user chat bubble text was truncated as well",
+]
+const multilinePromptTranscript = [
+  {
+    id: "msg_user_multiline",
+    type: "user",
+    text: multilinePromptLines.join("\n"),
+    time: { created: 1 },
+  },
+] as SessionMessageInfo[]
+
 const oversizedMarkdownPrompt = Array.from(
   { length: 40 },
   (_, index) =>
@@ -1232,6 +1251,38 @@ test("collapses file edit results before expanding the board diff grid", async (
   }
 }, 60_000)
 
+test("renders every line of an ordinary multi-line user prompt", async () => {
+  const screen = await renderScreen({
+    ...DESIGN_VIEWPORT,
+    args: { sessionID },
+    route: routeFor(multilinePromptTranscript),
+    settle: multilinePromptLines[0]!,
+  })
+
+  try {
+    // The bubble wraps, so a source line is not a contiguous rendered string. Removing the
+    // border glyphs and normalizing whitespace is what makes "did the reader see this line"
+    // checkable across wrapped rows.
+    const lines = screen.lines().map((line) => transcriptSlice(line, DESIGN_VIEWPORT.width))
+    const flat = lines
+      .join("\n")
+      .replace(/[│╭╮╰╯]/g, " ")
+      .replace(/\s+/g, " ")
+    for (const line of multilinePromptLines) expect(flat).toContain(line.replace(/\s+/g, " "))
+    // A prompt inside the row budget is shown whole. The composer placeholder also contains an
+    // ellipsis, so the bubble body is what must be free of the truncation marker.
+    const body = lines
+      .slice(
+        lines.findIndex((line) => line.includes("╭")),
+        lines.findLastIndex((line) => line.includes("╰")) + 1,
+      )
+      .join("\n")
+    expect(body).not.toContain("…")
+  } finally {
+    await screen.dispose()
+  }
+}, 60_000)
+
 test("renders intrinsic rounded user bubbles without crossing their border at supported widths", async () => {
   const viewports = [NARROW_VIEWPORT, { width: 100, height: 30 }, DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]
   const widths: Array<{ viewport: number; short: number; long: number; maximum: number }> = []
@@ -1288,12 +1339,20 @@ test("bounds a pasted multi-section Markdown user prompt without delaying later 
 
     expect(lines().some((line) => line.includes("Follow-up prompt remains visible"))).toBe(true)
     await scroll("up")
+    // The scroll clamp and the painted frame settle on different ticks, so measure only after
+    // the frame stops changing. Measuring mid-repaint read a bubble whose top border had not
+    // been painted back in yet.
+    await stableFrame(screen)
     const before = bubbleBounds(lines(), "## Section 01")
     await scroll("down")
     await scroll("up")
+    await stableFrame(screen)
     const after = bubbleBounds(lines(), "## Section 01")
 
-    expect(before.bottom - before.top + 1).toBeLessThanOrEqual(6)
+    // The bound is a rendered-row budget, not a source-line count: the bubble wraps, so a
+    // pasted document must still be capped well below its full height (the fixture is ~40
+    // sections) while an ordinary prompt stays whole. This pins the cap at 10 painted rows.
+    expect(before.bottom - before.top + 1).toBeLessThanOrEqual(12)
     expect({ ...after, top: 0, bottom: 0 }).toEqual({ ...before, top: 0, bottom: 0 })
   } finally {
     await screen.dispose()
@@ -1581,6 +1640,22 @@ async function waitForFrame(frame: () => string, text: string) {
     await Bun.sleep(20)
   }
   throw new Error(`screen did not settle on ${text}`)
+}
+
+/**
+ * Waits until the captured frame stops changing. Scroll clamping and the repaint that follows
+ * it land on different ticks, so a measurement taken right after the scroll can read a
+ * half-painted frame.
+ */
+async function stableFrame(screen: { frame: () => string }) {
+  const deadline = Date.now() + 2_000
+  let previous = screen.frame()
+  while (Date.now() < deadline) {
+    await Bun.sleep(30)
+    const current = screen.frame()
+    if (current === previous) return
+    previous = current
+  }
 }
 
 async function renderMeasuredScreen(input: {

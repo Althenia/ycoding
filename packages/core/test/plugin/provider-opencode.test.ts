@@ -280,7 +280,7 @@ describe("OpencodePlugin", () => {
     ),
   )
 
-  it.effect("uses a public key and disables paid models without credentials", () =>
+  it.effect("disables every model without a credential instead of a public fallback", () =>
     withEnv({ OPENCODE_API_KEY: undefined }, () =>
       Effect.gen(function* () {
         const catalog = yield* Catalog.Service
@@ -289,76 +289,31 @@ describe("OpencodePlugin", () => {
             ...ProviderV2.Info.empty(ProviderV2.ID.opencode),
             package: ProviderV2.aisdk("test-provider"),
           })
-          const model = ModelV2.Info.make({
+          const paid = ModelV2.Info.make({
             ...ModelV2.Info.empty(provider.id, ModelV2.ID.make("paid")),
             modelID: ModelV2.ID.make("paid"),
             package: ProviderV2.aisdk("test-provider"),
             cost: cost(1),
           })
-          catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
-          })
-        })
-        yield* addPlugin()
-        expect(required(yield* catalog.provider.get(ProviderV2.ID.opencode)).settings?.apiKey).toBe("public")
-        expect(required(yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("paid"))).enabled).toBe(false)
-      }),
-    ),
-  )
-
-  it.effect("keeps free models without credentials", () =>
-    withEnv({ OPENCODE_API_KEY: undefined }, () =>
-      Effect.gen(function* () {
-        const catalog = yield* Catalog.Service
-        yield* catalog.transform((catalog) => {
-          const provider = ProviderV2.Info.make({
-            ...ProviderV2.Info.empty(ProviderV2.ID.opencode),
-            package: ProviderV2.aisdk("test-provider"),
-          })
-          const model = ModelV2.Info.make({
+          const free = ModelV2.Info.make({
             ...ModelV2.Info.empty(provider.id, ModelV2.ID.make("free")),
             modelID: ModelV2.ID.make("free"),
             package: ProviderV2.aisdk("test-provider"),
             cost: cost(0),
           })
           catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
-          })
+          for (const model of [paid, free])
+            catalog.model.update(provider.id, model.id, (draft) => {
+              draft.cost = [...model.cost]
+            })
         })
         yield* addPlugin()
-        expect(required(yield* catalog.provider.get(ProviderV2.ID.opencode)).settings?.apiKey).toBe("public")
-        expect(required(yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("free"))).enabled).toBe(true)
-      }),
-    ),
-  )
-
-  it.effect("treats output-only cost as free without credentials", () =>
-    withEnv({ OPENCODE_API_KEY: undefined }, () =>
-      Effect.gen(function* () {
-        const catalog = yield* Catalog.Service
-        yield* catalog.transform((catalog) => {
-          const provider = ProviderV2.Info.make({
-            ...ProviderV2.Info.empty(ProviderV2.ID.opencode),
-            package: ProviderV2.aisdk("test-provider"),
-          })
-          const model = ModelV2.Info.make({
-            ...ModelV2.Info.empty(provider.id, ModelV2.ID.make("output-only")),
-            modelID: ModelV2.ID.make("output-only"),
-            package: ProviderV2.aisdk("test-provider"),
-            cost: cost(0, 1),
-          })
-          catalog.provider.update(provider.id, () => {})
-          catalog.model.update(provider.id, model.id, (draft) => {
-            draft.cost = [...model.cost]
-          })
-        })
-        yield* addPlugin()
-        expect(required(yield* catalog.provider.get(ProviderV2.ID.opencode)).settings?.apiKey).toBe("public")
-        expect(required(yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("output-only"))).enabled).toBe(
-          true,
-        )
+        const provider = required(yield* catalog.provider.get(ProviderV2.ID.opencode))
+        // No anonymous sentinel: without a credential the gateway rejects every request, so the
+        // provider is left unauthenticated and none of its models are offered as usable.
+        expect(provider.settings?.apiKey).toBeUndefined()
+        expect(required(yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("paid"))).enabled).toBe(false)
+        expect(required(yield* catalog.model.get(ProviderV2.ID.opencode, ModelV2.ID.make("free"))).enabled).toBe(false)
       }),
     ),
   )

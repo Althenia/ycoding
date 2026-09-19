@@ -4710,6 +4710,27 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("adds the provider session header only to that provider's model requests", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({
+        id: "big-pickle",
+        provider: ProviderV2.ID.opencode,
+        route: OpenAIChat.route.with({ limits: testLimits }),
+      })
+      yield* admit(session, "Run provider-scoped request")
+
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.http?.headers).toMatchObject({
+        "x-opencode-session": sessionID,
+        "User-Agent": `ycoding/${InstallationVersion}`,
+      })
+      // The request for another provider in "adds session correlation headers to model requests"
+      // asserts the exact header map, so it is the no-leak proof for this header.
+    }),
+  )
+
   it.effect("adds the parent session header to child model requests", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -5901,6 +5922,36 @@ describe("SessionRunnerLLM", () => {
       ])
       expect(messages.find((message) => message.type === "user")?.time.consumed).toBeUndefined()
       expect(yield* recordedEventTypes(sessionID)).not.toContain("session.input.consumed.1")
+    }),
+  )
+
+  it.effect("interrupting the retry backoff publishes the pending step terminal", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Interrupt retry backoff")
+      responseStream = Stream.fail(providerUnavailable())
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      // The retryable attempt started a step and scheduled its backoff; interrupt now, while the
+      // scheduled delay is the only thing in flight.
+      yield* TestClock.adjust("1 millis")
+      while (!(yield* recordedEventTypes(sessionID)).includes("session.retry.scheduled.1")) yield* Effect.yieldNow
+      yield* session.interrupt(sessionID)
+      const exit = yield* Fiber.await(run)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+
+      // Every published Step.Started owes exactly one terminal step event, even when the retry
+      // that owns it is interrupted before the attempt settles. This harness stubs the
+      // execution layer, so the interrupted execution event itself is covered by
+      // session-execution.test.ts and the TUI header reads durable status from here.
+      const assistant = requireAssistant(yield* session.context(sessionID))
+      expect(assistant.time.completed).toBeDefined()
+      const events = yield* recordedStepSettlementEvents(sessionID, assistant.id)
+      expect(events.filter((event) => event.type === "session.step.started.1")).toHaveLength(1)
+      expect(
+        events.filter((event) => event.type === "session.step.ended.1" || event.type === "session.step.failed.1"),
+      ).toHaveLength(1)
     }),
   )
 

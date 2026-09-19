@@ -167,7 +167,7 @@ OpenAI-hosted web search URL citations enter the normal assistant text lifecycle
 - Promoting new user input resets the selected agent's step allowance.
 - Durable pending user and synthetic inputs are projected back into the resident transcript after message eviction or child-chat navigation. Reopening a child therefore preserves an admitted steer without promoting it early.
 - Outbound user bubbles render lifecycle receipts from durable state only: a clock while the admitted input remains pending, one subdued check after promotion, and two info-colored checks after a physical model request consumed that exact message. Assistant, synthetic, and system rows do not render these receipts. Historical promoted messages without a consumption event remain in the sent state; assistant activity is not treated as proof of consumption.
-- Outbound user bubbles render a width-derived bounded preview of oversized prompt text. The canonical message retains the full prompt for message actions, including copy, editor, fork, and revert; the transcript never mounts the omitted text.
+- Outbound user bubbles render a width-derived bounded preview of oversized prompt text, measured in rendered rows because the bubble wraps. An ordinary prompt is shown whole; a pasted document is capped. The canonical message retains the full prompt for message actions, including copy, editor, fork, and revert; the transcript never mounts the omitted text.
 
 ### Composer preparation and recovery
 
@@ -437,6 +437,12 @@ Continuation state is invalidated by context-revision activation and explicit cl
 ### Anthropic and compatible routes
 
 Anthropic cache-control placement is normalized across direct and compatible provider routes. Profiled Anthropic models on native OpenRouter use top-level automatic `cache_control` plus stable session affinity; the AI SDK OpenRouter route uses bounded inline markers. Plugin-owned volatile suffixes and context-pressure advisories do not receive cache breakpoints. Claude Code OAuth requests derive `x-claude-code-session-id` from the stable incoming `X-Session-Id`; an explicit interceptor override wins, and process-random identity is only the fallback when neither value exists. The OAuth billing system prefix samples the first durable canonical user message for that Session, so local compaction and runtime recreation do not replace its fingerprint with checkpoint text. A missing or unreadable durable Session falls back to the current visible first-user sample. Public Anthropic API-key requests do not use this Claude Code translation.
+
+### OpenCode Zen and OpenCode Go requests
+
+Every model request identifies the client as `ycoding/<version>`; the runtime never presents itself as another client. Requests to the `opencode` and `opencode-go` providers additionally carry `x-opencode-session` set to the Session ID, which is the stable per-conversation identifier those gateways use for routing and prompt caching and which survives compaction. Other providers receive no `x-opencode-session` header, and the value is never a credential.
+
+OpenCode Zen's anonymous free tier is not reachable from a third-party client: the gateway rejects it for any client identity, including the official one, so the runtime does not advertise anonymous free-model access as usable. Zen and Go models require a real provider credential.
 
 ### Telemetry
 

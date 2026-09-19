@@ -172,12 +172,11 @@ export const OpencodePlugin = define<HttpClient.HttpClient | EventV2.Service | S
       const item = catalog.provider.get(ProviderV2.ID.opencode)
       if (!item) return
       const hasKey = Boolean(process.env.OPENCODE_API_KEY || connected || item.provider.settings?.apiKey)
-      catalog.provider.update(item.provider.id, (provider) => {
-        if (!hasKey) provider.settings = { ...provider.settings, apiKey: "public" }
-      })
       if (hasKey) return
+      // OpenCode's anonymous free tier is closed: the gateway rejects it for every client identity,
+      // so presenting the `public` sentinel and enabling free models advertised access that could
+      // only fail with a 403. Without a real credential no OpenCode model is usable.
       for (const model of item.models.values()) {
-        if (!model.cost.some((cost) => cost.input > 0)) continue
         catalog.model.update(item.provider.id, model.id, (draft) => {
           draft.enabled = false
         })

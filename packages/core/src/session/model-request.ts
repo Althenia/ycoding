@@ -292,7 +292,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const baseRequest = LLM.request({
           model,
           http: {
-            headers: SessionModelHeaders.make(session, options),
+            headers: SessionModelHeaders.make(session, { ...options, providerID: resolved.ref.providerID }),
           },
           providerOptions: mergeProviderOptions(
             cache.providerOptions,

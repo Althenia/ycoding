@@ -99,7 +99,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           const response = yield* llm.generate(
             LLM.request({
               model: selected.model,
-              http: { headers: SessionModelHeaders.make(selection.session, options) },
+              http: { headers: SessionModelHeaders.make(selection.session, { ...options, providerID: selected.ref.providerID }) },
               providerOptions,
               system: contextEvent.system,
               messages: contextEvent.messages,

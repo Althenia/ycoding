@@ -100,7 +100,7 @@ import { useConfig } from "../../config"
 import { useClipboard } from "../../context/clipboard"
 import { nextThinkingMode, reasoningSummary, type ThinkingMode } from "../../context/thinking"
 import { getScrollAcceleration } from "../../util/scroll"
-import { collapseToolOutput, toolOutputBudget, toolOutputDisplay } from "../../util/collapse-tool-output"
+import { collapseToolOutput, collapseWrappedOutput, toolOutputBudget, toolOutputDisplay } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { PluginSlot } from "../../plugin/context"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
@@ -473,8 +473,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         count: 1,
         elapsed: session() ? (Date.now() - session()!.time.created) / 1000 : undefined,
       } as const
+    // Durable execution status is the only truth about a running Session. Deriving readiness from
+    // messages alone reported "ready" while a drain worked between steps, with no open assistant
+    // message, so the header invited a prompt the Session could not take yet.
+    const running = data.session.status(route.sessionID) === "running"
     const message = messages().findLast((item) => item.type === "assistant" && !item.time.completed)
-    if (message?.type === "assistant") {
+    // An open assistant row is a live step only while the Session is actually running. A step
+    // interrupted during retry backoff keeps its row open until the next prompt, and reading that
+    // row as activity pinned the header at "cooking" for an idle Session.
+    if (running && message?.type === "assistant") {
       const tool = message.content.find(
         (part) => part.type === "tool" && (part.state.status === "streaming" || part.state.status === "running"),
       )
@@ -483,10 +490,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         return { type: "thinking", startedAt: message.time.created } as const
       return { type: "working", startedAt: message.time.created } as const
     }
-    // Durable execution status is the only truth about a running Session. Deriving readiness from
-    // messages alone reported "ready" while a drain worked between steps, with no open assistant
-    // message, so the header invited a prompt the Session could not take yet.
-    if (data.session.status(route.sessionID) === "running") return { type: "working" } as const
+    if (running) return { type: "working" } as const
     const latest = messages().findLast((item) => item.type === "assistant")
     if (latest?.type === "assistant" && latest.error?.type.startsWith("provider."))
       return { type: "provider-error", message: safeProviderErrorMessage(latest.error.message) } as const
@@ -2665,10 +2669,16 @@ function UserMessage(props: { message: SessionMessageUser }) {
   const renderer = useRenderer()
   const promptRef = usePromptRef()
   const skills = createMemo(() => promptSkillsFromMetadata(props.message.metadata))
-  const maxChars = createMemo(() => 3 * Math.max(20, Math.floor(ctx.width * 0.515) - 2))
+  // The bubble caps at 51.5% of the transcript width and draws a border plus one column of
+  // padding on each side, so its usable text width is that share minus four columns. The row
+  // budget is measured after wrapping because the bubble wraps text; a one-row budget dropped
+  // every line after the first, and a smaller budget still truncated an ordinary prompt in a
+  // bubble this narrow, so the preview shows a normal prompt whole while still capping a
+  // pasted document at 10 painted rows.
+  const bubbleWidth = createMemo(() => Math.max(20, Math.floor(ctx.width * 0.515) - 4))
   const content = createMemo(() =>
     segmentPromptSkills(
-      collapseToolOutput(props.message.text, 1, maxChars()).output,
+      collapseWrappedOutput(props.message.text, 10, bubbleWidth()).output,
       skills(),
     ),
   )
