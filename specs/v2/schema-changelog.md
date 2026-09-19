@@ -1067,3 +1067,13 @@ Compatibility:
 
 - All changed durable definitions remain version 1. `20260703200000_reset_v2_session_events` performs the single reset for this Session event contract update, wiping experimental V2 events, sequences, projected messages, and admitted inputs.
 - Promise, Effect, and legacy JavaScript SDK surfaces are regenerated from the simplified schemas.
+
+## 2026-09-19: Named Provider Profiles
+
+- Add `active: boolean` to `Connection.CredentialInfo`. A stored credential is a named provider profile, and `active` reports whether it is the profile that model requests resolve.
+- Add the `credential.activate` Protocol operation (`POST /api/credential/:credentialID/activate`), which makes one stored credential the active profile for its integration.
+- `Credential.create` no longer replaces every credential for an integration: it inserts or updates one profile by `(integration, label)` and marks it active. The existing `credential.active` column carries the selection; no schema migration is required.
+
+Compatibility:
+
+- Additive only. `active` is a new required field on a response object, so generated clients are regenerated; the stored `credential.active` column already exists in every database and no data migration runs. Existing single-credential users see no change in behaviour; a provider that stored several credentials previously kept only one row, so no existing data can contradict the new rule.
