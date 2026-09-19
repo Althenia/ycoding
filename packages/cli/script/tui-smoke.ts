@@ -39,10 +39,14 @@ for (const expected of [
 }
 
 const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {
+  // The stdio server owns its lifetime through EOF. Do not inherit a CI runner's stdin:
+  // it can remain open after the smoke parent is ready and make the timeout kill a healthy server.
+  stdin: "pipe",
   stdout: "pipe",
   stderr: "pipe",
   env: { ...process.env, YCODING_PASSWORD: "tui-artifact-smoke" },
 })
+server.stdin.end()
 const stdout = new Response(server.stdout).text()
 const stderr = new Response(server.stderr).text()
 const timeout = setTimeout(() => server.kill(), 5_000)
