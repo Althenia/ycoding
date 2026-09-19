@@ -20,7 +20,6 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
   const requestedDirectory = Option.getOrUndefined(input.directory)
   if (requestedDirectory !== undefined) process.chdir(requestedDirectory)
   const updater = yield* Updater.Service
-  yield* updater.check().pipe(Effect.forkScoped)
   const preflight = UpdatePreflight.make()
   yield* Effect.addFinalizer(() => Effect.promise(() => preflight.close()))
   const server = yield* ServerConnection.resolve({
@@ -37,6 +36,9 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
   }).pipe(
     Effect.tapError(() => Effect.promise(() => preflight.fail("YCoding update could not start the new background service"))),
   )
+  // The background server spawns from this executable, so the release install
+  // must not replace that path while the service is still starting.
+  yield* updater.check().pipe(Effect.forkScoped)
   preflight.loading()
   const config = yield* Config.Service
   const npm = yield* Npm.Service

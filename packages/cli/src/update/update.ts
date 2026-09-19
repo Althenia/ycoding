@@ -8,7 +8,7 @@ const maxChecksumsBytes = 1024 * 1024
 const pairedMacOSRelease = "0.2.0"
 const computerHelper = "ycoding-computer-helper"
 
-type Fetch = (input: string, init?: RequestInit) => Promise<Response>
+export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 type Rename = (source: string, destination: string) => Promise<void>
 type InstallTransaction = {
   executableBackedUp: boolean

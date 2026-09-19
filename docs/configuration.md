@@ -117,6 +117,8 @@ After GitHub Pages and a native release are published, `curl -fsSL https://althe
 
 `ycoding update` checks GitHub Releases and replaces an installed release only after verifying its archive checksum and exact contents. On macOS, releases from 0.2.0 onward must contain both `ycoding` and `ycoding-computer-helper`; self-update preserves the installed pair and restores it if either replacement fails. Explicit rollback to a published pre-0.2.0 macOS version accepts its historical single-file archive and leaves any sibling helper unchanged. Linux remains single-file. Self-update supports macOS arm64/x64 and Linux x64, matching the shell installer. Development builds must be rebuilt locally; Windows users must exit YCoding and replace the executable from the release ZIP manually.
 
+The background update check resolves the newest release from the same GitHub Releases source and installs it with that release installer; it never consults the npm registry. It runs only after the background service is running or attached, because the release install replaces the executable that service spawns from. The `autoupdate` policy still governs it: `false` disables the check, and major releases are never installed automatically.
+
 ## Removed configuration keys
 
 A document containing any removed key is ignored as a whole. Current removed keys are:
