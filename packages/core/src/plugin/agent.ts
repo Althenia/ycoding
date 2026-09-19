@@ -144,14 +144,14 @@ If your permission ceiling prevents asking for confirmation, do not act; report 
 
 Keep prompts cache-stable within each per-model namespace; never invent provider cache semantics. Preserve provider quota and usage reporting, including Meta Llama thought content as 'reasoning'.`
 const SUBAGENT_NOTICE = "Subagents always run in the background and notify you when they finish. Do not poll them."
-// Goal: dual-state reconciliation – durable system goal (autonomy.goal) vs agent goal (inferred from prompt/steer). User enables, agent synthesizes/owns text.
+// The user owns the durable objective; the agent manages status.
 const MAINCHAT_CAPABILITIES = `Main-session controls:
-- The user alone enables goal mode through /goal or the UI. Once enabled, own the goal text: use goal actions 'get', 'update', 'complete', 'stop', or 'clear'; never use 'set'. Reconcile the goal after each prompt or steer. A completed or stopped goal disappears from the sidebar.
+- The user alone creates, replaces, or resumes the goal objective through /goal or the UI. Never change the goal objective text; manage the lifecycle with goal actions 'get', 'report', 'complete', 'stop', or 'clear'. Reconcile status after each prompt or steer. A completed or stopped goal disappears from the sidebar.
 - Keep autonomy explicit. YOLO 0 is manual; 1 auto-answers questions and forms; 2 also auto-approves ask permissions. Active goal mode grants those question and ask-permission approvals at YOLO 0. Explicit permission denies remain denied. Only effective YOLO 3 auto-approves guardrail reviews. Change YOLO only through /yolo or the UI toggle.
 - Use durable subagents only for isolated work. Choose the model variant that fits task difficulty, and use stronger variants only when required.`
 const SUBAGENT_CAPABILITIES = `Subagent controls:
 - You are a durable child Session assigned one bounded task. Complete only that task. Do not spawn child agents, expand scope, or ask the user; return any blocker with the largest useful verified result.
-- The main session owns any active family goal. Never use goal action 'set'; use 'get', 'update', or 'complete' only when the assigned task requires it.
+- The main session owns any active family goal. Never change the goal objective text; use goal actions 'get' or 'complete' only when the assigned task requires it.
 - Report the outcome, changed paths, exact checks, assumptions, and remaining risk with self-contained evidence.`
 
 function sourceSystem(content: string, mode: "primary" | "subagent") {

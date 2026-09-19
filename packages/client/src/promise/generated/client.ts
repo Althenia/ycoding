@@ -638,7 +638,7 @@ export function make(options: ClientOptions) {
               path: `/api/session/${encodeURIComponent(input.sessionID)}/autonomy`,
               body: input["payload"],
               successStatus: 200,
-              declaredStatuses: [404, 400, 401],
+              declaredStatuses: [404, 400, 409, 500, 401],
               empty: false,
             },
             requestOptions,

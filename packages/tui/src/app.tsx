@@ -83,7 +83,7 @@ import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "./context/k
 import { DialogVariant } from "./component/dialog-variant"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
-import { cliErrorMessage, errorFormat } from "./util/error"
+import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
@@ -628,7 +628,8 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         // Bias /mo toward /models over /move without changing global fuzzy scoring.
         slash: { name: "models", aliases: ["mo"] },
         run: () => {
-          dialog.replace(() => <DialogModel />)
+          const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+          dialog.replace(() => <DialogModel sessionID={sessionID} />)
         },
       },
       {
@@ -637,7 +638,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         category: "Agent",
         palette: undefined,
         run: () => {
-          local.model.cycle(1)
+          void local.model.cycle(1).catch((error: unknown) =>
+            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+          )
         },
       },
       {
@@ -646,7 +649,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         category: "Agent",
         palette: undefined,
         run: () => {
-          local.model.cycle(-1)
+          void local.model.cycle(-1).catch((error: unknown) =>
+            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+          )
         },
       },
       {
@@ -655,7 +660,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         category: "Agent",
         palette: undefined,
         run: () => {
-          local.model.cycleFavorite(1)
+          void local.model.cycleFavorite(1).catch((error: unknown) =>
+            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+          )
         },
       },
       {
@@ -664,7 +671,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         category: "Agent",
         palette: undefined,
         run: () => {
-          local.model.cycleFavorite(-1)
+          void local.model.cycleFavorite(-1).catch((error: unknown) =>
+            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+          )
         },
       },
       {
@@ -699,7 +708,9 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         title: "Variant cycle",
         category: "Agent",
         run: () => {
-          local.model.variant.cycle()
+          void local.model.variant.cycle().catch((error: unknown) =>
+            toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
+          )
         },
       },
       {
@@ -716,7 +727,8 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
               variant: "info",
             })
           }
-          dialog.replace(() => <DialogVariant />)
+          const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+          dialog.replace(() => <DialogVariant sessionID={sessionID} />)
         },
       },
       {

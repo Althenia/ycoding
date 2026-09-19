@@ -1315,7 +1315,7 @@ test("renders intrinsic rounded user bubbles without crossing their border at su
   })
 }, 60_000)
 
-test("bounds a pasted multi-section Markdown user prompt without delaying later transcript rows", async () => {
+test("renders a pasted multi-section Markdown user prompt at full height", async () => {
   const screen = await renderScreen({
     ...NARROW_VIEWPORT,
     args: { sessionID },
@@ -1325,39 +1325,76 @@ test("bounds a pasted multi-section Markdown user prompt without delaying later 
 
   try {
     const lines = () => screen.lines().map((line) => transcriptSlice(line, NARROW_VIEWPORT.width))
-    const scroll = async (direction: "up" | "down") => {
-      const deadline = Date.now() + 2_000
-      while (Date.now() < deadline) {
-        await screen.mouse.scroll(8, 12, direction, { delayMs: 10 })
-        const viewport = screen.scrollbox()
-        const target = direction === "up" ? 0 : Math.max(0, (viewport?.scrollHeight ?? 0) - (viewport?.viewport.height ?? 0))
-        const text = direction === "up" ? "## Section 01" : "Follow-up prompt remains visible"
-        if (viewport?.scrollTop === target && screen.frame().includes(text)) return
+    const viewport = screen.scrollbox()
+    expect(viewport).toBeDefined()
+    await stableFrame(screen)
+    // The complete message paints far more rows than the former 10-row preview budget. A capped
+    // bubble plus the follow-up prompt fits the viewport; this content does not.
+    expect(viewport!.scrollHeight).toBeGreaterThan(viewport!.viewport.height * 2)
+
+    const body = () => {
+      const rows = lines()
+      const top = rows.findIndex((line) => line.includes("╭") && line.includes("╮"))
+      const bottom = rows.findLastIndex((line) => line.includes("╰") && line.includes("╯"))
+      return rows.slice(top, bottom + 1).join("\n")
+    }
+    // Full height is not silent truncation: the message bubble must not paint the preview
+    // ellipsis. Scope to the bubble because the composer placeholder always ends in one.
+    expect(body()).not.toContain("…")
+
+    const reachable = async (text: string) => {
+      // Re-read the scrollbox each pass: a terminal resize replaces the renderable, and a stale
+      // reference would keep reporting the pre-resize scroll extent.
+      for (let pass = 0; pass < 400; pass++) {
+        const current = screen.scrollbox()
+        if (!current) return false
+        const maxTop = Math.max(0, current.scrollHeight - current.viewport.height)
+        const top = Math.min(pass * 8, maxTop)
+        current.scrollTo(top)
+        await stableFrame(screen)
+        if (lines().some((line) => line.includes(text))) return true
+        if (top >= maxTop) return false
       }
-      throw new Error(`transcript did not finish scrolling ${direction}`)
+      return false
     }
 
-    expect(lines().some((line) => line.includes("Follow-up prompt remains visible"))).toBe(true)
-    await scroll("up")
-    // The scroll clamp and the painted frame settle on different ticks, so measure only after
-    // the frame stops changing. Measuring mid-repaint read a bubble whose top border had not
-    // been painted back in yet.
-    await stableFrame(screen)
-    const before = bubbleBounds(lines(), "## Section 01")
-    await scroll("down")
-    await scroll("up")
-    await stableFrame(screen)
-    const after = bubbleBounds(lines(), "## Section 01")
+    // The last pasted section and the following message both remain reachable by scrolling.
+    if (!(await reachable("## Section 40"))) throw new Error("unreachable: ## Section 40")
+    if (!(await reachable("Follow-up prompt remains visible"))) throw new Error("unreachable: follow-up")
 
-    // The bound is a rendered-row budget, not a source-line count: the bubble wraps, so a
-    // pasted document must still be capped well below its full height (the fixture is ~40
-    // sections) while an ordinary prompt stays whole. This pins the cap at 10 painted rows.
-    expect(before.bottom - before.top + 1).toBeLessThanOrEqual(12)
-    expect({ ...after, top: 0, bottom: 0 }).toEqual({ ...before, top: 0, bottom: 0 })
+    // Widening the terminal keeps the whole message: wrapping reflows and no remainder is dropped.
+    // The rail docks at this width, so the transcript slice must widen with it.
+    const widenedWidth = NARROW_VIEWPORT.width + 40
+    screen.renderer.resize(widenedWidth, NARROW_VIEWPORT.height)
+    await stableFrame(screen)
+    const widenedLines = () => screen.lines().map((line) => transcriptSlice(line, widenedWidth))
+    const widenedBody = () => {
+      const rows = widenedLines()
+      const top = rows.findIndex((line) => line.includes("╭") && line.includes("╮"))
+      const bottom = rows.findLastIndex((line) => line.includes("╰") && line.includes("╯"))
+      return rows.slice(top, bottom + 1).join("\n")
+    }
+    expect(widenedBody()).not.toContain("…")
+    const reachableWidened = async (text: string) => {
+      for (let pass = 0; pass < 400; pass++) {
+        const current = screen.scrollbox()
+        if (!current) return false
+        const maxTop = Math.max(0, current.scrollHeight - current.viewport.height)
+        const top = Math.min(pass * 8, maxTop)
+        current.scrollTo(top)
+        await stableFrame(screen)
+        if (widenedLines().some((line) => line.includes(text))) return true
+        if (top >= maxTop) return false
+      }
+      return false
+    }
+    if (!(await reachableWidened("## Section 01"))) throw new Error("unreachable-widened: ## Section 01")
+    if (!(await reachableWidened("Follow-up prompt remains visible")))
+      throw new Error("unreachable-widened: follow-up")
   } finally {
     await screen.dispose()
   }
-}, 60_000)
+}, 90_000)
 
 test("renders only truthful icon receipts at the lower-right of outbound user bubbles", async () => {
   const screen = await renderScreen({

@@ -1,8 +1,25 @@
 # Configuration reference
 
-Status: **implemented**
-
 This document is the canonical configuration reference for the current YCoding repository. It is derived from the live Schema and runtime discovery code.
+
+## Configure by task
+
+| Task                                      | Read                                                                                                                                     |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Choose which configuration wins           | [Discovery and precedence](#runtime-configuration-discovery-and-precedence), [JSON/JSONC](#json-and-jsonc-behavior).                     |
+| Connect an account and choose a model     | [Providers and models](#providers-and-models), [profiles](#provider-profiles), [model selectors](#model-selectors).                      |
+| Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                 |
+| Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).          |
+| Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency). |
+| Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [desktop client](#native-desktop-client), [managed service](#managed-service-configuration).          |
+
+Runtime settings belong in `ycoding.json` or `ycoding.jsonc`; terminal preferences belong in `cli.json`. These surfaces do not substitute for each other.
+
+## Workspace memory
+
+The `memory` runtime object enables explicit repository-memory and shared-knowledge operations. It defaults to `enabled: true`, `max_concept_bytes: 65536`, `max_bundle_bytes: 8388608`, and `max_concepts: 1000`. Its optional `path` selects the managed base instead of `<YCoding data directory>/memory`; `~/` uses the user home and relative paths use the repository's main checkout, or the current Location outside Git. Fields merge independently in normal configuration order.
+
+Setting `enabled: false` preserves existing files. Enabling memory does not create storage, extract transcripts, or recall concepts into prompts. See [Workspace knowledge memory](./memory.md) for examples, workspace identity, permissions, update conflicts, retrieval bounds, and offline graph use.
 
 ## Configuration surfaces
 
@@ -14,7 +31,7 @@ YCoding has three independent configuration surfaces:
 | CLI/TUI configuration         | `cli.json` in the YCoding global config directory                                                             | Theme, keybindings, notifications, prompt behavior, transcript presentation, mouse, and terminal integration.                          |
 | Managed-service configuration | `service.json`, `service-local.json`, or `service-<channel-hash>.json` in the YCoding global config directory | Managed background-server hostname, port, and private password.                                                                        |
 
-The obsolete files `tui.json` and `kv.json` are ignored. Project-local `.ycoding/tui.json` is not a supported configuration source.
+The obsolete files `tui.json` and `kv.json` have no effect. Project-local `.ycoding/tui.json` is not a supported configuration source.
 
 ## Global directories
 
@@ -43,7 +60,7 @@ When `$XDG_CONFIG_HOME` is `~/.config`, the global JSONC source is `~/.config/yc
 
 Configuration entries are assembled from lowest to highest priority. For scalar values, the latest document that defines the field wins. Agents, commands, providers, plugins, permissions, and similar domains apply their own ordered merge behavior.
 
-The tested document order is:
+The document order is:
 
 1. Global `ycoding.json`.
 2. Global `ycoding.jsonc`.
@@ -53,7 +70,7 @@ The tested document order is:
 6. Authenticated well-known integration configuration.
 7. `YCODING_CONFIG_CONTENT`, which has the highest priority.
 
-Example tested order:
+Example order:
 
 ```text
 global -> explicit file -> project -> inline content
@@ -119,9 +136,9 @@ After GitHub Pages and a native release are published, `curl -fsSL https://althe
 
 The background update check resolves the newest release from the same GitHub Releases source and installs it with that release installer; it never consults the npm registry. It runs only after the background service is running or attached, because the release install replaces the executable that service spawns from. The `autoupdate` policy still governs it: `false` disables the check, and major releases are never installed automatically.
 
-## Removed configuration keys
+## Rejected configuration keys
 
-A document containing any removed key is ignored as a whole. Current removed keys are:
+A document containing any rejected key is ignored as a whole. Rejected keys are:
 
 ```text
 logLevel
@@ -143,7 +160,7 @@ attachment
 layout
 ```
 
-The legacy MCP shape where server names appear directly under `mcp` is also rejected. Use `mcp.servers`.
+The MCP shape where server names appear directly under `mcp` is also rejected. Use `mcp.servers`.
 
 ## Complete top-level runtime fields
 
@@ -177,6 +194,7 @@ The legacy MCP shape where server names appear directly under `mcp` is also reje
 | `plugins`               | array                                 | Ordered plugin additions, options, and removals.                                            |
 | `providers`             | record                                | Provider and model overrides.                                                               |
 | `ntfy`                  | object                                | Optional attention-notification tool configuration.                                         |
+| `memory`                | object                                | On-demand workspace knowledge enablement, base path, and concept/bundle limits.             |
 | `efficiency`            | object                                | Helper-model, prompt-cache, and provider-continuation policy.                               |
 | `image_analyzer`        | object                                | Image analysis fallback for text-only models.                                               |
 | `experimental`          | object                                | Subagent depth and resource policies.                                                       |
@@ -208,7 +226,7 @@ Each tool execution reads the current merged Location configuration. It returns 
 
 ### Field defaults and nested Schema contract
 
-The preceding overview is completed by this field-level ledger. `unset` means the field is optional in Schema and no consumer default is asserted here. This prevents an omitted field from being mistaken for a documented product default.
+The field reference below expands the overview. `unset` means the field is optional in Schema and has no default specified here.
 
 | Field path                                        | Exact type or closed values                                                    | Default         | Operational remark                                                                                |
 | ------------------------------------------------- | ------------------------------------------------------------------------------ | --------------- | ------------------------------------------------------------------------------------------------- |
@@ -283,7 +301,7 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `attachments.image.max_width`, `.max_height`, `.max_base64_bytes`                       | positive integer                                                                                                | unset                           | Image limits.                                                                                                                                                                     |
 | `tool_output.max_lines`, `.max_bytes`                                                   | positive integer                                                                                                | unset                           | Output truncation thresholds.                                                                                                                                                     |
 | `watcher.ignore`                                                                        | string[]                                                                                                        | unset                           | Watcher ignore patterns.                                                                                                                                                          |
-| `compaction.keep_recent_messages`                                                       | non-negative integer                                                                                            | `20`                            | Number of newest complete messages protected from selective exclusion. Model-switch boundary advice requires an explicit value.                                                    |
+| `compaction.keep_recent_messages`                                                       | non-negative integer                                                                                            | `20`                            | Number of newest complete messages protected from selective exclusion. Model-switch boundary advice requires an explicit value.                                                   |
 | `compaction.reserved_output_tokens`                                                     | non-negative integer                                                                                            | `0`                             | Output-token reservation used by compaction helper requests.                                                                                                                      |
 | `compaction.context_safety_margin_tokens`                                               | non-negative integer                                                                                            | `4096`                          | Tokens reserved from the model input budget before context-pressure and model-switch fit calculations.                                                                            |
 | `compaction.timeout_seconds`                                                            | non-negative integer                                                                                            | `60`                            | Total provider-assisted checkpoint-generation budget across all helper calls; expiry stops helper traffic and uses the local canonical checkpoint, while `0` disables the budget. |
@@ -298,7 +316,6 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 | `provider_usage.codex_app_server.cwd`                                                   | string                                                                                                          | unset                           | Client working directory.                                                                                                                                                         |
 | `provider_usage.codex_app_server.timeout_ms`                                            | positive integer `<= 30000`                                                                                     | unset                           | App-server timeout.                                                                                                                                                               |
 | `efficiency.title`                                                                      | `local` \| `model` \| `off`                                                                                     | `local`                         | Title policy.                                                                                                                                                                     |
-| `efficiency.goal_synthesis`                                                             | `local` \| `model`                                                                                              | `local`                         | Goal synthesis policy.                                                                                                                                                            |
 | `efficiency.helper_models.title`, `.goal`, `.compaction.main`, `.compaction.subagent`   | model selector \| `session`                                                                                     | `session`                       | Independent model selection for title, goal, and ContextManifest helpers.                                                                                                         |
 | `efficiency.prompt_cache.anthropic_ttl`                                                 | `adaptive` \| `5m` \| `1h`                                                                                      | `adaptive`                      | Cache lifetime policy.                                                                                                                                                            |
 | `efficiency.prompt_cache.openai_mode`                                                   | `auto` \| `implicit` \| `explicit`                                                                              | `auto`                          | OpenAI cache lowering.                                                                                                                                                            |
@@ -310,7 +327,7 @@ The preceding overview is completed by this field-level ledger. `unset` means th
 
 ### Provider-usage reporting
 
-**Implemented:** `provider_usage` currently configures only the optional Codex app-server fields above. GitHub Copilot usage reporting has no `provider_usage` key and requires no separate credential; it reuses the OAuth credential already configured for the `github-copilot` provider.
+`provider_usage` configures only the optional Codex app-server fields above. GitHub Copilot usage reporting has no `provider_usage` key and requires no separate credential; it reuses the OAuth credential already configured for the `github-copilot` provider.
 
 After unsuccessful Copilot model discovery, YCoding removes previously discovered Copilot model entries so stale models cannot remain selectable.
 
@@ -346,7 +363,6 @@ The optional `efficiency` block controls provider-request amplification and prom
 {
   "efficiency": {
     "title": "local",
-    "goal_synthesis": "local",
     "helper_models": {
       "title": "openai/gpt-5-mini#low",
       "goal": "openai/gpt-5-mini#low",
@@ -369,7 +385,6 @@ The optional `efficiency` block controls provider-request amplification and prom
 | Field                                    | Values                         | Default    | Purpose                                                                                                          |
 | ---------------------------------------- | ------------------------------ | ---------- | ---------------------------------------------------------------------------------------------------------------- |
 | `title`                                  | `local`, `model`, `off`        | `local`    | Generate Session titles locally, with a model, or not at all.                                                    |
-| `goal_synthesis`                         | `local`, `model`               | `local`    | Normalize goals locally or use the hidden goal agent.                                                            |
 | `helper_models.title`                    | model selector, `session`      | `session`  | Model for model-generated Session titles.                                                                        |
 | `helper_models.goal`                     | model selector, `session`      | `session`  | Model for model-based goal synthesis.                                                                            |
 | `helper_models.compaction.main`          | model selector, `session`      | `session`  | Model for ContextManifest generation in main chats.                                                              |
@@ -436,7 +451,7 @@ scene:
 objects[2]{type,count,description}:
   cat,1,...
 ...
-````
+```
 
 Original description: ... (if present)
 SHA-256: ...
@@ -462,7 +477,24 @@ When `openai_extended_retention` is true, supported pre-GPT-5.6 direct OpenAI re
 
 `openai_responses_continuation` never changes `openai_responses_state`. The default `stored` state sends `store: true` on direct OpenAI Responses requests; choose `stateless` to send `store: false` and disable response-ID continuation. Enabling extended cache retention or stored Responses state may change provider data-retention behavior; make that choice explicitly.
 
-The default `local` title and goal modes do not make provider requests. Set `title` or `goal_synthesis` to `model` to restore model-generated behavior. `title: "off"` leaves the initial generated Session title unchanged.
+The default `local` title mode makes no provider request. Set `title` to `model` for model-generated titles; `title: "off"` leaves the initial generated Session title unchanged. Explicit `/goal <text>` calculation always uses a model, while resuming a retained goal does not recalculate it.
+
+Configure the goal pre-prompt with `agents.goal.system`. Select its model with `agents.goal.model` or `efficiency.helper_models.goal`; leave both unset to use the current Session model. For example:
+
+```jsonc
+{
+  "agents": {
+    "goal": {
+      "system": "Derive one concise, verifiable objective from the user's explicit request and conversation. Return only the objective.",
+    },
+  },
+  "efficiency": {
+    "helper_models": { "goal": "session" },
+  },
+}
+```
+
+An unavailable configured model, failed provider request, or empty calculation leaves the prior goal unchanged. The runtime does not fall back to raw input or another model on that failure. The user replaces objectives explicitly; ordinary chat and agent goal-tool calls cannot rewrite them.
 
 For titles and goals, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. For selective-compaction manifests, the owner Session resolves `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. Each job reuses a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. This changes no configuration shape.
 
@@ -488,7 +520,7 @@ including approval for the current Session, remain available.
 
 For noninteractive runs, `ycoding run --yolo <0-3>` sets the durable Session level before admitting the prompt. Omitting the flag preserves an adopted Session's autonomy; `--yolo 0` explicitly selects manual handling. A failed autonomy update prevents prompt admission.
 
-**CLI breaking change:** `run --auto` and the former boolean `--yolo` alias are removed. Supply an explicit level, for example `ycoding run --yolo 2 "Run the tests"`. The noninteractive client does not approve requests locally: any remaining permission, question, form or guardrail blocker is rejected or cancelled and the run exits unsuccessfully. Hard guardrail reviews always require a human decision and cannot be approved by this CLI path.
+The noninteractive client does not approve requests locally: any remaining permission, question, form or guardrail blocker is rejected or cancelled and the run exits unsuccessfully. Hard guardrail reviews always require a human decision and cannot be approved by this CLI path.
 
 Home-directory expansion applies to path resources for `external_directory`, `read`, and `edit`. It does not rewrite shell command text.
 
@@ -620,16 +652,16 @@ The office answers these keys. Every shortcut carries the modifier (Cmd on macOS
 Ctrl elsewhere) because the arrows and WASD already pan the view, and Alt is
 unused because macOS composes characters with it.
 
-| Key | Action |
-|---|---|
-| Cmd/Ctrl + 1 | Show or hide the sidebar |
-| Cmd/Ctrl + 2 | Show or hide the prompt composer |
-| Cmd/Ctrl + 3 | Reduce motion |
-| Cmd/Ctrl + I | Open the source drawer for the selection |
-| Cmd/Ctrl + T | Switch between light and dark panels |
-| Cmd/Ctrl + = | Enlarge the interface text |
-| Cmd/Ctrl + Down / Up | Select the next or previous session |
-| Escape | Close the drawer, or leave the composer |
+| Key                  | Action                                   |
+| -------------------- | ---------------------------------------- |
+| Cmd/Ctrl + 1         | Show or hide the sidebar                 |
+| Cmd/Ctrl + 2         | Show or hide the prompt composer         |
+| Cmd/Ctrl + 3         | Reduce motion                            |
+| Cmd/Ctrl + I         | Open the source drawer for the selection |
+| Cmd/Ctrl + T         | Switch between light and dark panels     |
+| Cmd/Ctrl + =         | Enlarge the interface text               |
+| Cmd/Ctrl + Down / Up | Select the next or previous session      |
+| Escape               | Close the drawer, or leave the composer  |
 
 Typing wins: while the caret is in the composer only Escape is acted on, so a
 shortcut can never take a keystroke from the text being written. Escape undoes the
@@ -800,9 +832,11 @@ provider. A profile is the stored credential's user-facing name. Connecting asks
 and re-using a name updates that profile instead of replacing the provider's credentials.
 
 Exactly one profile per provider is active. The active profile is the one a model request resolves,
-the one provider usage reports, and the one named in the session header and model selector; a
+the one provider usage reports, and the one named in the Context sidebar above Provider and in the model selector; a
 provider with a single profile keeps the plain `provider/model` label. Switching the active profile
 does not remove the others, and removing the active profile promotes the remaining one.
+
+The Session header shows model identity without a profile suffix. Context displays the Profile row only for a provider with multiple stored profiles.
 
 Model entries support:
 
@@ -966,36 +1000,36 @@ Defaults applied by the TUI:
 
 All other `cli.json` fields are optional and remain `unset` until configured. The schema-recognized field paths are:
 
-| Field path                                                         | Exact type or closed values                       | Default                     | Operational remark                                                                                  |
-| ------------------------------------------------------------------ | ------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `theme.name`                                                       | string                                            | unset                       | Discovered theme ID.                                                                                |
-| `theme.mode`                                                       | `system` \| `dark` \| `light`                     | unset                       | `system` follows the terminal.                                                                      |
-| `keybinds.<command>`                                               | key-sequence override                             | unset                       | The supported command names and default bindings are owned by `packages/tui/src/config/keybind.ts`. |
-| `plugins[]`                                                        | string \| `{ package: string, options?: record }` | unset                       | TUI-side plugin directives, separate from Core runtime plugins.                                     |
-| `leader.timeout`                                                   | positive integer milliseconds                     | `2000`                      | Wait time after the leader key.                                                                     |
-| `scroll.speed`                                                     | number `>= 0.001`                                 | unset                       | Distance per scroll-input tick.                                                                     |
-| `scroll.acceleration`                                              | boolean                                           | unset                       | Repeated-input acceleration.                                                                        |
-| `attention.enabled`, `.notifications`, `.sound`                    | boolean                                           | `true`                      | Master alerts, system notifications, and attention sound.                                           |
-| `attention.volume`                                                 | number `0..1`                                     | `0.4`                       | Attention-sound volume.                                                                             |
-| `attention.sound_pack`                                             | string                                            | `ycoding.default`           | Active sound-pack ID.                                                                               |
-| `attention.sounds.<event>`                                         | string                                            | unset                       | Event is `default`, `question`, `permission`, `error`, `done`, or `subagent_done`.                  |
-| `diffs.wrap`                                                       | `word` \| `none`                                  | unset                       | Diff line wrapping.                                                                                 |
-| `diffs.tree`, `.single`                                            | boolean                                           | unset                       | File-tree visibility and single-patch view.                                                         |
-| `diffs.view`                                                       | `auto` \| `split` \| `unified`                    | unset                       | `auto` selects from terminal width.                                                                 |
-| `terminal.title`                                                   | boolean                                           | unset                       | Terminal title updates.                                                                             |
-| `terminal.copy_on_select`                                          | boolean                                           | unset; behaviorally ignored | Deprecated compatibility field.                                                                     |
-| `prompt.editor`                                                    | boolean                                           | unset                       | Adds active editor file or selection to prompt context.                                             |
-| `prompt.paste`                                                     | `compact` \| `full`                               | unset                       | Large-paste presentation.                                                                           |
-| `session.sidebar`                                                  | `auto` \| `hide`                                  | unset                       | `auto` shows the sidebar when width permits.                                                        |
-| `session.scrollbar`                                                | boolean                                           | unset                       | Transcript scrollbar.                                                                               |
-| `session.thinking`                                                 | `show` \| `hide`                                  | unset                       | Default reasoning visibility.                                                                       |
-| `session.grouping`                                                 | `auto` \| `none`                                  | unset                       | Related transcript-item grouping.                                                                   |
-| `hints.onboarding`, `debug.devtools`, `debug.timing`, `animations` | boolean                                           | unset                       | Guidance, diagnostics, and animation switches.                                                      |
-| `mouse`                                                            | boolean                                           | `true`                      | Terminal mouse capture.                                                                             |
+| Field path                                                         | Exact type or closed values                       | Default               | Operational remark                                                                                  |
+| ------------------------------------------------------------------ | ------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------- |
+| `theme.name`                                                       | string                                            | unset                 | Discovered theme ID.                                                                                |
+| `theme.mode`                                                       | `system` \| `dark` \| `light`                     | unset                 | `system` follows the terminal.                                                                      |
+| `keybinds.<command>`                                               | key-sequence override                             | unset                 | The supported command names and default bindings are owned by `packages/tui/src/config/keybind.ts`. |
+| `plugins[]`                                                        | string \| `{ package: string, options?: record }` | unset                 | TUI-side plugin directives, separate from Core runtime plugins.                                     |
+| `leader.timeout`                                                   | positive integer milliseconds                     | `2000`                | Wait time after the leader key.                                                                     |
+| `scroll.speed`                                                     | number `>= 0.001`                                 | unset                 | Distance per scroll-input tick.                                                                     |
+| `scroll.acceleration`                                              | boolean                                           | unset                 | Repeated-input acceleration.                                                                        |
+| `attention.enabled`, `.notifications`, `.sound`                    | boolean                                           | `true`                | Master alerts, system notifications, and attention sound.                                           |
+| `attention.volume`                                                 | number `0..1`                                     | `0.4`                 | Attention-sound volume.                                                                             |
+| `attention.sound_pack`                                             | string                                            | `ycoding.default`     | Active sound-pack ID.                                                                               |
+| `attention.sounds.<event>`                                         | string                                            | unset                 | Event is `default`, `question`, `permission`, `error`, `done`, or `subagent_done`.                  |
+| `diffs.wrap`                                                       | `word` \| `none`                                  | unset                 | Diff line wrapping.                                                                                 |
+| `diffs.tree`, `.single`                                            | boolean                                           | unset                 | File-tree visibility and single-patch view.                                                         |
+| `diffs.view`                                                       | `auto` \| `split` \| `unified`                    | unset                 | `auto` selects from terminal width.                                                                 |
+| `terminal.title`                                                   | boolean                                           | unset                 | Terminal title updates.                                                                             |
+| `terminal.copy_on_select`                                          | boolean                                           | `true` except Windows | Copy the mouse selection when it is released.                                                       |
+| `prompt.editor`                                                    | boolean                                           | unset                 | Adds active editor file or selection to prompt context.                                             |
+| `prompt.paste`                                                     | `compact` \| `full`                               | unset                 | Large-paste presentation.                                                                           |
+| `session.sidebar`                                                  | `auto` \| `hide`                                  | unset                 | `auto` shows the sidebar when width permits.                                                        |
+| `session.scrollbar`                                                | boolean                                           | unset                 | Transcript scrollbar.                                                                               |
+| `session.thinking`                                                 | `show` \| `hide`                                  | unset                 | Default reasoning visibility.                                                                       |
+| `session.grouping`                                                 | `auto` \| `none`                                  | unset                 | Related transcript-item grouping.                                                                   |
+| `hints.onboarding`, `debug.devtools`, `debug.timing`, `animations` | boolean                                           | unset                 | Guidance, diagnostics, and animation switches.                                                      |
+| `mouse`                                                            | boolean                                           | `true`                | Terminal mouse capture.                                                                             |
 
 Attention sound names are `default`, `question`, `permission`, `error`, `done`, and `subagent_done`.
 
-`terminal.copy_on_select` is deprecated and behaviorally ignored. Passive mouse selection highlights text only. Copy the active selection with `Ctrl+C` on every supported platform or `Cmd+C` on macOS; press `Esc` to clear it. Selection copy consumes `Ctrl+C` and cannot exit the application. Without a selection, `Ctrl+C` keeps its prompt behavior and requires two presses to exit from an empty prompt; `Esc` never exits YCoding.
+`terminal.copy_on_select` controls copy-on-select. When enabled (the default except on Windows), releasing a mouse selection copies it; when disabled, use `Ctrl+C` on every supported platform or `Cmd+C` on macOS, and press `Esc` to clear the selection. Selection copy consumes `Ctrl+C` and cannot exit the application. Without a selection, `Ctrl+C` keeps its prompt behavior and requires two presses to exit from an empty prompt; `Esc` never exits YCoding.
 
 `keybinds` is a record of command names to key sequences. The complete current key map lives in `packages/tui/src/config/keybind.ts`; that file is authoritative when bindings are added or renamed.
 
@@ -1073,7 +1107,7 @@ Stable operator-facing variables:
 | `YCODING_SIMULATE`               | Enable simulation backend behavior.                        |
 | `YCODING_GIT_BASH_PATH`          | Windows Git Bash path.                                     |
 | `YCODING_FILEWATCHER_DISABLE`    | Disable filesystem watcher.                                |
-| `YCODING_DISABLE_FILEWATCHER`    | Filesystem-watcher compatibility alias.                    |
+| `YCODING_DISABLE_FILEWATCHER`    | Alternate filesystem-watcher disable switch.               |
 | `YCODING_DISABLE_FFF`            | Disable the FFF filesystem backend.                        |
 | `YCODING_WEBSEARCH_PROVIDER`     | Select web-search provider.                                |
 | `YCODING_TERMINAL`               | Override terminal identity used by shell and PTY behavior. |
@@ -1092,9 +1126,9 @@ CLI/TUI `cli.json` updates are serialized, written atomically through a temporar
 
 ## Troubleshooting
 
-- A config file containing a removed key is ignored in full; inspect warning logs for the exact keys.
+- A config file containing a rejected key is ignored in full; inspect warning logs for the exact keys.
 - Invalid JSON/JSONC or a failed file substitution causes that document to be skipped.
 - `instructions` is accepted but currently inactive; use `AGENTS.md` or skills.
-- `tui.json`, `kv.json`, legacy `config.json`, and project `.ycoding/tui.json` are not read.
+- `tui.json`, `kv.json`, `config.json`, and project `.ycoding/tui.json` are not read.
 - A managed-service port conflict is not fixed by deleting session data. Change the channel service config port or use `ycoding --standalone`.
 - Run with `--log-level all` and `YCODING_PRINT_LOGS=1` when investigating configuration discovery.

@@ -38,9 +38,20 @@ const setup = Effect.gen(function* () {
 
 it.effect("exposes one explicit agent no-progress report action", () =>
   Effect.sync(() => {
-    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "report", noProgress: false })).toEqual({
-      action: "report",
+    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "report" })).toEqual({ action: "report" })
+    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "update", status: "completed" })).toEqual({
+      action: "update",
+      status: "completed",
     })
+  }),
+)
+
+it.effect("removes objective text from the agent goal tool input", () =>
+  Effect.sync(() => {
+    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "update", text: "Replace objective" })).toEqual({
+      action: "update",
+    })
+    expect(Schema.decodeUnknownSync(GoalTool.Input)({ action: "set", text: "New objective" })).toEqual({ action: "set" })
   }),
 )
 
@@ -171,6 +182,68 @@ it.effect("resets a completed goal to active with identical or new text", () =>
   }),
 )
 
+it.effect("resumes a retained goal without recalculating its text", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    yield* service.setGoal({ sessionID, text: "Ship the fix", maxNoProgress: 2 })
+    yield* service.report({ sessionID })
+    yield* service.stop(sessionID)
+
+    const resumed = yield* service.set({ sessionID, goal: true })
+    expect(resumed).toEqual({
+      mode: "normal",
+      yolo: 0,
+      goal: {
+        text: "Ship the fix",
+        rawText: "Ship the fix",
+        status: "active",
+        iteration: 0,
+        noProgress: 1,
+        maxNoProgress: 2,
+      },
+    })
+  }),
+)
+
+it.effect("leaves state untouched when resume has no retained goal", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    expect(yield* service.set({ sessionID, goal: true })).toEqual({ mode: "normal", yolo: 0 })
+  }),
+)
+
+it.effect("applies a guarded goal calculation only at the expected autonomy revision", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    const before = yield* service.snapshot(sessionID)
+
+    const applied = yield* service.setGoalIfCurrent({
+      sessionID,
+      expectedSequence: before.sequence,
+      text: "Calculated goal",
+      rawText: "raw request",
+      yolo: 1,
+    })
+    expect(applied.applied).toBe(true)
+    expect(applied.state.yolo).toBe(1)
+    expect(applied.state.goal).toMatchObject({ text: "Calculated goal", rawText: "raw request", status: "active" })
+
+    const current = yield* service.snapshot(sessionID)
+    yield* service.stop(sessionID)
+
+    const stale = yield* service.setGoalIfCurrent({
+      sessionID,
+      expectedSequence: current.sequence,
+      text: "Late calculation",
+      rawText: "late request",
+      yolo: 3,
+    })
+    expect(stale.applied).toBe(false)
+    expect(stale.state.yolo).toBe(1)
+    expect(stale.state.goal).toMatchObject({ text: "Calculated goal", status: "stopped" })
+  }),
+)
+
 it.effect("uses every report as one no-progress retry attempt", () =>
   Effect.gen(function* () {
     const service = yield* setup
@@ -192,6 +265,19 @@ it.effect("uses every report as one no-progress retry attempt", () =>
     yield* service.setGoal({ sessionID, text: "Finish" })
     const completed = yield* service.complete(sessionID)
     expect(completed).toMatchObject({ mode: "normal", goal: { status: "completed", iteration: 0 } })
+  }),
+)
+
+it.effect("explicit stop fences a pending first calculation even without a stored goal", () =>
+  Effect.gen(function* () {
+    const service = yield* setup
+    const first = yield* service.snapshot(sessionID)
+    yield* service.set({ sessionID, goal: null })
+    expect((yield* service.setGoalIfCurrent({ sessionID, expectedSequence: first.sequence, text: "Late first goal" })).applied).toBe(false)
+    const second = yield* service.snapshot(sessionID)
+    yield* service.stop(sessionID)
+    expect((yield* service.setGoalIfCurrent({ sessionID, expectedSequence: second.sequence, text: "Late replacement" })).applied).toBe(false)
+    expect(yield* service.get(sessionID)).toEqual({ mode: "normal", yolo: 0 })
   }),
 )
 

@@ -1,8 +1,6 @@
 # Guardrails, subagent permissions, and provider usage
 
-Status: **Implemented**
-
-This document describes the operator-facing configuration and terminal behavior for Session guardrails, subagent shell permissions, and provider quota reporting.
+This document specifies the operator-facing configuration and terminal behavior for Session guardrails, subagent shell permissions, and provider quota reporting.
 
 ## Agent and subagent permissions
 
@@ -277,7 +275,7 @@ GET  /api/session/:sessionID/guardrail/request
 POST /api/session/:sessionID/guardrail/request/:requestID/reply
 ```
 
-The reply body uses the public union `once | always | reject`. The three routes are unchanged; only the Reply union and its transient `always` semantics are extended.
+The reply body uses the public union `once | always | reject`; `always` is transient.
 
 Provider usage:
 

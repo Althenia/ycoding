@@ -9,8 +9,9 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 - **Durable work:** preserve session history, pending prompts, and orchestration state.
 - **Background subagents:** delegate work with inherited permission limits.
 - **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
+- **On-demand knowledge:** save and search linked workspace Markdown with an [offline graph and reader](./docs/memory.md), without automatic transcript extraction or recall.
 
-YCoding is terminal-first—the TUI is the primary surface. An approved native Godot desktop client is in development under [`apps/office`](./apps/office); it is a presentation client of the same local service and owns no execution authority.
+YCoding is terminal-first—the TUI is the primary surface. The native Godot desktop client under [`apps/office`](./apps/office) is a presentation client of the same local service and owns no execution authority.
 
 ## Install
 

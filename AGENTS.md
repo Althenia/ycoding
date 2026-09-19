@@ -40,7 +40,10 @@ Update documentation in the same change when behavior changes.
 - Public API or schema: update the relevant `specs/v2` contract and regenerate clients/OpenAPI through the owning command.
 - Contributor invariants or required verification: update this file or the relevant package `AGENTS.md`.
 
-Never describe a proposal, historical plan, or incomplete implementation as current behavior. Use explicit statuses: implemented, partial, proposed, or historical.
+- Write product documentation as specifications of current behavior, configuration, interfaces, constraints, and examples.
+- Describe the current contract directly; omit change-history narration such as “no longer uses,” “previously,” or “has been removed.” Keep migration instructions and release history in their dedicated documents.
+- Do not add implementation-status banners, progress labels, delivery ledgers, or test-run tracking to product documentation. Keep delivery evidence and unfinished work in the task's tracking artifacts.
+- State functional limitations in the relevant specification section. Never present proposals, historical plans, or unverified behavior as current capabilities; keep proposals separate from current product guides.
 
 ## Generated content and dependency boundaries
 

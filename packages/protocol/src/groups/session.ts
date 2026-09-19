@@ -188,16 +188,12 @@ export const SessionAutonomyState = Schema.Struct({
   goal: SessionAutonomyGoal.pipe(Schema.optional),
 }).annotate({ identifier: "SessionAutonomyState" })
 export const SessionAutonomySet = Schema.Union([
-  Schema.Struct({ yolo: SessionAutonomyYolo }),
   Schema.Struct({
-    goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Null]),
+    yolo: SessionAutonomyYolo.pipe(Schema.optional),
+    goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Literal(true), Schema.Null]),
     maxNoProgress: PositiveInt.pipe(Schema.optional),
   }),
-  Schema.Struct({
-    yolo: SessionAutonomyYolo,
-    goal: Schema.Union([Schema.Trim.pipe(Schema.check(Schema.isNonEmpty())), Schema.Null]),
-    maxNoProgress: PositiveInt.pipe(Schema.optional),
-  }),
+  Schema.Struct({ yolo: SessionAutonomyYolo, goal: Schema.Never.pipe(Schema.optional) }),
 ]).annotate({ identifier: "SessionAutonomySet" })
 
 export const SessionSubagentLaunch = Schema.Struct({
@@ -377,14 +373,14 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         params: { sessionID: Session.ID },
         payload: SessionAutonomySet,
         success: Schema.Struct({ data: SessionAutonomyState }),
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, InvalidRequestError, ConflictError, UnknownError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
           OpenApi.annotations({
             identifier: "v2.session.autonomy.set",
             summary: "Set session autonomy",
-            description: "Switch a session to Normal or YOLO mode, or activate an autonomous Goal.",
+            description: "Set YOLO level; calculate and activate a user-supplied goal string, resume the retained goal with true without recalculating its objective, or stop it with null.",
           }),
         ),
     )
@@ -570,7 +566,7 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             identifier: "v2.session.switchModel",
             summary: "Switch session model",
             description:
-              "Switch the model used by subsequent provider turns. Refuses the switch when the current context cannot fit the target model.",
+              "Validate the target, interrupt active execution and await settlement, compact model-visible context if needed, then switch in the same Session. Preserve raw history and do not replay interrupted work. Refuse selection if context still cannot fit the target model.",
           }),
         ),
     )

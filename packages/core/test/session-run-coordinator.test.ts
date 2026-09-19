@@ -611,4 +611,243 @@ describe("SessionRunCoordinator", () => {
       }),
     ),
   )
+
+  it.effect("serializes concurrent transitions for one key", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const coordinator = yield* SessionRunCoordinator.make({ drain: () => Effect.void })
+        const firstStarted = yield* Deferred.make<void>()
+        const firstRelease = yield* Deferred.make<void>()
+        const secondStarted = yield* Deferred.make<void>()
+        const secondRelease = yield* Deferred.make<void>()
+        let active = 0
+        let maxActive = 0
+        const transition = (started: Deferred.Deferred<void>, release: Deferred.Deferred<void>) =>
+          coordinator.withTransition(
+            "session",
+            Effect.sync(() => {
+              active += 1
+              maxActive = Math.max(maxActive, active)
+            }).pipe(
+              Effect.andThen(Deferred.succeed(started, undefined)),
+              Effect.andThen(Deferred.await(release)),
+              Effect.ensuring(Effect.sync(() => void (active -= 1))),
+            ),
+          )
+
+        const first = yield* transition(firstStarted, firstRelease).pipe(Effect.forkChild)
+        yield* Deferred.await(firstStarted)
+        const second = yield* transition(secondStarted, secondRelease).pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        yield* Effect.yieldNow
+
+        expect(maxActive).toBe(1)
+        expect(yield* Deferred.isDone(secondStarted)).toBe(false)
+        yield* Deferred.succeed(firstRelease, undefined)
+        yield* Deferred.await(secondStarted)
+        expect(maxActive).toBe(1)
+        yield* Deferred.succeed(secondRelease, undefined)
+        yield* Effect.all([Fiber.join(first), Fiber.join(second)])
+      }),
+    ),
+  )
+
+  it.effect("defers a doorbell raised during a transition and drains once after release", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const drained = yield* Deferred.make<void>()
+        let drains = 0
+        const coordinator = yield* SessionRunCoordinator.make<string, never>({
+          drain: () =>
+            Effect.sync(() => void (drains += 1)).pipe(Effect.andThen(Deferred.succeed(drained, undefined))),
+        })
+
+        const transition = yield* coordinator
+          .withTransition("session", Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))))
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        yield* Effect.all([coordinator.wake("session"), coordinator.wake("session")])
+        yield* Effect.yieldNow
+
+        expect(drains).toBe(0)
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(transition)
+        yield* Deferred.await(drained)
+        expect(drains).toBe(1)
+      }),
+    ),
+  )
+
+  it.effect("stays idle after a transition that observed no doorbell", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let drains = 0
+        const coordinator = yield* SessionRunCoordinator.make({ drain: () => Effect.sync(() => void (drains += 1)) })
+
+        yield* coordinator.withTransition("session", Effect.void)
+        yield* Effect.yieldNow
+        yield* Effect.yieldNow
+
+        expect(drains).toBe(0)
+        expect(yield* coordinator.active).toEqual(new Set())
+      }),
+    ),
+  )
+
+  it.effect("waits for a reserved transition before starting an explicit resume", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        const resumed = yield* Deferred.make<void>()
+        let drains = 0
+        const coordinator = yield* SessionRunCoordinator.make<string, never>({
+          drain: () =>
+            Effect.sync(() => void (drains += 1)).pipe(Effect.andThen(Deferred.succeed(resumed, undefined))),
+        })
+
+        const transition = yield* coordinator
+          .withTransition("session", Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))))
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        const resume = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        yield* Effect.yieldNow
+
+        expect(drains).toBe(0)
+        yield* Deferred.succeed(release, undefined)
+        yield* Effect.all([Fiber.join(transition), Fiber.join(resume)])
+        yield* Deferred.await(resumed)
+        expect(drains).toBe(1)
+      }),
+    ),
+  )
+
+  it.effect("forwards a doorbell raised during interruption cleanup inside a transition", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>()
+        const cleanupStarted = yield* Deferred.make<void>()
+        const cleanupGate = yield* Deferred.make<void>()
+        const secondStarted = yield* Deferred.make<void>()
+        let runs = 0
+        const coordinator = yield* SessionRunCoordinator.make({
+          drain: () =>
+            Effect.sync(() => ++runs).pipe(
+              Effect.flatMap((run) =>
+                run === 1
+                  ? Deferred.succeed(firstStarted, undefined).pipe(
+                      Effect.andThen(Effect.never),
+                      Effect.onInterrupt(() =>
+                        Deferred.succeed(cleanupStarted, undefined).pipe(Effect.andThen(Deferred.await(cleanupGate))),
+                      ),
+                    )
+                  : Deferred.succeed(secondStarted, undefined),
+              ),
+            ),
+        })
+
+        yield* coordinator.wake("session")
+        yield* Deferred.await(firstStarted)
+        const transition = yield* coordinator
+          .withTransition(
+            "session",
+            Effect.gen(function* () {
+              const interrupting = yield* coordinator.interrupt("session").pipe(Effect.forkChild)
+              yield* Deferred.await(cleanupStarted)
+              // The doorbell rings after `interrupt` cleared the execution's own pending wake.
+              yield* coordinator.wake("session")
+              yield* Deferred.succeed(cleanupGate, undefined)
+              yield* Fiber.join(interrupting)
+              // The transition owner can await drain settlement without deadlocking on its own gate.
+              yield* coordinator.awaitIdle("session")
+            }),
+          )
+          .pipe(Effect.forkChild)
+
+        yield* Fiber.join(transition)
+        yield* Deferred.await(secondStarted)
+        expect(runs).toBe(2)
+      }),
+    ),
+  )
+
+  it.effect("releases a queued transition when its waiter is cancelled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const release = yield* Deferred.make<void>()
+        let secondRan = false
+        const coordinator = yield* SessionRunCoordinator.make({ drain: () => Effect.void })
+
+        const first = yield* coordinator
+          .withTransition("session", Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(release))))
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        const queued = yield* coordinator
+          .withTransition("session", Effect.sync(() => void (secondRan = true)))
+          .pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+        yield* Fiber.interrupt(queued)
+
+        expect(secondRan).toBe(false)
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(first)
+        // A cancelled waiter must not strand the reservation.
+        yield* coordinator.withTransition("session", Effect.sync(() => void (secondRan = true)))
+        expect(secondRan).toBe(true)
+      }),
+    ),
+  )
+
+  it.effect("releases a transition that fails and still forwards an observed doorbell", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const failure = new Error("transition failed")
+        const drained = yield* Deferred.make<void>()
+        let drains = 0
+        const coordinator = yield* SessionRunCoordinator.make<string, Error>({
+          drain: () =>
+            Effect.sync(() => void (drains += 1)).pipe(Effect.andThen(Deferred.succeed(drained, undefined))),
+        })
+
+        const exit = yield* coordinator
+          .withTransition("session", coordinator.wake("session").pipe(Effect.andThen(Effect.fail(failure))))
+          .pipe(Effect.exit)
+
+        expect(Exit.isFailure(exit) && Cause.hasFails(exit.cause)).toBe(true)
+        yield* Deferred.await(drained)
+        expect(drains).toBe(1)
+      }),
+    ),
+  )
+
+  it.effect("runs transitions for different keys concurrently", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const coordinator = yield* SessionRunCoordinator.make({ drain: () => Effect.void })
+        const firstStarted = yield* Deferred.make<void>()
+        const firstGate = yield* Deferred.make<void>()
+        let active = 0
+
+        const first = yield* coordinator
+          .withTransition(
+            "first",
+            Effect.sync(() => void (active += 1)).pipe(
+              Effect.andThen(Deferred.succeed(firstStarted, undefined)),
+              Effect.andThen(Deferred.await(firstGate)),
+            ),
+          )
+          .pipe(Effect.forkChild)
+        yield* Deferred.await(firstStarted)
+        yield* coordinator.withTransition("second", Effect.sync(() => void (active += 1)))
+
+        expect(active).toBe(2)
+        yield* Deferred.succeed(firstGate, undefined)
+        yield* Fiber.join(first)
+      }),
+    ),
+  )
 })

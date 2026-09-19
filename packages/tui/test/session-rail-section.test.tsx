@@ -482,6 +482,68 @@ test("renders the CONTEXT design rows and omits unreported cache telemetry", asy
   }
 })
 
+test("renders the Profile row above Provider inside the Context section", async () => {
+  const [{ RailProvider }, { SidebarCacheContent }] = await Promise.all([
+    import("../src/routes/session/rail-section"),
+    import("../src/feature-plugins/sidebar/context"),
+  ])
+  const diagnostics: SessionCacheDiagnostics = {
+    model: { providerID: "openai", id: "gpt-5.6" },
+    context: { total: 1_464, limit: 200_000, percent: 56 },
+    tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    cache: { eligible: 0, hitRatio: undefined, mechanism: "none", readReported: false, writeReported: false },
+    requests: undefined,
+  }
+  const app = await mount(
+    () => (
+      <RailProvider>
+        <SidebarCacheContent diagnostics={() => diagnostics} profile={() => "Work"} />
+      </RailProvider>
+    ),
+    { width: 40, height: 32 },
+  )
+  await app.waitForFrame((frame) => frame.includes("Work"))
+
+  try {
+    const frame = app.captureCharFrame()
+    const profile = frame.indexOf("Profile")
+    const provider = frame.indexOf("Provider")
+    const model = frame.indexOf("Model")
+    // Profile is credential identity and sits above the provider identity it resolves through.
+    expect(profile).toBeGreaterThan(-1)
+    expect(profile).toBeLessThan(provider)
+    expect(provider).toBeLessThan(model)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("omits the Profile row when the provider has a single stored profile", async () => {
+  const [{ RailProvider }, { SidebarCacheContent }] = await Promise.all([
+    import("../src/routes/session/rail-section"),
+    import("../src/feature-plugins/sidebar/context"),
+  ])
+  const diagnostics: SessionCacheDiagnostics = {
+    model: { providerID: "openai", id: "gpt-5.6" },
+    context: { total: 1_464, limit: 200_000, percent: 56 },
+    tokens: { uncachedInput: 1_411, output: 53, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+    cache: { eligible: 0, hitRatio: undefined, mechanism: "none", readReported: false, writeReported: false },
+    requests: undefined,
+  }
+  const app = await mount(() => (
+    <RailProvider>
+      <SidebarCacheContent diagnostics={() => diagnostics} />
+    </RailProvider>
+  ))
+  await app.waitForFrame((frame) => frame.includes("CONTEXT"))
+
+  try {
+    expect(app.captureCharFrame()).not.toContain("Profile")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("renders a non-toggleable CACHE sub-heading inside the toggleable CONTEXT section", async () => {
   const { RailProvider, RailSection, RailSubheading } = await import("../src/routes/session/rail-section")
   const [themeV2, setThemeV2] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()

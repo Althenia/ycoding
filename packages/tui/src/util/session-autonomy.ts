@@ -149,22 +149,33 @@ export async function submitSessionPrompt(input: {
   await input.prompt(true)
 }
 
+export type GoalToggleAction =
+  | { readonly type: "stop" }
+  | { readonly type: "resume"; readonly text: string }
+  | { readonly type: "request-objective" }
+
+/**
+ * Bare /goal or the sidebar toggle never invents an objective. An active goal stops;
+ * a retained goal (any terminal status) resumes its existing text without recalculation;
+ * with no retained text the UI must ask the user for an explicit objective.
+ */
+export function goalToggleAction(state: SessionAutonomyState): GoalToggleAction {
+  if (state.goal?.status === "active") return { type: "stop" }
+  const retained = state.goal?.text.trim()
+  if (retained) return { type: "resume", text: retained }
+  return { type: "request-objective" }
+}
+
 export async function activateGoal(input: {
   sessionID: string
-  id: string
   goal: string
   get: () => Promise<SessionAutonomyState>
   set: (input: { goal: string }) => Promise<SessionAutonomyState>
-  prompt: (input: { sessionID: string; id: string; text: string; resume?: boolean }) => Promise<unknown>
 }) {
-  await input.prompt({ sessionID: input.sessionID, id: input.id, text: input.goal, resume: false })
   const current = await input.get()
-  const state =
-    current.goal &&
-    current.goal.status === "active" &&
+  const sameActive =
+    current.goal?.status === "active" &&
     ("rawText" in current.goal ? (current.goal as { rawText?: string }).rawText : current.goal.text) === input.goal
-      ? current
-      : await input.set({ goal: input.goal })
-  await input.prompt({ sessionID: input.sessionID, id: input.id, text: input.goal })
-  return state
+  if (sameActive) return current
+  return input.set({ goal: input.goal })
 }

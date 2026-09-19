@@ -60,6 +60,7 @@ import { useEditorContext } from "../../context/editor"
 import { openEditor } from "../../editor"
 import { useDialog } from "../../ui/dialog"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogSessionGoal } from "../../component/dialog-session-goal"
 import { DialogSessionSkills } from "../../component/dialog-session-skills"
 import { DialogSessionTerminals } from "../../component/dialog-session-terminals"
 import { SessionIsolatedBrowserCommand } from "../../component/dialog-session-browser"
@@ -100,7 +101,7 @@ import { useConfig } from "../../config"
 import { useClipboard } from "../../context/clipboard"
 import { nextThinkingMode, reasoningSummary, type ThinkingMode } from "../../context/thinking"
 import { getScrollAcceleration } from "../../util/scroll"
-import { collapseToolOutput, collapseWrappedOutput, toolOutputBudget, toolOutputDisplay } from "../../util/collapse-tool-output"
+import { collapseToolOutput, toolOutputBudget, toolOutputDisplay } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { PluginSlot } from "../../plugin/context"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
@@ -124,6 +125,7 @@ import {
   autonomyModeLabel,
   createSessionAutonomyRefreshGuard,
   currentSessionAutonomy,
+  goalToggleAction,
   type SessionAutonomyResponse,
   yoloLevel,
 } from "../../util/session-autonomy"
@@ -329,23 +331,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? railWidth(dimensions().width) : 0) - 4)
   const models = createMemo(() => data.location.model.list(location()) ?? [])
-  // The active profile name for a provider, shown only when the user stores more than one profile
-  // for it. A single profile keeps the historical provider/model label.
-  const activeProfile = (providerID: string | undefined) => {
-    if (!providerID) return undefined
-    const integrationID =
-      (data.location.provider.list(location()) ?? []).find((provider) => provider.id === providerID)?.integrationID ??
-      providerID
-    const credentials = (data.location.integration.list(location()) ?? [])
-      .filter((integration) => integration.id === integrationID)
-      .flatMap((integration) => integration.connections)
-      .filter(
-        (connection): connection is Extract<typeof connection, { type: "credential" }> =>
-          connection.type === "credential",
-      )
-    if (credentials.length <= 1) return undefined
-    return credentials.find((connection) => connection.active)?.label
-  }
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
@@ -510,27 +495,27 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const message = messages().findLast((item) => item.type === "assistant")
     return message?.type === "assistant" ? message : undefined
   })
-  // The active profile is part of a model's identity, so the header names it whenever the user has
-  // more than one profile stored for that provider.
-  const headerProfile = createMemo(() => activeProfile(session()?.model?.providerID ?? headerMessage()?.model.providerID))
   const headerModel = createMemo(() => {
     const model = session()?.model ?? headerMessage()?.model
     if (!model) return
     const info = models().find((item) => item.providerID === model.providerID && item.id === model.id)
     const name = info?.name ?? Locale.titlecase(model.id.replaceAll("-", " "))
-    const profile = headerProfile()
-    return `${model.providerID}/${profile ? `${name} · ${profile}` : name}`
+    return `${model.providerID}/${name}`
   })
   const headerVariant = createMemo(() => session()?.model?.variant ?? headerMessage()?.model.variant)
   const pendingHeaderModel = createMemo(() => {
-    const selected = local.model.current()
+    // While a switch is in flight, show the desired target as pending progress. The durable Session
+    // model is still the active one until the switch settles.
+    const pending = local.model.pendingTarget(route.sessionID)
+    const selected = pending ?? local.model.current()
     if (!selected) return undefined
     const info = models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
     const name = info?.name ?? Locale.titlecase(selected.modelID.replaceAll("-", " "))
-    const profile = activeProfile(selected.providerID)
-    return `${selected.providerID}/${profile ? `${name} · ${profile}` : name}`
+    return `${selected.providerID}/${name}`
   })
-  const pendingHeaderVariant = createMemo(() => local.model.variant.current())
+  const pendingHeaderVariant = createMemo(
+    () => local.model.pendingTarget(route.sessionID)?.variant ?? local.model.variant.current(),
+  )
   const headerAgent = createMemo(() => {
     const agent = session()?.agent ?? headerMessage()?.agent
     return agent ? Locale.titlecase(agent) : undefined
@@ -1007,14 +992,21 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       id: "session.autonomy.goal.toggle",
       group: "Session",
       run: () => {
-        const isActive = autonomy().goal?.status === "active"
-        if (isActive) {
+        const action = goalToggleAction(autonomy())
+        if (action.type === "stop") {
           updateAutonomy({ goal: null })
-        } else {
-          const existing = autonomy().goal?.text
-          const text = existing?.trim() || "Autonomous goal"
-          updateAutonomy({ goal: text })
+          return
         }
+        if (action.type === "resume") {
+          updateAutonomy({ goal: action.text })
+          return
+        }
+        DialogSessionGoal.show(
+          dialog,
+          route.sessionID,
+          undefined,
+          (state) => acceptAutonomy(route.sessionID, state),
+        )
       },
     },
     {
@@ -2669,19 +2661,20 @@ function UserMessage(props: { message: SessionMessageUser }) {
   const renderer = useRenderer()
   const promptRef = usePromptRef()
   const skills = createMemo(() => promptSkillsFromMetadata(props.message.metadata))
-  // The bubble caps at 51.5% of the transcript width and draws a border plus one column of
-  // padding on each side, so its usable text width is that share minus four columns. The row
-  // budget is measured after wrapping because the bubble wraps text; a one-row budget dropped
-  // every line after the first, and a smaller budget still truncated an ordinary prompt in a
-  // bubble this narrow, so the preview shows a normal prompt whole while still capping a
-  // pasted document at 10 painted rows.
-  const bubbleWidth = createMemo(() => Math.max(20, Math.floor(ctx.width * 0.515) - 4))
-  const content = createMemo(() =>
-    segmentPromptSkills(
-      collapseWrappedOutput(props.message.text, 10, bubbleWidth()).output,
-      skills(),
-    ),
-  )
+  // The bubble caps at 51.5% of the transcript width. Yoga clamps a `maxWidth` bubble's height to
+  // the container instead of growing with its wrapped content, which silently dropped the
+  // remainder of a long prompt. Capping the text's own width keeps the pill silhouette at every
+  // width while the bubble still grows to the complete message.
+  const intrinsicWidth = createMemo(() => {
+    // The bubble draws a border plus one column of padding on each side, so its usable text width
+    // is the 51.5% share minus those four columns.
+    const cap = Math.max(20, Math.floor(ctx.width * 0.515) - 4)
+    const longest = props.message.text
+      .split("\n")
+      .reduce((widest, line) => Math.max(widest, Math.min(cap, stringWidth(line))), 1)
+    return Math.min(cap, longest)
+  })
+  const content = createMemo(() => segmentPromptSkills(props.message.text, skills()))
   const receipt = createMemo(() => {
     if (data.session.input.has(ctx.sessionID, props.message.id)) return { glyph: "◷", read: false }
     if (props.message.time.consumed !== undefined) return { glyph: "✓✓", read: true }
@@ -2712,7 +2705,6 @@ function UserMessage(props: { message: SessionMessageUser }) {
           paddingBottom={0}
           paddingLeft={1}
           paddingRight={1}
-          maxWidth="51.5%"
           border
           borderStyle="rounded"
           // The rounded border is drawn in the bubble's own fill colour, so it reads as a pill
@@ -2724,7 +2716,7 @@ function UserMessage(props: { message: SessionMessageUser }) {
           flexDirection="column"
           flexShrink={0}
         >
-          <text wrapMode="word" fg={themeV2.text.default}>
+          <text wrapMode="word" fg={themeV2.text.default} width={intrinsicWidth()}>
             <For each={content()}>
               {(part) => (
                 <Show when={part.type === "skill"} fallback={part.value}>

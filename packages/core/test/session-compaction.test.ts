@@ -26,7 +26,7 @@ import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
 import { SessionContextState } from "@ycoding-ai/core/session/context-state"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
-import { SessionHelperPolicy, localGoal, localTitle } from "@ycoding-ai/core/session/helper-policy"
+import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionHistory } from "@ycoding-ai/core/session/history"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
@@ -86,18 +86,16 @@ const models = Layer.mock(SessionRunnerModel.Service)({
 const helpers = Layer.succeed(
   SessionHelperPolicy.Service,
   SessionHelperPolicy.Service.of({
-    settings: { titleMode: "local", goalMode: "local", models: {}, compactionScopes: {} },
+    settings: { titleMode: "local", models: {}, compactionScopes: {} },
     localTitle,
-    localGoal,
     resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model)),
   }),
 )
 const unavailableHelpers = Layer.succeed(
   SessionHelperPolicy.Service,
   SessionHelperPolicy.Service.of({
-    settings: { titleMode: "local", goalMode: "local", models: {}, compactionScopes: {} },
+    settings: { titleMode: "local", models: {}, compactionScopes: {} },
     localTitle,
-    localGoal,
     resolveModel: () => Effect.succeed(undefined),
   }),
 )

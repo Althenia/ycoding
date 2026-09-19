@@ -154,7 +154,8 @@ type ForkInput = {
 type AutonomyInput = {
   sessionID: SessionSchema.ID
   yolo?: number | boolean
-  goal?: string | null
+  /** A string calculates and replaces the objective; true resumes the retained one; null stops it. */
+  goal?: string | null | true
   maxNoProgress?: number
   mode?: "normal" | "yolo" | "goal"
 }
@@ -307,7 +308,10 @@ export interface Interface {
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<SessionModelSwitch.Outcome, NotFoundError | MessageDecodeError>
+  }) => Effect.Effect<
+    SessionModelSwitch.Outcome,
+    NotFoundError | MessageDecodeError | SessionRunnerModel.Error | CompactionConflictError
+  >
   readonly rename: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<void, NotFoundError>
   readonly move: (input: {
     sessionID: SessionSchema.ID
@@ -335,7 +339,7 @@ export interface Interface {
   readonly usage: (sessionID: SessionSchema.ID) => Effect.Effect<ProviderRequest.Summary, NotFoundError>
   readonly autonomy: {
     readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.State, NotFoundError>
-    readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError>
+    readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError | SessionGoal.Error>
   }
   readonly command: (input: {
     id?: SessionMessage.ID
@@ -436,13 +440,32 @@ const layer = Layer.effect(
         Effect.catchCause(() => Effect.succeed(undefined)),
       )
     })
+    const sameModel = (current: ModelV2.Ref | undefined, target: ModelV2.Ref) =>
+      current?.providerID === target.providerID &&
+      current.id === target.id &&
+      (current.variant ?? "default") === (target.variant ?? "default")
+    const compactionPolicy = Effect.fnUntraced(function* (session: SessionSchema.Info) {
+      return yield* Config.Service.pipe(
+        Effect.provide(locations.get(session.location)),
+        Effect.flatMap((config) => config.entries()),
+        Effect.map((entries) =>
+          ConfigCompaction.resolve(
+            entries
+              .filter((entry): entry is Config.Document => entry.type === "document")
+              .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : [])),
+          ),
+        ),
+      )
+    })
     // Context validation for a model switch resolves the target in the Session's
     // Location-scoped registry. The transcript read below is durable database work.
     const checkModelSwitch = Effect.fnUntraced(function* (session: SessionSchema.Info, targetModel: ModelV2.Ref) {
       const resolution = yield* Effect.gen(function* () {
         const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
-        const config = yield* Config.Service.pipe(Effect.provide(locations.get(session.location)))
-        const compactions = (yield* config.entries())
+        const compactions = (yield* Config.Service.pipe(
+          Effect.provide(locations.get(session.location)),
+          Effect.flatMap((config) => config.entries()),
+        ))
           .filter((entry): entry is Config.Document => entry.type === "document")
           .flatMap((entry) => (entry.info.compaction ? [entry.info.compaction] : []))
         const compaction = ConfigCompaction.resolve(compactions)
@@ -465,10 +488,102 @@ const layer = Layer.effect(
         currentModel: session.model,
         targetModel,
         messages,
-        model: session.model ?? targetModel,
+        // The switch decision must lower history exactly as the target model's request would,
+        // including model-specific phase/tool/media lowering.
+        model: targetModel,
         target: resolution.target,
         keepRecentMessages: resolution.keepRecentMessages,
       })
+    })
+    // A switch validates the target through the same Location-scoped resolver the runner uses,
+    // before it interrupts anything: an unresolvable target must not cancel valid work. The
+    // resolver also applies configured helper-model selection, which the switch never changes.
+    const validateModelSwitchTarget = Effect.fnUntraced(function* (
+      session: SessionSchema.Info,
+      targetModel: ModelV2.Ref,
+    ) {
+      yield* SessionRunnerModel.Service.pipe(
+        Effect.provide(locations.get(session.location)),
+        Effect.flatMap((models) => models.resolve({ ...session, model: targetModel })),
+      )
+    })
+    // The target's safe input budget is catalog data, so it can be checked before any
+    // interruption; a nonpositive budget is refused instead of forcing an oversized request.
+    const modelSwitchTargetBudget = Effect.fnUntraced(function* (
+      session: SessionSchema.Info,
+      targetModel: ModelV2.Ref,
+    ) {
+      const policy = yield* compactionPolicy(session)
+      const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+      const target = SessionContextBudget.resolveCapabilities(
+        yield* catalog.model.available(),
+        targetModel.providerID,
+        targetModel.id,
+        { safetyMarginTokens: policy.contextSafetyMarginTokens },
+      )
+      return target === undefined ? undefined : SessionContextBudget.safeInputBudget(target)
+    })
+    const compactionManifest = (session: SessionSchema.Info) => (job: SessionCompactionJob.Job) =>
+      Effect.gen(function* () {
+        const compaction = yield* SessionCompaction.Service
+        return yield* compaction.manifest(job)
+      }).pipe(Effect.provide(locations.get(session.location)))
+    // Compaction to fit a smaller switch target. It joins an already-admitted compaction, then
+    // admits at most one `mandatory` job at the target safe budget. A mandatory job protects no
+    // recent tail, so a first-time switch needs no prior summary. Compaction reduces the context;
+    // the switch itself refuses selection afterward unless the reloaded history fits the target.
+    const compactForModelSwitch = Effect.fnUntraced(function* (
+      session: SessionSchema.Info,
+      targetModel: ModelV2.Ref,
+      targetSafeInputTokens: number,
+    ) {
+      const policy = yield* compactionPolicy(session)
+      const configDigest = ConfigCompaction.admissionDigest(policy)
+      const manifest = compactionManifest(session)
+      return yield* compactionJobs.withAdmissionGate(session.id, (admit) =>
+        Effect.gen(function* () {
+          let admitted = false
+          while (true) {
+            const active = (yield* compactionJobs.pending(session.id))[0]
+            if (active) {
+              const settled = yield* compactionExecution.run({ jobID: active.id, manifest })
+              if (settled.status !== "ended") return false
+            } else {
+              if (admitted) return false
+              const boundary = yield* latestCompleteBoundary(db, session.id)
+              if (!boundary) return false
+              const current = yield* contextState.current(session.id)
+              if (
+                yield* compactionJobs.hasUnchangedDeterministicFailure({
+                  sessionID: session.id,
+                  requestedThrough: boundary,
+                  baseContextRevision: current.revision,
+                  targetMaxInputTokens: targetSafeInputTokens,
+                  configDigest,
+                })
+              )
+                return false
+              const job = yield* admit({
+                sessionID: session.id,
+                trigger: "mandatory",
+                requestedThrough: boundary,
+                baseContextRevision: current.revision,
+                targetMaxInputTokens: targetSafeInputTokens,
+                configDigest,
+              })
+              admitted = true
+              const settled = yield* compactionExecution.run({ jobID: job.id, manifest })
+              if (settled.status !== "ended") return false
+            }
+            const reloaded = yield* result.get(session.id)
+            if ((yield* checkModelSwitch(reloaded, targetModel)).status === "switched") return true
+          }
+        }),
+      ).pipe(
+        Effect.mapError(
+          (error) => new CompactionConflictError({ sessionID: session.id, jobID: ID.create(), message: error.message }),
+        ),
+      )
     })
     const family = Effect.fnUntraced(function* (session: SessionSchema.Info) {
       if (session.parentID) return [session]
@@ -511,6 +626,31 @@ const layer = Layer.effect(
             }),
         ),
       )
+
+    const admitGoalContinuation = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      state: SessionAutonomy.State,
+    ) {
+      const goal = state.goal
+      if (!goal || goal.status !== "active") return state
+      const startID = SessionMessage.ID.make(`msg_goal_${(yield* Effect.sync(() => randomUUID())).slice(0, 24)}`)
+      const startInput = SessionPending.Message.make({
+        type: "synthetic",
+        data: {
+          text: SessionAutonomy.continuationPrompt(goal),
+          description: "Autonomous goal start",
+          metadata: { autonomy: { yolo: state.yolo, goal: true, iteration: goal.iteration } },
+        },
+        delivery: "steer",
+      })
+      yield* SessionPending.admit(db, events, { id: startID, sessionID, input: startInput }).pipe(
+        Effect.catchDefect((defect) =>
+          defect instanceof SessionPending.LifecycleConflict ? Effect.void : Effect.die(defect),
+        ),
+      )
+      yield* execution.wake(sessionID).pipe(Effect.orDie)
+      return state
+    })
 
     const result = Service.of({
       create: Effect.fn("V2Session.create")(function* (input) {
@@ -649,51 +789,42 @@ const layer = Layer.effect(
         set: Effect.fn("V2Session.autonomy.set")(function* (input) {
           const session = yield* result.get(input.sessionID)
           let yolo = input.yolo
-          let goal: string | null | undefined = input.goal as string | null | undefined
-          if (input.mode !== undefined) {
-            if (input.mode === "yolo") yolo = yolo ?? true
-            else if (input.mode === "normal") yolo = yolo ?? false
-            else if (input.mode === "goal" && goal === undefined) goal = (input as { goal?: string }).goal ?? undefined
-          }
+          const goal = input.goal
+          if (input.mode === "yolo") yolo = yolo ?? true
+          if (input.mode === "normal") yolo = yolo ?? false
+          const notFound = <A, R>(effect: Effect.Effect<A, SessionAutonomy.NotFoundError, R>) =>
+            effect.pipe(
+              Effect.catchTag("SessionAutonomy.NotFound", (error) =>
+                Effect.fail(new NotFoundError({ sessionID: error.sessionID })),
+              ),
+            )
           if (typeof goal === "string") {
             const rawText = goal.trim()
+            // Capture the durable revision before the paid calculation. A concurrent user stop or
+            // replacement must win over this late result instead of being overwritten by it.
+            const snapshot = yield* autonomy.snapshot(input.sessionID).pipe(notFound)
             const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
             const synthesized = yield* goals.synthesize({ session, text: rawText })
-            const state = yield* autonomy
-              .set({
+            const applied = yield* autonomy
+              .setGoalIfCurrent({
                 sessionID: input.sessionID,
+                expectedSequence: snapshot.sequence,
                 yolo,
-                goal: synthesized ?? rawText,
+                text: synthesized,
                 rawText,
                 maxNoProgress: input.maxNoProgress,
               })
-              .pipe(
-                Effect.catchTag("SessionAutonomy.NotFound", () =>
-                  Effect.fail(new NotFoundError({ sessionID: input.sessionID })),
-                ),
-              )
-            if (state.goal?.status === "active") {
-              const startText = SessionAutonomy.continuationPrompt(state.goal)
-              const startID = SessionMessage.ID.make(
-                `msg_goal_${(yield* Effect.sync(() => randomUUID())).slice(0, 24)}`,
-              )
-              const startInput = SessionPending.Message.make({
-                type: "synthetic",
-                data: {
-                  text: startText,
-                  description: "Autonomous goal start",
-                  metadata: { autonomy: { yolo: state.yolo, goal: true, iteration: state.goal.iteration } },
-                },
-                delivery: "steer",
-              })
-              yield* SessionPending.admit(db, events, { id: startID, sessionID: input.sessionID, input: startInput }).pipe(
-                Effect.catchDefect((defect) =>
-                  defect instanceof SessionPending.LifecycleConflict ? Effect.void : Effect.die(defect),
-                ),
-              )
-              if (state.goal) yield* execution.wake(input.sessionID).pipe(Effect.orDie)
-            }
-            return state
+              .pipe(notFound)
+            if (!applied.applied) return yield* new SessionGoal.Error({ code: "goal.stale_calculation" })
+            return yield* admitGoalContinuation(input.sessionID, applied.state)
+          }
+          if (goal === true) {
+            const current = yield* autonomy.get(input.sessionID).pipe(notFound)
+            if (!current.goal) return yield* new SessionGoal.Error({ code: "goal.no_retained_goal" })
+            const resumed = yield* autonomy
+              .set({ sessionID: input.sessionID, yolo, goal: true, maxNoProgress: input.maxNoProgress })
+              .pipe(notFound)
+            return yield* admitGoalContinuation(input.sessionID, resumed)
           }
           return yield* autonomy
             .set({
@@ -702,11 +833,7 @@ const layer = Layer.effect(
               goal,
               maxNoProgress: input.maxNoProgress,
             })
-            .pipe(
-              Effect.catchTag("SessionAutonomy.NotFound", () =>
-                Effect.fail(new NotFoundError({ sessionID: input.sessionID })),
-              ),
-            )
+            .pipe(notFound)
         }),
       },
       remove: Effect.fn("V2Session.remove")(function* (sessionID) {
@@ -900,13 +1027,6 @@ const layer = Layer.effect(
               attachments,
             ).pipe(Effect.provideService(FSUtil.Service, fs))
             const messageID = input.id ?? SessionMessage.ID.create()
-            const activeGoal = (yield* autonomy.get(input.sessionID).pipe(Effect.orDie)).goal?.status === "active"
-            const alreadyAdmitted =
-              activeGoal &&
-              ((yield* SessionPending.find(db, messageID)) !== undefined ||
-                (yield* SessionHistory.load(db, input.sessionID).pipe(Effect.orDie)).some(
-                  (message) => message.id === messageID,
-                ))
             const admittedInput = SessionPending.Message.make({
               type: "user",
               data: { ...prompt, metadata: input.metadata },
@@ -928,16 +1048,6 @@ const layer = Layer.effect(
               !SessionPending.equivalent(admitted, { sessionID: input.sessionID, input: admittedInput })
             )
               return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            if (activeGoal && !alreadyAdmitted) {
-              const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
-              const rawText = admitted.data.text.trim()
-              const synthesized = yield* goals.synthesize({ session, text: rawText })
-              yield* autonomy.set({
-                sessionID: input.sessionID,
-                goal: synthesized ?? rawText,
-                rawText,
-              }).pipe(Effect.orDie)
-            }
             if (input.resume !== false) {
               if (activeShells.has(admitted.sessionID)) {
                 // Admit-only during an active shell strands the prompt until
@@ -981,13 +1091,16 @@ const layer = Layer.effect(
         const model = command.model ?? commandAgent?.model ?? input.model
         if (agent !== undefined && session.agent !== AgentV2.ID.make(agent))
           yield* result.switchAgent({ sessionID: input.sessionID, agent: AgentV2.ID.make(agent) })
-        // A blocked switch is advisory for command execution: the command still runs on the
-        // current model rather than failing the whole command. Transcript corruption is a
-        // defect and fails loudly for both the switch and the following prompt.
+        // A requested command model must be selected before the command is admitted. A failed
+        // selection is an explicit command evaluation failure rather than a silent run on the
+        // previous model. Transcript corruption is a defect and fails loudly.
         if (model !== undefined)
-          yield* result
-            .switchModel({ sessionID: input.sessionID, model })
-            .pipe(Effect.asVoid, Effect.catchTag("Session.MessageDecodeError", Effect.die))
+          yield* result.switchModel({ sessionID: input.sessionID, model }).pipe(
+            Effect.catchTag("Session.MessageDecodeError", Effect.die),
+            Effect.mapError(
+              (error) => new CommandV2.EvaluationError({ command: input.command, message: error.message }),
+            ),
+          )
         const provenance = source ? yield* source.provenance("command", input.command) : undefined
 
         const admitted = yield* result.prompt({
@@ -1208,28 +1321,49 @@ const layer = Layer.effect(
         )
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
-        const current = yield* result.get(input.sessionID)
-        if (
-          current.model?.providerID === input.model.providerID &&
-          current.model.id === input.model.id &&
-          (current.model.variant ?? "default") === (input.model.variant ?? "default")
+        return yield* execution.withTransition(
+          input.sessionID,
+          Effect.gen(function* () {
+            const current = yield* result.get(input.sessionID)
+            if (sameModel(current.model, input.model)) return { status: "switched" } as const
+            // Validate the target before cancelling any work: an invalid target must leave the
+            // active drain, the selected model, and every durable row untouched. The target
+            // budget is validated unconditionally, including when the transcript is empty, so a
+            // zero or unresolved budget can never be selected.
+            yield* validateModelSwitchTarget(current, input.model)
+            const targetBudget = yield* modelSwitchTargetBudget(current, input.model)
+            if (targetBudget === undefined || targetBudget <= 0)
+              return yield* new CompactionConflictError({
+                sessionID: input.sessionID,
+                jobID: ID.create(),
+                message: "Target model has no positive compaction input budget",
+              })
+            if ((yield* execution.active).has(input.sessionID)) {
+              yield* execution.interrupt(input.sessionID)
+              yield* execution.awaitIdle(input.sessionID)
+            }
+            const session = yield* result.get(input.sessionID)
+            if (sameModel(session.model, input.model)) return { status: "switched" } as const
+            const checked = yield* checkModelSwitch(session, input.model)
+            if (checked.status === "switched") {
+              yield* events.publish(SessionEvent.ModelSelected, {
+                sessionID: session.id,
+                model: input.model,
+              })
+              return { status: "switched" } as const
+            }
+            const compacted = yield* compactForModelSwitch(session, input.model, targetBudget)
+            if (!compacted) return checked
+            const reloaded = yield* result.get(input.sessionID)
+            const fitted = yield* checkModelSwitch(reloaded, input.model)
+            if (fitted.status === "blocked") return fitted
+            yield* events.publish(SessionEvent.ModelSelected, {
+              sessionID: reloaded.id,
+              model: input.model,
+            })
+            return { status: "switched" } as const
+          }),
         )
-          return { status: "switched" }
-        yield* execution.awaitIdle(input.sessionID)
-        const session = yield* result.get(input.sessionID)
-        if (
-          session.model?.providerID === input.model.providerID &&
-          session.model.id === input.model.id &&
-          (session.model.variant ?? "default") === (input.model.variant ?? "default")
-        )
-          return { status: "switched" }
-        const checked = yield* checkModelSwitch(session, input.model)
-        if (checked.status === "blocked") return checked
-        yield* events.publish(SessionEvent.ModelSelected, {
-          sessionID: session.id,
-          model: input.model,
-        })
-        return { status: "switched" }
       }),
       rename: Effect.fn("V2Session.rename")(function* (input) {
         yield* result.get(input.sessionID)

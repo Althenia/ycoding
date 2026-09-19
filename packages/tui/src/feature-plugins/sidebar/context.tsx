@@ -26,6 +26,12 @@ export function SidebarCacheContent(props: {
   fallback?: () => { tokens: { input: number; output: number }; cost: number } | undefined
   currentModel?: () => { identity: string; limit: number } | undefined
   cost?: () => number | undefined
+  /**
+   * The active credential profile for the current provider, named only when the provider stores
+   * more than one. Credential identity is not model identity, so it renders here above Provider
+   * rather than in the session header.
+   */
+  profile?: () => string | undefined
 }) {
   const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -107,6 +113,9 @@ export function SidebarCacheContent(props: {
 
   return (
     <RailSection section="context" title="CONTEXT" summary={summary()}>
+      <Show when={props.profile?.()}>
+        {(value) => <RailRow label="Profile" value={value()} />}
+      </Show>
       <Show when={diagnostics()}>
         {(value) => (
           <>
@@ -181,6 +190,23 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
       : undefined
   })
   const cost = createMemo(() => props.context.data.session.cost(props.sessionID))
+  // A provider with several stored credentials names the active one. The profile is credential
+  // identity, so the Context rail carries it above Provider instead of the header.
+  const profile = createMemo(() => {
+    const current = session()
+    if (!current) return undefined
+    const location = current.location
+    const integrationID =
+      (props.context.data.location.provider.list(location) ?? []).find(
+        (provider) => provider.id === current.model?.providerID,
+      )?.integrationID ?? current.model?.providerID
+    const credentials = (props.context.data.location.integration.list(location) ?? [])
+      .filter((integration) => integration.id === integrationID)
+      .flatMap((integration) => integration.connections)
+      .filter((connection) => connection.type === "credential")
+    if (credentials.length <= 1) return undefined
+    return credentials.find((connection) => connection.active)?.label
+  })
   createEffect(() => {
     const current = session()
     if (!current) return
@@ -195,6 +221,7 @@ function View(props: { context: Plugin.Context; sessionID: string }) {
       pressure={pressure}
       fallback={fallback}
       cost={cost}
+      profile={profile}
     />
   )
 }

@@ -29,6 +29,7 @@ import { ConfigImageAnalyzer } from "./config/image-analyzer"
 import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
 import { ConfigModel } from "./config/model"
+import { ConfigMemory } from "./config/memory"
 import { ConfigNtfy } from "./config/ntfy"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
@@ -108,6 +109,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   }),
   compaction: ConfigCompaction.Info.pipe(Schema.optional).annotate({
     description: "Conversation compaction behavior",
+  }),
+  memory: ConfigMemory.Info.pipe(Schema.optional).annotate({
+    description: "On-demand workspace knowledge and offline graph configuration",
   }),
   guardrails: ConfigGuardrail.Info.pipe(Schema.optional).annotate({
     description: "Session-wide guardrail enablement and runtime caps",

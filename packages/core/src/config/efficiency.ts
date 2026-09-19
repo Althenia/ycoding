@@ -26,7 +26,6 @@ export class HelperModels extends Schema.Class<HelperModels>("ConfigEfficiency.H
 
 export class Info extends Schema.Class<Info>("ConfigEfficiency.Info")({
   title: Schema.Literals(["local", "model", "off"]).pipe(Schema.optional),
-  goal_synthesis: Schema.Literals(["local", "model"]).pipe(Schema.optional),
   helper_models: HelperModels.pipe(Schema.optional),
   prompt_cache: PromptCache.pipe(Schema.optional),
   openai_responses_continuation: Schema.Literals(["auto", "on", "off"]).pipe(Schema.optional),

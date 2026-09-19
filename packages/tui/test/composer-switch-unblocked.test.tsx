@@ -205,7 +205,7 @@ test("steers immediately by interrupting the active step before the wake", async
   }
 }, 30_000)
 
-test("keeps the composer reusable while a model switch waits for the active drain", async () => {
+test("holds the composer behind an awaited model switch and admits on the selected variant", async () => {
   admitted.length = 0
   resumed.length = 0
   switchStarted = false
@@ -221,18 +221,19 @@ test("keeps the composer reusable while a model switch waits for the active drai
     screen.input.pressEnter()
     await waitForFrameText(screen, "Message YCoding…")
 
-    await typeAndSend(screen, "first steer")
+    await typeAndSend(screen, "steer on the selected variant")
     await waitForSwitchStart(screen)
     expect(switchStarted).toBe(true)
-    expect(admitted).toEqual(["first steer"])
-
-    // The prompt is durably admitted before the switch is requested, and the switch waits for the
-    // active drain to reach its boundary. The composer must not stay held behind it, or every later
-    // send is refused for as long as the running step takes.
-    await waitForFrameText(screen, "Message YCoding…")
+    // The approved ordering is switch -> admit -> resume. Nothing is admitted while the switch is
+    // still in flight, and a later send cannot slip past it either.
+    expect(admitted).toEqual([])
     await typeAndSend(screen, "second steer")
-    for (let attempt = 0; attempt < 150 && admitted.length < 2; attempt++) await Bun.sleep(20)
-    expect(admitted).toEqual(["first steer", "second steer"])
+    await Bun.sleep(100)
+    expect(admitted).toEqual([])
+
+    releaseSwitch?.()
+    for (let attempt = 0; attempt < 150 && admitted.length < 1; attempt++) await Bun.sleep(20)
+    expect(admitted).toEqual(["steer on the selected variant"])
   } finally {
     releaseSwitch?.()
     switchGate = undefined

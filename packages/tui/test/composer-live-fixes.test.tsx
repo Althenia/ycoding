@@ -53,6 +53,8 @@ let admissionAbortObserved = false
 let modelSwitchGate: Promise<void> | undefined
 let releaseModelSwitch: (() => void) | undefined
 let modelSwitchStarted = false
+/** When set, the next `/model` request fails with this response instead of succeeding. */
+let modelSwitchFailure: (() => Response) | undefined
 const promptRequests: Array<{
   id: string
   text: string
@@ -154,6 +156,11 @@ async function route(url: URL, request: Request) {
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     modelSwitchStarted = true
     if (modelSwitchGate) await modelSwitchGate
+    if (modelSwitchFailure) {
+      const response = modelSwitchFailure()
+      modelSwitchFailure = undefined
+      return response
+    }
     return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/skill` && request.method === "POST") {
@@ -244,6 +251,19 @@ async function route(url: URL, request: Request) {
           name: "GPT 5.6 Terra",
           capabilities: { tools: true, input: ["text"], output: ["text"] },
           variants: [{ id: session.model.variant }, { id: "low" }],
+          time: { released: 0 },
+          cost: [],
+          status: "active",
+          enabled: true,
+          limit: { context: 200_000, output: 32_000 },
+        },
+        {
+          id: "gpt-5.6-luna",
+          modelID: "gpt-5.6-luna",
+          providerID: "openai",
+          name: "GPT 5.6 Luna",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          variants: [],
           time: { released: 0 },
           cost: [],
           status: "active",
@@ -687,7 +707,7 @@ test("submits virtualized large pastes at full length without blocking the compo
   }
 })
 
-test("admits a steer before an in-flight model variant switch and reuses the composer", async () => {
+test("awaits the model switch before admitting and resumes the same submission", async () => {
   submittedPrompt = undefined
   submittedResumes.length = 0
   modelSwitchStarted = false
@@ -715,12 +735,15 @@ test("admits a steer before an in-flight model variant switch and reuses the com
     }
 
     expect(modelSwitchStarted).toBe(true)
-    expect(submittedText()).toBe("steer on the selected variant")
-    // The steer is admitted before the switch request. The switch waits for the active drain to
-    // reach its boundary, so the composer must not be held behind it: the admission resumes and the
-    // composer clears while the switch is still in flight.
-    expect(submittedResumes[0]).toBe(false)
+    // The switch is awaited before any admission: nothing is admitted while it is in flight.
+    expect(submittedText()).toBeUndefined()
     releaseModelSwitch?.()
+    for (let attempt = 0; attempt < 100 && submittedText() !== "steer on the selected variant"; attempt++)
+      await Bun.sleep(10)
+
+    expect(submittedText()).toBe("steer on the selected variant")
+    // Admission precedes the explicit resume, and the resume keeps the same submission.
+    expect(submittedResumes).toEqual([false, true])
     await waitForFrameText(screen, "Message YCoding…")
 
     promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
@@ -737,7 +760,56 @@ test("admits a steer before an in-flight model variant switch and reuses the com
   }
 })
 
-test("submits the prompt when a model switch is blocked and warns instead of failing", async () => {
+test("a failed in-flight selection admits nothing and retains the draft", async () => {
+  submittedPrompt = undefined
+  submittedResumes.length = 0
+  promptRequests.length = 0
+  modelSwitchStarted = false
+  modelSwitchFailure = () => json({ error: "simulated switch failure" }, { status: 500 })
+  modelSwitchGate = new Promise<void>((resolve) => {
+    releaseModelSwitch = resolve
+  })
+  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  try {
+    let promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    // `/variants` opens the real variant dialog bound to this Session, so choosing a row starts an
+    // explicit selection that stays in flight behind the gate.
+    await screen.input.typeText("/variants")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Select variant")
+    screen.input.pressKey("ARROW_DOWN")
+    screen.input.pressEnter()
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (modelSwitchStarted) break
+      await Bun.sleep(10)
+    }
+    expect(modelSwitchStarted).toBe(true)
+
+    promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.typeText("draft survives failed selection")
+    screen.input.pressEnter()
+    await Bun.sleep(50)
+    // Submission is waiting on the in-flight selection; nothing has been admitted on the old model.
+    expect(promptRequests).toHaveLength(0)
+
+    releaseModelSwitch?.()
+    await waitForFrameText(screen, "Model switch needs attention")
+    // The failed selection admits nothing and keeps the draft for retry.
+    expect(promptRequests).toHaveLength(0)
+    expect(submittedText()).toBeUndefined()
+    expect(screen.frame()).toContain("draft survives failed selection")
+  } finally {
+    releaseModelSwitch?.()
+    modelSwitchGate = undefined
+    releaseModelSwitch = undefined
+    modelSwitchFailure = undefined
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("a blocked model switch retains the draft and admits nothing", async () => {
   const blocked = {
     _tag: "ModelSwitchBlockedError",
     status: "blocked",
@@ -749,12 +821,22 @@ test("submits the prompt when a model switch is blocked and warns instead of fai
     maximumSafeSummaryBoundary: "msg_boundary_1",
     reason: "context-window-exceeded",
   }
+  // The variant dialog itself now performs a durable switch, so only the submit-time switch is
+  // refused: the selection commits locally, then the submission cannot switch to it.
+  let allowNextSwitch = true
   async function blockedRoute(url: URL, request: Request) {
-    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST")
+    if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
+      if (allowNextSwitch) {
+        allowNextSwitch = false
+        return new Response(null, { status: 204 })
+      }
       return json(blocked, { status: 409 })
+    }
     return route(url, request)
   }
   submittedPrompt = undefined
+  submittedResumes.length = 0
+  promptRequests.length = 0
   modelSwitchGate = undefined
   releaseModelSwitch = undefined
   const screen = await renderScreen({
@@ -779,7 +861,11 @@ test("submits the prompt when a model switch is blocked and warns instead of fai
     await screen.input.typeText("prompt survives blocked switch")
     screen.input.pressEnter()
     await waitForFrameText(screen, "Model switch needs attention")
-    expect(submittedText()).toBe("prompt survives blocked switch")
+
+    // No admission and no wake: the failed switch performs neither.
+    expect(promptRequests).toHaveLength(0)
+    expect(submittedText()).toBeUndefined()
+    expect(screen.frame()).toContain("prompt survives blocked switch")
     expect(screen.frame()).not.toContain("Failed to send prompt or activate skill")
   } finally {
     await screen.dispose()

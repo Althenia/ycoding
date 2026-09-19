@@ -5,7 +5,7 @@ import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProjectV2 } from "@ycoding-ai/core/project"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
-import { localGoal, localTitle, make, selectHelperModel, settings } from "@ycoding-ai/core/session/helper-policy"
+import { localTitle, make, selectHelperModel, settings } from "@ycoding-ai/core/session/helper-policy"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { Money } from "@ycoding-ai/schema/money"
@@ -26,9 +26,14 @@ test("local title produces one terminal-safe line without a provider call", () =
   expect(localTitle("界".repeat(60))).toBe(`${"界".repeat(47)}...`)
 })
 
-test("local goal preserves meaning while normalizing whitespace", () => {
-  expect(localGoal("  Fix\n the\tmigration and   run tests. ")).toBe("Fix the migration and run tests.")
-  expect(localGoal("   ")).toBe("")
+test("helper settings carry no goal mode because goal synthesis is always model-based", () => {
+  const info = Schema.decodeUnknownSync(Config.Info)({ efficiency: { title: "local" } })
+  expect(settings([new Config.Document({ type: "document", info })])).toEqual({
+    titleMode: "local",
+    models: {},
+    compactionScopes: {},
+  })
+  expect(settings([])).toEqual({ titleMode: "local", models: {}, compactionScopes: {} })
 })
 
 test("helper model precedence is agent override, role model, then session model", () => {
@@ -73,7 +78,6 @@ test("compaction model selection uses the owner Session scope before the hidden 
   const policy = make(
     {
       titleMode: "local",
-      goalMode: "local",
       models: {},
       compactionScopes: { main, subagent },
     },

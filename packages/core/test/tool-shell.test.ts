@@ -295,6 +295,7 @@ const executionNode = makeGlobalNode({
         wake: () => Effect.void,
         interrupt: () => Effect.void,
         awaitIdle: (id) => complete(id).pipe(Effect.exit, Effect.asVoid),
+        withTransition: (_sessionID, effect) => effect,
       })
     }),
   ),

@@ -105,11 +105,19 @@ export interface Interface {
     rawText?: string
     maxNoProgress?: number
   }) => Effect.Effect<State, NotFoundError>
+  readonly setGoalIfCurrent: (input: {
+    sessionID: SessionSchema.ID
+    expectedSequence: number
+    yolo?: number | boolean
+    text: string
+    rawText?: string
+    maxNoProgress?: number
+  }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
   readonly clearGoal: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly set: (input: {
     sessionID: SessionSchema.ID
     yolo?: number | boolean
-    goal?: string | null
+    goal?: string | null | true
     rawText?: string
     maxNoProgress?: number
   }) => Effect.Effect<State, NotFoundError>
@@ -214,7 +222,11 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
 
   const load = (sessionID: SessionSchema.ID) => snapshot(sessionID).pipe(Effect.map((value) => value.state))
 
-  const mutate = (sessionID: SessionSchema.ID, transition: (state: State) => State | undefined) =>
+  const mutate = (
+    sessionID: SessionSchema.ID,
+    transition: (state: State) => State | undefined,
+    expectedSequence?: number,
+  ) =>
     input.db
       .transaction(
         (tx) =>
@@ -227,8 +239,9 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
               .pipe(Effect.orDie)
             if (!row) return yield* new NotFoundError({ sessionID })
             const state = read(row.autonomy)
+            if (expectedSequence !== undefined && row.revision !== expectedSequence) return { state, applied: false }
             const next = transition(state)
-            if (!next) return state
+            if (!next) return { state, applied: false }
             const updated = yield* tx
               .update(SessionTable)
               .set({
@@ -241,11 +254,14 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
               .get()
               .pipe(Effect.orDie)
             if (!updated) return yield* Effect.die(new Error(`Concurrent autonomy mutation for ${sessionID}`))
-            return next
+            return { state: next, applied: true }
           }),
         { behavior: "immediate" },
       )
       .pipe(Effect.catchTag("SqlError", Effect.die))
+
+  const apply = (sessionID: SessionSchema.ID, transition: (state: State) => State | undefined) =>
+    mutate(sessionID, transition).pipe(Effect.map((result) => result.state))
 
   const walkEffective = (sessionID: SessionSchema.ID): Effect.Effect<{ yolo: number; goalActive: boolean }, NotFoundError> =>
     load(sessionID).pipe(
@@ -292,7 +308,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
 
   const setYolo: Interface["setYolo"] = ({ sessionID, yolo }) => {
     const level = normalizeYolo(yolo) as YoloLevel
-    return mutate(sessionID, (state) => {
+    return apply(sessionID, (state) => {
       if (state.yolo === level) return undefined
       return { ...state, mode: "normal", yolo: level }
     })
@@ -300,24 +316,39 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
 
   const setMode: Interface["setMode"] = ({ sessionID, mode }) => setYolo({ sessionID, yolo: mode === "yolo" })
 
+  const goalState = (state: State, text: string, rawText: string | undefined, maxNoProgress: number): State => ({
+    mode: "normal",
+    yolo: state.yolo,
+    goal: {
+      text: text.trim(),
+      rawText: (rawText ?? text).trim(),
+      status: "active",
+      iteration: 0,
+      noProgress: 0,
+      maxNoProgress: Math.max(1, Math.trunc(maxNoProgress)),
+    },
+  })
+
   const setGoal: Interface["setGoal"] = ({ sessionID, text, rawText, maxNoProgress = 3 }) =>
+    apply(sessionID, (state) => goalState(state, text, rawText, maxNoProgress))
+
+  const setGoalIfCurrent: Interface["setGoalIfCurrent"] = ({
+    sessionID,
+    expectedSequence,
+    yolo,
+    text,
+    rawText,
+    maxNoProgress = 3,
+  }) =>
     mutate(sessionID, (state) => ({
-      mode: "normal",
-      yolo: state.yolo,
-      goal: {
-        text: text.trim(),
-        rawText: (rawText ?? text).trim(),
-        status: "active",
-        iteration: 0,
-        noProgress: 0,
-        maxNoProgress: Math.max(1, Math.trunc(maxNoProgress)),
-      },
-    }))
+      ...goalState(state, text, rawText, maxNoProgress),
+      yolo: yolo === undefined ? state.yolo : normalizeYolo(yolo) as YoloLevel,
+    }), expectedSequence)
 
   const clearGoal: Interface["clearGoal"] = (sessionID) =>
-    mutate(sessionID, (state) => {
-      if (!state.goal) return undefined
-      if (state.goal.status === "stopped") return undefined
+    apply(sessionID, (state) => {
+      // Persist stop intent to fence calculations even before the first goal exists.
+      if (!state.goal || state.goal.status === "stopped") return state
       return {
         mode: "normal",
         yolo: state.yolo,
@@ -326,7 +357,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     })
 
   const set: Interface["set"] = ({ sessionID, yolo, goal, rawText, maxNoProgress }) =>
-    mutate(sessionID, (state) => {
+    apply(sessionID, (state) => {
       let next: State = { ...state, mode: "normal" }
       let changed = false
       if (yolo !== undefined) {
@@ -338,8 +369,14 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
       }
       if (goal !== undefined) {
         if (goal === null) {
+          changed = true
           if (next.goal && next.goal.status !== "stopped") {
             next = { ...next, goal: { ...next.goal, status: "stopped" as const } }
+          }
+        } else if (goal === true) {
+          // Resume the retained goal without recalculating it; the user alone re-activates.
+          if (next.goal && next.goal.status !== "active") {
+            next = { ...next, goal: { ...next.goal, status: "active" as const } }
             changed = true
           }
         } else {
@@ -377,11 +414,12 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     setMode,
     setYolo,
     setGoal,
+    setGoalIfCurrent,
     clearGoal,
     set,
     stop: (sessionID) => clearGoal(sessionID),
     report: ({ sessionID }) =>
-      mutate(sessionID, (state) => {
+      apply(sessionID, (state) => {
         const goal = state.goal
         if (!goal || goal.status !== "active") return undefined
         const noProgress = goal.noProgress + 1
@@ -397,13 +435,13 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         }
       }),
     complete: (sessionID) =>
-      mutate(sessionID, (state) => {
+      apply(sessionID, (state) => {
         const goal = state.goal
         if (!goal || goal.status !== "active") return undefined
         return { ...state, goal: { ...goal, status: "completed" as const } }
       }),
     advance: ({ sessionID, completed = false }) =>
-      mutate(sessionID, (state) => {
+      apply(sessionID, (state) => {
         const goal = state.goal
         if (!goal || goal.status !== "active") return undefined
         if (completed) return { ...state, goal: { ...goal, status: "completed" as const } }

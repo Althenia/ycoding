@@ -26,6 +26,7 @@ import { LocationMutation } from "./location-mutation"
 import { Policy } from "./policy"
 import { LocationServiceMap } from "./location-service-map"
 import { MCP } from "./mcp/index"
+import { Memory } from "./memory"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginSupervisor } from "./plugin/supervisor"
@@ -89,6 +90,7 @@ const locationServiceNodes = [
   LocationMutation.node,
   FileMutation.node,
   MCP.node,
+  Memory.node,
   PermissionV2.node,
   SessionGuardrail.node,
   BrowserAdmission.node,

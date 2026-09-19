@@ -1,8 +1,6 @@
 # Product direction
 
-Status: **implemented direction**
-
-YCoding is a standalone coding agent. The terminal application is the primary supported surface. This document defines maintained product scope; it is not a roadmap and does not promise unimplemented features.
+YCoding is a standalone coding agent. The terminal application is the primary supported surface. This document specifies maintained product scope; it is not a roadmap and does not promise unimplemented features.
 
 ## Product identity
 
@@ -12,6 +10,19 @@ The product goal is a dependable, highly customizable coding-agent runtime with 
 
 ## Priorities
 
+### Concepts at a glance
+
+| Concept                    | Purpose                                                                               | Read more                                            |
+| -------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Session                    | Durable intent, history, pending input, and execution state.                          | [Runtime](./runtime.md)                              |
+| Location                   | The folder-scoped runtime environment for configuration, tools, and model resolution. | [Architecture](./architecture.md)                    |
+| Agent and subagent         | Configured behavior and durable background delegation with inherited limits.          | [Repository resources](./repository-resources.md)    |
+| Autonomy                   | Explicit control over automatic answers, approvals, and goal continuation.            | [Runtime](./runtime.md)                              |
+| Permission and guardrail   | Tool authority and family-wide review of high-impact actions.                         | [Operator guide](./guardrails-and-provider-usage.md) |
+| Skill and project artifact | Loadable guidance and managed reusable agent customization.                           | [Repository resources](./repository-resources.md)    |
+| Workspace memory           | Explicit linked knowledge, separate from transcripts and prompt caches.               | [Memory](./memory.md)                                |
+| Provider cache and quota   | Provider-owned reuse telemetry and read-only usage reporting.                         | [Provider efficiency](./provider-efficiency.md)      |
+
 ### 1. Terminal-first delivery
 
 The terminal application is the primary product and release surface. A native Godot desktop client is an explicitly approved additional presentation surface that ships from `apps/office/` as a release artifact alongside the CLI; it is a client of the existing public service contracts, never a second runtime.
@@ -20,13 +31,13 @@ The desktop client is distributed as a platform archive attached to the same Git
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path. The desktop client consumes those same contracts and owns no execution authority.
 
-Do not restore desktop, browser, console, website, or hosted-application packages from the removed Electron/browser product. The native Godot client is not that product and must not become an Electron or embedded-browser shell.
+The supported surfaces are the terminal application and the native Godot desktop client. There is no Electron, browser-application, console, website, or hosted-application runtime; the native Godot client is a presentation client, not an embedded-browser shell.
 
 ### 2. Current runtime architecture
 
-YCoding does not restore removed session, configuration, plugin, client, event, or TUI compatibility paths.
+Supported contracts are the current session, configuration, plugin, client, event, and TUI paths.
 
-New changes extend current contracts. Do not restore removed adapters, duplicate legacy event shapes, or add fallback parsing for obsolete configuration without a documented durable-data migration requirement.
+New changes extend current contracts; there is one current runtime. Changing stored data requires an explicit, tested migration.
 
 ### 3. Durable execution
 
@@ -85,7 +96,7 @@ GitHub Pages publishes maintained YCoding documentation, the generated configura
 - **Durable data:** preserve current data or provide an explicit tested migration.
 - **Protocol and client:** generated Client output must match the assembled public `HttpApi`.
 - **Plugins:** current contracts only; breaking changes require Schema, API, tests, and documentation updates.
-- **Configuration:** current Schema is authoritative; obsolete keys are not accepted through hidden fallback paths.
+- **Configuration:** current Schema is authoritative; rejected keys are not accepted through hidden fallback paths.
 - **External providers:** preserve provider-owned IDs, URLs, credentials, and names required for interoperability.
 
 ## Definition of complete

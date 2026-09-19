@@ -36,6 +36,7 @@ import { Integration } from "../integration";
 import { Location } from "../location";
 import { LocationMutation } from "../location-mutation";
 import { ModelsDev } from "../models-dev";
+import { Memory } from "../memory";
 import { Npm } from "../npm";
 import { PermissionV2 } from "../permission";
 import { ProviderUsageV2 } from "../provider-usage";
@@ -390,6 +391,7 @@ export const node = makeLocationNode({
     Location.node,
     LocationMutation.node,
     ModelsDev.node,
+    Memory.node,
     Npm.node,
     PermissionV2.node,
     ProviderUsageV2.node,

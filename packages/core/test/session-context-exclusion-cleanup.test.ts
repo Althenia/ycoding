@@ -32,6 +32,7 @@ const execution = Layer.succeed(
     wake: () => Effect.void,
     interrupt: () => Effect.void,
     awaitIdle: () => Effect.void,
+    withTransition: (_sessionID, effect) => effect,
   }),
 )
 const it = testEffect(

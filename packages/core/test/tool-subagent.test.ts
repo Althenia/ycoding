@@ -118,6 +118,7 @@ const executionNode = makeGlobalNode({
           }),
         interrupt: (sessionID) => Effect.sync(() => void executionInterrupts.push(sessionID)),
         awaitIdle: (sessionID) => complete(sessionID).pipe(Effect.exit, Effect.asVoid),
+        withTransition: (_sessionID, effect) => effect,
       })
     }),
   ),

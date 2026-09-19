@@ -2,7 +2,7 @@ export * as SessionGoal from "./goal"
 
 import { LLM, LLMClient, LLMError, LLMEvent, LLMRequest, Message } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
-import { Context, Effect, Layer, Stream } from "effect"
+import { Context, Effect, Layer, Schema, Stream } from "effect"
 import { AgentV2 } from "../agent"
 import { Config } from "../config"
 import { Database } from "../database/database"
@@ -22,6 +22,22 @@ import { SessionUsage } from "./usage"
 
 const MAX_CONTEXT_CHARS = 6_000
 
+export const ErrorCode = Schema.Literals([
+  "goal.no_retained_goal",
+  "goal.model_unavailable",
+  "goal.calculation_failed",
+  "goal.stale_calculation",
+])
+export type ErrorCode = typeof ErrorCode.Type
+
+export class Error extends Schema.TaggedErrorClass<Error>()("SessionGoal.Error", {
+  code: ErrorCode,
+}) {
+  override get message() {
+    return this.code
+  }
+}
+
 type Dependencies = {
   readonly headers?: SessionModelHeaders.Options
   readonly events: EventV2.Interface
@@ -36,7 +52,7 @@ type Dependencies = {
 }
 
 export interface Interface {
-  readonly synthesize: (input: { session: SessionSchema.Info; text: string }) => Effect.Effect<string | undefined>
+  readonly synthesize: (input: { session: SessionSchema.Info; text: string }) => Effect.Effect<string, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionGoal") {}
@@ -46,12 +62,10 @@ const make = (dependencies: Dependencies) => {
     db: Database.Interface["db"],
     input: Parameters<Interface["synthesize"]>[0],
   ) {
-    if (dependencies.helpers.settings.goalMode === "local")
-      return dependencies.helpers.localGoal(input.text) || undefined
     const agent = yield* dependencies.agents.get(AgentV2.ID.make("goal"))
-    if (!agent) return
+    if (!agent) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
     const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
-    if (!resolved) return
+    if (!resolved) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
     const history = yield* SessionHistory.load(db, input.session.id)
     const context = history
       .slice(-12)
@@ -127,6 +141,7 @@ const make = (dependencies: Dependencies) => {
     })
     const chunks: string[] = []
     let failed = false
+    let settled = false
     let usage: SessionUsage.Recorded | undefined
     const recordUsage = Effect.suspend(() =>
       usage
@@ -165,6 +180,7 @@ const make = (dependencies: Dependencies) => {
     const streamed = yield* dependencies.llm.stream(request).pipe(
       Stream.runForEach((event) => {
         if (LLMEvent.is.providerError(event)) failed = true
+        if (LLMEvent.is.finish(event)) settled = true
         if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
         if (LLMEvent.is.stepFinish(event)) {
           const step = SessionUsage.record(event.usage, resolved.cost)
@@ -178,8 +194,10 @@ const make = (dependencies: Dependencies) => {
     )
     yield* recordUsage
     yield* completeRequest
-    if (!streamed || failed) return
-    return chunks.join("").trim().replace(/\s+/g, " ") || undefined
+    if (!streamed || failed || !settled) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
+    const synthesized = chunks.join("").trim().replace(/\s+/g, " ")
+    if (!synthesized) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
+    return synthesized
   })
   return { synthesize }
 }
@@ -198,7 +216,14 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const database = yield* Database.Service
       const goal = make({ events, llm, agents, config, helpers, requests, cacheRuntime, headers: options })
       return Service.of({
-        synthesize: (input) => goal.synthesize(database.db, input).pipe(Effect.catch(() => Effect.succeed(undefined))),
+        synthesize: (input) =>
+          goal
+            .synthesize(database.db, input)
+            .pipe(
+              Effect.catchTag("Session.MessageDecodeError", () =>
+                Effect.fail(new Error({ code: "goal.calculation_failed" })),
+              ),
+            ),
       })
     }),
   )

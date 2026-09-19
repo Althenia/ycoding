@@ -176,11 +176,9 @@ test("labels provider-qualified models with the resolved name", () => {
   expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra" })).toBe("openai/Gpt 5 6 Terra")
 })
 
-test("names the active profile when a provider has one", () => {
-  expect(
-    headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra", name: "GPT-5.6 Terra", profile: "Work" }),
-  ).toBe("openai/GPT-5.6 Terra · Work")
-  // A provider with a single stored profile keeps the plain provider/model label.
+test("keeps the header model label to provider and model only", () => {
+  // The active profile is credential identity, not model identity: the header names the model and
+  // the Context rail carries the profile above Provider.
   expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra", name: "GPT-5.6 Terra" })).toBe(
     "openai/GPT-5.6 Terra",
   )

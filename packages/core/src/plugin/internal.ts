@@ -28,6 +28,7 @@ import { Integration } from "../integration";
 import { Location } from "../location";
 import { LocationMutation } from "../location-mutation";
 import { ModelsDev } from "../models-dev";
+import { Memory } from "../memory";
 import { Npm } from "../npm";
 import { PermissionV2 } from "../permission";
 import { ProviderUsageV2 } from "../provider-usage";
@@ -58,6 +59,7 @@ import { SubagentReportTool } from "../tool/subagent-report";
 import { TodoWriteTool } from "../tool/todowrite";
 import { GoalTool } from "../tool/goal";
 import { NtfyTool } from "../tool/ntfy";
+import { MemoryTool } from "../tool/memory";
 import { ProjectArtifactTool } from "../tool/project-artifact";
 import { ProjectArtifactStore } from "../project-artifact";
 import { Tools } from "../tool/tools";
@@ -96,6 +98,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const location = yield* Location.Service;
   const locationMutation = yield* LocationMutation.Service;
   const models = yield* ModelsDev.Service;
+  const memory = yield* Memory.Service;
   const npm = yield* Npm.Service;
   const permission = yield* PermissionV2.Service;
   const providerUsage = yield* ProviderUsageV2.Service;
@@ -136,6 +139,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(Location.Service, location),
     Context.make(LocationMutation.Service, locationMutation),
     Context.make(ModelsDev.Service, models),
+    Context.make(Memory.Service, memory),
     Context.make(Npm.Service, npm),
     Context.make(PermissionV2.Service, permission),
     Context.make(ProviderUsageV2.Service, providerUsage),
@@ -191,6 +195,7 @@ const pre = [
   TodoWriteTool.Plugin,
   ProjectArtifactTool.Plugin,
   NtfyTool.Plugin,
+  MemoryTool.Plugin,
   WebFetchTool.Plugin,
   WebSearchTool.Plugin,
   WriteTool.Plugin,

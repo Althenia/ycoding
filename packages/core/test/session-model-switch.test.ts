@@ -30,6 +30,13 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionContextBudget } from "@ycoding-ai/core/session/context-budget"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionCompaction } from "@ycoding-ai/core/session/compaction"
+import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
+import { SessionCompactionJob } from "@ycoding-ai/core/session/compaction-job"
+import { SessionContextState } from "@ycoding-ai/core/session/context-state"
+import { ContextManifest } from "@ycoding-ai/core/session/context-manifest"
+import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
+import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
+import { SessionSummaryToon } from "@ycoding-ai/core/session/summary-toon"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionModelSwitch } from "@ycoding-ai/core/session/model-switch"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
@@ -41,6 +48,7 @@ import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import {
+  SessionCompactionJobTable,
   SessionMessageTable,
   SessionPendingTable,
   SessionProviderRequestTable,
@@ -51,7 +59,7 @@ import { Snapshot } from "@ycoding-ai/core/snapshot"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { DateTime, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
-import { and, eq } from "drizzle-orm"
+import { and, eq, like } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 import { FileAttachment } from "@ycoding-ai/schema/prompt"
 
@@ -143,26 +151,17 @@ const config = Layer.succeed(
 )
 
 const requests: LLMRequest[] = []
-let idleStarted: Deferred.Deferred<void> | undefined
-let idleGate: Deferred.Deferred<void> | undefined
 const client = Layer.succeed(
   LLMClient.Service,
   LLMClient.Service.of({
     prepare: () => Effect.die("unused"),
     stream: ((request: LLMRequest) => {
       requests.push(request)
-      const events = Stream.make(
+      return Stream.make(
         LLMEvent.stepStart({ index: 0 }),
         LLMEvent.textDelta({ id: "text", text: "hello" }),
         LLMEvent.stepFinish({ index: 0, reason: "stop" }),
         LLMEvent.finish({ reason: "stop" }),
-      )
-      if (!idleGate) return events
-      return Stream.unwrap(
-        (idleStarted ? Deferred.succeed(idleStarted, undefined) : Effect.void).pipe(
-          Effect.andThen(Deferred.await(idleGate)),
-          Effect.as(events),
-        ),
       )
     }) as unknown as LLMClientShape["stream"],
     generate: () => Effect.die("unused"),
@@ -171,15 +170,28 @@ const client = Layer.succeed(
 
 const sonnetRouteModel = Model.make({ id: "claude-sonnet-4-5", provider: "anthropic", route: OpenAIChat.route })
 const gptRouteModel = Model.make({ id: "gpt-5.6", provider: "openai", route: OpenAIChat.route })
-const models = SessionRunnerModel.layerWith((session) =>
-  Effect.succeed(
+const models = SessionRunnerModel.layerWith((session) => {
+  // Mirror the production resolver: a target outside the catalog is unavailable, not resolved
+  // to the nearest known model.
+  const selected = session.model
+  if (
+    selected &&
+    !catalogModels.some((model) => model.providerID === selected.providerID && model.id === selected.id)
+  )
+    return Effect.fail(
+      new SessionRunnerModel.ModelUnavailableError({
+        providerID: selected.providerID,
+        modelID: selected.id,
+      }),
+    )
+  return Effect.succeed(
     SessionRunnerModel.resolved(
       session.model?.id === "gpt-5.6" ? gptRouteModel : sonnetRouteModel,
       session.model?.variant,
       [],
     ),
-  ),
-)
+  )
+})
 const systemContext = Layer.mock(InstructionBuiltIns.Service, { load: () => Effect.succeed(Instructions.empty) })
 const instructionContext = Layer.mock(InstructionDiscovery.Service, { load: () => Effect.succeed(Instructions.empty) })
 const skillInstructions = Layer.mock(SkillInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
@@ -203,11 +215,138 @@ const permission = Layer.succeed(
   }),
 )
 const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
-// Model switches do not generate compaction manifests.
+// A switch reaches compaction only through a target-budget admission, so the switch suite needs
+// the real job/execution/context-state path. The worker activates one deterministic reducing
+// canonical checkpoint; it never calls a provider.
 const compaction = Layer.succeed(
   SessionCompaction.Service,
-  SessionCompaction.Service.of({
-    manifest: () => Effect.die("unused"),
+  SessionCompaction.Service.of({ manifest: () => Effect.die("unused") }),
+)
+const compactionExecution = Layer.effect(
+  SessionCompactionExecution.Service,
+  Effect.gen(function* () {
+    const jobs = yield* SessionCompactionJob.Service
+    const contextState = yield* SessionContextState.Service
+    const guardrails = yield* SessionGuardrail.Service
+    const db = (yield* Database.Service).db
+    const owner = "switch-test-compaction"
+    const terminalResult = (job: SessionCompactionJob.Job) => {
+      if (job.status !== "ended" && job.status !== "failed")
+        throw new Error(`Compaction job did not settle: ${job.id}`)
+      return {
+        id: job.id,
+        sessionID: job.sessionID,
+        trigger: job.trigger,
+        status: job.status,
+        requestedThrough: job.requestedThrough,
+        timeCreated: DateTime.makeUnsafe(job.timeCreated),
+        ...(job.errorCode === undefined ? {} : { failure: job.errorCode }),
+      }
+    }
+    const run: SessionCompactionExecution.Interface["run"] = (input) =>
+      Effect.gen(function* () {
+        const pending = yield* jobs.get(input.jobID)
+        if (!pending) return yield* Effect.die(`Compaction job not found: ${input.jobID}`)
+        if (pending.status === "ended" || pending.status === "failed") return terminalResult(pending)
+        const now = Date.now()
+        const job = yield* jobs.claim({ jobID: pending.id, owner, now, expiresAt: now + 30_000 })
+        if (!job) return yield* Effect.die(`Compaction job is not claimable: ${pending.id}`)
+        if (compactionFailure) {
+          const code = compactionFailure
+          yield* jobs.fail({ id: job.id, owner, code, now })
+          const failed = yield* jobs.get(job.id)
+          if (!failed) return yield* Effect.die(`Compaction job disappeared: ${job.id}`)
+          return terminalResult(failed)
+        }
+        const guardrail = yield* guardrails.snapshot(job.sessionID).pipe(Effect.orDie)
+        const capture = yield* SessionLiveState.captureDatabase(db, job.sessionID).pipe(Effect.orDie)
+        const boundary = yield* db
+          .select({ data: SessionMessageTable.data })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.id, job.requestedThrough.messageID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!boundary) return yield* Effect.die("Missing compaction boundary")
+        const boundaryData = boundary.data
+        if (!Schema.is(Schema.Json)(boundaryData)) return yield* Effect.die("Invalid compaction boundary")
+        const summary = SessionSummaryToon.encode({
+          version: 2,
+          through_sequence: job.requestedThrough.seq,
+          objective: "Continue after the switch compaction.",
+          in_progress: [],
+          pending: [],
+          blocked: [],
+          decision: [],
+          current_state:
+            "The earlier transcript was compacted to fit the target model." + "x".repeat(compactionSummaryPadding),
+          facts: [],
+          preferences: [],
+          constraints: [],
+          completed: [],
+          unresolved: [],
+          important_identifiers: [],
+          continuation: "Answer the next request on the target model.",
+        })
+        yield* contextState
+          .activate({
+            sessionID: job.sessionID,
+            jobID: job.id,
+            leaseOwner: owner,
+            manifest: Object.freeze({
+              schemaVersion: 1,
+              baseContextRevision: job.baseContextRevision,
+              coveredThrough: Object.freeze({
+                messageID: job.requestedThrough.messageID,
+                seq: EventV2.Seq.make(job.requestedThrough.seq),
+              }),
+              protectedState: Object.freeze(
+                SessionLiveState.toProtectedState({ ...capture.sources, guardrails: guardrail }).map((entry) =>
+                  Object.freeze(entry),
+                ),
+              ),
+              exclusions: Object.freeze([]),
+              summary: Object.freeze({
+                text: summary,
+                coveredThrough: Object.freeze({
+                  messageID: job.requestedThrough.messageID,
+                  seq: EventV2.Seq.make(job.requestedThrough.seq),
+                }),
+                digest: ContextManifest.payloadDigest(boundaryData),
+              }),
+              inputTokens: 100,
+              retainedTokens: 50,
+            }),
+          })
+          .pipe(Effect.orDie)
+        const settled = yield* jobs.get(job.id)
+        if (!settled) return yield* Effect.die(`Compaction job disappeared: ${job.id}`)
+        return terminalResult(settled)
+      })
+    const start: SessionCompactionExecution.Interface["start"] = (input) => run(input).pipe(Effect.asVoid)
+    return SessionCompactionExecution.Service.of({ start, run })
+  }),
+)
+// A real coordinator-backed execution so interruption, transition reservation, and settlement
+// are the production ones. The drain itself is a controllable hook: this suite owns the
+// boundary, not the runner.
+let drainHook: (sessionID: SessionV2.ID, force: boolean) => Effect.Effect<void> = () => Effect.void
+let compactionFailure: SessionCompactionJob.Job["errorCode"]
+/** When set, the activated summary is this large, so a completed compaction can still not fit. */
+let compactionSummaryPadding = 0
+const execution = Layer.effect(
+  SessionExecution.Service,
+  Effect.gen(function* () {
+    const coordinator = yield* SessionRunCoordinator.make<SessionV2.ID, never>({
+      drain: (sessionID, force) => drainHook(sessionID, force),
+    })
+    return SessionExecution.Service.of({
+      active: coordinator.active,
+      resume: coordinator.run,
+      wake: coordinator.wake,
+      interrupt: coordinator.interrupt,
+      awaitIdle: coordinator.awaitIdle,
+      withTransition: coordinator.withTransition,
+    })
   }),
 )
 const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
@@ -226,21 +365,6 @@ const runnerLayer = AppNodeBuilder.build(SessionRunnerLLM.node, [
   [PluginSupervisor.node, pluginSupervisor],
   [SessionCompaction.node, compaction],
 ])
-const execution = Layer.succeed(
-  SessionExecution.Service,
-  SessionExecution.Service.of({
-    active: Effect.succeed(new Set()),
-    resume: () => Effect.void,
-    wake: () => Effect.void,
-    interrupt: () => Effect.void,
-    awaitIdle: () =>
-      idleGate === undefined
-        ? Effect.void
-        : (idleStarted ? Deferred.succeed(idleStarted, undefined) : Effect.void).pipe(
-            Effect.andThen(Deferred.await(idleGate)),
-          ),
-  }),
-)
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([
@@ -263,6 +387,10 @@ const it = testEffect(
       Config.node,
       Snapshot.node,
       SessionRunnerLLM.node,
+      SessionCompactionJob.node,
+      SessionContextState.node,
+      SessionGuardrail.node,
+      SessionCompactionExecution.node,
       SessionExecution.node,
       SessionV2.node,
     ]),
@@ -284,11 +412,13 @@ const it = testEffect(
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [PluginSupervisor.node, pluginSupervisor],
       [SessionCompaction.node, compaction],
+      [SessionCompactionExecution.node, compactionExecution],
     ],
   ),
 )
 
 const encodeMessage = Schema.encodeSync(SessionMessage.Info)
+
 const userRow = (sessionID: SessionV2.ID, id: SessionMessage.ID, seq: number, text: string) => {
   const message = SessionMessage.User.make({
     type: "user",
@@ -363,7 +493,7 @@ const eventCountFor = (sessionID: SessionV2.ID, type?: string) =>
       .where(
         type === undefined
           ? and(eq(EventTable.aggregate_id, sessionID))
-          : and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, type)),
+          : and(eq(EventTable.aggregate_id, sessionID), like(EventTable.type, `${type}.%`)),
       )
       .all()
       .pipe(Effect.orDie)
@@ -443,7 +573,7 @@ describe("SessionV2.switchModel context validation", () => {
     }),
   )
 
-  it.effect("uses the default 4,096-token compaction safety margin when blocking a switch", () =>
+  it.effect("compacts to the target budget and switches when the context does not fit", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
@@ -456,44 +586,24 @@ describe("SessionV2.switchModel context validation", () => {
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
 
-      expect(outcome.status).toBe("blocked")
-      if (outcome.status !== "blocked") throw new Error("Expected a blocked switch, got a switch")
-      expect(outcome.currentModel).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
-      expect(outcome.targetModel).toMatchObject({ id: "claude-haiku-4-5", providerID: "anthropic" })
-      expect(outcome.targetSafeInputTokens).toBe(64_000 - 4_096)
-      expect(outcome.currentContextTokens).toBeGreaterThan(outcome.targetSafeInputTokens)
-      expect(outcome.requiredReductionTokens).toBe(outcome.currentContextTokens - outcome.targetSafeInputTokens)
-      expect(outcome.reason).toBe("context-window-exceeded")
-      expect(outcome.maximumSafeSummaryBoundary).toBeUndefined()
+      expect(outcome).toEqual({ status: "switched" })
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-haiku-4-5", providerID: "anthropic" })
+      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(1)
+      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(1)
+      // The raw transcript stays intact: every seeded row is still durable and unchanged.
+      const rows = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const seeded = rows.filter((row) => row.type !== "compaction" || row.id === messageID(sessionID, SessionMessage.ID.make("msg_summary")))
+      expect(seeded.map((row) => row.id)).toContain(messageID(sessionID, SessionMessage.ID.make("msg_u1")))
+      expect(seeded.map((row) => row.id)).toContain(messageID(sessionID, SessionMessage.ID.make("msg_summary")))
     }),
   )
 
-  it.effect("omits an advisory boundary when keep-recent is not configured", () =>
-    Effect.gen(function* () {
-      compactionConfig = []
-      const { sessionID, location } = createSession()
-      const session = yield* SessionV2.Service
-      yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({
-        sessionID,
-        summary: "x".repeat(250_000),
-        posts: Array.from({ length: 25 }, (_, index) => ({
-          id: SessionMessage.ID.make(`msg_p${index}`),
-          text: "post-switch context",
-        })),
-      })
-
-      const outcome = yield* session.switchModel({ sessionID, model: haiku })
-
-      expect(outcome).toMatchObject({
-        status: "blocked",
-      })
-      if (outcome.status !== "blocked") throw new Error("Expected a blocked switch, got a switch")
-      expect(outcome.maximumSafeSummaryBoundary).toBeUndefined()
-    }),
-  )
-
-  it.effect("uses the last configured compaction safety margin when blocking a switch", () =>
+  it.effect("admits a mandatory compaction at the target safe budget, not the selected model's", () =>
     Effect.gen(function* () {
       compactionConfig = [
         new ConfigCompaction.Info({ context_safety_margin_tokens: 1_024 }),
@@ -506,10 +616,16 @@ describe("SessionV2.switchModel context validation", () => {
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
 
-      expect(outcome).toMatchObject({
-        status: "blocked",
-        targetSafeInputTokens: 64_000 - 2_048,
-      })
+      expect(outcome).toEqual({ status: "switched" })
+      const jobs = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionCompactionJobTable)
+        .where(eq(SessionCompactionJobTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      // 64,000 target context minus the last configured 2,048 margin; the sonnet budget is larger.
+      expect(jobs).toHaveLength(1)
+      expect(jobs[0]).toMatchObject({ trigger: "mandatory", target_max_input_tokens: 64_000 - 2_048 })
     }),
   )
 
@@ -521,60 +637,121 @@ describe("SessionV2.switchModel context validation", () => {
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
 
-      const outcome = yield* session.switchModel({ sessionID, model: haiku })
-
-      expect(outcome).toMatchObject({
-        status: "blocked",
-        targetSafeInputTokens: 64_000 - 4_096,
-      })
+      expect(yield* session.switchModel({ sessionID, model: haiku })).toEqual({ status: "switched" })
+      const jobs = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionCompactionJobTable)
+        .where(eq(SessionCompactionJobTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(jobs).toHaveLength(1)
+      expect(jobs[0]).toMatchObject({ target_max_input_tokens: 64_000 - 4_096 })
     }),
   )
 
-  it.effect("a blocked switch retains the current active model", () =>
+  it.effect("compacts on a first-time switch with no prior compaction and no explicit keep-recent", () =>
     Effect.gen(function* () {
+      compactionConfig = []
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
+      const { db } = yield* Database.Service
+      // No completed compaction exists, and the only complete boundary is one large consumed user
+      // message: the advisory summary boundary would be absent, yet mandatory compaction fits.
+      const onlyID = messageID(sessionID, SessionMessage.ID.make("msg_only"))
+      const { id: _onlyID, type: onlyType, ...onlyData } = encodeMessage(
+        SessionMessage.User.make({
+          type: "user",
+          id: onlyID,
+          text: "z".repeat(250_000),
+          files: [],
+          agents: [],
+          time: { created: DateTime.makeUnsafe(0), consumed: DateTime.makeUnsafe(1) },
+        }),
+      )
+      yield* db
+        .insert(SessionMessageTable)
+        .values({ id: onlyID, session_id: sessionID, type: onlyType, seq: 1, time_created: 1_000, data: onlyData })
+        .run()
+        .pipe(Effect.orDie)
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
-      expect(outcome.status).toBe("blocked")
-      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
-      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(0)
-      expect((yield* session.context(sessionID)).some((message) => message.type === "model-switched")).toBe(false)
+
+      expect(outcome).toEqual({ status: "switched" })
+      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(1)
     }),
   )
 
-  it.effect("a blocked switch does not modify SQLite", () =>
+  it.effect("a fitting switch issues no compaction job and no provider request", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
       yield* seedTranscript({
         sessionID,
-        summary: "x".repeat(195_000),
-        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "y".repeat(60_000) }],
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
       })
+
+      expect(yield* session.switchModel({ sessionID, model: haiku })).toEqual({ status: "switched" })
+      expect((yield* pendingRows(sessionID)).filter((row) => row.type === "compaction")).toHaveLength(0)
+      expect(yield* eventCountFor(sessionID, "session.compaction.started")).toBe(0)
+      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(0)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("a completed compaction that still cannot fit blocks without selecting", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
+      // The job completes and activates a summary that is still larger than the target safe budget,
+      // so the post-compaction fit check must refuse the selection.
+      compactionSummaryPadding = 400_000
+
+      const outcome = yield* session.switchModel({ sessionID, model: haiku })
+
+      expect(outcome.status).toBe("blocked")
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
+      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(0)
+      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(1)
+    }),
+  )
+
+  it.effect("a failed compaction retains the prior selection and every durable row", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
       const { db } = yield* Database.Service
-      const eventsBefore = yield* eventCountFor(sessionID)
       const messagesBefore = (yield* db
         .select()
         .from(SessionMessageTable)
         .where(eq(SessionMessageTable.session_id, sessionID))
         .all()
         .pipe(Effect.orDie)).length
+      compactionFailure = "provider_failed"
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
+
       expect(outcome.status).toBe("blocked")
-      expect(yield* eventCountFor(sessionID)).toBe(eventsBefore)
-      expect(
-        (yield* db
-          .select()
-          .from(SessionMessageTable)
-          .where(eq(SessionMessageTable.session_id, sessionID))
-          .all()
-          .pipe(Effect.orDie)).length,
-      ).toBe(messagesBefore)
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
+      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(0)
+      expect(yield* eventCountFor(sessionID, "session.compaction.failed")).toBe(1)
+      // The failed job adds one projected lifecycle row; no seeded source row is rewritten.
+      const rows = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows).toHaveLength(messagesBefore + 1)
+      expect(rows.filter((row) => row.id === messageID(sessionID, SessionMessage.ID.make("msg_summary")))).toHaveLength(
+        1,
+      )
       expect(
         (yield* db
           .select()
@@ -583,23 +760,47 @@ describe("SessionV2.switchModel context validation", () => {
           .all()
           .pipe(Effect.orDie)).length,
       ).toBe(0)
-      expect((yield* pendingRows(sessionID)).length).toBe(0)
     }),
   )
 
-  it.effect("a blocked switch never invokes summarization", () =>
+  it.effect("an unresolved complete boundary leaves the selection and rows unchanged", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
-      yield* seedTranscript({ sessionID, summary: "x".repeat(250_000), posts: [] })
+      const { db } = yield* Database.Service
+      // A large but still-incomplete user message: no completed boundary exists to compact through.
+      const pendingID = messageID(sessionID, SessionMessage.ID.make("msg_pending"))
+      const { id: _pendingID, type: pendingType, ...pendingData } = encodeMessage(
+        SessionMessage.User.make({
+          type: "user",
+          id: pendingID,
+          text: "z".repeat(250_000),
+          files: [],
+          agents: [],
+          time: { created: DateTime.makeUnsafe(0) },
+        }),
+      )
+      yield* db
+        .insert(SessionMessageTable)
+        .values({
+          id: pendingID,
+          session_id: sessionID,
+          type: pendingType,
+          seq: 1,
+          time_created: 1_000,
+          data: pendingData,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const eventsBefore = yield* eventCountFor(sessionID)
 
       const outcome = yield* session.switchModel({ sessionID, model: haiku })
+
       expect(outcome.status).toBe("blocked")
-      expect((yield* pendingRows(sessionID)).filter((row) => row.type === "compaction")).toHaveLength(0)
-      expect(yield* eventCountFor(sessionID, "session.compaction.started")).toBe(0)
-      expect(yield* eventCountFor(sessionID, "session.compaction.ended")).toBe(0)
-      expect(yield* eventCountFor(sessionID, "session.compaction.failed")).toBe(0)
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5" })
+      expect(yield* eventCountFor(sessionID)).toBe(eventsBefore)
+      expect((yield* pendingRows(sessionID)).length).toBe(0)
     }),
   )
 
@@ -642,23 +843,198 @@ describe("SessionV2.switchModel context validation", () => {
 })
 
 describe("SessionV2.switchModel in-flight boundary", () => {
-  it.effect("applies a switch only after the active request boundary settles", () =>
+  it.effect("interrupts the active drain and selects only after terminal settlement", () =>
     Effect.gen(function* () {
       const { sessionID, location } = createSession()
       const session = yield* SessionV2.Service
       yield* session.create({ id: sessionID, location, model: sonnet })
-      idleStarted = yield* Deferred.make<void>()
-      idleGate = yield* Deferred.make<void>()
+      yield* seedTranscript({
+        sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
+      const drainStarted = yield* Deferred.make<void>()
+      const drainInterrupted = yield* Deferred.make<void>()
+      drainHook = (_sessionID, _force) =>
+        Deferred.succeed(drainStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(drainInterrupted, undefined)),
+        )
 
+      yield* (yield* SessionExecution.Service).wake(sessionID)
+      yield* Deferred.await(drainStarted)
       const switched = yield* session.switchModel({ sessionID, model: gpt }).pipe(Effect.forkScoped)
-      yield* Deferred.await(idleStarted)
-      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5", providerID: "anthropic" })
-      yield* Deferred.succeed(idleGate, undefined)
+
+      yield* Deferred.await(drainInterrupted)
       yield* Fiber.join(switched)
 
       expect((yield* session.get(sessionID)).model).toMatchObject({ id: "gpt-5.6", providerID: "openai" })
-      idleStarted = undefined
-      idleGate = undefined
+      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(1)
+      // Interruption is the only terminal fact: the drain is not replayed and no provider
+      // request is issued for the switch itself.
+      expect(requests).toHaveLength(0)
+      drainHook = () => Effect.void
+    }),
+  )
+
+  it.effect("a same-target switch neither interrupts nor selects", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      const drainStarted = yield* Deferred.make<void>()
+      let interrupted = false
+      drainHook = () =>
+        Deferred.succeed(drainStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              interrupted = true
+            }),
+          ),
+        )
+
+      yield* (yield* SessionExecution.Service).wake(sessionID)
+      yield* Deferred.await(drainStarted)
+
+      expect(yield* session.switchModel({ sessionID, model: sonnet })).toEqual({ status: "switched" })
+      expect(interrupted).toBe(false)
+      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(0)
+      yield* (yield* SessionExecution.Service).interrupt(sessionID)
+      drainHook = () => Effect.void
+    }),
+  )
+
+  it.effect("an unresolvable target neither interrupts nor changes the selected model", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      const drainStarted = yield* Deferred.make<void>()
+      let interrupted = false
+      drainHook = () =>
+        Deferred.succeed(drainStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() =>
+            Effect.sync(() => {
+              interrupted = true
+            }),
+          ),
+        )
+
+      yield* (yield* SessionExecution.Service).wake(sessionID)
+      yield* Deferred.await(drainStarted)
+      const missing = ref("anthropic", "does-not-exist")
+
+      const outcome = yield* session.switchModel({ sessionID, model: missing }).pipe(Effect.flip)
+
+      expect(outcome._tag).toBe("SessionRunnerModel.ModelUnavailableError")
+      expect(interrupted).toBe(false)
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "claude-sonnet-4-5" })
+      expect(yield* eventCountFor(sessionID, "session.model.selected")).toBe(0)
+      yield* (yield* SessionExecution.Service).interrupt(sessionID)
+      drainHook = () => Effect.void
+    }),
+  )
+
+  it.effect("a doorbell raised during the switch waits for the transition and drains once", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({
+        sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
+      const drainStarted = yield* Deferred.make<void>()
+      const drainReleased = yield* Deferred.make<void>()
+      let drains = 0
+      drainHook = () =>
+        Effect.sync(() => {
+          drains += 1
+        }).pipe(
+          Effect.andThen(Deferred.succeed(drainStarted, undefined)),
+          Effect.andThen(Deferred.await(drainReleased)),
+        )
+
+      yield* (yield* SessionExecution.Service).wake(sessionID)
+      yield* Deferred.await(drainStarted)
+      // A concurrent doorbell must not start a successor drain against the pre-switch state.
+      const switched = yield* session.switchModel({ sessionID, model: gpt }).pipe(Effect.forkScoped)
+      yield* (yield* SessionExecution.Service).wake(sessionID)
+      yield* Fiber.join(switched)
+
+      expect((yield* session.get(sessionID)).model).toMatchObject({ id: "gpt-5.6" })
+      // The coalesced doorbell runs after the transition releases, not during it.
+      for (let attempt = 0; attempt < 100 && drains < 2; attempt++) yield* Effect.yieldNow
+      expect(drains).toBe(2)
+      yield* Deferred.succeed(drainReleased, undefined)
+      yield* (yield* SessionExecution.Service).awaitIdle(sessionID)
+      drainHook = () => Effect.void
+    }),
+  )
+
+  it.effect("a selection-only switch leaves the Session idle with no successor drain", () =>
+    Effect.gen(function* () {
+      const { sessionID, location } = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: sessionID, location, model: sonnet })
+      yield* seedTranscript({
+        sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
+      let drains = 0
+      drainHook = () => Effect.sync(() => void (drains += 1))
+      const execution = yield* SessionExecution.Service
+
+      expect(yield* session.switchModel({ sessionID, model: gpt })).toEqual({ status: "switched" })
+      for (let attempt = 0; attempt < 20; attempt++) yield* Effect.yieldNow
+
+      expect(drains).toBe(0)
+      expect(yield* execution.active).toEqual(new Set())
+      drainHook = () => Effect.void
+    }),
+  )
+
+  it.effect("keeps other Sessions independent while one transitions", () =>
+    Effect.gen(function* () {
+      const first = createSession()
+      const second = createSession()
+      const session = yield* SessionV2.Service
+      yield* session.create({ id: first.sessionID, location: first.location, model: sonnet })
+      yield* session.create({ id: second.sessionID, location: second.location, model: sonnet })
+      yield* seedTranscript({
+        sessionID: first.sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
+      yield* seedTranscript({
+        sessionID: second.sessionID,
+        summary: "S1",
+        posts: [{ id: SessionMessage.ID.make("msg_u1"), text: "hello" }],
+      })
+      const drainStarted = yield* Deferred.make<void>()
+      const drainReleased = yield* Deferred.make<void>()
+      drainHook = (sessionID) =>
+        sessionID === first.sessionID
+          ? Deferred.succeed(drainStarted, undefined).pipe(Effect.andThen(Deferred.await(drainReleased)))
+          : Effect.void
+      const execution = yield* SessionExecution.Service
+
+      yield* execution.wake(first.sessionID)
+      yield* Deferred.await(drainStarted)
+      const switched = yield* session.switchModel({ sessionID: first.sessionID, model: gpt }).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+
+      // The second Session is never blocked by the first Session's transition.
+      expect(yield* session.switchModel({ sessionID: second.sessionID, model: haiku })).toEqual({ status: "switched" })
+
+      yield* Deferred.succeed(drainReleased, undefined)
+      yield* Fiber.join(switched)
+      expect((yield* session.get(first.sessionID)).model).toMatchObject({ id: "gpt-5.6" })
+      drainHook = () => Effect.void
     }),
   )
 })

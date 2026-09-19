@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
-import { SessionAutonomySet, SessionAutonomyState } from "../src/groups/session.js"
+import { HttpApi, HttpApiMiddleware, OpenApi } from "effect/unstable/httpapi"
+import { makeSessionGroup, SessionAutonomySet, SessionAutonomyState } from "../src/groups/session.js"
+
+class SessionLocationMiddleware extends HttpApiMiddleware.Service<SessionLocationMiddleware>()(
+  "test/SessionAutonomyLocationMiddleware",
+) {}
 
 test("session autonomy state preserves active goal progress", () => {
   expect(
@@ -63,4 +68,26 @@ test("session autonomy set accepts modes and rejects empty goals", () => {
     }),
   ).toEqual({ goal: "Finish the migration", maxNoProgress: 4 })
   expect(() => Schema.decodeUnknownSync(SessionAutonomySet)({ goal: "   " })).toThrow()
+})
+
+test("R7 accepts explicit goal resume without replacing objective text", () => {
+  const decode = Schema.decodeUnknownSync(SessionAutonomySet)
+  expect(decode({ goal: true })).toEqual({ goal: true })
+  for (const goal of [true, null, "New objective"] as const) {
+    expect(decode({ yolo: 1, goal })).toEqual({ yolo: 1, goal })
+  }
+  expect(() => decode({ goal: false })).toThrow()
+  expect(() => decode({ goal: {} })).toThrow()
+  expect(() => decode({ yolo: 1, goal: false })).toThrow()
+  expect(() => decode({ yolo: 1, goal: "  " })).toThrow()
+  expect(() => decode({})).toThrow()
+  expect(() => decode({ maxNoProgress: 3 })).toThrow()
+})
+
+test("R7 documents typed goal resume, stale calculation, and provider failures", () => {
+  const group = makeSessionGroup(SessionLocationMiddleware)
+  const document = OpenApi.fromApi(HttpApi.make("goal-test").add(group))
+  const responses = document.paths["/api/session/{sessionID}/autonomy"]?.put?.responses
+  for (const status of [200, 400, 404, 409, 500]) expect(responses?.[status]).toBeDefined()
+  expect(group.endpoints["session.autonomy.set"].middlewares.has(SessionLocationMiddleware)).toBe(true)
 })

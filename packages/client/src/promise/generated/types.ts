@@ -3863,9 +3863,12 @@ export type SessionAutonomyGetOutput = { data: SessionAutonomyState }["data"]
 export type SessionAutonomySetInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly payload:
-    | { readonly yolo: (0 | 1 | 2 | 3) | boolean }
-    | { readonly goal: string | null; readonly maxNoProgress?: number | null }
-    | { readonly yolo: (0 | 1 | 2 | 3) | boolean; readonly goal: string | null; readonly maxNoProgress?: number | null }
+    | {
+        readonly yolo?: (0 | 1 | 2 | 3) | boolean | null
+        readonly goal: string | true | null
+        readonly maxNoProgress?: number | null
+      }
+    | { readonly yolo: (0 | 1 | 2 | 3) | boolean; readonly goal?: never | null }
 }
 
 export type SessionAutonomySetOutput = { data: SessionAutonomyState }["data"]

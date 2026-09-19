@@ -38,6 +38,7 @@ const recordingExecution = Layer.succeed(
     wake: () => Effect.void,
     interrupt: (sessionID) => Effect.sync(() => void executionCalls.push(`interrupt:${sessionID}`)),
     awaitIdle: (sessionID) => Effect.sync(() => void executionCalls.push(`awaitIdle:${sessionID}`)),
+    withTransition: (_sessionID, effect) => effect,
   }),
 )
 const recordingAccounting = Layer.succeed(

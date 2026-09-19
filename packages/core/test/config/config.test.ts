@@ -113,7 +113,6 @@ describe("Config", () => {
       const decoded = Schema.decodeUnknownSync(Config.Info)({
         efficiency: {
           title: "local",
-          goal_synthesis: "model",
           helper_models: {
             title: "openai/gpt-5-mini#low",
             goal: "session",
@@ -130,7 +129,6 @@ describe("Config", () => {
       })
       expect(decoded.efficiency).toEqual({
         title: "local",
-        goal_synthesis: "model",
         helper_models: {
           title: selection("openai/gpt-5-mini#low"),
           goal: "session",

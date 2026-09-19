@@ -1,8 +1,6 @@
 # Native computer use
 
-Status: **implemented on macOS for iTerm and Finder; unsupported on other platforms**
-
-YCoding exposes one platform-neutral `computer` tool. Core owns capability reporting, Session ownership, revision fencing, cancellation, permissions, and guardrails. The first provider is an isolated native macOS helper; no Windows or Linux provider is implemented.
+YCoding exposes one platform-neutral `computer` tool. Core owns capability reporting, Session ownership, revision fencing, cancellation, permissions, and guardrails. The provider is an isolated native macOS helper; Windows and Linux report `unsupported`.
 
 ## Supported capabilities
 
@@ -43,9 +41,3 @@ On macOS, the first command compiles and ad-hoc signs the current source into th
 The ordinary Bun and Node CLI builds emit only complete artifacts. A macOS host can build their supported macOS architectures and matching helpers. A non-macOS host explicitly reports that it is skipping macOS targets rather than creating Darwin artifacts without the required helper; an explicit unavailable Node target fails instead of succeeding without output. Release CI builds each Darwin target on a matching macOS runner, stages only the main executable and helper, and archives both.
 
 For macOS upgrades, the curl installer and `ycoding update` prepare both files in the install directory, preserve any installed pair, and restore that prior pair when either final replacement fails. This is rollback-based recovery across two renames, not a crash-atomic pair swap. If a restore rename also fails, the updater retains the only old backup, reports its exact path and destination, and exits unsuccessfully. Explicit self-update rollback to a published pre-0.2.0 macOS release accepts its historical single-file archive and leaves any sibling helper unchanged. Linux archives and installs remain main-executable only.
-
-## Validation boundary
-
-Automated coverage verifies capability filtering, ownership and revision fencing, cancellation, helper resolution, helper protocol decoding, build planning, signed arm64 and x64 helper construction, sibling packaging, exact installer archive entries, and installer rollback under an injected final-replacement failure.
-
-Live iTerm text submission is intentionally excluded from routine tests because it would mutate a user's terminal session. Release workflow execution and macOS Automation authorization remain environment-specific release/operator checks.

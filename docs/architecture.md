@@ -1,8 +1,6 @@
 # Architecture
 
-Status: **implemented**
-
-This document describes the current package boundaries and runtime flow. Exact public shapes remain owned by `packages/schema` and `packages/protocol`.
+This document specifies the current package boundaries and runtime flow. Exact public shapes remain owned by `packages/schema` and `packages/protocol`.
 
 ## Workspace boundary
 
@@ -77,10 +75,13 @@ Owns:
 - durable subagent orchestration and autonomy;
 - skill discovery, activation, and session status;
 - project-artifact storage, validation, packaging, lifecycle, and accounting;
+- Location-scoped on-demand Markdown knowledge storage and derived offline graph export;
 - database schema, migrations, event history, and projections;
 - process-global and location-scoped runtime services.
 
 Core remains independent of any specific UI.
+
+`Memory.Service` derives repository identity from the canonical Git common directory so linked worktrees share one collection, reads current configuration lazily, and owns concept validation, bounded retrieval, compare-and-swap writes, and derived files. Shared knowledge uses a separate collection under the same configured base. The built-in `memory` tool applies permissions and Session file-mutation guardrails before calling that service. It imports no UI package and exposes no separate HTTP group or hosted application. See [workspace memory](./memory.md).
 
 ### `packages/protocol`
 
@@ -194,9 +195,9 @@ The TUI applies events to a Solid store and reconciles canonical Client reads. A
 
 ## Constraints
 
-- Removed legacy runtime paths are not part of the product.
+- The product includes only current runtime paths.
 - One logical model step has one explicit provider stream call except documented compaction recovery.
-- Session execution ownership remains process-local until clustering is implemented explicitly.
+- Session execution ownership is process-local.
 - Public HTTP contracts come from Protocol and Schema, not handler-local types.
 - Durable state remains replayable; caches and projections remain rebuildable.
 - TUI Session eviction releases complete resident transcript payloads; canonical reload rebuilds them.

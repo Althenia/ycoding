@@ -9,6 +9,10 @@ import { renderScreen } from "./harness"
 const sessionID = "ses_chrome_design_match"
 const directory = "/tmp/ycoding/session-chrome-design-match"
 const location = { directory, project: { id: "proj_session_chrome_design_match", directory } }
+// A profile fixture uses a distinct directory: the client store keys location data by location, and
+// reusing this one would serve the earlier empty integration list from its resident cache.
+const profileDirectory = "/tmp/ycoding/session-chrome-profile"
+const profileLocation = { directory: profileDirectory, project: { id: "proj_session_chrome_profile", directory: profileDirectory } }
 const session = {
   id: sessionID,
   title: "Chrome design match",
@@ -19,6 +23,13 @@ const session = {
   cost: 0,
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   time: { created: 1, updated: 2 },
+}
+
+const profileSession = {
+  ...session,
+  projectID: "proj_session_chrome_profile",
+  location: { directory: profileDirectory },
+  title: "Chrome profile match",
 }
 
 function route(url: URL) {
@@ -148,6 +159,115 @@ async function expectComposerSurface(viewport: typeof DESIGN_VIEWPORT) {
   }
 }
 
+/**
+ * A provider with two stored profiles: the header must stay provider/model, and the Context rail
+ * must carry the active profile above Provider. Every location-bearing endpoint answers with the
+ * profile location so the client store keys this fixture separately from the shared one.
+ */
+function profileRoute(url: URL) {
+  if (url.pathname === "/api/integration")
+    return json({
+      location: profileLocation,
+      data: [
+        {
+          id: "anthropic",
+          name: "Claude",
+          methods: [],
+          connections: [
+            { type: "credential", id: "cred_work", label: "Work", active: true },
+            { type: "credential", id: "cred_personal", label: "Personal", active: false },
+          ],
+        },
+      ],
+    })
+  if (url.pathname === "/api/location") return json(profileLocation)
+  if (url.pathname === "/api/provider") return json({ location: profileLocation, data: [{ id: "anthropic", name: "Claude" }] })
+  if (url.pathname === "/api/model")
+    return json({
+      location: profileLocation,
+      data: [
+        {
+          id: "claude-opus-5",
+          modelID: "claude-opus-5",
+          providerID: "anthropic",
+          name: "Claude Opus 5",
+          capabilities: { tools: true, input: ["text"], output: ["text"] },
+          variants: [{ id: "max" }],
+          time: { released: 0 },
+          cost: [],
+          status: "active",
+          enabled: true,
+          limit: { context: 200_000, output: 32_000 },
+        },
+      ],
+    })
+  if (url.pathname === "/api/fs/list") return json({ location: profileLocation, data: [] })
+  if (url.pathname === "/api/session") return json({ data: [profileSession], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}`) return json({ data: profileSession })
+  if (url.pathname === "/api/agent")
+    return json({
+      location: profileLocation,
+      data: [{ id: "build", name: "Build", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] }],
+    })
+  return route(url)
+}
+
+async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
+  // Rail expansion is process-global and shared across Session remounts, so a neighbouring file's
+  // collapse of CONTEXT would hide the row. Reset it so this assertion measures placement, not
+  // another test's leftover state.
+  const { resetRailExpansion } = await import("../../src/routes/session/rail-section")
+  resetRailExpansion()
+  const screen = await renderScreen({
+    ...viewport,
+    args: { sessionID },
+    route: profileRoute,
+    settle: "Message YCoding…",
+  })
+  try {
+    // The Context section fills from its own diagnostics fetch, which can land after the composer
+    // settles. Wait for the rows to paint before measuring their order.
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      const painted = screen.frame()
+      if (painted.includes("Profile") && painted.includes("Provider")) break
+      await Bun.sleep(50)
+    }
+    const lines = screen.lines()
+    const railStart = viewport.width - railWidth(viewport.width)
+    const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
+    // The header names the model identity; credential identity lives in the rail.
+    expect(header).toContain("Build · anthropic/Claude Opus 5 · max")
+    expect(header).not.toContain("Work")
+    const rail = lines.map((line) => line.slice(railStart))
+    const profileRow = rail.findIndex((line) => line.includes("Profile"))
+    const providerRow = rail.findIndex((line) => line.includes("Provider") && line.includes("anthropic"))
+    expect(providerRow, rail.join("|")).toBeGreaterThan(-1)
+    expect(profileRow).toBeGreaterThan(-1)
+    expect(profileRow).toBeLessThan(providerRow)
+    expect(rail[profileRow]).toContain("Work")
+    // A narrow terminal hides the rail; the header still must not resurrect the profile.
+    const narrow = await renderScreen({
+      width: 80,
+      height: 24,
+      args: { sessionID },
+      route: profileRoute,
+      settle: "Message YCoding…",
+    })
+    try {
+      const narrowHeader = narrow
+        .lines()
+        .find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
+      expect(narrowHeader).not.toContain("Work")
+      expect(narrow.lines().some((line) => line.includes("Profile"))).toBe(false)
+    } finally {
+      await narrow.dispose()
+    }
+  } finally {
+    await screen.dispose()
+  }
+}
+
 describe("active-session chrome Penpot design match", () => {
   test("matches the 189x69 chrome rows", () => expectChrome(DESIGN_VIEWPORT), 60_000)
   test("matches the 220x69 chrome rows", () => expectChrome(DESIGN_VIEWPORT_WIDE), 60_000)
@@ -155,4 +275,8 @@ describe("active-session chrome Penpot design match", () => {
     await expectComposerSurface(DESIGN_VIEWPORT)
     await expectComposerSurface(DESIGN_VIEWPORT_WIDE)
   }, 60_000)
+  test("names the active profile in the Context rail and not the header", async () => {
+    await expectProfilePlacement(DESIGN_VIEWPORT)
+    await expectProfilePlacement(DESIGN_VIEWPORT_WIDE)
+  }, 120_000)
 })

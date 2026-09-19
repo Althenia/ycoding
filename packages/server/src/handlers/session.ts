@@ -209,6 +209,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         Effect.fn(function* (ctx) {
           return {
             data: yield* session.autonomy.set({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+              Effect.catchTag("SessionGoal.Error", (error) => Effect.gen(function* () {
+                if (error.code === "goal.no_retained_goal")
+                  return yield* new InvalidRequestError({ message: "No retained goal to resume. Set a goal with /goal <text>.", field: "goal" })
+                if (error.code === "goal.stale_calculation")
+                  return yield* new ConflictError({ message: "Goal changed while calculation was running. Review the current goal before retrying.", resource: ctx.params.sessionID })
+                const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+                yield* Effect.logWarning("Goal calculation failed", { sessionID: ctx.params.sessionID, category: error.code, ref })
+                return yield* new UnknownError({
+                  message: error.code === "goal.model_unavailable"
+                    ? "Goal model is unavailable. Check the goal model configuration before retrying."
+                    : "Goal calculation failed. The existing goal was not replaced; retry when the provider is available.",
+                  ref,
+                })
+              })),
               Effect.catchTag("Session.NotFoundError", (error) =>
                 Effect.fail(
                   new SessionNotFoundError({
@@ -419,6 +433,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
           const outcome = yield* session
             .switchModel({ sessionID: ctx.params.sessionID, model: ctx.payload.model })
             .pipe(
+              Effect.catchTags({
+                "SessionRunnerModel.ModelNotSelectedError": () => modelSwitchFailure(ctx.params.sessionID, "model-not-selected", "Select an available model before switching."),
+                "SessionRunnerModel.ModelUnavailableError": () => modelSwitchFailure(ctx.params.sessionID, "model-unavailable", "Target model is unavailable. Refresh the model catalog and select an available model."),
+                "SessionRunnerModel.VariantUnavailableError": () => modelSwitchFailure(ctx.params.sessionID, "variant-unavailable", "Target model variant is unavailable. Select a supported variant."),
+                "SessionRunnerModel.UnsupportedPackageError": () => modelSwitchFailure(ctx.params.sessionID, "unsupported-provider", "Target model uses an unsupported provider package. Check provider configuration."),
+                "Integration.Authorization": () => modelSwitchFailure(ctx.params.sessionID, "provider-authorization", "Provider authorization failed. Reconnect the provider and retry the model switch."),
+                "Session.CompactionConflictError": () => modelSwitchFailure(ctx.params.sessionID, "compaction-failed", "Context compaction could not complete the model switch. The prior model remains selected; inspect compaction status before retrying."),
+              }),
               Effect.catchTag("Session.NotFoundError", (error) =>
                 Effect.fail(
                   new SessionNotFoundError({
@@ -1028,6 +1050,14 @@ export const resolveSkillConflict = (
       "Session.MessageDecodeError": Effect.die,
     }),
   )
+
+function modelSwitchFailure(sessionID: SessionV2.ID, category: string, message: string) {
+  const ref = `err_${crypto.randomUUID().slice(0, 8)}`
+  return Effect.logError("session model switch failed").pipe(
+    Effect.annotateLogs({ ref, sessionID, category }),
+    Effect.andThen(Effect.fail(new UnknownError({ message, ref }))),
+  )
+}
 
 function mapOwnershipError(error: SessionOrchestration.OwnershipError) {
   if (error._tag === "Session.NotFoundError") return mapSessionNotFound(error)

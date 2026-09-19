@@ -45,6 +45,7 @@ import { useToast } from "../../ui/toast"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { DialogBtwExport } from "../dialog-btw-export"
+import { DialogSessionGoal } from "../dialog-session-goal"
 import { useArgs } from "../../context/args"
 import { useConfig } from "../../config"
 import { usePromptMove } from "./move"
@@ -55,6 +56,8 @@ import { useLocation } from "../../context/location"
 import { Keymap, type KeymapCommand } from "../../context/keymap"
 import {
   confirmSessionCreation,
+  goalToggleAction,
+  parseGoalCommand,
   restoreSessionSubmission,
   retainSessionSubmission,
   yoloLevel,
@@ -852,37 +855,8 @@ export function Prompt(props: PromptProps) {
         palette: true,
         slash: { name: "goal" },
         run: async () => {
-          const isActive = props.autonomy?.goal?.status === "active"
-          const sessionID = props.sessionID
-          if (sessionID) {
-            try {
-              const newGoal = isActive
-                ? null
-                : store.prompt.text.trim() || props.autonomy?.goal?.text || "Autonomous goal"
-              const result = await client.api.session.autonomy.set({ sessionID, payload: { goal: newGoal } })
-              const state =
-                (result as unknown as { data: SessionAutonomyState }).data ??
-                (result as unknown as SessionAutonomyState)
-              props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
-              toast.show({
-                message: isActive ? "Goal deactivated" : "Goal activated",
-                variant: "success",
-                duration: 3000,
-              })
-            } catch (error) {
-              toast.show({ title: "Failed to toggle goal", message: errorMessage(error), variant: "error" })
-            }
-            return
-          }
-          // landing: goal follows prompt adaptively – do not push goal into composer
-          if (isActive) {
-            props.onLandingGoalToggle?.(null)
-            toast.show({ message: "Goal deactivated (landing)", variant: "success", duration: 2000 })
-          } else {
-            const text = store.prompt.text.trim() || props.autonomy?.goal?.text || "Autonomous goal"
-            props.onLandingGoalToggle?.(text)
-            toast.show({ message: "Goal activated (landing)", variant: "success", duration: 2000 })
-          }
+          const parsed = parseGoalCommand(store.prompt.text)
+          await applyGoalCommand(parsed?.goal || undefined)
         },
       },
       {
@@ -1601,39 +1575,12 @@ export function Prompt(props: PromptProps) {
       ...structuredClone(unwrap(store.prompt)),
       mode: store.mode,
     }
-    // /goal and /yolo are toggles with no arguments – handle before generic slash dispatch
+    // /goal is a toggle without arguments and an explicit objective with text. Text always replaces
+    // the objective, active or not; the bare form stops, resumes the retained objective, or asks for
+    // one. Only tracked-paste expansion happens before parsing, so multiline and Unicode survive.
     const normalized = inputText.trim()
     if (normalized === "/goal" || normalized.startsWith("/goal ") || normalized.startsWith("/goal\n")) {
-      clearPrompt()
-      const isActive = props.autonomy?.goal?.status === "active"
-      const sessionID = props.sessionID
-      if (sessionID) {
-        try {
-          const candidate = normalized.slice(5).trim()
-          // Agent owns goal text: candidate is hint for SessionGoal synthesis, not verbatim final text.
-          // Do not echo hint into composer (bug fix) – clearPrompt already called.
-          const hint = candidate || props.autonomy?.goal?.text || "Autonomous goal"
-          const newGoal = isActive ? null : hint
-          const result = await client.api.session.autonomy.set({ sessionID, payload: { goal: newGoal } })
-          const state =
-            (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
-          props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
-          toast.show({ message: isActive ? "Goal deactivated" : "Goal activated", variant: "success", duration: 3000 })
-        } catch (error) {
-          toast.show({ title: "Failed to toggle goal", message: errorMessage(error), variant: "error" })
-        }
-      } else {
-        if (isActive) {
-          props.onLandingGoalToggle?.(null)
-          toast.show({ message: "Goal deactivated (landing)", variant: "success", duration: 2000 })
-        } else {
-          const text = normalized.slice(5).trim() || props.autonomy?.goal?.text || "Autonomous goal"
-          // Landing has no session; keep hint for next session creation but do not pollute composer.
-          // Store hint via onLandingGoalToggle only; composer stays cleared (bug fix).
-          props.onLandingGoalToggle?.(text)
-          toast.show({ message: "Goal activated (landing)", variant: "success", duration: 2000 })
-        }
-      }
+      await applyGoalCommand(normalized.slice(5).trim() || undefined)
       return true
     }
     if (normalized === "/yolo" || normalized.startsWith("/yolo ") || normalized.startsWith("/yolo\n")) {
@@ -1689,6 +1636,19 @@ export function Prompt(props: PromptProps) {
         // still allow send with fallback; if truly no agent, let server error rather than deadlock
         agentID = "default"
       }
+    }
+    // A pending explicit selection owns the next target. Await it before capturing this
+    // submission, or the draft would be admitted on the stale preference and then switch back. A
+    // failed selection admits nothing and keeps the draft and attachments.
+    const pendingError = await awaitPendingSelection()
+    if (pendingError) {
+      toast.show({
+        title: "Model switch needs attention",
+        message: errorMessage(pendingError),
+        variant: "warning",
+      })
+      finishOperation(currentOperation.id, { message: "Model switch failed · draft retained", error: true })
+      return false
     }
     const fixedModel = btwSession()?.model
     let selectedModel = fixedModel
@@ -1940,6 +1900,27 @@ export function Prompt(props: PromptProps) {
           return false
         }
       }
+      if (switchRequired) {
+        // Switch before admitting anything. The approved ordering is switch -> admit -> resume: a
+        // failed switch keeps the draft and attachments and performs no admission or wake, and a
+        // successful switch guarantees the admitted prompt runs on the selected model.
+        updateOperation(currentOperation.id, "Switching model…")
+        const error = await client.api.session
+          .switchModel({ sessionID, model: submission.payload.model }, requestOptions(currentOperation))
+          .then(
+            () => undefined,
+            (error) => error,
+          )
+        if (error) {
+          toast.show({
+            title: "Model switch needs attention",
+            message: errorMessage(error),
+            variant: "warning",
+          })
+          finishOperation(currentOperation.id, { message: "Model switch failed · draft retained", error: true })
+          return false
+        }
+      }
       if (pendingEditorSelection) {
         // Keep editor context hidden while admitting it before the corresponding user prompt.
         updateOperation(currentOperation.id, "Sending editor context…")
@@ -1967,7 +1948,6 @@ export function Prompt(props: PromptProps) {
         }
       }
       let phase: "skill" | "admission" | "wake" = "admission"
-      let switched = false
       const result = await submitPromptWithSkills({
         prompt: async (resume) => {
           if (resume && options?.steerNow && status() === "running") {
@@ -1983,35 +1963,6 @@ export function Prompt(props: PromptProps) {
                   variant: "warning",
                 })
               })
-          }
-          if (resume && switchRequired && !switched) {
-            switched = true
-            // A switch waits for the active drain to reach its boundary, and it also publishes the
-            // selection the runner reads at the next request boundary.
-            const switching = client.api.session.switchModel(
-              {
-                sessionID,
-                model: submission.payload.model,
-              },
-              requestOptions(currentOperation),
-            )
-            const warnSwitch = (error: unknown) =>
-              toast.show({
-                title: "Model switch needs attention",
-                message: errorMessage(error),
-                variant: "warning",
-              })
-            if (status() === "running") {
-              // The admitted prompt must not be held behind a switch that is waiting for a running
-              // step to finish; that wait is as long as the step itself and would refuse every
-              // later send. The selection still applies at the following request boundary.
-              void switching.catch(warnSwitch)
-            } else {
-              await switching.then(
-                () => undefined,
-                (error) => warnSwitch(error),
-              )
-            }
           }
           return client.api.session.prompt(
             {
@@ -2278,6 +2229,91 @@ export function Prompt(props: PromptProps) {
     input.extmarks.clear()
     setStore("prompt", emptyPrompt())
     setStore("extmarkToPart", new Map())
+  }
+
+  /**
+   * Waits for any in-flight explicit selection for this Session and reports its failure. A caller
+   * that captures a model target must not proceed on the stale preference, and a failed selection
+   * must not silently continue into admission or paid goal synthesis.
+   */
+  async function awaitPendingSelection(): Promise<unknown | undefined> {
+    const pending = props.sessionID ? local.model.pending(props.sessionID)?.promise : undefined
+    if (!pending) return undefined
+    return pending.then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+  }
+
+  /**
+   * One `/goal` contract for both the composer and the palette command. Explicit text always
+   * replaces the objective, even while one is active; the bare form stops, resumes the retained
+   * objective without recalculation, or asks for one. A failed calculation keeps the draft and
+   * attachments and performs no prompt admission.
+   */
+  async function applyGoalCommand(candidate?: string) {
+    const sessionID = props.sessionID
+    if (!sessionID) {
+      // Landing has no Session: retain the hint for the next Session creation, then clear the draft.
+      const current = props.autonomy
+      if (candidate) props.onLandingGoalToggle?.(candidate)
+      else if (current?.goal?.status === "active") props.onLandingGoalToggle?.(null)
+      else if (current?.goal?.text.trim()) props.onLandingGoalToggle?.(current.goal.text)
+      else return false
+      toast.show({
+        message: candidate ? "Goal activated (landing)" : current?.goal?.status === "active" ? "Goal deactivated (landing)" : "Goal activated (landing)",
+        variant: "success",
+        duration: 2000,
+      })
+      clearPrompt()
+      return true
+    }
+    const action = candidate
+      ? ({ type: "replace", text: candidate } as const)
+      : goalToggleAction(props.autonomy ?? ({ mode: "normal", yolo: 0 } as unknown as SessionAutonomyState))
+    if (action.type === "request-objective") {
+      clearPrompt()
+      DialogSessionGoal.show(dialog, sessionID, undefined, (state) => props.onAutonomyUpdated?.(sessionID, state))
+      return true
+    }
+    // Explicit replacement synthesizes through the model, so it must run on the model the user
+    // selected. Bare stop/resume performs no calculation and needs no wait. A failed pending
+    // selection keeps the draft and starts no request.
+    if (action.type === "replace") {
+      const pendingError = await awaitPendingSelection()
+      if (pendingError) {
+        toast.show({
+          title: "Model switch needs attention",
+          message: errorMessage(pendingError),
+          variant: "warning",
+        })
+        return false
+      }
+    }
+    try {
+      const payload =
+        action.type === "stop"
+          ? ({ goal: null } as const)
+          : action.type === "resume"
+            ? ({ goal: true } as const)
+            : ({ goal: action.text } as const)
+      const result = await client.api.session.autonomy.set({ sessionID, payload })
+      const state =
+        (result as unknown as { data: SessionAutonomyState }).data ?? (result as unknown as SessionAutonomyState)
+      props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)
+      clearPrompt()
+      toast.show({
+        message:
+          action.type === "stop" ? "Goal deactivated" : action.type === "resume" ? "Goal resumed" : "Goal activated",
+        variant: "success",
+        duration: 3000,
+      })
+      return true
+    } catch (error) {
+      // The draft and its attachments stay editable so the user can retry the exact same objective.
+      toast.show({ title: "Failed to set goal", message: errorMessage(error), variant: "error" })
+      return false
+    }
   }
 
   const highlight = createMemo(() => {

@@ -11,14 +11,12 @@ import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 
 export type TitleMode = "local" | "model" | "off"
-export type GoalMode = "local" | "model"
 export type Role = "title" | "goal" | "compaction"
 export type CompactionScope = "main" | "subagent"
 export type ModelSelection = ModelV2.Ref | "session"
 
 export interface Settings {
   readonly titleMode: TitleMode
-  readonly goalMode: GoalMode
   readonly models: Partial<Record<Role, ModelSelection>>
   readonly compactionScopes?: Partial<Record<CompactionScope, ModelSelection>>
 }
@@ -52,8 +50,6 @@ export const localTitle = (input: string) => {
   const normalized = first ? collapse(stripMarkdownPrefix(first)) : ""
   return truncate(normalized || "New session", 50)
 }
-
-export const localGoal = (input: string) => collapse(stripControls(input))
 
 export const selectHelperModel = (input: SelectHelperModelInput) =>
   input.agentModel ?? (input.roleModel === "session" ? input.sessionModel : input.roleModel) ?? input.sessionModel
@@ -96,7 +92,6 @@ export const settings = (entries: readonly Config.Entry[]): Settings => {
   const compactionSubagent = configuredModel(efficiency?.helper_models?.compaction?.subagent)
   return {
     titleMode: efficiency?.title ?? "local",
-    goalMode: efficiency?.goal_synthesis ?? "local",
     models: {
       ...(title === undefined ? {} : { title }),
       ...(goal === undefined ? {} : { goal }),
@@ -111,7 +106,6 @@ export const settings = (entries: readonly Config.Entry[]): Settings => {
 export interface Interface {
   readonly settings: Settings
   readonly localTitle: (input: string) => string
-  readonly localGoal: (input: string) => string
   readonly resolveModel: (
     session: SessionSchema.Info,
     role: Role,
@@ -124,7 +118,6 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/
 export const make = (policy: Settings, models: SessionRunnerModel.Interface): Interface => ({
   settings: policy,
   localTitle,
-  localGoal,
   resolveModel: (session, role, agent) => {
     const selected =
       role === "compaction"

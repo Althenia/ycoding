@@ -19,22 +19,23 @@ A plan, deleted package, or stale generated file does not override current code.
 
 ## Index
 
-| Document                                               | Purpose                                                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| [`product-direction.md`](./product-direction.md)       | Terminal-first product scope, priorities, and compatibility policy.                                    |
-| [`architecture.md`](./architecture.md)                 | Active package graph, ownership, runtime flow, and constraints.                                        |
-| [`runtime.md`](./runtime.md)                           | Implemented Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior. |
-| [`browser-extension.md`](./browser-extension.md)       | Selected-tab Chrome bridge installation, isolation boundary, operations, and validation limits.       |
-| [`computer-use.md`](./computer-use.md)                 | Native computer capability, macOS iTerm/Finder boundary, helper development, packaging, and validation limits. |
-| [`tui-redesign-backlog.md`](./tui-redesign-backlog.md) | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog. |
-| [`provider-efficiency.md`](./provider-efficiency.md)   | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks. |
-| [`configuration.md`](./configuration.md)               | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.         |
-| [`repository-resources.md`](./repository-resources.md) | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules. |
+| Document                                                                 | Purpose                                                                                                                                      |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`product-direction.md`](./product-direction.md)                         | Terminal-first product scope, priorities, and compatibility policy.                                                                          |
+| [`architecture.md`](./architecture.md)                                   | Active package graph, ownership, runtime flow, and constraints.                                                                              |
+| [`runtime.md`](./runtime.md)                                             | Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, and transcript behavior.                                     |
+| [`browser-extension.md`](./browser-extension.md)                         | Selected-tab Chrome bridge installation, isolation boundary, operations, and mutation limits.                                                |
+| [`computer-use.md`](./computer-use.md)                                   | Native computer capability, macOS iTerm/Finder boundary, helper development, and packaging.                                                  |
+| [`memory.md`](./memory.md)                                               | On-demand workspace knowledge, Markdown concepts, permissions, conflict-safe updates, and offline graph export.                              |
+| [`tui-redesign-backlog.md`](./tui-redesign-backlog.md)                   | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog.                            |
+| [`provider-efficiency.md`](./provider-efficiency.md)                     | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks.      |
+| [`configuration.md`](./configuration.md)                                 | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.                                               |
+| [`repository-resources.md`](./repository-resources.md)                   | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules.                                       |
 | [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md) | Operator configuration for agent permissions, custom guardrail sources, caps, replies, transient approval reuse, and provider quota sources. |
-| [`ycoding-migration.md`](./ycoding-migration.md)       | Canonical YCoding identifiers and external-provider exceptions.                                        |
-| [`releases/`](./releases/)                                                                     | Per-version release notes (`v<version>.md`); the file matching the tag ships as the GitHub release notes and asset. |
-| [`../specs/v2/README.md`](../specs/v2/README.md)       | Detailed cross-module contracts and accepted decisions.                                                |
-| [`../AGENTS.md`](../AGENTS.md)                         | Mandatory contributor and coding-agent invariants.                                                     |
+| [`ycoding-migration.md`](./ycoding-migration.md)                         | Canonical YCoding identifiers and external-provider exceptions.                                                                              |
+| [`releases/`](./releases/)                                               | Per-version release notes (`v<version>.md`); the file matching the tag ships as the GitHub release notes and asset.                          |
+| [`../specs/v2/README.md`](../specs/v2/README.md)                         | Detailed cross-module contracts and accepted decisions.                                                                                      |
+| [`../AGENTS.md`](../AGENTS.md)                                           | Mandatory contributor and coding-agent invariants.                                                                                           |
 
 ## Documentation placement
 
@@ -44,25 +45,42 @@ The static GitHub Pages site is generated from maintained documents in this dire
 
 Temporary implementation plans belong under an explicitly temporary planning directory and must not be cited as current behavior.
 
+### Local documentation preview
+
+The generated navigation groups maintained guides into Start, Concepts, Components, Configuration, Runtime, and Capabilities. Proposed backlog documents remain source-only. Each guide has an on-page heading index; configuration schema, example, and installer downloads use the same site base.
+
+Build and mount the output at `/ycoding/`, matching deployment:
+
+```sh
+bun script/build-pages.ts
+preview=$(mktemp -d)
+ln -s "$PWD/dist/pages" "$preview/ycoding"
+python3 -m http.server 4174 --bind 127.0.0.1 --directory "$preview"
+```
+
+Open `http://127.0.0.1:4174/ycoding/`. Stop the preview with Ctrl-C. Use another free port if needed; do not replace a pre-existing server. Previewing does not publish the site.
+
 ## Required updates
 
-| Change                                                                             | Required documentation                                     |
-| ---------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Product scope or release surface                                                   | `product-direction.md` and root `README.md`                |
-| Package ownership or dependency direction                                          | `architecture.md` and root `AGENTS.md`                     |
+| Change                                                                                                 | Required documentation                                     |
+| ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Product scope or release surface                                                                       | `product-direction.md` and root `README.md`                |
+| Package ownership or dependency direction                                                              | `architecture.md` and root `AGENTS.md`                     |
 | Session, autonomy, subagent, skill, artifact, cache, guardrail, provider-usage, or transcript behavior | `runtime.md`                                               |
-| Provider request amplification, cache/continuation capability, diagnostics, or efficiency measurement | `provider-efficiency.md` and `runtime.md`                  |
-| Public HTTP operation or Schema                                                    | relevant `specs/v2` contract and regenerated Client output |
-| Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration | `configuration.md`                                         |
-| Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery | `repository-resources.md`                                  |
-| Product identity, path, environment, or provider exception                         | `ycoding-migration.md`                                     |
-| Contributor invariant or verification requirement                                  | root or package-level `AGENTS.md`                          |
+| Provider request amplification, cache/continuation capability, diagnostics, or efficiency measurement  | `provider-efficiency.md` and `runtime.md`                  |
+| Public HTTP operation or Schema                                                                        | relevant `specs/v2` contract and regenerated Client output |
+| Runtime, CLI/TUI, service, provider, MCP, permission, or environment configuration                     | `configuration.md`                                         |
+| Agent, command, skill, plugin, hook, tool, theme, or repository resource discovery                     | `repository-resources.md`                                  |
+| Product identity, path, environment, or provider exception                                             | `ycoding-migration.md`                                     |
+| Contributor invariant or verification requirement                                                      | root or package-level `AGENTS.md`                          |
 
-## Status language
+## Authoring guidance
 
-- **Implemented:** verified in current code and a concrete runtime or test path.
-- **Partial:** real implementation exists with a named limitation.
-- **Proposed:** design only; no production behavior may be claimed.
-- **Historical:** retained for context and not authoritative.
+Write product documentation as specifications of current behavior, configuration, interfaces, constraints, and examples.
 
-Never describe proposed or historical behavior as implemented.
+- Describe the current contract directly. Do not narrate change history ("no longer", "previously", "has been removed"); keep migration instructions and release history in their dedicated documents.
+- Do not add implementation-status banners, progress labels, delivery ledgers, or test-run tracking. Keep delivery evidence and unfinished work in the task's tracking artifacts.
+- State functional limitations in the relevant specification section. Keep functional state values (`pending`, `connected`, `rejected`, `uncertain`) as specified behavior.
+- Never present proposals, historical plans, or unverified behavior as current capabilities; keep proposals separate from current product guides.
+
+Documents that record history or proposals (`ycoding-migration.md`, `tui-redesign-backlog.md`, `specs/v2/schema-changelog.md`, and the decision records under `specs/v2`) are exempt and are not current product guides.

@@ -34,6 +34,13 @@ export interface Interface {
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
   /** Resolves once this process owns no active execution for the Session. Returns immediately when idle and never starts work. */
   readonly awaitIdle: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  /**
+   * Runs one exclusive process-local transition for the Session. Transitions for the same
+   * Session serialize; doorbells raised while a transition is reserved are coalesced and
+   * forwarded once after the last release, and explicit resumes wait for reserved transitions.
+   * `awaitIdle` keeps observing only drain settlement.
+   */
+  readonly withTransition: <A, E, R>(sessionID: SessionSchema.ID, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
 /** Routes execution from a Session ID to the runner owned by that Session's Location. */
@@ -284,6 +291,7 @@ export const layer = Layer.effect(
       resume: coordinator.run,
       wake: coordinator.wake,
       awaitIdle: coordinator.awaitIdle,
+      withTransition: coordinator.withTransition,
     })
   }),
 )
@@ -310,5 +318,6 @@ export const noopLayer = Layer.succeed(
     wake: () => Effect.void,
     interrupt: () => Effect.void,
     awaitIdle: () => Effect.void,
+    withTransition: (_sessionID, effect) => effect,
   }),
 )

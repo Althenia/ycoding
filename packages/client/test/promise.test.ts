@@ -2,6 +2,26 @@ import { expect, test } from "bun:test"
 import { SessionCompaction } from "@ycoding-ai/schema"
 import { isSessionNotFoundError, isUnauthorizedError, YCoding } from "../src/promise/index"
 
+test("R7 sends explicit goal resume and preserves the returned objective", async () => {
+  const requests: Request[] = []
+  const state = {
+    mode: "normal", yolo: 1,
+    goal: { text: "Verify the release", status: "active", iteration: 2, noProgress: 1, maxNoProgress: 3 },
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      requests.push(input instanceof Request ? input : new Request(input, init))
+      return Response.json({ data: state })
+    },
+  })
+  expect(await client.session.autonomy.set({ sessionID: "ses_goal_client", payload: { goal: true, yolo: 1 } })).toEqual(state)
+  expect(requests).toHaveLength(1)
+  expect(requests[0]!.method).toBe("PUT")
+  expect(new URL(requests[0]!.url).pathname).toBe("/api/session/ses_goal_client/autonomy")
+  expect(await requests[0]!.json()).toEqual({ goal: true, yolo: 1 })
+})
+
 test("exposes every standard HTTP API group", () => {
   const client = YCoding.make({ baseUrl: "http://localhost:3000" })
 

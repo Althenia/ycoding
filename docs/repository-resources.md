@@ -1,7 +1,5 @@
 # Repository resources
 
-Status: **implemented**
-
 YCoding discovers repository-owned resources from `.ycoding` directories while walking upward from the current working directory. Broader ancestor directories load before nearer directories, so nearer resource definitions override or extend earlier definitions according to their domain rules.
 
 The same directory structure is supported globally under the YCoding configuration directory.
@@ -48,6 +46,10 @@ Supported project resource domains are:
 - custom guardrail rule files.
 
 There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
+
+## Built-in workspace memory
+
+The built-in `memory` tool stores explicit folder-scoped knowledge outside repository resource discovery. Configure it through the runtime `memory` object; it does not scan `.ycoding` for concepts or automatically load knowledge as instructions. Its actions are `status`, `list`, `search`, `read`, `write`, and offline `graph` export. See [Workspace knowledge memory](./memory.md) for storage, format, permissions, and update semantics.
 
 ## Built-in ntfy attention notifications
 
@@ -433,9 +435,9 @@ Do not create `.ycoding/hooks.json`, `.ycoding/hooks/`, or a top-level `hooks` c
 
 YCoding does not auto-load `.ycoding/tool/*.ts` or `.ycoding/tools/*.ts`.
 
-Implemented: local selective compaction is runtime-owned rather than a model tool. At configured `consider` pressure, the context hook durably admits and starts or joins one process-global background worker without waiting for settlement. It admits once more only if the same pressure cycle rises to `advised`, and rearms after returning to `normal`; failed admission remains retryable, while successful or deduplicated admission latches. `mandatory` never starts this soft path. Explicit `/compact` and the mandatory hard-limit gate remain synchronous settlement paths, and all three paths share one per-Session admission gate. Before creating helper state, the owner resolves its configured `efficiency.helper_models.compaction.main` or `.subagent` model. Each job reuses a deterministic taskless child Session with that model and the hidden built-in `compaction` agent, which remains `mode: primary`. The worker validates a bounded canonical TOON checkpoint containing objective, requirements, acceptance criteria, progress, pending work, decisions, blockers, skills, and a bounded fact capsule for every covered source item. Helper timeout or failure uses the local canonical fallback. Required semantic evidence that cannot fit fails closed; arbitrary covered bytes are not guaranteed to survive lossy compression. Activation creates a new immutable context revision without deleting canonical messages or transcript events.
+Local selective compaction is runtime-owned rather than a model tool. At configured `consider` pressure, the context hook durably admits and starts or joins one process-global background worker without waiting for settlement. It admits once more only if the same pressure cycle rises to `advised`, and rearms after returning to `normal`; failed admission remains retryable, while successful or deduplicated admission latches. `mandatory` never starts this soft path. Explicit `/compact` and the mandatory hard-limit gate remain synchronous settlement paths, and all three paths share one per-Session admission gate. Before creating helper state, the owner resolves its configured `efficiency.helper_models.compaction.main` or `.subagent` model. Each job reuses a deterministic taskless child Session with that model and the hidden built-in `compaction` agent, which remains `mode: primary`. The worker validates a bounded canonical TOON checkpoint containing objective, requirements, acceptance criteria, progress, pending work, decisions, blockers, skills, and a bounded fact capsule for every covered source item. Helper timeout or failure uses the local canonical fallback. Required semantic evidence that cannot fit fails closed; arbitrary covered bytes are not guaranteed to survive lossy compression. Activation creates a new immutable context revision without deleting canonical messages or transcript events.
 
-Historical summary events remain decode and migration input only. No active `conversation_summarize` source or tool remains; custom tools must not depend on destructive summary replacement.
+Custom tools must not depend on destructive summary replacement.
 
 Custom tools must be supplied through:
 
@@ -564,5 +566,5 @@ The following inherited patterns are not current YCoding resource contracts:
 - global `tui.json` or `kv.json`;
 - `.ycoding/tool/**` arbitrary tool loading;
 - `.ycoding/hooks/**` or top-level `hooks` configuration;
-- removed legacy plugin exports;
+- legacy plugin export shapes;
 - other products' schema or documentation URLs as YCoding authority.

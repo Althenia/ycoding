@@ -4,6 +4,8 @@ import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { json, type FetchHandler } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT } from "../viewport"
+import { railWidth } from "../../src/routes/session/rail"
+import { resetRailExpansion } from "../../src/routes/session/rail-section"
 import { renderScreen } from "./harness"
 
 const directory = `${process.env.HOME}/Workspace/Personal/YCoding`
@@ -164,6 +166,10 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
   const output = path.resolve(import.meta.dir, "../../../../.aphrodite/renders")
   await mkdir(output, { recursive: true })
 
+  // Rail expansion is process-global and shared across Session remounts. Reset it so this fixture
+  // starts from the shipped default (SESSION, CONTEXT, TODO) instead of another file's leftovers.
+  resetRailExpansion()
+
   for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE, NARROW_VIEWPORT]) {
     const screen = await renderScreen({
       ...viewport,
@@ -182,6 +188,24 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         )
           break
         await Bun.sleep(20)
+      }
+      // Default expansion is SESSION, CONTEXT, TODO only: active goal does not auto-expand GOAL or
+      // AUTONOMY. Expand the panels this capture is about through their real headers, so the
+      // captured expanded state is produced by the shipped interaction rather than assumed.
+      if (viewport.width !== NARROW_VIEWPORT.width) {
+        const railStart = viewport.width - railWidth(viewport.width)
+        for (const title of ["GOAL", "AUTONOMY", "SUBAGENTS", "SHELLS"]) {
+          const collapsed = screen
+            .lines()
+            .findIndex((line) => line.slice(railStart).includes(`+  ${title}`))
+          if (collapsed === -1) continue
+          await screen.mouse.click(railStart + 4, collapsed)
+          for (let attempt = 0; attempt < 50; attempt++) {
+            if (screen.lines().some((line) => line.slice(railStart).includes(`−  ${title}`))) break
+            await Bun.sleep(20)
+          }
+          expect(screen.lines().some((line) => line.slice(railStart).includes(`−  ${title}`))).toBe(true)
+        }
       }
       const lines = screen.frame().split("\n").slice(0, viewport.height)
       expect(lines).toHaveLength(viewport.height)
@@ -206,7 +230,7 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         expect(indexes.every((index) => index >= 0)).toBe(true)
         expect(indexes).toEqual([...indexes].toSorted((left, right) => left - right))
         expect(rail).not.toContain("3 / 5")
-        // An active goal expands the primary operational sections; their headers retain active-state summaries.
+        // Explicitly expanded sections retain their active-state summaries.
         expect(rail).toMatch(/−\s+GOAL\s+active/)
         expect(rail).toMatch(/−\s+AUTONOMY\s+Goal/)
       }
@@ -219,6 +243,7 @@ test("captures the expanded goal and YOLO session with populated rail fixtures",
         await Bun.write(path.join(output, `expanded-goal-yolo-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
     } finally {
       await screen.dispose()
+      resetRailExpansion()
     }
   }
 }, 120_000)

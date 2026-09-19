@@ -40,11 +40,9 @@ export function DialogSessionGoal(props: {
         retry = submission
         void activateGoal({
           sessionID: submission.payload.sessionID,
-          id: retry.promptID,
           goal: submission.payload.goal,
           get: () => client.api.session.autonomy.get({ sessionID: submission.payload.sessionID }),
           set: (payload) => client.api.session.autonomy.set({ sessionID: submission.payload.sessionID, payload }),
-          prompt: (input) => client.api.session.prompt(input),
         })
           .then((state) => {
             retry = undefined

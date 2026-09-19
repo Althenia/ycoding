@@ -20,10 +20,11 @@ test("session goal keeps palette and durable autonomy state wiring", async () =>
 
   expect(command).toContain('name: "session.autonomy.goal"')
   expect(command).toContain("palette: true")
-  expect(command).toContain('props.autonomy?.goal?.status === "active"')
-  expect(command).toContain("store.prompt.text.trim() || props.autonomy?.goal?.text ||")
-  expect(command).toContain("client.api.session.autonomy.set({ sessionID, payload: { goal: newGoal } })")
-  expect(command).toContain("props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)")
+  // Both the palette command and the composer branch share one `/goal` contract, so the command
+  // must delegate to the shared handler rather than duplicating the toggle logic.
+  expect(command).toContain("applyGoalCommand")
+  expect(prompt).toContain("client.api.session.autonomy.set({ sessionID, payload })")
+  expect(prompt).toContain("props.onAutonomyUpdated?.(sessionID, state as SessionAutonomyState)")
   expect(session).toContain("autonomy={autonomy()}")
   expect(session).toContain("onAutonomyUpdated={acceptAutonomy}")
 })

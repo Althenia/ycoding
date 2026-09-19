@@ -1,6 +1,7 @@
 export * as SessionRunCoordinator from "./run-coordinator"
 
 import { Deferred, Effect, Exit, Fiber, FiberSet, Scope } from "effect"
+import { KeyedMutex } from "../effect/keyed-mutex"
 
 /** Serializes execution for each key while allowing different keys to run concurrently. */
 export interface Coordinator<Key, E, Reason = never> {
@@ -14,6 +15,14 @@ export interface Coordinator<Key, E, Reason = never> {
   readonly interrupt: (key: Key, reason?: Reason) => Effect.Effect<void>
   /** Resolves once no execution is active for the key. Returns immediately when already idle and never starts work. */
   readonly awaitIdle: (key: Key) => Effect.Effect<void>
+  /**
+   * Runs one exclusive process-local transition for the key. Transitions for the same key
+   * serialize; a doorbell raised while any transition is reserved is coalesced and forwarded
+   * once, with `force: false`, after the last transition releases. `run` waits for reserved
+   * transitions, and `awaitIdle` still observes only drain settlement. Different keys stay
+   * independent.
+   */
+  readonly withTransition: <A, E, R>(key: Key, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
 }
 
 /**
@@ -55,6 +64,11 @@ export const make = <Key, E, Reason = never>(options: {
   Effect.gen(function* () {
     const executions = new Map<Key, Execution<E, Reason>>()
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
+    // A transition reservation is registered before its effect waits for the mutex, so a
+    // queued transition still blocks new drains. `users` counts active and queued
+    // transitions; only the last release may forward the coalesced doorbell.
+    const transitions = new Map<Key, { users: number; doorbell: boolean; done: Deferred.Deferred<void, never> }>()
+    const transitionLocks = KeyedMutex.makeUnsafe<Key>()
 
     const loop = (key: Key, execution: Execution<E, Reason>, force: boolean): Effect.Effect<void, E> =>
       Effect.suspend(() => options.drain(key, force)).pipe(
@@ -99,14 +113,24 @@ export const make = <Key, E, Reason = never>(options: {
     // during failure or interruption cleanup) starts a fresh execution for the remaining work.
     // Register the successor before resolving completed callers so awaitIdle follows the new
     // owner. start yields before it invokes drain, preserving the original caller's exit first.
+    // A reserved transition suppresses the successor and transfers the doorbell to the
+    // reservation, so the transition owner can settle the key without a drain starting
+    // against the pre-transition state.
     const settle = (key: Key, execution: Execution<E, Reason>, exit: Exit.Exit<void, E>) => {
-      if (execution.pendingWake) start(key, false)
+      const transition = transitions.get(key)
+      if (transition !== undefined) {
+        if (execution.pendingWake) transition.doorbell = true
+        executions.delete(key)
+      } else if (execution.pendingWake) start(key, false)
       else executions.delete(key)
       Deferred.doneUnsafe(execution.done, exit)
     }
 
     const run = (key: Key): Effect.Effect<void, E> =>
       Effect.suspend(() => {
+        const transition = transitions.get(key)
+        if (transition !== undefined)
+          return Deferred.await(transition.done).pipe(Effect.andThen(run(key)))
         const execution = executions.get(key)
         if (execution !== undefined) {
           // A stopping execution refuses joiners: wait out its cleanup, then run fresh.
@@ -118,6 +142,11 @@ export const make = <Key, E, Reason = never>(options: {
 
     const wake = (key: Key) =>
       Effect.sync(() => {
+        const transition = transitions.get(key)
+        if (transition !== undefined) {
+          transition.doorbell = true
+          return
+        }
         const execution = executions.get(key)
         if (execution !== undefined) {
           execution.pendingWake = true
@@ -126,12 +155,46 @@ export const make = <Key, E, Reason = never>(options: {
         start(key, false)
       })
 
+    const withTransition = <A, E2, R>(key: Key, effect: Effect.Effect<A, E2, R>): Effect.Effect<A, E2, R> =>
+      // Reservation and finalizer registration are one uninterruptible step: a cancellation
+      // that landed between them would strand the reservation (and its mutex waiters) forever.
+      Effect.uninterruptibleMask((restore) =>
+        Effect.suspend(() => {
+          const current = transitions.get(key)
+          const entry = current ?? { users: 0, doorbell: false, done: Deferred.makeUnsafe<void, never>() }
+          if (!current) transitions.set(key, entry)
+          entry.users += 1
+          return restore(transitionLocks.withLock(key)(effect)).pipe(
+            Effect.ensuring(
+              Effect.suspend(() => {
+                entry.users -= 1
+                if (entry.users > 0) return Effect.void
+                const doorbell = entry.doorbell
+                transitions.delete(key)
+                Deferred.doneUnsafe(entry.done, Exit.void)
+                // Forward only an observed doorbell; never manufacture a forced resume.
+                return doorbell ? wake(key) : Effect.void
+              }),
+            ),
+          )
+        }),
+      )
+
     const interrupt = (key: Key, reason?: Reason): Effect.Effect<void> =>
       Effect.suspend(() => {
         const execution = executions.get(key)
         if (execution?.owner === undefined || execution.stopping) return Effect.void
         execution.stopping = true
-        execution.pendingWake = false
+        const transition = transitions.get(key)
+        // A reserved transition owns the doorbell: a wake rung before the transition must
+        // survive the interruption instead of being discarded, so retained durable work can
+        // run once the transition releases.
+        if (transition !== undefined) {
+          if (execution.pendingWake) transition.doorbell = true
+          execution.pendingWake = false
+        } else {
+          execution.pendingWake = false
+        }
         execution.interruptionReason = reason
         return Fiber.interrupt(execution.owner)
       })
@@ -145,5 +208,5 @@ export const make = <Key, E, Reason = never>(options: {
         return Deferred.await(execution.done).pipe(Effect.exit, Effect.andThen(awaitIdle(key)))
       })
 
-    return { active: Effect.sync(() => new Set(executions.keys())), run, wake, interrupt, awaitIdle }
+    return { active: Effect.sync(() => new Set(executions.keys())), run, wake, interrupt, awaitIdle, withTransition }
   })

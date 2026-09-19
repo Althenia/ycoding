@@ -5,6 +5,7 @@ import {
   autonomyModeLabel,
   autonomyProgressLabel,
   createSessionAutonomyRefreshGuard,
+  goalToggleAction,
   parseGoalCommand,
 } from "../src/util/session-autonomy"
 
@@ -151,81 +152,53 @@ test("parses single-line, multiline, non-goal, and empty goal commands", () => {
   expect(parseGoalCommand("/goal")).toEqual({ goal: "" })
 })
 
-test("admits a goal before setting mode and wakes only after mode is active", async () => {
-  const calls: string[] = []
-  await activateGoal({
-    sessionID: "ses_123",
-    id: "msg_goal",
-    goal: "Finish the migration",
-    get: async () => {
-      calls.push("get")
-      return { mode: "normal", yolo: 0 }
-    },
-    set: async () => {
-      calls.push("set")
-      return { mode: "normal", yolo: 0, goal: {
-          text: "Finish the migration",
-          status: "active",
-          iteration: 0,
-          noProgress: 0,
-          maxNoProgress: 3,
-        },
-      }
-    },
-    prompt: async (input) => {
-      calls.push(`prompt:${input.id}:${input.resume === false ? "admit" : "wake"}`)
-    },
-  })
-  expect(calls).toEqual(["prompt:msg_goal:admit", "get", "set", "prompt:msg_goal:wake"])
+test("stops an active goal on a bare toggle", () => {
+  expect(
+    goalToggleAction({
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "Finish the migration", status: "active", iteration: 2, noProgress: 0, maxNoProgress: 3 },
+    }),
+  ).toEqual({ type: "stop" })
 })
 
-test("retries a lost goal wake without resetting an identical active goal", async () => {
-  const calls: string[] = []
-  let state: SessionAutonomyState = { mode: "normal", yolo: 0 }
-  let failWake = true
-  const run = () =>
-    activateGoal({
-      sessionID: "ses_123",
-      id: "msg_goal",
-      goal: "Finish the migration",
-      get: async () => {
-        calls.push("get")
-        return state
-      },
-      set: async () => {
-        calls.push("set")
-        state = { mode: "normal", yolo: 0, goal: {
-            text: "Finish the migration",
-            status: "active",
-            iteration: 0,
-            noProgress: 0,
-            maxNoProgress: 3,
-          },
-        }
-        return state
-      },
-      prompt: async (input) => {
-        calls.push(input.resume === false ? "admit" : "wake")
-        if (input.resume !== false && failWake) {
-          failWake = false
-          throw new Error("lost response")
-        }
-      },
-    })
+test("resumes a retained goal without inventing or recalculating its objective", () => {
+  expect(
+    goalToggleAction({
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "Finish the migration", status: "completed", iteration: 4, noProgress: 1, maxNoProgress: 3 },
+    }),
+  ).toEqual({ type: "resume", text: "Finish the migration" })
+  expect(
+    goalToggleAction({
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "Finish the migration", status: "stopped", iteration: 1, noProgress: 0, maxNoProgress: 3 },
+    }),
+  ).toEqual({ type: "resume", text: "Finish the migration" })
+})
 
-  await expect(run()).rejects.toThrow("lost response")
-  await run()
-
-  expect(calls).toEqual(["admit", "get", "set", "wake", "admit", "get", "wake"])
+test("requests an explicit objective when no retained goal text exists", () => {
+  expect(goalToggleAction({ mode: "normal", yolo: 0 })).toEqual({ type: "request-objective" })
+  expect(
+    goalToggleAction({
+      mode: "normal",
+      yolo: 0,
+      goal: { text: "   ", status: "stopped", iteration: 0, noProgress: 0, maxNoProgress: 3 },
+    }),
+  ).toEqual({ type: "request-objective" })
 })
 
 test("does not reset an active goal when its original text is re-activated", async () => {
   const calls: string[] = []
   await activateGoal({
     sessionID: "ses_123",
-    id: "msg_goal",
     goal: "Fix the migration failure",
-    get: async () => ({ mode: "normal" as const, yolo: 0, goal: {
+    get: async () => ({
+      mode: "normal" as const,
+      yolo: 0,
+      goal: {
         text: "Repair the migration and verify the suite passes.",
         rawText: "Fix the migration failure",
         status: "active" as const,
@@ -238,33 +211,25 @@ test("does not reset an active goal when its original text is re-activated", asy
       calls.push("set")
       throw new Error("an active goal with the same original text must not be reset")
     },
-    prompt: async (input) => {
-      calls.push(input.resume === false ? "admit" : "wake")
-    },
   })
 
-  expect(calls).toEqual(["admit", "wake"])
+  expect(calls).toEqual([])
 })
 
-test("resets a completed goal with identical original text to active", async () => {
+test("calculates and replaces the goal when new objective text is submitted", async () => {
   const calls: string[] = []
   const state = await activateGoal({
     sessionID: "ses_123",
-    id: "msg_goal",
-    goal: "Fix the migration failure",
-    get: async () => ({ mode: "normal" as const, yolo: 0, goal: {
-        text: "Repair the migration and verify the suite passes.",
-        rawText: "Fix the migration failure",
-        status: "completed" as const,
-        iteration: 4,
-        noProgress: 2,
-        maxNoProgress: 3,
-      },
-    }),
-    set: async () => {
-      calls.push("set")
-      return { mode: "normal" as const, yolo: 0, goal: {
-          text: "Fix the migration failure",
+    goal: "Replace migration",
+    get: async () => ({ mode: "normal" as const, yolo: 0 }),
+    set: async (payload) => {
+      calls.push(payload.goal)
+      return {
+        mode: "normal" as const,
+        yolo: 0,
+        goal: {
+          text: "Repair the migration and verify the suite passes.",
+          rawText: payload.goal,
           status: "active" as const,
           iteration: 0,
           noProgress: 0,
@@ -272,45 +237,31 @@ test("resets a completed goal with identical original text to active", async () 
         },
       }
     },
-    prompt: async (input) => {
-      calls.push(input.resume === false ? "admit" : "wake")
-    },
   })
 
-  expect(calls).toEqual(["admit", "set", "wake"])
-  expect(state).toMatchObject({ mode: "normal", yolo: 0, goal: { status: "active", iteration: 0, noProgress: 0, maxNoProgress: 3 },
-  })
+  expect(calls).toEqual(["Replace migration"])
   expect(autonomyProgressLabel(state)).toBe("0 · no progress 0/3")
 })
 
-test("retains the admitted goal when changed content is submitted after a lost wake", async () => {
+test("surfaces a failed calculation so the dialog can preserve the draft", async () => {
+  await expect(
+    activateGoal({
+      sessionID: "ses_123",
+      goal: "Replace migration",
+      get: async () => ({ mode: "normal" as const, yolo: 0 }),
+      set: async () => {
+        throw new Error("goal.calculation_failed")
+      },
+    }),
+  ).rejects.toThrow("goal.calculation_failed")
+})
+
+test("keeps the goal dialog retry identity for a failed submission", async () => {
   const util = await import("../src/util/session-autonomy")
   const original = util.retainSessionSubmission(undefined, "/goal Finish migration", 0, {
     goal: "Finish migration",
   })
   original.sessionID = "ses_123"
-  const calls: string[] = []
-
-  await expect(
-    activateGoal({
-      sessionID: original.sessionID,
-      id: original.promptID,
-      goal: original.payload.goal,
-      get: async () => ({ mode: "normal", yolo: 0 }),
-      set: async () => ({ mode: "normal", yolo: 0, goal: {
-          text: original.payload.goal,
-          status: "active",
-          iteration: 0,
-          noProgress: 0,
-          maxNoProgress: 3,
-        },
-      }),
-      prompt: async (input) => {
-        calls.push(`${input.sessionID}:${input.id}:${input.resume === false ? "admit" : "wake"}`)
-        if (input.resume !== false) throw new Error("lost response")
-      },
-    }),
-  ).rejects.toThrow("lost response")
 
   const changed = util.retainSessionSubmission(original, "/goal Replace migration", 0, {
     goal: "Replace migration",
@@ -320,10 +271,6 @@ test("retains the admitted goal when changed content is submitted after a lost w
   expect(changed.sessionID).toBe("ses_123")
   expect(changed.promptID).toBe(original.promptID)
   expect(changed.payload).toEqual({ goal: "Finish migration" })
-  expect(calls).toEqual([
-    `ses_123:${original.promptID}:admit`,
-    `ses_123:${original.promptID}:wake`,
-  ])
 })
 
 test("exposes autonomy only for the connected active session", async () => {

@@ -16,7 +16,7 @@ import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runti
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
-import { SessionHelperPolicy, localGoal, localTitle } from "@ycoding-ai/core/session/helper-policy"
+import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionTitle } from "@ycoding-ai/core/session/title"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Project } from "@ycoding-ai/core/project"
@@ -107,10 +107,9 @@ const helperPolicy = Layer.succeed(
   SessionHelperPolicy.Service,
   SessionHelperPolicy.Service.of({
     get settings() {
-      return { titleMode, goalMode: "local" as const, models: {} }
+      return { titleMode, models: {} }
     },
     localTitle,
-    localGoal,
     resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
   }),
 )
