@@ -25,13 +25,11 @@ The product goal is a dependable, highly customizable coding-agent runtime with 
 
 ### 1. Terminal-first delivery
 
-The terminal application is the primary product and release surface. A native Godot desktop client is an explicitly approved additional presentation surface that ships from `apps/office/` as a release artifact alongside the CLI; it is a client of the existing public service contracts, never a second runtime.
+The terminal application is the primary product and release surface.
 
-The desktop client is distributed as a platform archive attached to the same GitHub Release as the CLI, and the maintained installer can place it. It is not notarized: macOS refuses a downloaded bundle until the user allows it deliberately. State that limit rather than describing the download as ready to open.
+Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
-Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path. The desktop client consumes those same contracts and owns no execution authority.
-
-The supported surfaces are the terminal application and the native Godot desktop client. There is no Electron, browser-application, console, website, or hosted-application runtime; the native Godot client is a presentation client, not an embedded-browser shell.
+The supported surface is the terminal application. There is no Electron, browser-application, console, website, or hosted-application runtime.
 
 ### 2. Current runtime architecture
 

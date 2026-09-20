@@ -1,11 +1,11 @@
 # Architecture
 
-* [Package Architecture and Dependency Direction](architecture.md) - YCoding enforces a terminal-first package graph with directed Schema-to-Core/Protocol-to-Server dependencies, explicit state scopes, and a native desktop client outside the workspace.
+* [Package Architecture and Dependency Direction](architecture.md) - YCoding enforces a terminal-first package graph with directed Schema-to-Core/Protocol-to-Server dependencies and explicit state scopes.
 * [Provider Integration and Cache](provider-integration.md) - Provider integration optimizes cost and cache reuse without changing semantic behavior, using stable prefixes, provider-native cache controls, normalized usage, and bounded diagnostics.
 
 # Decision
 
-* [Terminal-First Product Direction](product-direction.md) - YCoding is a standalone terminal-first coding agent with durable execution, explicit autonomy, background orchestration, provider-efficient model usage, and an approved native Godot desktop client.
+* [Terminal-First Product Direction](product-direction.md) - YCoding is a standalone terminal-first coding agent with durable execution, explicit autonomy, background orchestration, and provider-efficient model usage.
 
 # Interface
 

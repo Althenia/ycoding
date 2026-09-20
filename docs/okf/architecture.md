@@ -2,7 +2,7 @@
 type: Architecture
 title: Package Architecture and Dependency Direction
 description: YCoding enforces a terminal-first package graph with directed Schema-to-Core/Protocol-to-Server
-  dependencies, explicit state scopes, and a native desktop client outside the workspace.
+  dependencies and explicit state scopes.
 tags:
 - packages
 - dependency
@@ -19,8 +19,6 @@ sources:
   resource: repo:///AGENTS.md
 - id: contrib
   resource: repo:///CONTRIBUTING.md
-- id: office-agents
-  resource: repo:///apps/office/AGENTS.md
 ---
 
 ## Dependency Direction
@@ -49,10 +47,6 @@ Terminal input flows through Client request, Protocol operation, Server handler,
 
 The active package set is explicit and enforced by script/ycoding-workspace.ts.[^arch-doc] Electron, browser-product, console, website, statistics, hosted-application, and legacy SDK packages are outside the product boundary and must not be restored.[^contrib]
 
-## Native Desktop Client
-
-`apps/office/` is an approved native Godot client of the existing public HTTP/SSE contracts and is deliberately not a Bun workspace package, mirroring the tracked non-package surface of `extensions/chrome`; the workspace checker scans `packages/` only, so the terminal artifact closure is unchanged.[^arch-doc][^office-agents]
-
 ## Authority Order
 
 When sources disagree, the order is executable behavior and tests, Schema public shapes, Protocol operations, Core runtime behavior, docs documentation and specs/v2 contracts, package AGENTS.md, generated clients, and upstream material last.[^agents]
@@ -69,5 +63,4 @@ When sources disagree, the order is executable behavior and tests, Schema public
 [^arch-doc]: repo:///docs/architecture.md
 [^product-dir]: repo:///docs/product-direction.md
 [^contrib]: repo:///CONTRIBUTING.md
-[^office-agents]: repo:///apps/office/AGENTS.md
 [^agents]: repo:///AGENTS.md
