@@ -1,0 +1,5 @@
+a shipped module OPENS a runtime database            passed=658  failed=6   CAUGHT             the runtime does not name a runtime database
+a shipped module NAMES a runtime database            passed=663  failed=1   CAUGHT             the runtime does not name a runtime database
+a shipped module opens an extension it does not own  passed=663  failed=1   CAUGHT             the runtime opens only client surfaces, not 
+a shipped module opens a sqlite file                 passed=669  failed=1   CAUGHT             the runtime opens only client surfaces, not 
+restored source: True

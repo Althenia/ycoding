@@ -1,0 +1,17 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R503 start outdir=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r5-03
+R503 seeded projects: /tmp/r5-03-alpha and /tmp/r5-03-beta
+R503 target='ses_r503_beta' composer_name='/tmp/r5-03-beta' model_pill='Claude Sonnet 4  ·  demo list'
+R503 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r5-03/r5-03-composer-ses_r503_beta.png
+R503 target='ses_r503_alpha' composer_name='/tmp/r5-03-alpha' model_pill='DeepSeek V4.1 Flash  ·  demo list'
+R503 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r5-03/r5-03-composer-ses_r503_alpha.png
+R503 target='ses_r503_beta' composer_name='/tmp/r5-03-beta' model_pill='Claude Sonnet 4  ·  demo list'
+R503 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r5-03/r5-03-composer-ses_r503_beta.png
+R503 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

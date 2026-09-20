@@ -1,0 +1,364 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:49)
+SCRIPT ERROR: Parse Error: Assigned value for constant "MARK_VISIBLE" isn't a constant expression.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:49)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "MARK_VISIBLE" constant because the value doesn't have a set type.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:49)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:50)
+SCRIPT ERROR: Parse Error: Assigned value for constant "MARK_HIDDEN" isn't a constant expression.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:50)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "MARK_HIDDEN" constant because the value doesn't have a set type.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:50)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://ui/shell/office_shell_layout.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/suites/test_shell_layout.gd:0)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:45)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:45)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "demo_text" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:49)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "live_text" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:54)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:62)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:62)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "demo_colour" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:66)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "live_colour" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:70)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:82)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:82)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:101)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:101)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "routine" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:105)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:118)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:118)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:130)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:130)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:148)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:148)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:152)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:153)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:154)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:154)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "row" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:159)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:163)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:171)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:171)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "plain" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:174)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "urgent" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:175)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:185)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:185)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:209)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:210)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:223)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:223)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:245)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:245)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:263)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:263)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "text" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:276)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:295)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:295)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:332)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "panel" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_sidebar.gd:332)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:243)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:249)
+SCRIPT ERROR: Parse Error: Could not parse global class "SidebarPanel" from "res://ui/shell/sidebar_panel.gd".
+          at: GDScript::reload (res://app/main.gd:31)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/suites/test_asset_provenance.gd:0)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:70)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "sidebar".
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:70)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_scale_ownership.gd:239)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "sidebar" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_scale_ownership.gd:239)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "sidebar_min" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_scale_ownership.gd:242)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:237)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "sidebar" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:237)
+SCRIPT ERROR: Parse Error: Could not resolve class "SidebarPanel", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:268)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/run_tests.gd:0)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_sidebar_is_a_docked_column (res://tests/suites/test_shell_layout.gd:51)
+              [3] run (res://tests/suites/test_shell_layout.gd:22)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_sidebar_is_a_docked_column (res://tests/suites/test_shell_layout.gd:51)
+          GDScript backtrace (most recent call first):
+              [0] test_sidebar_is_a_docked_column (res://tests/suites/test_shell_layout.gd:51)
+              [1] run (res://tests/suites/test_shell_layout.gd:22)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_office_owns_the_area_east_of_the_sidebar (res://tests/suites/test_shell_layout.gd:74)
+              [3] run (res://tests/suites/test_shell_layout.gd:23)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_office_owns_the_area_east_of_the_sidebar (res://tests/suites/test_shell_layout.gd:75)
+          GDScript backtrace (most recent call first):
+              [0] test_office_owns_the_area_east_of_the_sidebar (res://tests/suites/test_shell_layout.gd:75)
+              [1] run (res://tests/suites/test_shell_layout.gd:23)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_overlays_are_present_and_inside (res://tests/suites/test_shell_layout.gd:142)
+              [3] run (res://tests/suites/test_shell_layout.gd:26)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_overlays_are_present_and_inside (res://tests/suites/test_shell_layout.gd:145)
+          GDScript backtrace (most recent call first):
+              [0] test_overlays_are_present_and_inside (res://tests/suites/test_shell_layout.gd:145)
+              [1] run (res://tests/suites/test_shell_layout.gd:26)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_sidebar_never_covers_the_office (res://tests/suites/test_shell_layout.gd:163)
+              [3] run (res://tests/suites/test_shell_layout.gd:27)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_sidebar_never_covers_the_office (res://tests/suites/test_shell_layout.gd:163)
+          GDScript backtrace (most recent call first):
+              [0] test_sidebar_never_covers_the_office (res://tests/suites/test_shell_layout.gd:163)
+              [1] run (res://tests/suites/test_shell_layout.gd:27)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_composer_is_centred_in_the_visible_office (res://tests/suites/test_shell_layout.gd:175)
+              [3] run (res://tests/suites/test_shell_layout.gd:28)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'composer' on a base object of type 'Dictionary'.
+          at: test_composer_is_centred_in_the_visible_office (res://tests/suites/test_shell_layout.gd:176)
+          GDScript backtrace (most recent call first):
+              [0] test_composer_is_centred_in_the_visible_office (res://tests/suites/test_shell_layout.gd:176)
+              [1] run (res://tests/suites/test_shell_layout.gd:28)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_composer_never_covers_a_work_anchor (res://tests/suites/test_shell_layout.gd:317)
+              [3] run (res://tests/suites/test_shell_layout.gd:29)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'composer' on a base object of type 'Dictionary'.
+          at: test_composer_never_covers_a_work_anchor (res://tests/suites/test_shell_layout.gd:317)
+          GDScript backtrace (most recent call first):
+              [0] test_composer_never_covers_a_work_anchor (res://tests/suites/test_shell_layout.gd:317)
+              [1] run (res://tests/suites/test_shell_layout.gd:29)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_composer_never_covers_a_visitor_anchor (res://tests/suites/test_shell_layout.gd:329)
+              [3] run (res://tests/suites/test_shell_layout.gd:30)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'composer' on a base object of type 'Dictionary'.
+          at: test_composer_never_covers_a_visitor_anchor (res://tests/suites/test_shell_layout.gd:329)
+          GDScript backtrace (most recent call first):
+              [0] test_composer_never_covers_a_visitor_anchor (res://tests/suites/test_shell_layout.gd:329)
+              [1] run (res://tests/suites/test_shell_layout.gd:30)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_sidebar_never_covers_an_anchor (res://tests/suites/test_shell_layout.gd:342)
+              [3] run (res://tests/suites/test_shell_layout.gd:31)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_sidebar_never_covers_an_anchor (res://tests/suites/test_shell_layout.gd:342)
+          GDScript backtrace (most recent call first):
+              [0] test_sidebar_never_covers_an_anchor (res://tests/suites/test_shell_layout.gd:342)
+              [1] run (res://tests/suites/test_shell_layout.gd:31)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_occlusion_maps_to_real_tiles (res://tests/suites/test_shell_layout.gd:381)
+              [3] run (res://tests/suites/test_shell_layout.gd:33)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_occlusion_maps_to_real_tiles (res://tests/suites/test_shell_layout.gd:381)
+          GDScript backtrace (most recent call first):
+              [0] test_occlusion_maps_to_real_tiles (res://tests/suites/test_shell_layout.gd:381)
+              [1] run (res://tests/suites/test_shell_layout.gd:33)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_chrome_stays_a_minority_of_the_frame (res://tests/suites/test_shell_layout.gd:215)
+              [3] run (res://tests/suites/test_shell_layout.gd:34)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_chrome_stays_a_minority_of_the_frame (res://tests/suites/test_shell_layout.gd:215)
+          GDScript backtrace (most recent call first):
+              [0] test_chrome_stays_a_minority_of_the_frame (res://tests/suites/test_shell_layout.gd:215)
+              [1] run (res://tests/suites/test_shell_layout.gd:34)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] _overlays (res://tests/suites/test_shell_layout.gd:44)
+              [2] test_toggle_cluster_is_reachable (res://tests/suites/test_shell_layout.gd:245)
+              [3] run (res://tests/suites/test_shell_layout.gd:35)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'toggles' on a base object of type 'Dictionary'.
+          at: test_toggle_cluster_is_reachable (res://tests/suites/test_shell_layout.gd:246)
+          GDScript backtrace (most recent call first):
+              [0] test_toggle_cluster_is_reachable (res://tests/suites/test_shell_layout.gd:246)
+              [1] run (res://tests/suites/test_shell_layout.gd:35)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] occluded_tiles (res://ui/shell/office_shell_layout.gd:163)
+              [2] test_hidden_overlays_occlude_nothing (res://tests/suites/test_shell_layout.gd:274)
+              [3] run (res://tests/suites/test_shell_layout.gd:36)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] occluded_tiles (res://ui/shell/office_shell_layout.gd:163)
+              [2] test_hidden_overlays_occlude_nothing (res://tests/suites/test_shell_layout.gd:278)
+              [3] run (res://tests/suites/test_shell_layout.gd:36)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] occluded_tiles (res://ui/shell/office_shell_layout.gd:163)
+              [2] test_hidden_overlays_occlude_nothing (res://tests/suites/test_shell_layout.gd:286)
+              [3] run (res://tests/suites/test_shell_layout.gd:36)
+              [4] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] test_a_text_scale_grows_the_panels_that_carry_text (res://tests/suites/test_shell_layout.gd:398)
+              [2] run (res://tests/suites/test_shell_layout.gd:38)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] test_a_text_scale_grows_the_panels_that_carry_text (res://tests/suites/test_shell_layout.gd:399)
+              [2] run (res://tests/suites/test_shell_layout.gd:38)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_a_text_scale_grows_the_panels_that_carry_text (res://tests/suites/test_shell_layout.gd:400)
+          GDScript backtrace (most recent call first):
+              [0] test_a_text_scale_grows_the_panels_that_carry_text (res://tests/suites/test_shell_layout.gd:400)
+              [1] run (res://tests/suites/test_shell_layout.gd:38)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] test_every_scale_fits_and_never_overlaps (res://tests/suites/test_shell_layout.gd:431)
+              [2] run (res://tests/suites/test_shell_layout.gd:39)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_every_scale_fits_and_never_overlaps (res://tests/suites/test_shell_layout.gd:432)
+          GDScript backtrace (most recent call first):
+              [0] test_every_scale_fits_and_never_overlaps (res://tests/suites/test_shell_layout.gd:432)
+              [1] run (res://tests/suites/test_shell_layout.gd:39)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'cluster_width' in base 'GDScript'.
+          at: overlays (res://ui/shell/office_shell_layout.gd:120)
+          GDScript backtrace (most recent call first):
+              [0] overlays (res://ui/shell/office_shell_layout.gd:120)
+              [1] test_the_composer_never_covers_the_sidebar_at_any_scale (res://tests/suites/test_shell_layout.gd:455)
+              [2] run (res://tests/suites/test_shell_layout.gd:40)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'sidebar' on a base object of type 'Dictionary'.
+          at: test_the_composer_never_covers_the_sidebar_at_any_scale (res://tests/suites/test_shell_layout.gd:456)
+          GDScript backtrace (most recent call first):
+              [0] test_the_composer_never_covers_the_sidebar_at_any_scale (res://tests/suites/test_shell_layout.gd:456)
+              [1] run (res://tests/suites/test_shell_layout.gd:40)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _init (res://tests/run_tests.gd:51)
+          GDScript backtrace (most recent call first):
+              [0] _init (res://tests/run_tests.gd:51)
+Terminated: 15
+EXIT=143

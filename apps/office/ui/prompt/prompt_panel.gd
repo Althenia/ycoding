@@ -8,6 +8,10 @@
 ## submitting never sends a mutation. It does not script employee movement, inject
 ## roleplay, or select an agent on the user's behalf.
 ##
+## The key map is the TUI's, because the submit convention is the application's
+## and not this panel's: a bare Return submits, and Return with a modifier breaks
+## the line instead.
+##
 ## Every row has an explicit height and the card's total matches what the shell
 ## layout reserves, because an earlier version stacked more content than its box
 ## allowed and silently clipped the send button.
@@ -17,6 +21,14 @@ extends PanelContainer
 signal prompt_submitted(text: String)
 signal model_selected(ref: String)
 signal effort_selected(variant: String)
+## The user asked to stop the work the runtime is running. The panel never performs
+## it: stopping is a real service mutation, so the composition root owns it.
+signal stop_requested
+
+## Why the Stop control cannot act. A control that cannot act is disabled and says
+## why rather than silently swallowing the click.
+const STOP_DISABLED_REASON := "Nothing is running to stop"
+const STOP_DEMO_REASON := "DEMO preview — there is no running work to stop"
 
 ## Row metrics. The card is INPUT_H + CONTROL_H + padding.
 const INPUT_H := 44.0
@@ -37,15 +49,23 @@ var ui_scale: float = UiScale.MIN
 
 var _input: TextEdit
 var _send: Button
+var _stop: Button
 var _attach: Button
 var _approval: Button
 var _pill: Button
 var _pill_menu: PopupMenu
 var _notice: Label
+## The folder work would target. Its OWN label, because the target is standing context
+## the spec requires to be visible before Send, while the notice is a transient
+## outcome: sharing one line let each overwrite the other.
+var _target_label: Label
 var _effort: EffortSlider
 var _mode: String = OfficeStore.MODE_DEMO
 var _models: Array = []
 var _model_ref: String = ""
+## The folder new work would run in. Empty until a folder is chosen, because the
+## composer must not name a target it does not have.
+var _target: String = ""
 
 
 func _ready() -> void:
@@ -110,6 +130,17 @@ func _ready() -> void:
 	_send.pressed.connect(_on_send)
 	row.add_child(_send)
 
+	# Stopping is a real service mutation, so this panel only asks. It sits beside
+	# Send because it is the same intent interrupted, and it is disabled with a
+	# reason whenever there is nothing it could stop, rather than swallowing a click.
+	_stop = OfficeTheme.icon_button("Stop")
+	OfficeTheme.apply_font(_stop, 13)
+	_stop.custom_minimum_size = Vector2(0, CONTROL_H * ui_scale)
+	_stop.disabled = true
+	_stop.tooltip_text = STOP_DISABLED_REASON
+	_stop.pressed.connect(_on_stop)
+	row.add_child(_stop)
+
 	box.add_child(row)
 
 	# --- notice line ---------------------------------------------------------
@@ -119,6 +150,16 @@ func _ready() -> void:
 	_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_notice.custom_minimum_size = Vector2(WRAP_MIN_WIDTH * ui_scale, 0.0)
 	box.add_child(_notice)
+
+	# --- target line ---------------------------------------------------------
+	# Beside the composer and above Send, so where work would land is stated before
+	# the user commits to it.
+	_target_label = Label.new()
+	OfficeTheme.apply_font(_target_label, 11)
+	_target_label.add_theme_color_override("font_color", OfficeTheme.text_dim())
+	_target_label.clip_text = true
+	_target_label.text = target_text()
+	box.add_child(_target_label)
 
 	add_child(box)
 
@@ -219,6 +260,12 @@ func _refresh_pill() -> void:
 		_pill.text = "Default"
 		return
 	var label := ModelCatalog.display_label(_entry_for(ref), str(ref["variant"]))
+	# A model the catalogue does not describe is still the model in use - a session can
+	# report one the current read has not listed. It is named from the reference rather
+	# than left blank, because an empty control states nothing and the user cannot tell
+	# whether any model is selected at all.
+	if label.strip_edges().is_empty():
+		label = str(ref["id"])
 	# A fabricated catalogue must say so wherever it is shown, or the office claims
 	# a model the runtime never offered.
 	if ModelCatalog.is_demo_catalog(_models):
@@ -249,6 +296,37 @@ func current_entry() -> Dictionary:
 	return _entry_for(ModelCatalog.parse_ref(_model_ref))
 
 
+## The folder new work would run in, named beside the composer.
+##
+## The kit requires the target to be shown BEFORE Send is enabled, so the composer
+## reports what it has rather than leaving the user to guess where work would land.
+## With nothing chosen it says so instead of inventing a directory.
+func target_text() -> String:
+	if _target.is_empty():
+		return "no folder chosen"
+	return _target
+
+
+## Adopt the folder a submission would target. An empty path clears it, because a
+## composer must not keep claiming a folder that was withdrawn.
+func set_target(directory: String) -> void:
+	_target = directory
+	if _target_label != null:
+		_target_label.text = target_text()
+
+
+## Put a saved draft back in the composer, and place the caret at its end so the user's
+## next keystroke continues the thought rather than replacing it. Restoring a draft is not
+## a submission: nothing is sent, and Send still has to be pressed.
+func set_draft(text: String) -> void:
+	if _input == null:
+		return
+	_input.text = text
+	var last: int = _input.get_line_count() - 1
+	_input.set_caret_line(last)
+	_input.set_caret_column(_input.get_line(last).length())
+
+
 func current_text() -> String:
 	return _input.text
 
@@ -265,9 +343,36 @@ func _on_input_event(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
-	if key.pressed and key.keycode == KEY_ENTER and (key.ctrl_pressed or key.meta_pressed):
-		_on_send()
+	if not key.pressed:
+		return
+	if key.keycode != KEY_ENTER and key.keycode != KEY_KP_ENTER:
+		return
+	# A held key repeats. The draft stays in the box after a submission, so acting
+	# on a repeat would admit the same prompt once per repeat.
+	if key.echo:
 		accept_event()
+		return
+	# An unfinished composition is not a draft. The editor keeps this key so the
+	# composition can settle; a later Return submits what it produced.
+	if _input.has_ime_text():
+		return
+	# The key is the composer's, not the editor's: if the editor also saw it, a
+	# submission would break the line it submitted, and an inserted newline would
+	# arrive twice.
+	if _asks_for_a_newline(key):
+		_input.insert_text_at_caret("\n")
+	else:
+		_on_send()
+	accept_event()
+
+
+## Whether a Return press asks to break the line rather than to submit.
+##
+## These are the TUI's own `input_newline` bindings: Shift, Ctrl and Alt. The
+## command key is the same binding on macOS, where `Shortcuts` already treats Cmd
+## and Ctrl as one shortcut modifier, so a bare Return is the only submit.
+func _asks_for_a_newline(key: InputEventKey) -> bool:
+	return key.shift_pressed or key.ctrl_pressed or key.alt_pressed or key.meta_pressed
 
 
 func _on_send() -> void:
@@ -275,6 +380,21 @@ func _on_send() -> void:
 	if text.is_empty():
 		return
 	prompt_submitted.emit(text)
+
+
+## Ask the composition root to stop the running work. The panel does not know which
+## session that is, and stopping is a service mutation the root owns.
+func _on_stop() -> void:
+	stop_requested.emit()
+
+
+## Enable or disable the Stop control with the reason it is unavailable, so a user
+## never clicks a control that quietly did nothing.
+func set_stop_available(available: bool, reason: String = STOP_DISABLED_REASON) -> void:
+	if _stop == null:
+		return
+	_stop.disabled = not available
+	_stop.tooltip_text = reason
 
 
 ## The attach affordance opens the same style of menu the reference shows: the
@@ -378,14 +498,17 @@ func _on_effort_chosen(variant: String) -> void:
 ##
 ## The panel owns the text editor, so focus is its business rather than the
 ## composition root reaching into a child.
+## Focus exists only in tree scope, so a composer that is not in the tree has nothing to
+## focus. `grab_focus` on a control outside the tree raises an engine error rather than
+## doing nothing, which a log scan then reads as a defect, so the scope is checked here.
 func focus_input() -> void:
-	if _input != null:
+	if _input != null and _input.is_inside_tree():
 		_input.grab_focus()
 
 
 ## Take the caret out of the composer, so a further Escape reaches the drawer.
 func release_input_focus() -> void:
-	if _input != null:
+	if _input != null and _input.is_inside_tree():
 		_input.release_focus()
 
 

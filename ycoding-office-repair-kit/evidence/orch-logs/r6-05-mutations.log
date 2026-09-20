@@ -1,0 +1,7 @@
+a running shell is presented as finished                 passed=31   failed=2   CAUGHT             a running shell is not settled
+more output is never reported                            passed=32   failed=1   CAUGHT             and the reader reports that MORE output rema
+a page is presented as the whole output (truncation dropped) passed=32   failed=1   CAUGHT             a truncated capture is reported as truncated
+the patch is carried whole, unmarked                     passed=33   failed=0   *** NOT CAUGHT *** 
+the shell row invites input (a fake terminal)            passed=32   failed=1   CAUGHT             a shell row carries no 'input' field to type
+the end event appends a second row for one shell         passed=31   failed=2   CAUGHT             the end event updates the same shell rather 
+restored: True True

@@ -6,6 +6,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { Global } from "@ycoding-ai/core/global"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigToolOutput } from "@ycoding-ai/core/config/tool-output"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
@@ -25,7 +26,7 @@ const withStore = <A, E, R>(
       const configured = config
         ? Layer.succeed(
             Config.Service,
-            Config.Service.of({
+            stubConfig({
               entries: () => Effect.succeed([new Config.Document({ type: "document", info: config })]),
             }),
           )

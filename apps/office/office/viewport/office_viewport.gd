@@ -39,6 +39,12 @@ func _ready() -> void:
 ## Fit the whole office inside the container, preserving aspect so nothing is
 ## distorted or cropped. The camera centres on the map so the north wall band and
 ## the south rooms are both visible.
+##
+## Deliberately NOT "fill": the office region is world-aspect, so fit and fill are the
+## same rect and the change would be a no-op. Making the office cover a non-world-aspect
+## region would crop the reviewed plan and hide anchors the shell's occlusion guarantees
+## are stated against, so the region keeps the world's shape and the backdrop shows
+## through the band instead.
 func _fit() -> void:
 	if _camera == null or size.x <= 0.0 or size.y <= 0.0:
 		return
@@ -46,6 +52,27 @@ func _fit() -> void:
 	_camera.position = WORLD_SIZE * 0.5
 	var zoom := clampf(fit, MIN_ZOOM, MAX_ZOOM)
 	_camera.zoom = Vector2(zoom, zoom)
+
+
+## The camera as it stands, so a caller can save where the view was. This owns where the
+## camera IS; what to do with that is the caller's decision.
+func capture_view() -> Dictionary:
+	if _camera == null:
+		return {}
+	return {"position": _camera.position, "zoom": _camera.zoom.x}
+
+
+## Put the camera back where it was. The position is clamped into the world here, and the
+## ZOOM BOUND is applied here because this viewport owns that rule: a stored zoom is only
+## ever a request, and one that is not a usable zoom keeps the current fit rather than
+## collapsing the view.
+func restore_view(position: Vector2, zoom: float = 0.0) -> void:
+	if _camera == null:
+		return
+	_camera.position = position.clamp(Vector2.ZERO, WORLD_SIZE)
+	if zoom > 0.0:
+		var bounded := clampf(zoom, MIN_ZOOM, MAX_ZOOM)
+		_camera.zoom = Vector2(bounded, bounded)
 
 
 func bind_store(store: OfficeStore) -> void:

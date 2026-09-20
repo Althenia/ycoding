@@ -1,0 +1,109 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:102)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:102)
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:124)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:124)
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:142)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:142)
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:167)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:167)
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:191)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:191)
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:217)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:217)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "cell" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:221)
+SCRIPT ERROR: Parse Error: Function "_navigation()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:237)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "navigation" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_anchor_reservations.gd:237)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/run_tests.gd:0)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] _close_drawer (res://app/main.gd:1142)
+       [2] _apply_shortcut (res://app/main.gd:929)
+       [3] test_escape_releases_the_caret_before_the_drawer (res://tests/suites/test_drawer.gd:128)
+       [4] run (res://tests/suites/test_drawer.gd:28)
+       [5] _init (res://tests/run_tests.gd:54)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] test_escape_releases_the_caret_before_the_drawer (res://tests/suites/test_drawer.gd:137)
+       [2] run (res://tests/suites/test_drawer.gd:28)
+       [3] _init (res://tests/run_tests.gd:54)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] _close_drawer (res://app/main.gd:1142)
+       [2] test_closing_the_drawer_returns_focus_to_the_composer (res://tests/suites/test_drawer.gd:166)
+       [3] run (res://tests/suites/test_drawer.gd:29)
+       [4] _init (res://tests/run_tests.gd:54)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] test_closing_the_drawer_returns_focus_to_the_composer (res://tests/suites/test_drawer.gd:175)
+       [2] run (res://tests/suites/test_drawer.gd:29)
+       [3] _init (res://tests/run_tests.gd:54)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] _close_drawer (res://app/main.gd:1142)
+       [2] test_closing_the_drawer_returns_focus_to_the_composer (res://tests/suites/test_drawer.gd:184)
+       [3] run (res://tests/suites/test_drawer.gd:29)
+       [4] _init (res://tests/run_tests.gd:54)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] _close_drawer (res://app/main.gd:1142)
+       [2] test_closing_the_drawer_never_costs_the_draft (res://tests/suites/test_drawer.gd:206)
+       [3] run (res://tests/suites/test_drawer.gd:30)
+       [4] _init (res://tests/run_tests.gd:54)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:449)
+       [1] _close_drawer (res://app/main.gd:1142)
+       [2] _apply_shortcut (res://app/main.gd:929)
+       [3] test_closing_the_drawer_never_costs_the_draft (res://tests/suites/test_drawer.gd:215)
+       [4] run (res://tests/suites/test_drawer.gd:30)
+       [5] _init (res://tests/run_tests.gd:54)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _init (res://tests/run_tests.gd:53)
+          GDScript backtrace (most recent call first):
+              [0] _init (res://tests/run_tests.gd:53)
+Terminated: 15
+EXIT=143

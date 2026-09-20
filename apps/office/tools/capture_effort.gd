@@ -4,6 +4,8 @@
 ## capture never shows it. This opens it deliberately and shoots the frame.
 extends SceneTree
 
+const DemoCapture := preload("res://tools/demo_capture.gd")
+
 var _scene: Node
 var _stage := 0
 var _out := "user://effort.png"
@@ -18,6 +20,9 @@ func _initialize() -> void:
 
 
 func _process(_delta: float) -> bool:
+	# Opt in explicitly: production boot no longer has to imply DEMO.
+	if not DemoCapture.started(_scene):
+		return false
 	_stage += 1
 	if _stage == 3:
 		# Open the real card through the real control, so the frame shows what the

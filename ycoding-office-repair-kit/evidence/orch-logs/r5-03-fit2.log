@@ -1,0 +1,30 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R503F start
+R503F scale=1.00 panel_rect=[P: (368.5, 536.0), S: (840.0, 160.0)] needed_h=160.0 window_h=720.0
+R503F   size=(1280.0, 720.0) placed_bottom=696.0 inside_window=true row_bottom=684.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1600.0, 900.0) placed_bottom=876.0 inside_window=true row_bottom=864.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1920.0, 1080.0) placed_bottom=1056.0 inside_window=true row_bottom=1044.0 row_on_screen=true row_name='no folder chosen'
+R503F scale=1.25 panel_rect=[P: (405.625, 521.0), S: (840.0, 175.0)] needed_h=175.0 window_h=720.0
+R503F   size=(1280.0, 720.0) placed_bottom=696.0 inside_window=true row_bottom=684.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1600.0, 900.0) placed_bottom=876.0 inside_window=true row_bottom=864.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1920.0, 1080.0) placed_bottom=1056.0 inside_window=true row_bottom=1044.0 row_on_screen=true row_name='no folder chosen'
+R503F scale=1.50 panel_rect=[P: (469.5, 492.0), S: (786.5, 204.0)] needed_h=191.0 window_h=720.0
+R503F   size=(1280.0, 720.0) placed_bottom=696.0 inside_window=true row_bottom=671.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1600.0, 900.0) placed_bottom=876.0 inside_window=true row_bottom=851.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1920.0, 1080.0) placed_bottom=1056.0 inside_window=true row_bottom=1031.0 row_on_screen=true row_name='no folder chosen'
+R503F scale=1.75 panel_rect=[P: (543.75, 458.0), S: (712.25, 238.0)] needed_h=206.0 window_h=720.0
+R503F   size=(1280.0, 720.0) placed_bottom=696.0 inside_window=true row_bottom=652.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1600.0, 900.0) placed_bottom=876.0 inside_window=true row_bottom=832.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1920.0, 1080.0) placed_bottom=1056.0 inside_window=true row_bottom=1012.0 row_on_screen=true row_name='no folder chosen'
+R503F scale=2.00 panel_rect=[P: (618.0, 424.0), S: (638.0, 272.0)] needed_h=222.0 window_h=720.0
+R503F   size=(1280.0, 720.0) placed_bottom=696.0 inside_window=true row_bottom=634.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1600.0, 900.0) placed_bottom=876.0 inside_window=true row_bottom=814.0 row_on_screen=true row_name='no folder chosen'
+R503F   size=(1920.0, 1080.0) placed_bottom=1056.0 inside_window=true row_bottom=994.0 row_on_screen=true row_name='no folder chosen'
+R503F done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

@@ -1,0 +1,41 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R704 registered=http://127.0.0.1:43094
+R704 snapshots=5 error=
+R704 providers=5
+R704   anthropic status=unsupported windows=0 note=No supported credential is configured
+R704   openrouter status=available windows=4 note=
+R704   openai status=available windows=2 note=
+R704   meta status=unsupported windows=0 note=Provider usage refresh failed
+R704   github-copilot status=unsupported windows=0 note=No supported credential is configured
+R704 PASS  no combined total is offered across windows
+R704   window openrouter/Key limit unit=usd used=44.31 limit=50 pct=89% remaining=5.69
+R704 PASS  a window with a limit shows a share (Key limit = 89%)
+R704   window openrouter/Daily unit=usd used=0.50 limit=Not reported pct=Not reported remaining=Not reported
+R704 PASS  a window WITHOUT a limit shows NO derived share (Daily)
+R704 PASS  and its limit reads as unreported, not zero (Not reported)
+R704   window openrouter/Weekly unit=usd used=44.31 limit=Not reported pct=Not reported remaining=Not reported
+R704 PASS  a window WITHOUT a limit shows NO derived share (Weekly)
+R704 PASS  and its limit reads as unreported, not zero (Not reported)
+R704   window openrouter/Monthly unit=usd used=44.31 limit=Not reported pct=Not reported remaining=Not reported
+R704 PASS  a window WITHOUT a limit shows NO derived share (Monthly)
+R704 PASS  and its limit reads as unreported, not zero (Not reported)
+R704   window openai/Weekly unit=percent used=100 limit=Not reported pct=100% remaining=Not reported
+R704 PASS  a percent-unit window shows its own reported figure (Weekly)
+R704 PASS  and its limit reads as unreported, not zero (Not reported)
+R704   window openai/Reset credits unit=count used=Not reported limit=Not reported pct=Not reported remaining=1
+R704 PASS  and its limit reads as unreported, not zero (Not reported)
+R704 windows_with_limit=1 without=5
+R704 PASS  at least one window reported a real limit
+R704 panel_names_quota=true
+R704 panel_names_note=false
+R704 PASS  the quota tab is reachable on the surface
+R704 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r7-04/r7-04-quota.png
+R704 checks=13 fails=0
+R704 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

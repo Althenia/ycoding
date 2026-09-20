@@ -1,0 +1,51 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:376)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:377)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:392)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:393)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:488)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:490)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:501)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:502)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:505)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:520)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:525)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:535)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:547)
+SCRIPT ERROR: Parse Error: Too many arguments for "_prompt_message_id()" call. Expected at most 1 but received 2.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:553)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/run_tests.gd:0)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _init (res://tests/run_tests.gd:55)
+          GDScript backtrace (most recent call first):
+              [0] _init (res://tests/run_tests.gd:55)
+Terminated: 15
+EXIT=143

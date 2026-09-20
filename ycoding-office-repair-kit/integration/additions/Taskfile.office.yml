@@ -1,0 +1,25 @@
+version: '3'
+tasks:
+  doctor:
+    cmds: ['python3 script/office_tasks.py doctor']
+  run:
+    cmds: ['python3 script/office_tasks.py run']
+  verify:
+    cmds: ['python3 script/office_tasks.py verify']
+  build:
+    requires: {vars: [VERSION, TARGET, OUTDIR]}
+    env:
+      RELEASE_VERSION: '{{.VERSION}}'
+      RELEASE_TARGET: '{{.TARGET}}'
+      RELEASE_OUTDIR: '{{.OUTDIR}}'
+    cmds: ['python3 script/office_tasks.py build --version "$RELEASE_VERSION" --target "$RELEASE_TARGET" --outdir "$RELEASE_OUTDIR"']
+  install:
+    requires: {vars: [VERSION]}
+    env: {RELEASE_VERSION: '{{.VERSION}}'}
+    cmds: ['python3 script/office_tasks.py install-release --version "$RELEASE_VERSION"']
+  install-confirmed:
+    requires: {vars: [VERSION]}
+    env: {RELEASE_VERSION: '{{.VERSION}}'}
+    cmds: ['python3 script/office_tasks.py install-release --version "$RELEASE_VERSION" --yes']
+  pages:
+    cmds: ['python3 script/office_tasks.py pages']

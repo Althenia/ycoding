@@ -1,0 +1,11 @@
+a formula-leading text cell is not guarded         passed=37   failed=7   CAUGHT             a formula-leading cell is neutrali
+only '=' is treated as a trigger                   passed=39   failed=5   CAUGHT             the '+' trigger is neutralised in 
+secrets are not redacted at all                    passed=41   failed=3   CAUGHT             a credential-shaped value is redac
+private paths are not redacted                     passed=43   failed=1   CAUGHT             a home-directory path is redacted 
+the JSON carries secrets the CSV redacts           passed=43   failed=1   CAUGHT             a key-shaped value is redacted fro
+the header names no columns                        passed=39   failed=5   CAUGHT             with the header, so the file is we
+an embedded quote is not doubled                   passed=43   failed=1   CAUGHT             an embedded quote is doubled (labe
+a newline inside a cell breaks the record          passed=41   failed=3   CAUGHT             the file is a header plus ONE reco
+composing an export writes the file immediately    passed=42   failed=2   CAUGHT             composing an export writes no file
+a negative number is escaped into text             passed=42   failed=2   CAUGHT             and it is not escaped into text, w
+restored: True

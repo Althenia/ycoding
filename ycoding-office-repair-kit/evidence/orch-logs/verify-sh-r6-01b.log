@@ -1,0 +1,26 @@
+Godot: 4.7.2.stable.official.ed1daf0bf
+import         exit=0 engine_errors=0
+tests          exit=1 engine_errors=0
+  stage failed; see /var/folders/qc/jlsb8bw944v3tn_1bnd1x9hw0000gn/T//ycoding-office-verify/tests.log
+       [2] run (res://tests/suites/test_project_ledger.gd:31)
+       [3] _initialize (res://tests/run_tests.gd:79)
+
+=== office test summary ===
+passed: 8059
+failed: 1
+  FAIL: a credential-shaped literal ships in res://tests/suites/test_conversation_history.gd:103
+RESULT: FAILED
+WARNING: 868 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 1068 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 47 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+ERROR: 41 RID allocations of type 'PN13RendererDummy14TextureStorage12DummyTextureE' were leaked at exit.
+flow           exit=0 engine_errors=0
+  passed: 8059
+  RESULT: FAILED
+  checks: 34, failures: 0
+  FLOW RESULT: PASSED
+VERIFY: FAILED
+EXIT=1

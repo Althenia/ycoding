@@ -5,7 +5,8 @@
 ## service emits, so DemoTransport and the live path converge on one reducer.
 ## A fixture label reaching OfficeStore.apply() directly is a defect.
 ##
-## Verified real vocabulary: contracts/wire-audit.json -> actual_event_vocabulary
+## Verified real vocabulary: `packages/schema/src/session-event.ts`,
+## `event-manifest.ts` and the other `*-event.ts` inventories.
 class_name FixtureTranslator
 extends RefCounted
 
@@ -95,8 +96,18 @@ static func _connection(
 ## the UI can label them rather than passing them off as real placement. They use
 ## the repository's own workspace so the demo path is recognisable, and a model
 ## that genuinely exists in this project's config.
+##
+## `model` uses the DECLARED `Model.Ref` shape `{id, providerID, variant?}`
+## (`packages/schema/src/model.ts:14-18`). The `provider/id#variant` config string
+## is the client's own form and is not a wire field, so the fixture must not carry
+## it: a fixture that teaches an absent shape is how the store's wrong read
+## survived.
 const DEMO_DIRECTORY := "~/Workspace/Project/ycoding"
-const DEMO_MODEL_REF := "openrouter/deepseek/deepseek-v4.1-flash#high"
+const DEMO_MODEL := {
+	"id": "deepseek/deepseek-v4.1-flash",
+	"providerID": "openrouter",
+	"variant": "high",
+}
 
 static func _observed(session_id: Variant, payload: Dictionary, at_ms: int, epoch: String) -> Dictionary:
 	# JSON null must normalize to an empty parent, never the literal "<null>".
@@ -107,13 +118,23 @@ static func _observed(session_id: Variant, payload: Dictionary, at_ms: int, epoc
 		"agent": str(payload.get("agent_id", "agent")),
 		"title": str(payload.get("display_role", "")),
 		"location": {"directory": DEMO_DIRECTORY},
-		"model": {"ref": DEMO_MODEL_REF},
+		"model": DEMO_MODEL,
 		"synthetic": true,
 	}
 	return _base("session.created", str(session_id), data, at_ms, epoch, {"event_id": "observed:%s" % str(session_id)})
 
 
 ## activity.changed -> the real event family that would produce that activity.
+##
+## `testing` maps to a real tool call, and the name comes from the same event the
+## runtime uses: `session.tool.input.started` carries `name`, while
+## `session.tool.called` carries no name at all
+## (`packages/schema/src/session-event.ts:499-540`). Both are emitted, sharing one
+## `callID`, so the store classifies the call exactly as it does in LIVE.
+##
+## The input start is dated one millisecond earlier than the call because the
+## runtime publishes it first and `DemoTransport` sorts by timestamp with a
+## non-stable comparison; the causal order must not depend on that tie-break.
 static func _activity(session_id: Variant, payload: Dictionary, at_ms: int, epoch: String) -> Array[Dictionary]:
 	var activity := str(payload.get("activity", "idle"))
 	var type := str(ACTIVITY_EVENTS.get(activity, ""))
@@ -122,7 +143,24 @@ static func _activity(session_id: Variant, payload: Dictionary, at_ms: int, epoc
 	if type == Wire.SESSION_STATUS:
 		return [_base(type, str(session_id), {"status": {"type": Wire.STATUS_RETRY}}, at_ms, epoch, {"event_id": "activity"})]
 	if type == Wire.TOOL_CALLED:
-		return [_base(type, str(session_id), {"tool": "shell"}, at_ms, epoch, {"event_id": "activity"})]
+		return [
+			_base(
+				OfficeStore.TOOL_INPUT_STARTED,
+				str(session_id),
+				{"assistantMessageID": "msg_activity", "callID": "call_activity", "name": "shell"},
+				maxi(at_ms - 1, 0),
+				epoch,
+				{"event_id": "activity"}
+			),
+			_base(
+				type,
+				str(session_id),
+				{"assistantMessageID": "msg_activity", "callID": "call_activity", "input": {}, "executed": true},
+				at_ms,
+				epoch,
+				{"event_id": "activity"}
+			),
+		]
 	return [_base(type, str(session_id), {}, at_ms, epoch, {"event_id": "activity"})]
 
 

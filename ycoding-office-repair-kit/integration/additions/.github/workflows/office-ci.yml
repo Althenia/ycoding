@@ -1,0 +1,29 @@
+name: office-ci
+on:
+  pull_request:
+    paths: ['apps/office/**', 'script/office*', 'script/office_tests/**', '.github/workflows/office-ci.yml']
+  push:
+    branches: [main]
+    paths: ['apps/office/**', 'script/office*', 'script/office_tests/**', '.github/workflows/office-ci.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: office-ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Test delivery helpers
+        run: python3 -B -m unittest discover -s script/office_tests -p 'test_*.py' -v
+      - name: Setup pinned editor and matching templates
+        run: python3 script/setup_office_godot.py --directory "$RUNNER_TEMP/office-godot" --github
+      - name: Godot scene and loopback integration checks
+        run: python3 script/office_tasks.py verify
+      # Real-provider credentials, native GUI signoff and publishing do not run on PR code.

@@ -1,0 +1,100 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:73)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "rows" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:73)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:86)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "rows" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:86)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:105)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "only_reasoning" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:105)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:110)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "mixed" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:110)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:135)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "rows" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:135)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:149)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "rows" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:149)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:169)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "rows" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:169)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:186)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "history" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:186)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:209)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "history" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:209)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:229)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "rows" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:229)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Could not resolve class "ConversationHistory", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:248)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "history" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_conversation_history.gd:248)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:35)
+ERROR: Failed to load script "res://tests/suites/test_conversation_history.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+   GDScript backtrace (most recent call first):
+       [0] _initialize (res://r5_single_suite_tmp.gd:35)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _initialize (res://r5_single_suite_tmp.gd:40)
+          GDScript backtrace (most recent call first):
+              [0] _initialize (res://r5_single_suite_tmp.gd:40)
+Terminated: 15
+EXIT=143

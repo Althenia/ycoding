@@ -1,6 +1,8 @@
 ## Capture the interface in the states TASK-043 requires: light panels and a 200%
 ## text scale, so "without hiding runtime state" can be checked by eye.
 extends SceneTree
+
+const DemoCapture := preload("res://tools/demo_capture.gd")
 const STEP_MS := 16
 var _scene: Node
 var _elapsed := 0
@@ -14,6 +16,8 @@ func _initialize() -> void:
 	root.add_child(_scene)
 func _process(_d: float) -> bool:
 	if _stage == 0:
+		if not DemoCapture.started(_scene):
+			return false
 		while _elapsed < 40000:
 			_elapsed += STEP_MS
 			_scene.demo.advance(STEP_MS)

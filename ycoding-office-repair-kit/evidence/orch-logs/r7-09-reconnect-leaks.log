@@ -1,0 +1,176 @@
+WorkerThreadPool: 15 threads, 4 max low-priority.
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+TextServer: Added interface "Dummy"
+TextServer: Added interface "ICU / HarfBuzz / Graphite (Built-in)"
+SDL: Init OK!
+Using "default" pen tablet driver...
+
+TextServer: Primary interface set to: "ICU / HarfBuzz / Graphite (Built-in)".
+CORE API HASH: 2004498165
+EDITOR API HASH: 1696660745
+Loading resource: /Users/viadz/Workspace/Project/ycoding.worktrees/office/ycoding-office-repair-kit/tools/r5_single_suite.gd remapped: /Users/viadz/Workspace/Project/ycoding.worktrees/office/ycoding-office-repair-kit/tools/r5_single_suite.gd
+Completed load for: '/Users/viadz/Workspace/Project/ycoding.worktrees/office/ycoding-office-repair-kit/tools/r5_single_suite.gd' remapped '/Users/viadz/Workspace/Project/ycoding.worktrees/office/ycoding-office-repair-kit/tools/r5_single_suite.gd' at thread -1
+SceneTreeFTI: traversal method DEFAULT
+Loaded system CA certificates
+Loading resource: res://tests/suites/test_production_boot.gd remapped: res://tests/suites/test_production_boot.gd
+Completed load for: 'res://tests/suites/test_production_boot.gd' remapped 'res://tests/suites/test_production_boot.gd' at thread -1
+Socket error: 61.
+Connection to remote host failed.
+SINGLE passed=105 failed=0
+WARNING: 27 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 57 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: Cannot get path of node as it is not in a scene tree.
+   at: get_path (scene/main/node.cpp:2431)
+ERROR: 1 resources still in use at exit.
+   at: clear (core/io/resource.cpp:817)
+XR: Clearing primary interface
+XR: Removed interface "Native mobile"
+XR: Removed interface "OpenXR"
+Leaked instance: GDScriptNativeClass:9223372051199296310 - Reference count: 1
+Leaked instance: StyleBoxFlat:9223372062423254443 - Reference count: 54
+Leaked instance: Object:129771767291
+Leaked instance: PanelContainer:112357017093 - Node path: 
+Leaked instance: Object:96536102413
+Leaked instance: PanelContainer:96519325198 - Node path: 
+Leaked instance: GDScript:9223372077472417325 - Reference count: 27
+Leaked instance: PanelContainer:88365598276 - Node path: 
+Leaked instance: Object:88382375493
+Leaked instance: PanelContainer:92325021254 - Node path: 
+Leaked instance: Object:83785418312
+Leaked instance: Object:92341798474
+Leaked instance: PanelContainer:83768641101 - Node path: 
+Leaked instance: Object:172838880847
+Leaked instance: PanelContainer:172822103635 - Node path: 
+Leaked instance: PanelContainer:73635202644 - Node path: 
+Leaked instance: Object:73651979861
+Leaked instance: Object:68719478371
+Leaked instance: PanelContainer:68702701166 - Node path: 
+Leaked instance: PanelContainer:52244252275 - Node path: 
+Leaked instance: Object:52261029492
+Leaked instance: PanelContainer:56170120821 - Node path: 
+Leaked instance: PanelContainer:60095989366 - Node path: 
+Leaked instance: Object:56186898039
+Leaked instance: PanelContainer:64172852856 - Node path: 
+Leaked instance: Object:60112766585
+Leaked instance: Object:64189630075
+Leaked instance: PanelContainer:166094440079 - Node path: 
+Leaked instance: Object:160759285394
+Leaked instance: Object:166111217334
+Leaked instance: PanelContainer:177939154633 - Node path: 
+Leaked instance: Object:101502158555
+Leaked instance: Object:177955931871
+Leaked instance: Object:138479142624
+Leaked instance: Object:79255570146
+Leaked instance: PanelContainer:154534938339 - Node path: 
+Leaked instance: Object:112373794534
+Leaked instance: PanelContainer:79238792935 - Node path: 
+Leaked instance: PanelContainer:129754990319 - Node path: 
+Leaked instance: PanelContainer:134570051312 - Node path: 
+Leaked instance: PanelContainer:138462365427 - Node path: 
+Leaked instance: Object:134586828541
+Leaked instance: PanelContainer:147689834238 - Node path: 
+Leaked instance: Object:142337902358
+Leaked instance: PanelContainer:185992218405 - Node path: 
+Leaked instance: Object:154551715623
+Leaked instance: Object:147706611514
+Leaked instance: PanelContainer:142321125183 - Node path: 
+Leaked instance: Object:125141256008
+Leaked instance: Object:116232554334
+Leaked instance: PanelContainer:101485381471 - Node path: 
+Leaked instance: Object:120091314016
+Leaked instance: PanelContainer:116215777121 - Node path: 
+Leaked instance: PanelContainer:120074536803 - Node path: 
+Leaked instance: PanelContainer:125124478825 - Node path: 
+Leaked instance: Object:186008995707
+Leaked instance: PanelContainer:160742508602 - Node path: 
+Hint: Leaked instances typically happen when nodes are removed from the scene tree (with `remove_child()`) but not freed (with `free()` or `queue_free()`).
+Resource still in use: res://ui/prompt/effort_slider.gd (GDScript)
+Orphan StringName: CARD_H (static: 0, total: 1)
+Orphan StringName: CARD_W (static: 0, total: 1)
+Orphan StringName: _ready (static: 1, total: 2)
+Orphan StringName: PAD (static: 0, total: 1)
+Orphan StringName: TRACK_BG (static: 0, total: 1)
+Orphan StringName: selected_variant (static: 0, total: 1)
+Orphan StringName: EffortSlider (static: 0, total: 3)
+Orphan StringName: _model (static: 0, total: 29)
+Orphan StringName: variant_chosen (static: 0, total: 29)
+Orphan StringName: _index (static: 0, total: 30)
+Orphan StringName: _on_reset (static: 0, total: 1)
+Orphan StringName: _sync (static: 0, total: 1)
+Orphan StringName: DOT_R (static: 0, total: 1)
+Orphan StringName: TRACK_FILL (static: 0, total: 1)
+Orphan StringName: _reset (static: 0, total: 29)
+Orphan StringName: _track (static: 0, total: 29)
+Orphan StringName: _build (static: 0, total: 1)
+Orphan StringName: _built (static: 0, total: 30)
+Orphan StringName: EffortTrack (static: 0, total: 1)
+Orphan StringName: KNOB (static: 0, total: 1)
+Orphan StringName: PanelContainer (static: 0, total: 1)
+Orphan StringName: _stops (static: 0, total: 29)
+Orphan StringName: variants (static: 0, total: 1)
+Orphan StringName: knob_fraction (static: 0, total: 1)
+Orphan StringName: _title (static: 0, total: 29)
+Orphan StringName: current_index (static: 0, total: 1)
+Orphan StringName: panel (static: 0, total: 27)
+Orphan StringName: TRACK_H (static: 0, total: 1)
+Orphan StringName: KNOB_EDGE (static: 0, total: 1)
+Orphan StringName: open (static: 0, total: 1)
+Orphan StringName: _variants (static: 0, total: 29)
+Orphan StringName: KNOB_R (static: 0, total: 1)
+Orphan StringName: DOT (static: 0, total: 1)
+Orphan StringName: _on_track_clicked (static: 0, total: 1)
+StringName: 34 unclaimed string names at exit.

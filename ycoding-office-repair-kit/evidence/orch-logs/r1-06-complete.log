@@ -1,0 +1,56 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+R106 start url=http://127.0.0.1:43094 (credential withheld)
+R106 event server.connected
+R106 event server.connected
+R106 event session.created
+R106 session created id=ses_f53be6ed8ffe3BRDN6O5jURbPY
+R106 submitted TOOL prompt to session=ses_f53be6ed8ffe3BRDN6O5jURbPY
+R106 event session.input.admitted
+R106 event session.execution.started
+R106 event server.connected
+R106 event session.instructions.updated
+R106 event session.input.promoted
+R106 event session.context.observed
+R106 event shell.created
+R106 event session.input.consumed
+R106 event session.step.started
+R106 TOOL started name=shell (session ses_f53be6ed8ffe3BRDN6O5jURbPY)
+R106 event session.tool.input.delta
+R106 event session.tool.input.ended
+R106 TOOL called executed=false (session ses_f53be6ed8ffe3BRDN6O5jURbPY)
+R106 event session.diagnostics.updated
+R106 event guardrail.decided
+R106 event shell.created
+R106 event shell.exited
+R106 event session.tool.success
+R106 event session.step.ended
+R106 step settled finish=tool-calls
+R106 event session.usage.updated
+R106 event session.renamed
+R106 event session.step.started
+R106 stream session.text.started
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.delta
+R106 stream session.text.ended
+R106 event session.diagnostics.updated
+R106 event session.step.ended
+R106 step settled finish=stop
+R106 event session.usage.updated
+R106 event session.execution.succeeded
+R106 restart: stopping the first transport
+R106 restart issued snapshot request=1 messages request=2
+R106 result=timeout created=true tool_submitted=true tool_started=true tool_called=true history=true
+EXIT=1

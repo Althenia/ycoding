@@ -4,6 +4,7 @@ import os from "os"
 import path from "path"
 import { Effect, Exit, Layer, PlatformError } from "effect"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigAttachments } from "@ycoding-ai/core/config/attachments"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -105,7 +106,7 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
-const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed(configEntries) }))
+const config = Layer.succeed(Config.Service, stubConfig({ entries: () => Effect.succeed(configEntries) }))
 const imageLayer = AppNodeBuilder.build(Image.node, [[Config.node, config]])
 const testFileSystem = Layer.effect(
   FSUtil.Service,

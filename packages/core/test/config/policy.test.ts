@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { ConfigPolicyPlugin } from "@ycoding-ai/core/config/plugin/policy"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
@@ -28,7 +29,7 @@ const addPlugin = Effect.fn(function* (entries: () => Config.Entry[]) {
   const plugin = yield* PluginV2.Service
   const host = yield* PluginHost.make(plugin)
   yield* ConfigPolicyPlugin.Plugin.effect(host).pipe(
-    Effect.provideService(Config.Service, Config.Service.of({ entries: () => Effect.sync(entries) })),
+    Effect.provideService(Config.Service, stubConfig({ entries: () => Effect.sync(entries) })),
   )
 })
 

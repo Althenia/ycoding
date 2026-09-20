@@ -20,6 +20,8 @@ permissions:
 
 env:
   YCODING_CHANNEL: latest
+  REQUESTED_VERSION: ${{ inputs.version }}
+  SOURCE_REF_NAME: ${{ github.ref_name }}
 
 jobs:
   verify-source:
@@ -44,10 +46,10 @@ jobs:
       - name: Resolve release version
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            version="$REQUESTED_VERSION"
+          elif [[ "$SOURCE_REF_NAME" == v* ]]; then
+            version="$SOURCE_REF_NAME"
             version="${version#v}"
           else
             version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
@@ -128,10 +130,10 @@ jobs:
       - name: Resolve release version
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            version="$REQUESTED_VERSION"
+          elif [[ "$SOURCE_REF_NAME" == v* ]]; then
+            version="$SOURCE_REF_NAME"
             version="${version#v}"
           else
             version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
@@ -279,10 +281,10 @@ jobs:
       - name: Resolve release version
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            version="$REQUESTED_VERSION"
+          elif [[ "$SOURCE_REF_NAME" == v* ]]; then
+            version="$SOURCE_REF_NAME"
             version="${version#v}"
           else
             version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
@@ -347,10 +349,13 @@ jobs:
           echo "GODOT_BIN=$godot_bin" >>"$GITHUB_ENV"
           "$godot_bin" --version
 
+      - name: Verify Office before export
+        run: python3 script/office_tasks.py verify
+
       - name: Build the desktop client
         run: |
           set -euo pipefail
-          apps/office/tools/build-release.sh --version "$RELEASE_VERSION" --target "${{ matrix.target }}" --outdir dist/office/release
+          python3 script/office_tasks.py build --version "$RELEASE_VERSION" --target "${{ matrix.target }}" --outdir dist/office/release
 
       # The installer mounts the macOS disk image with ditto and hdiutil, which only
       # exist on macOS, so that path is skipped on the Linux runner that also runs
@@ -388,10 +393,10 @@ jobs:
       - name: Resolve release version
         run: |
           set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
+          if [ -n "$REQUESTED_VERSION" ]; then
+            version="$REQUESTED_VERSION"
+          elif [[ "$SOURCE_REF_NAME" == v* ]]; then
+            version="$SOURCE_REF_NAME"
             version="${version#v}"
           else
             version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
@@ -435,6 +440,9 @@ jobs:
           # verifies the desktop client with the same rule as the terminal executable.
           (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip "ycoding-office-$version-"*.tar.gz "ycoding-office-$version-"*.zip "ycoding-office-$version-"*.dmg > "ycoding-$version-checksums.txt")
 
+      - name: Verify complete release artifact contract
+        run: python3 script/office_release.py verify --directory release --version "$RELEASE_VERSION"
+
       - name: Upload prepared release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -445,6 +453,7 @@ jobs:
 
   release:
     name: publish release
+    environment: office-release
     needs: package
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
@@ -456,11 +465,12 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Resolve release version
         run: |
           set -euo pipefail
-          version="${{ github.ref_name }}"
+          version="$SOURCE_REF_NAME"
           version="${version#v}"
           echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
 
@@ -469,6 +479,9 @@ jobs:
         with:
           name: release-assets-${{ env.RELEASE_VERSION }}
           path: release
+
+      - name: Verify reviewed candidate before publication
+        run: python3 script/office_readiness.py --version "$RELEASE_VERSION"
 
       - name: Create GitHub release
         env:
@@ -490,4 +503,8 @@ jobs:
             echo ""
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
-          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md
+          # A prerelease must never replace the stable channel.
+          flags=()
+          base_version="${version%%+*}"
+          if [[ "$base_version" == *-* ]]; then flags+=(--prerelease --latest=false); fi
+          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md "${flags[@]}"

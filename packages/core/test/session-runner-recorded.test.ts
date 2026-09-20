@@ -12,6 +12,7 @@ import { Job } from "@ycoding-ai/core/job"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
@@ -103,7 +104,7 @@ const referenceInstructions = Layer.mock(ReferenceInstructions.Service, {
   load: () => Effect.succeed(Instructions.empty),
 })
 const mcpInstructions = Layer.mock(McpInstructions.Service, { load: () => Effect.succeed(Instructions.empty) })
-const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+const config = Layer.succeed(Config.Service, stubConfig({ entries: () => Effect.succeed([]) }))
 const pluginSupervisor = Layer.succeed(PluginSupervisor.Service, PluginSupervisor.Service.of({ flush: Effect.void }))
 const promptCatalog = Layer.mock(Catalog.Service, {
   provider: {

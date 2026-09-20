@@ -1,0 +1,13 @@
+the budget claims to be enforced                 passed=48   failed=1   CAUGHT             and it is not enforced, because noth
+the budget is no longer advisory                 passed=48   failed=1   CAUGHT             a local budget is advisory
+the label claims to be a provider limit          passed=46   failed=3   CAUGHT             and its own label says it is a warni
+unknown spend passes the comparison              passed=48   failed=1   CAUGHT             an evaluation over unknown spend is 
+a partial comparison reports it is under budget  passed=48   failed=1   CAUGHT             and its text says the spend is unkno
+a dismissed budget still warns                   passed=48   failed=1   CAUGHT             a dismissed budget does not warn aga
+over the limit is not recognised                 passed=48   failed=1   CAUGHT             spend far past the limit is over it
+an unsupported scope is accepted                 passed=47   failed=2   CAUGHT             and a budget for it is not created
+a negative limit is accepted                     passed=49   failed=0   *** NOT CAUGHT *** 
+an undeclared field is carried into storage      COULD NOT MUTATE
+an unknown schema version is adopted             passed=48   failed=1   CAUGHT             and the version gap is reported ()
+the write is not atomic                          passed=49   failed=0   *** NOT CAUGHT *** 
+restored: True

@@ -3,6 +3,7 @@ import { SystemPart } from "@ycoding-ai/ai"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
@@ -23,7 +24,7 @@ const it = testEffect(PluginTestLayer)
 const providerID = ProviderV2.ID.make("advisor-test")
 const modelID = ModelV2.ID.make("advisor-test")
 const advisorSessionID = SessionSchema.ID.make("ses_conversation_compact_advisor")
-const advisorConfig = Config.Service.of({
+const advisorConfig = stubConfig({
   entries: () =>
     Effect.succeed([
       new Config.Document({

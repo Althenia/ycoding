@@ -1,0 +1,17 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R502 start outdir=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r5-02
+R502 ledger entries=2
+R502 row 'Pinned project' pinned=true sessions=1 running=1 attention=0
+R502 row 'Quiet project' pinned=false sessions=0 running=0 attention=0
+R502 rail rows=2
+R502 rail text='★  Pinned project  ·  1 running' tooltip='/private/tmp/ycoding-r502-capture/pinned-work'
+R502 rail text='▸  Quiet project' tooltip='/private/tmp/ycoding-r502-capture/quiet-folder'
+R502 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r5-02/r5-02-projects.png
+R502 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

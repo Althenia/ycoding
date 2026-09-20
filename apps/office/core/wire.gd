@@ -1,9 +1,11 @@
-## Real YCoding wire vocabulary, verified in `contracts/wire-audit.json`.
+## Real YCoding wire vocabulary, verified against the live Schema owners
+## (`packages/schema/src/session-event.ts`, `event-manifest.ts` and the other
+## `*-event.ts` inventories) and the live Protocol route groups
+## (`packages/protocol/src/groups/`).
 ##
-## These names come from the live service (`packages/schema/src/session-event.ts`
-## and `event-manifest.ts`), not from the handoff fixtures. Fixture labels are
-## client-internal and are translated by DemoTransport before they reach the
-## store, so demo and live share one reducer.
+## These names come from the live service, not from the handoff fixtures. Fixture
+## labels are client-internal and are translated by DemoTransport before they
+## reach the store, so demo and live share one reducer.
 class_name Wire
 extends RefCounted
 
@@ -22,10 +24,18 @@ const TOOL_CALLED := "session.tool.called"
 const TOOL_SUCCESS := "session.tool.success"
 const TOOL_FAILED := "session.tool.failed"
 const TEXT_STARTED := "session.text.started"
+const TEXT_DELTA := "session.text.delta"
+const TEXT_ENDED := "session.text.ended"
 const REASONING_STARTED := "session.reasoning.started"
+const REASONING_DELTA := "session.reasoning.delta"
+const REASONING_ENDED := "session.reasoning.ended"
 const INPUT_ADMITTED := "session.input.admitted"
 const INPUT_PROMOTED := "session.input.promoted"
 const FILE_CHANGE := "session.file-change.recorded"
+## A shell the runtime ran for this session. `started` opens it and `ended` settles
+## it with the captured output (packages/schema/src/session-event.ts, Shell).
+const SHELL_STARTED := "session.shell.started"
+const SHELL_ENDED := "session.shell.ended"
 ## Context compaction. An agent consolidating its context is genuinely retreading
 ## what it has already seen, which is what the focus station depicts.
 ## `started`/`admitted` begin it and `ended` finishes it.

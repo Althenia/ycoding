@@ -1,0 +1,34 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+ERROR: ConfigFile parse error at user://test-corrupt-1789663700.cfg:3: Expected value, got 'EOF'.
+   at: _parse (core/io/config_file.cpp:293)
+   GDScript backtrace (most recent call first):
+       [0] load (res://core/project_ledger.gd:195)
+       [1] test_a_corrupt_store_falls_back_instead_of_failing (res://tests/suites/test_project_ledger.gd:218)
+       [2] run (res://tests/suites/test_project_ledger.gd:31)
+       [3] _initialize (res://tests/run_tests.gd:79)
+
+=== office test summary ===
+passed: 8059
+failed: 1
+  FAIL: a credential-shaped literal ships in res://tests/suites/test_conversation_history.gd:103
+RESULT: FAILED
+WARNING: 868 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 1068 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 47 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+ERROR: 41 RID allocations of type 'PN13RendererDummy14TextureStorage12DummyTextureE' were leaked at exit.
+EXIT=1

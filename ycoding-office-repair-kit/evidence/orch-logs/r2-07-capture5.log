@@ -1,0 +1,24 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R207 start outdir=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r2-07 cases=12
+R207 1024x768-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x788
+R207 1024x768-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x730
+R207 1024x768-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x672
+R207 1280x720-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x548
+R207 1280x720-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x490
+R207 1280x720-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x432
+R207 1440x900-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x628
+R207 1440x900-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x570
+R207 1440x900-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x512
+R207 1920x1080-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x548
+R207 1920x1080-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x490
+R207 1920x1080-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x432
+R207 captured=12
+R207 objective_problems=0
+R207 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

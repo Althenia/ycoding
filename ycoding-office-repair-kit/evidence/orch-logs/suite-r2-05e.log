@@ -1,0 +1,148 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+
+=== office test summary ===
+passed: 7248
+failed: 0
+RESULT: PASSED
+ERROR: Node not found: "SubViewport/OfficeWorld" (relative to "/root/@Node@3116/@SubViewportContainer@3154").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://office/viewport/office_viewport.gd:31)
+ERROR: Node not found: "SubViewport/OfficeWorld/Camera" (relative to "/root/@Node@3116/@SubViewportContainer@3154").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://office/viewport/office_viewport.gd:32)
+SCRIPT ERROR: Invalid assignment of property or key 'position' with value of type 'Vector2' on a base object of type 'null instance'.
+          at: OfficeViewport._ready (res://office/viewport/office_viewport.gd:33)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://office/viewport/office_viewport.gd:33)
+ERROR: Node not found: "Shell/OfficeViewport" (relative to "/root/@Node@3116").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:80)
+ERROR: Node not found: "Shell/PromptPanel" (relative to "/root/@Node@3116").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:81)
+ERROR: Node not found: "Shell/ConversationPanel" (relative to "/root/@Node@3116").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:82)
+ERROR: Node not found: "Shell/Sidebar" (relative to "/root/@Node@3116").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:83)
+ERROR: Node not found: "Shell/ChromeToggles" (relative to "/root/@Node@3116").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:84)
+SCRIPT ERROR: Invalid access to property or key 'prompt_submitted' on a base object of type 'null instance'.
+          at: OfficeMain._wire_signals (res://app/main.gd:115)
+          GDScript backtrace (most recent call first):
+              [0] _wire_signals (res://app/main.gd:115)
+              [1] _ready (res://app/main.gd:86)
+SCRIPT ERROR: Attempt to call function 'bind_store' in base 'null instance' on a null instance.
+          at: OfficeMain._ready (res://app/main.gd:87)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://app/main.gd:87)
+ERROR: Node not found: "SubViewport/OfficeWorld" (relative to "/root/@Node@3155/@SubViewportContainer@3193").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://office/viewport/office_viewport.gd:31)
+ERROR: Node not found: "SubViewport/OfficeWorld/Camera" (relative to "/root/@Node@3155/@SubViewportContainer@3193").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://office/viewport/office_viewport.gd:32)
+SCRIPT ERROR: Invalid assignment of property or key 'position' with value of type 'Vector2' on a base object of type 'null instance'.
+          at: OfficeViewport._ready (res://office/viewport/office_viewport.gd:33)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://office/viewport/office_viewport.gd:33)
+ERROR: Node not found: "Shell/OfficeViewport" (relative to "/root/@Node@3155").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:80)
+ERROR: Node not found: "Shell/PromptPanel" (relative to "/root/@Node@3155").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:81)
+ERROR: Node not found: "Shell/ConversationPanel" (relative to "/root/@Node@3155").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:82)
+ERROR: Node not found: "Shell/Sidebar" (relative to "/root/@Node@3155").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:83)
+ERROR: Node not found: "Shell/ChromeToggles" (relative to "/root/@Node@3155").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:84)
+SCRIPT ERROR: Invalid access to property or key 'prompt_submitted' on a base object of type 'null instance'.
+          at: OfficeMain._wire_signals (res://app/main.gd:115)
+          GDScript backtrace (most recent call first):
+              [0] _wire_signals (res://app/main.gd:115)
+              [1] _ready (res://app/main.gd:86)
+SCRIPT ERROR: Attempt to call function 'bind_store' in base 'null instance' on a null instance.
+          at: OfficeMain._ready (res://app/main.gd:87)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://app/main.gd:87)
+ERROR: Node not found: "SubViewport/OfficeWorld" (relative to "/root/@Node@3194/@SubViewportContainer@3232").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://office/viewport/office_viewport.gd:31)
+ERROR: Node not found: "SubViewport/OfficeWorld/Camera" (relative to "/root/@Node@3194/@SubViewportContainer@3232").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://office/viewport/office_viewport.gd:32)
+SCRIPT ERROR: Invalid assignment of property or key 'position' with value of type 'Vector2' on a base object of type 'null instance'.
+          at: OfficeViewport._ready (res://office/viewport/office_viewport.gd:33)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://office/viewport/office_viewport.gd:33)
+ERROR: Node not found: "Shell/OfficeViewport" (relative to "/root/@Node@3194").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:80)
+ERROR: Node not found: "Shell/PromptPanel" (relative to "/root/@Node@3194").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:81)
+ERROR: Node not found: "Shell/ConversationPanel" (relative to "/root/@Node@3194").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:82)
+ERROR: Node not found: "Shell/Sidebar" (relative to "/root/@Node@3194").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:83)
+ERROR: Node not found: "Shell/ChromeToggles" (relative to "/root/@Node@3194").
+   at: get_node (scene/main/node.cpp:1976)
+   GDScript backtrace (most recent call first):
+       [0] _ready (res://app/main.gd:84)
+SCRIPT ERROR: Invalid access to property or key 'prompt_submitted' on a base object of type 'null instance'.
+          at: OfficeMain._wire_signals (res://app/main.gd:115)
+          GDScript backtrace (most recent call first):
+              [0] _wire_signals (res://app/main.gd:115)
+              [1] _ready (res://app/main.gd:86)
+SCRIPT ERROR: Attempt to call function 'bind_store' in base 'null instance' on a null instance.
+          at: OfficeMain._ready (res://app/main.gd:87)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://app/main.gd:87)
+WARNING: 34 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 71 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 1 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+EXIT=0

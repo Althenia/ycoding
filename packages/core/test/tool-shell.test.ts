@@ -11,6 +11,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { makeGlobalNode, makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { filesystem } from "@ycoding-ai/core/effect/app-node-platform"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -73,7 +74,7 @@ const fakeShellState: {
   output: "partial output",
 }
 
-const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed(configEntries) }))
+const config = Layer.succeed(Config.Service, stubConfig({ entries: () => Effect.succeed(configEntries) }))
 
 const permission = Layer.succeed(
   PermissionV2.Service,

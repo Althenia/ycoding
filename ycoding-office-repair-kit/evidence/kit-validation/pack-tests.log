@@ -1,0 +1,22 @@
+test_merger_preview_then_apply (test_pack.MergeHappyPathTests.test_merger_preview_then_apply) ... ok
+test_workflow_transformation (test_pack.MergeHappyPathTests.test_workflow_transformation) ... ok
+test_audit_rejects_output_inside_repo (test_pack.PackTests.test_audit_rejects_output_inside_repo) ... ok
+test_blob (test_pack.PackTests.test_blob) ... ok
+test_coverage_not_implementation (test_pack.PackTests.test_coverage_not_implementation) ... ok
+test_layout_default (test_pack.PackTests.test_layout_default) ... ok
+test_layout_rejects_expected_geometry (test_pack.PackTests.test_layout_rejects_expected_geometry) ... ok
+test_layout_wrong_sidebar (test_pack.PackTests.test_layout_wrong_sidebar) ... ok
+test_merger_refuses_drift (test_pack.PackTests.test_merger_refuses_drift) ... ok
+test_pack_integrity (test_pack.PackTests.test_pack_integrity) ... ok
+test_replace_refuses_ambiguity (test_pack.PackTests.test_replace_refuses_ambiguity) ... ok
+test_replace_unique (test_pack.PackTests.test_replace_unique) ... ok
+test_schema_external_ref (test_pack.PackTests.test_schema_external_ref) ... ok
+test_schema_nested_record (test_pack.PackTests.test_schema_nested_record) ... ok
+test_schema_ref_array (test_pack.PackTests.test_schema_ref_array) ... ok
+test_settings_missing (test_pack.PackTests.test_settings_missing) ... ok
+test_settings_patterns (test_pack.PackTests.test_settings_patterns) ... ok
+
+----------------------------------------------------------------------
+Ran 17 tests in 0.031s
+
+OK

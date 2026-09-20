@@ -1,0 +1,8 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+PROBE[dead] before mode=DEMO conn=syncing actors=0 error='' demo_playing=true
+PROBE[dead] after  mode=LIVE conn=reconnecting actors=0 stale=true error='could not connect to 127.0.0.1:43999' demo_playing=false
+PROBE[dead] actors=[]
+PROBE[dead] prompt_panel_state=n/a
+PROBE[dead] capture=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r0-05-dead-service.png err=0 (1280x720)

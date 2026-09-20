@@ -452,6 +452,10 @@ export type ProjectArtifactConfidence = {
   eligible: boolean
 }
 
+export type ConfigScope = "global" | "project" | "virtual"
+
+export type ConfigWriteScope = "global" | "project"
+
 export type BrowserStatus = {
   state: "unavailable" | "pairing" | "connected" | "paused"
   generation?: number
@@ -3659,6 +3663,15 @@ export type ArtifactUnavailable = {
 }
 export const isArtifactUnavailable = (value: unknown): value is ArtifactUnavailable =>
   typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ArtifactUnavailable"
+
+export type ConfigInvalidError = {
+  readonly _tag: "ConfigInvalidError"
+  readonly message: string
+  readonly path?: string | undefined
+  readonly issues?: ReadonlyArray<{ readonly message: string; readonly path: ReadonlyArray<string> }> | undefined
+}
+export const isConfigInvalidError = (value: unknown): value is ConfigInvalidError =>
+  typeof value === "object" && value !== null && "_tag" in value && value["_tag"] === "ConfigInvalidError"
 
 export type HealthGetOutput = ServiceHealth
 
@@ -7230,6 +7243,68 @@ export type ProjectArtifactArtifactPurgeInput = {
 }
 
 export type ProjectArtifactArtifactPurgeOutput = { data: { count: number } }["data"]
+
+export type ConfigGetInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+}
+
+export type ConfigGetOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: {
+    values: { [x: string]: JsonValue }
+    sources: Array<{ path: string; scope: ConfigScope; keys: Array<string>; revision: string }>
+  }
+}
+
+export type ConfigPreviewInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly payload: {
+    readonly patch: { readonly [x: string]: JsonValue }
+    readonly scope: "global" | "project"
+    readonly expectedRevision?: string
+  }
+}
+
+export type ConfigPreviewOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: {
+    scope: ConfigWriteScope
+    path: string
+    revision: string
+    result: string
+    changes: Array<{ key: string; value?: JsonValue }>
+  }
+}
+
+export type ConfigCommitInput = {
+  readonly location?: {
+    readonly location?: { readonly directory?: string | undefined; readonly workspace?: string | undefined } | undefined
+  }["location"]
+  readonly payload: {
+    readonly patch: { readonly [x: string]: JsonValue }
+    readonly scope: "global" | "project"
+    readonly expectedRevision?: string
+  }
+}
+
+export type ConfigCommitOutput = {
+  location: { directory: string; workspaceID?: string; project: { id: string; directory: string } }
+  data: {
+    scope: ConfigWriteScope
+    path: string
+    revision: string
+    changes: Array<{ key: string; value?: JsonValue }>
+    unsettled: Array<string>
+    read: {
+      values: { [x: string]: JsonValue }
+      sources: Array<{ path: string; scope: ConfigScope; keys: Array<string>; revision: string }>
+    }
+  }
+}
 
 export type DebugLocationListOutput = Array<LocationRef>
 

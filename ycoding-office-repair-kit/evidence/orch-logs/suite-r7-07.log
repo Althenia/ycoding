@@ -1,0 +1,90 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+SCRIPT ERROR: Invalid access to property or key 'export_requested' on a base object of type 'Nil'.
+          at: OfficeMain.start_live (res://app/main.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] start_live (res://app/main.gd:363)
+              [1] _boot_with (res://app/main.gd:259)
+              [2] test_a_registration_attaches_live_without_a_toggle (res://tests/suites/test_production_boot.gd:200)
+              [3] run (res://tests/suites/test_production_boot.gd:44)
+              [4] _initialize (res://tests/run_tests.gd:88)
+SCRIPT ERROR: Invalid access to property or key 'export_requested' on a base object of type 'Nil'.
+          at: OfficeMain.start_live (res://app/main.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] start_live (res://app/main.gd:363)
+              [1] _boot_with (res://app/main.gd:259)
+              [2] test_the_registered_value_reaches_the_transport_and_is_never_rendered (res://tests/suites/test_production_boot.gd:227)
+              [3] run (res://tests/suites/test_production_boot.gd:45)
+              [4] _initialize (res://tests/run_tests.gd:88)
+SCRIPT ERROR: Invalid access to property or key 'export_requested' on a base object of type 'Nil'.
+          at: OfficeMain.start_live (res://app/main.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] start_live (res://app/main.gd:363)
+              [1] _boot_with (res://app/main.gd:259)
+              [2] test_live_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:256)
+              [3] run (res://tests/suites/test_production_boot.gd:46)
+              [4] _initialize (res://tests/run_tests.gd:88)
+SCRIPT ERROR: Invalid access to property or key 'export_requested' on a base object of type 'Nil'.
+          at: OfficeMain.start_live (res://app/main.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] start_live (res://app/main.gd:363)
+              [1] _boot_with (res://app/main.gd:259)
+              [2] test_the_id_is_retired_by_durable_admission_not_by_the_request (res://tests/suites/test_production_boot.gd:806)
+              [3] run (res://tests/suites/test_production_boot.gd:53)
+              [4] _initialize (res://tests/run_tests.gd:88)
+SCRIPT ERROR: Invalid access to property or key 'export_requested' on a base object of type 'Nil'.
+          at: OfficeMain.start_live (res://app/main.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] start_live (res://app/main.gd:363)
+              [1] _boot_with (res://app/main.gd:259)
+              [2] test_another_inputs_admission_does_not_retire_the_draft (res://tests/suites/test_production_boot.gd:837)
+              [3] run (res://tests/suites/test_production_boot.gd:54)
+              [4] _initialize (res://tests/run_tests.gd:88)
+SCRIPT ERROR: Invalid access to property or key 'export_requested' on a base object of type 'Nil'.
+          at: OfficeMain.start_live (res://app/main.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] start_live (res://app/main.gd:363)
+              [1] _boot_with (res://app/main.gd:259)
+              [2] test_the_send_reports_admission_not_completion (res://tests/suites/test_production_boot.gd:857)
+              [3] run (res://tests/suites/test_production_boot.gd:55)
+              [4] _initialize (res://tests/run_tests.gd:88)
+ERROR: ConfigFile parse error at user://test-corrupt-1789708073.cfg:3: Expected value, got 'EOF'.
+   at: _parse (core/io/config_file.cpp:293)
+   GDScript backtrace (most recent call first):
+       [0] load (res://core/project_ledger.gd:195)
+       [1] test_a_corrupt_store_falls_back_instead_of_failing (res://tests/suites/test_project_ledger.gd:218)
+       [2] run (res://tests/suites/test_project_ledger.gd:31)
+       [3] _initialize (res://tests/run_tests.gd:88)
+
+=== office test summary ===
+passed: 8851
+failed: 9
+  FAIL: secret material on res://tests/suites/test_export.gd:231
+  FAIL: secret material on res://tests/suites/test_export.gd:234
+  FAIL: a private trace ships in res://tests/suites/test_export.gd:244
+  FAIL: a private trace ships in res://tests/suites/test_export.gd:248
+  FAIL: the live transport is running
+  FAIL: an unconfirmed attach still offers the retry affordance
+  FAIL: the composer says there are none (expected No models, got Default)
+  FAIL: and the pill cannot act
+  FAIL: the service's real refusal is surfaced
+RESULT: FAILED
+WARNING: 868 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 1068 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 47 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+ERROR: 41 RID allocations of type 'PN13RendererDummy14TextureStorage12DummyTextureE' were leaked at exit.
+EXIT=1

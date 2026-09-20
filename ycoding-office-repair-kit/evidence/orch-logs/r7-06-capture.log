@@ -1,0 +1,31 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R706 limit_events=3
+R706   kind=rate-limit label=Provider rate limit detail=the provider's own reset is not reported here
+R706   kind=quota label=Provider quota exhausted detail=
+R706   kind=context-limit label=Model context limit detail=model context window 200000 tokens
+R706 PASS  all three failures reached the store (3)
+R706 PASS  and they are THREE DISTINCT kinds (["rate-limit", "quota", "context-limit"])
+R706 PASS  a rate limit, a quota and a context overflow are each their own kind
+R706 PASS  the model context window was read from the step (200000)
+R706 PASS  and a quota failure does NOT claim a context window
+R706 PASS  the context overflow names the window it exceeded
+R706 PASS  the 'rate-limit' kind is not enforced
+R706 PASS  the 'quota' kind is not enforced
+R706 PASS  the 'context-limit' kind is not enforced
+R706 PASS  no control in the drawer claims to enforce a limit
+R706 drawer_names_rate=true
+R706 drawer_names_quota=true
+R706 drawer_names_context=true
+R706 PASS  the drawer names the rate limit
+R706 PASS  the drawer names the quota
+R706 PASS  the drawer names the context limit
+R706 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r7-06/r7-06-limit-kinds.png
+R706 checks=13 fails=0
+R706 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

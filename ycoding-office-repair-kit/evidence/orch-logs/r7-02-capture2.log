@@ -1,0 +1,14 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R702 registered=http://127.0.0.1:43094
+R702 sessions_known=0
+R702 NOTE  no session is known to this client, so usage cannot be read here
+R702 refusal=No session was named, so there is nothing to read usage for.
+R702 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r7-02/r7-02-usage.png
+R702 checks=0 fails=0
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

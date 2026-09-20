@@ -1,0 +1,2 @@
+a recorded failure loses its source verification     passed=36   failed=1   CAUGHT             and marked as verified against its sou
+restored: True

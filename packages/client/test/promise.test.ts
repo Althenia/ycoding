@@ -55,6 +55,7 @@ test("exposes every standard HTTP API group", () => {
     "projectCopy",
     "vcs",
     "projectArtifact",
+    "config",
     "debug",
     "browser",
     "isolatedBrowser",
@@ -73,6 +74,7 @@ test("exposes every standard HTTP API group", () => {
   expect(Object.keys(client.pty.connect)).toEqual(["token"])
   expect(Object.keys(client.shell)).toEqual(["list", "create", "get", "timeout", "output", "remove"])
   expect(Object.keys(client.project)).toEqual(["list", "current", "directories"])
+  expect(Object.keys(client.config)).toEqual(["get", "preview", "commit"])
   expect(Object.keys(client.session.subagent)).toEqual(["list", "launch", "message", "answer", "cancel", "resume"])
   expect(Object.keys(client.guardrail)).toEqual(["status", "request"])
   expect(Object.keys(client.guardrail.request)).toEqual(["list", "reply"])

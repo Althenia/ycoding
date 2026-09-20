@@ -1,0 +1,10 @@
+a context overflow is classified as a quota          passed=63   failed=3   CAUGHT             a context overflow is its own kind
+a rate limit is classified as a quota                passed=62   failed=4   CAUGHT             and classified as a rate limit (qu
+two kinds share one label                            passed=63   failed=3   CAUGHT             and four DISTINCT labels (["Provid
+every kind claims to be enforced                     passed=61   failed=5   CAUGHT             the 'quota' kind is not presented 
+a failed step is applied by no arm                   passed=16   failed=9   CAUGHT             the failure is recorded (expected 
+a failed execution discards its error                passed=64   failed=1   CAUGHT             the execution failure is recorded 
+the context limit figure is not read                 passed=64   failed=2   CAUGHT             the window figure is read (expecte
+an unknown failure is dropped                        passed=54   failed=12  CAUGHT             and an honest unclassified kind ra
+an unknown failure is guessed into the context kind  passed=66   failed=0   *** NOT CAUGHT *** 
+restored: True

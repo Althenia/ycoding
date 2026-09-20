@@ -78,6 +78,23 @@ const RUNTIME_DIRS := ["app", "ui", "core", "office", "integration"]
 ## registration path from the environment. None of these spawns a process.
 const RUNTIME_OS_ALLOW_LIST := ["OS.get_environment"]
 
+## The runtime database is not the client's to read. Usage and cost figures are a
+## runtime concern, and the acceptance for the telemetry work is explicitly "no Godot
+## DB access": the client reads them through Protocol or not at all. These are the
+## extensions a SQLite or other embedded database would arrive through, so a shipped
+## module touching one is the failure this guard exists to catch.
+const DATABASE_EXTENSIONS := [".db", ".sqlite", ".sqlite3", ".db3", ".mdb"]
+
+## The only file extensions a shipped module may OPEN. Configuration and JSON are the
+## client's own surfaces; a database is the runtime's.
+##
+## `.git` is here because the folder picker resolves a chosen folder's repository root,
+## and a LINKED worktree keeps `.git` as a plain file holding the real gitdir path rather
+## than a directory. Reading that file is how the client knows where the work actually
+## lives, which is the client's own question about a folder the user chose - not a read
+## of runtime storage.
+const RUNTIME_OPEN_ALLOWED := [".cfg", ".json", ".jsonl", ".txt", ".md", ".gd", ".tscn", ".tres", ".git"]
+
 const REPLIES := ["once", "always", "reject"]
 
 
@@ -95,6 +112,8 @@ func run(t) -> void:
 	test_demo_never_answers_a_human_request(t)
 	test_a_refused_reply_leaves_the_request_pending(t)
 	test_only_the_schema_literals_are_offered(t)
+	test_the_runtime_never_opens_a_database(t)
+	test_every_shipped_open_is_a_client_surface(t)
 
 
 ## --- asset manifest ---------------------------------------------------------
@@ -365,6 +384,67 @@ func test_the_runtime_never_shells_out(t) -> void:
 				)
 
 
+## The client never opens the runtime database, and never opens an embedded database
+## at all. Cost and usage figures come over Protocol; reading them out of the runtime's
+## own storage would couple the client to a file format it does not own, and would do so
+## on the user's machine rather than through the service that guards it.
+##
+## The guard is on what a shipped module OPENS, not on what it mentions: naming a
+## database extension in a string is not access, so the check reads the open call and
+## the path it is given.
+func test_the_runtime_never_opens_a_database(t) -> void:
+	var open_call := RegEx.create_from_string("FileAccess\\.(open|get_file_as_string|file_exists)\\s*\\(")
+	for directory in RUNTIME_DIRS:
+		for path in _walk("res://" + directory):
+			if not path.ends_with(".gd"):
+				continue
+			var text := FileAccess.get_file_as_string(path)
+			if text.is_empty():
+				continue
+			for line_number in _matching_lines(text, open_call):
+				var line := text.split("\n")[line_number - 1]
+				for extension in DATABASE_EXTENSIONS:
+					t.check(
+						not line.contains('"' + extension + '"'),
+						"%s:%d opens a %s database; the client reads runtime data over Protocol" % [
+							path, line_number, extension
+						]
+					)
+			# A database may also be reached by a literal path built anywhere in the file.
+			for extension in DATABASE_EXTENSIONS:
+				t.check(
+					not text.contains("ycoding.db") and not text.contains("storage" + extension),
+					"the runtime does not name a runtime database file in %s" % path
+				)
+
+
+## Every path a shipped module opens carries an extension the client owns. This is the
+## positive half of the boundary above: refusing databases is only meaningful if the
+## opens that DO happen are the client's own surfaces.
+func test_every_shipped_open_is_a_client_surface(t) -> void:
+	var open_call := RegEx.create_from_string("FileAccess\\.(open|get_file_as_string)\\s*\\(")
+	for directory in RUNTIME_DIRS:
+		for path in _walk("res://" + directory):
+			if not path.ends_with(".gd"):
+				continue
+			var lines := FileAccess.get_file_as_string(path).split("\n")
+			for line_number in _matching_lines(FileAccess.get_file_as_string(path), open_call):
+				var line := str(lines[line_number - 1])
+				# A formatted path builds its extension elsewhere, so only a quoted
+				# literal can be judged here. The first quoted run is the path.
+				var quoted := line.split(char(34))
+				if quoted.size() < 3:
+					continue
+				var target := str(quoted[1])
+				var extension := "." + target.get_extension()
+				if extension == ".":
+					continue
+				t.check(
+					RUNTIME_OPEN_ALLOWED.has(extension),
+					"the runtime opens only client surfaces, not %s in %s" % [target, path]
+				)
+
+
 ## A synthetic office asks for nothing, so no layer may answer on the user's
 ## behalf. DEMO must refuse before it touches any transport, and the request must
 ## still be pending afterwards.
@@ -375,10 +455,10 @@ func test_demo_never_answers_a_human_request(t) -> void:
 	# A transport exists and is unconfigured, so a DEMO path that reached it would
 	# report the transport error instead of the DEMO refusal.
 	main.live = LiveTransport.new()
+	store.mode = OfficeStore.MODE_DEMO
 	store.attention.push(AttentionQueue.KIND_PERMISSION, "prq_demo", "ses_demo", {})
 
 	var refusal: String = main.answer_attention("prq_demo", {"reply": "once"})
-	t.check_equal(store.mode, OfficeStore.MODE_DEMO, "the office starts in DEMO")
 	t.check(
 		refusal.find("DEMO") != -1,
 		"DEMO refuses to answer and says why, instead of reaching a transport"

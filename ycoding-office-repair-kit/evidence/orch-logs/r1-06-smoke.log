@@ -1,0 +1,5 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SMOKE start url=http://127.0.0.1:43094 (credential withheld)
+SMOKE blocked: create refused: A new session needs a location, an agent or a model.
+EXIT=2

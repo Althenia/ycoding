@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
@@ -28,7 +29,7 @@ describe("SkillPlugin.Plugin", () => {
           },
         }),
       ).pipe(
-        Effect.provideService(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) })),
+        Effect.provideService(Config.Service, stubConfig({ entries: () => Effect.succeed([]) })),
         Effect.provideService(
           Location.Service,
           Location.Service.of(location({ directory: AbsolutePath.make(import.meta.dir) })),

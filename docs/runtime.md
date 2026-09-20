@@ -637,14 +637,39 @@ replaying each session log. A closed live event feed changes the connection stat
 to reconnecting and requests a reload; a close received while stopped does not.
 
 The Godot client under `apps/office` is a **presentation surface** with no
-execution authority. It owns no runtime state; it reads the same HTTP/SSE
-contract as the TUI and performs no persistence of its own.
+execution authority. It reads the same HTTP/SSE contract as the TUI. Runtime
+history and configuration remain service-owned; the desktop persists its own
+project list, per-project view state and presentation preferences locally.
 
-- **DEMO** is synthetic playback from a fixture. It performs no mutation, and the
-  store exposes no mutation method in that mode.
-- **LIVE** attaches to an existing local service and is entered only on an
-  explicit request; DEMO never becomes LIVE on its own. The office attaches to a
-  service but never starts or stops one.
+The persistent sidebar routes to Office, Sessions, Statistics and Settings.
+Settings provides grouped navigation and search across page labels, descriptions
+and configuration coverage. Runtime-key pages use the service's location-scoped
+configuration read, preview and commit operations. Global and Project are the
+write scopes; Project requires an open folder. The selected scope determines the
+document being written, independently of the effective value's source. Preview
+captures the key, draft, scope and document revision; a late response cannot arm
+Apply for a different draft or scope. Apply is disabled while a call is pending
+and adopts settled readback after a successful commit. Refusals remain visible,
+and redacted placeholders are never submitted as values. Pages with separate
+owners explain those boundaries instead of offering runtime configuration writes.
+The selected settings page is part of per-project view state and does not change
+Session execution. See [Desktop settings](./configuration.md#desktop-settings)
+for editor scope and limitations.
+
+The Statistics quota view omits provider snapshots whose status is `unsupported`,
+including their names, windows and placeholder cards. The read model retains the
+snapshots. Available, stale, unauthorized, error and unknown-status rows retain
+their reported state. An empty visible provider list has a page-level empty state,
+not a card for each unsupported provider. Missing figures remain unreported, never
+zero; provider quotas and local advisory budgets remain separate.
+
+- **DEMO** is synthetic playback from a fixture, reachable only by an explicit
+  user mode action. It performs no mutation, and the store exposes no mutation
+  method in that mode.
+- **LIVE** is the mode a normal launch enters: the client reads the local service
+  registration and attaches when one is present, and otherwise renders a
+  disconnected office that names what is missing. It attaches to a service but
+  never starts or stops one; DEMO never becomes LIVE on its own.
 - In LIVE the client performs the session mutations the UI exposes: prompting,
   model switching, and answering human attention. A refusal returned by the
   service is reported to the user rather than swallowed.

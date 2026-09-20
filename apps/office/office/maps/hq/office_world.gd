@@ -25,20 +25,18 @@ const TILE := 32
 ##   row  22     south wall
 ##
 ##   col  0       west wall
-##   cols 1-12    lobby             (the sidebar floats over this band)
-##   col  13      divider
-##   cols 14-21   lead office
-##   col  22      divider
-##   cols 23-30   engineering
-##   col  31      divider
-##   cols 32-39   lounge / QA
+##   cols 1-12    reception         (circulation; no anchors live here)
+##   col  26      the only divider  (solid through both bands, open at the corridor)
+##   cols 13-25   product (north) / engineering (south), west of the divider
+##   cols 27-39   ops (north) / CEO (south), east of the divider
 ##   col  40      east wall
 ##
-## The lobby carries no anchors. The sidebar is always open, and at 1024x768 it
-## covers cols 0-13, so an anchor there would be permanently hidden. For the same
-## reason every anchor sits at row 16 or above, clear of the floating composer.
-## test_shell_layout.gd proves both, and test_layout.gd proves the plan still
-## hangs together.
+## Reception carries no anchors. It is the circulation band the doorway opens into, and
+## the sidebar is a docked column rather than an overlay, so no anchor is hidden there -
+## nothing routed to lives in a circulation area. Every anchor sits at row 16 or above,
+## which keeps it clear of the floating composer that shares the office.
+## test_shell_layout.gd proves both, and test_layout.gd proves the plan still hangs
+## together.
 ##
 ## The doorway pierces the north wall band at cols 9-10. OfficeNavigation
 ## discovers the entrance as the first passable cell in the wall band rather than
@@ -124,9 +122,9 @@ const ZONES := [
 ## focus chair takes an agent consolidating context, the huddle table takes a
 ## question, and the CEO office receives reports.
 const FURNITURE := [
-	# --- Reception: cols 1-11, both bands. This is circulation: it is the band the doorway opens
-## into and the band the sidebar covers, so nothing anchored lives here and
-## losing those columns costs nothing real. ---
+	# --- Reception: cols 1-12, both bands. This is circulation: it is the band the
+	# doorway opens into, so nothing anchored lives here and losing those columns
+	# costs nothing real. ---
 	{"id": "rec_rug_n", "cell": Vector2i(3, 4), "prop": "rug_warm", "solid": false},
 	{"id": "rec_sofa_a", "cell": Vector2i(2, 3), "prop": "sofa", "solid": true},
 	{"id": "rec_sofa_b", "cell": Vector2i(6, 3), "prop": "sofa", "solid": true},
@@ -261,8 +259,12 @@ const ANCHORS := {
 	"play_sofa_a": {"work": Vector2i(19, 8), "visitor": Vector2i(19, 9)},
 	"play_sofa_b": {"work": Vector2i(23, 8), "visitor": Vector2i(23, 9)},
 	"play_tv": {"work": Vector2i(19, 11), "visitor": Vector2i(20, 11)},
-	"hud_table": {"work": Vector2i(34, 9), "visitor": Vector2i(35, 9)},
-	"hud_whiteboard": {"work": Vector2i(29, 10), "visitor": Vector2i(30, 10)},
+	# The huddle props are the world's own meeting places, so they carry the MEETING
+	# kind the acceptance names. It sits at the same cell as `work` on purpose: an
+	# actor holding the anchor for a meeting stands exactly where it would to work,
+	# and the kind distinguishes WHY the spot is claimed, not a second standing spot.
+	"hud_table": {"work": Vector2i(34, 9), "visitor": Vector2i(35, 9), "meeting": Vector2i(34, 9)},
+	"hud_whiteboard": {"work": Vector2i(29, 10), "visitor": Vector2i(30, 10), "meeting": Vector2i(29, 10)},
 	"focus_side": {"work": Vector2i(24, 10), "visitor": Vector2i(25, 10)},
 }
 
@@ -568,6 +570,13 @@ const STATIONS := {
 
 
 ## The anchor position for a named station, or the origin when unknown.
+## Whether the prop layer sorts by Y, which is the mechanism that keeps a seated
+## actor in front of the prop it sits at. Exposed so the depth rule can be asserted
+## without a test reaching into a private node.
+func prop_sort_enabled() -> bool:
+	return _props != null and _props.y_sort_enabled
+
+
 func station_position(station: String, which: String = "work") -> Vector2:
 	var group: Array = STATIONS.get(station, [])
 	for desk_id in group:

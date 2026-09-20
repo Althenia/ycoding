@@ -8,6 +8,7 @@
 ##     --script res://tools/capture_scene.gd -- --out=<abs path> --at-ms=35000
 extends SceneTree
 
+const DemoCapture := preload("res://tools/demo_capture.gd")
 const STEP_MS := 250
 
 var _scene: Node
@@ -46,6 +47,14 @@ func _advance_to_target() -> void:
 
 
 func _process(_delta: float) -> bool:
+	# Opt in explicitly: production boot no longer has to imply DEMO.
+	if not DemoCapture.started(_scene):
+		var reason := DemoCapture.failure(_scene)
+		if not reason.is_empty():
+			push_error("capture: demo did not start: %s" % reason)
+			quit(1)
+			return true
+		return false
 	if _stage == 0:
 		_advance_to_target()
 		print("capture: reached %d ms of playback" % _elapsed)

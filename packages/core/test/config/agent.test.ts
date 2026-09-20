@@ -4,6 +4,7 @@ import path from "path"
 import { Effect, Schema } from "effect"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -61,7 +62,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
         }),
       )
 
-      const config = Config.Service.of({
+      const config = stubConfig({
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -146,7 +147,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
   it.effect("maps configured agent fields and preserves an unspecified model variant", () =>
     Effect.gen(function* () {
       const agents = yield* AgentV2.Service
-      const config = Config.Service.of({
+      const config = stubConfig({
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -214,7 +215,7 @@ describe("ConfigAgentPlugin.Plugin", () => {
       const build = AgentV2.ID.make("build")
       yield* agents.transform((editor) => editor.update(build, () => {}))
 
-      const config = Config.Service.of({
+      const config = stubConfig({
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -277,7 +278,7 @@ Use current fields.`,
             await fs.writeFile(path.join(tmp.path, "agents", "disabled.md"), "---\ndisabled: true\n---\nDisabled")
           })
           const agents = yield* AgentV2.Service
-          const config = Config.Service.of({
+          const config = stubConfig({
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -322,7 +323,7 @@ function loadHomePermissions(home: string) {
     const agents = yield* AgentV2.Service
     const build = AgentV2.ID.make("build")
     yield* agents.transform((editor) => editor.update(build, () => {}))
-    const config = Config.Service.of({
+    const config = stubConfig({
       entries: () =>
         Effect.succeed([
           new Config.Document({

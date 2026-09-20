@@ -126,6 +126,41 @@ After deployment, use the endpoint in `ycoding.jsonc` for editor validation:
 
 Use the generated YCoding schema endpoint rather than a different product's schema.
 
+## Desktop settings
+
+The native client's Settings surface groups pages into Application, Workspace,
+Connections, Runtime and Advanced. Search matches page names, descriptions and
+configuration coverage. Back to Office returns to the office surface.
+
+Pages with runtime configuration keys read effective values and source provenance
+from the service. Edit opens a JSON editor for a reported top-level value, including
+record-valued settings. Preview validates the draft without writing; Apply writes
+only the exact previewed draft against the returned document revision. Editing the
+draft or changing scope requires a new preview. A stale-revision refusal requires
+re-reading and reviewing the change rather than an automatic retry.
+
+The scope selector chooses the write target: Global, or Project when a folder is
+open. The service resolves the configuration document for that scope; the client
+cannot supply an arbitrary file path. A missing writable document produces setup
+guidance. Folder and Session are not configuration-document write scopes; virtual
+sources are read-only provenance. Selecting Global or Project does not change
+which sources contribute to the effective configuration.
+
+After Apply, the editor adopts the service's settled readback and reports keys
+whose effective values are still owned by another source. The service preserves
+unrelated JSONC content, comments and substitution tokens. Secret-bearing values
+are displayed as `[redacted]`; the client refuses to submit that placeholder,
+including inside an object or array. These JSON editors are not credential
+management or schema-guided nested editors.
+
+Pages without runtime keys explain their separate ownership and show navigation
+guidance rather than a configuration editor. Only keys reported by the effective
+read are offered for editing; adding an absent key uses the configuration files
+documented in this guide.
+
+The selected settings page is saved with per-project desktop view state; it is
+independent of runtime configuration scope and does not change Session execution.
+
 ## Terminal installation and commands
 
 After GitHub Pages and a native release are published, `curl -fsSL https://althenia.github.io/ycoding/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
@@ -614,15 +649,17 @@ The top-level `instructions` field is Schema-accepted but not connected to curre
 
 ## Native desktop client
 
-`apps/office` needs no configuration of its own. In LIVE it reads the same local
+`apps/office` needs no configuration of its own. On start it reads the same local
 service registration the CLI writes, so the address and password are not retyped.
 `YCODING_SERVICE_FILE` overrides the registration path; otherwise the search
 mirrors the client contract: `XDG_STATE_HOME/ycoding/service.json`, then
 `~/.local/state/ycoding/service.json`. The registration lives under the **state**
 directory, not the config directory.
 
-The client holds no credentials of its own, writes no runtime configuration, and
-never starts or stops a service.
+The client keeps no provider credential store and never starts or stops a service.
+Runtime configuration remains service-owned: the [Settings surface](#desktop-settings)
+submits scoped previews and commits through the service rather than writing runtime
+configuration files directly.
 
 ### Installation
 

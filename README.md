@@ -41,7 +41,7 @@ macOS ships a disk image (`ycoding-office-<version>-darwin-universal.dmg`). Doub
 
 The desktop client is not notarized. On macOS the app opens without a warning when it is built from source; a bundle you downloaded may instead be refused as coming from an unidentified developer. Allow it deliberately in System Settings → Privacy & Security, or build it yourself with `apps/office/tools/build-release.sh`.
 
-The client is a presentation surface: it needs a running `ycoding` service for live sessions and works offline with synthetic playback otherwise.
+The client is a presentation surface: it needs a running `ycoding` service for live sessions, and a launch without a reachable service states the missing registration instead of substituting synthetic work.
 
 **Windows (x64):** download the ZIP from [GitHub Releases](https://github.com/Althenia/ycoding/releases/latest), extract `ycoding.exe`, and run it in your terminal. Native archives for all supported platforms are available there too, including `ycoding-office-*-windows-x64.zip` for the desktop client.
 

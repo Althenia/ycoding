@@ -5,6 +5,8 @@
 [ext_resource type="Script" path="res://ui/shell/sidebar_panel.gd" id="4_sidebar"]
 [ext_resource type="Script" path="res://ui/shell/chrome_toggles.gd" id="8_toggles"]
 [ext_resource type="Script" path="res://ui/conversation/conversation_panel.gd" id="5_conversation"]
+[ext_resource type="Script" path="res://ui/statistics/statistics_panel.gd" id="9_statistics"]
+[ext_resource type="Script" path="res://ui/settings/settings_panel.gd" id="10_settings"]
 [ext_resource type="Script" path="res://office/viewport/office_viewport.gd" id="6_viewport"]
 [ext_resource type="Script" path="res://office/maps/hq/office_world.gd" id="7_world"]
 
@@ -62,6 +64,16 @@ layout_mode = 0
 offset_right = 520.0
 offset_bottom = 450.0
 script = ExtResource("5_conversation")
+
+[node name="StatisticsPanel" type="PanelContainer" parent="Shell"]
+visible = false
+script = ExtResource("9_statistics")
+
+[node name="SettingsPanel" type="PanelContainer" parent="Shell"]
+visible = false
+offset_right = 900.0
+offset_bottom = 640.0
+script = ExtResource("10_settings")
 
 [node name="PromptPanel" type="PanelContainer" parent="Shell"]
 layout_mode = 0

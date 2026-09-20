@@ -1,0 +1,10 @@
+attempts are reported as steps                     passed=54   failed=3   CAUGHT             physical = 1+3+1 attempts (expecte
+an unknown price counts as free                    passed=55   failed=2   CAUGHT             the dataset has an unpriced group,
+the completeness counter drops its denominator     passed=55   failed=2   CAUGHT             one of two groups was priced (all)
+helpers are folded into the steps                  passed=54   failed=3   CAUGHT             helpers = the one title request (e
+a duplicate session is summed rather than superseded passed=47   failed=0   *** NOT CAUGHT *** 
+a covered child is summed into the root            passed=54   failed=3   CAUGHT             the root's family total is 3, not 
+a project filter returns every session             passed=55   failed=2   CAUGHT             alpha alone is 3, with no leak fro
+an estimate is labelled as recorded billing        passed=56   failed=1   CAUGHT             and their provenance differs (reco
+an absent cost renders as a zero amount            passed=56   failed=1   CAUGHT             a summary with no cost is unreport
+restored: True

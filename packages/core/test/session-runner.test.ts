@@ -69,6 +69,7 @@ import { QuestionTool } from "@ycoding-ai/core/tool/question"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Tool } from "@ycoding-ai/core/tool/tool"
@@ -524,7 +525,7 @@ let compactionWakeHook = Effect.void
 let compactionSummary = false
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  stubConfig({
     entries: () =>
       Effect.succeed([
         new Config.Document({

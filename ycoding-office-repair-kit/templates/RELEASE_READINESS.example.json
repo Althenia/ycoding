@@ -1,0 +1,78 @@
+{
+  "version": "0.0.0",
+  "tested_commit": null,
+  "signing": "not_verified",
+  "user_approved": false,
+  "checks": {
+    "real_provider": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "settings_parity": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "native_visual": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "multi_project": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "player_input": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "statistics_quota": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "no_production_demo": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "macos_install": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "linux_install": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    },
+    "windows_install": {
+      "result": "not_run",
+      "synthetic": false,
+      "evidence": [],
+      "reviewed_by": null,
+      "reviewed_at": null
+    }
+  }
+}

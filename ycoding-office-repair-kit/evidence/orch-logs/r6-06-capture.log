@@ -1,0 +1,20 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+SCRIPT ERROR: Parse Error: Cannot infer the type of "sidebar_before" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:73)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "composer_before" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:77)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "roster" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:95)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "after" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:100)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "back" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:104)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "ref" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:141)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "family" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://r6_06_capture_tmp.gd:147)
+ERROR: Failed to load script "res://r6_06_capture_tmp.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+EXIT=1

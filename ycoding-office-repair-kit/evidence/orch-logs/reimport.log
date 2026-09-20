@@ -1,0 +1,166 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+[   0% ] [90m[1mfirst_scan_filesystem[22m | Started Project initialization (5 steps)[39m[0m
+[   0% ] [90m[1mfirst_scan_filesystem[22m | Scanning file structure...[39m[0m
+[  16% ] [90m[1mfirst_scan_filesystem[22m | Loading global class names...[39m[0m
+[  33% ] [90m[1mfirst_scan_filesystem[22m | Verifying GDExtensions...[39m[0m
+[  50% ] [90m[1mfirst_scan_filesystem[22m | Creating autoload scripts...[39m[0m
+[  66% ] [90m[1mfirst_scan_filesystem[22m | Initializing plugins...[39m[0m
+[  83% ] [90m[1mfirst_scan_filesystem[22m | Starting file scan...[39m[0m
+[92m[ DONE ][39m [1mfirst_scan_filesystem[22m
+[0m
+[   0% ] [90m[1mupdate_scripts_classes[22m | Started Registering global classes... (82 steps)[39m[0m
+[   0% ] [90m[1mupdate_scripts_classes[22m | OfficeMain[39m[0m
+[   1% ] [90m[1mupdate_scripts_classes[22m | Shortcuts[39m[0m
+[   2% ] [90m[1mupdate_scripts_classes[22m | UiScale[39m[0m
+[   3% ] [90m[1mupdate_scripts_classes[22m | ActorIdentity[39m[0m
+[   4% ] [90m[1mupdate_scripts_classes[22m | ActorPresentation[39m[0m
+[   6% ] [90m[1mupdate_scripts_classes[22m | AttentionQueue[39m[0m
+[   7% ] [90m[1mupdate_scripts_classes[22m | ModelCatalog[39m[0m
+[   8% ] [90m[1mupdate_scripts_classes[22m | Motion[39m[0m
+[   9% ] [90m[1mupdate_scripts_classes[22m | OfficeStore[39m[0m
+[  10% ] [90m[1mupdate_scripts_classes[22m | Presence[39m[0m
+[  12% ] [90m[1mupdate_scripts_classes[22m | Wire[39m[0m
+[  13% ] [90m[1mupdate_scripts_classes[22m | WorkState[39m[0m
+[  14% ] [90m[1mupdate_scripts_classes[22m | DemoTransport[39m[0m
+[  15% ] [90m[1mupdate_scripts_classes[22m | FixtureTranslator[39m[0m
+[  16% ] [90m[1mupdate_scripts_classes[22m | Gateway[39m[0m
+[  18% ] [90m[1mupdate_scripts_classes[22m | HttpTransport[39m[0m
+[  19% ] [90m[1mupdate_scripts_classes[22m | LiveTransport[39m[0m
+[  20% ] [90m[1mupdate_scripts_classes[22m | ModelCatalogApi[39m[0m
+[  21% ] [90m[1mupdate_scripts_classes[22m | ServiceRegistration[39m[0m
+[  22% ] [90m[1mupdate_scripts_classes[22m | SessionApi[39m[0m
+[  24% ] [90m[1mupdate_scripts_classes[22m | SseParser[39m[0m
+[  25% ] [90m[1mupdate_scripts_classes[22m | OfficeActor[39m[0m
+[  26% ] [90m[1mupdate_scripts_classes[22m | OfficeDirector[39m[0m
+[  27% ] [90m[1mupdate_scripts_classes[22m | OfficeOverlay[39m[0m
+[  28% ] [90m[1mupdate_scripts_classes[22m | OfficeWorld[39m[0m
+[  30% ] [90m[1mupdate_scripts_classes[22m | OfficeNavigation[39m[0m
+[  31% ] [90m[1mupdate_scripts_classes[22m | OfficeViewport[39m[0m
+[  32% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  33% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  34% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  36% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  37% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  38% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  39% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  40% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  42% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  43% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  44% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  45% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  46% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  48% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  49% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  50% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  51% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  53% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  54% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  55% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  56% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  57% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  59% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  60% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  61% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  62% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  63% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  65% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  66% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  67% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  68% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  69% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  71% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  72% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  73% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  74% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  75% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  77% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  78% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  79% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  80% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  81% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  83% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  84% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  85% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  86% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  87% ] [90m[1mupdate_scripts_classes[22m | [39m[0m
+[  89% ] [90m[1mupdate_scripts_classes[22m | ConversationPanel[39m[0m
+[  90% ] [90m[1mupdate_scripts_classes[22m | EffortSlider[39m[0m
+[  91% ] [90m[1mupdate_scripts_classes[22m | PromptPanel[39m[0m
+[  92% ] [90m[1mupdate_scripts_classes[22m | ChromeToggles[39m[0m
+[  93% ] [90m[1mupdate_scripts_classes[22m | OfficeShellLayout[39m[0m
+[  95% ] [90m[1mupdate_scripts_classes[22m | OfficeTheme[39m[0m
+[  96% ] [90m[1mupdate_scripts_classes[22m | SidebarPanel[39m[0m
+[  97% ] [90m[1mupdate_scripts_classes[22m | OfficePalette[39m[0m
+[92m[ DONE ][39m [1mupdate_scripts_classes[22m
+[0m
+[   0% ] [90m[1m_update_scan_actions[22m | Started Scanning actions... (49 steps)[39m[0m
+[   0% ] [90m[1m_update_scan_actions[22m | char_backend.png[39m[0m
+[   2% ] [90m[1m_update_scan_actions[22m | char_frontend.png[39m[0m
+[   4% ] [90m[1m_update_scan_actions[22m | char_lead.png[39m[0m
+[   6% ] [90m[1m_update_scan_actions[22m | char_qa.png[39m[0m
+[   8% ] [90m[1m_update_scan_actions[22m | door_frame.png[39m[0m
+[  10% ] [90m[1m_update_scan_actions[22m | icon_512.png[39m[0m
+[  12% ] [90m[1m_update_scan_actions[22m | prop_aquarium.png[39m[0m
+[  14% ] [90m[1m_update_scan_actions[22m | prop_arcade.png[39m[0m
+[  16% ] [90m[1m_update_scan_actions[22m | prop_armchair.png[39m[0m
+[  18% ] [90m[1m_update_scan_actions[22m | prop_bookshelf.png[39m[0m
+[  20% ] [90m[1m_update_scan_actions[22m | prop_cabinet.png[39m[0m
+[  22% ] [90m[1m_update_scan_actions[22m | prop_chair.png[39m[0m
+[  24% ] [90m[1m_update_scan_actions[22m | prop_coffee.png[39m[0m
+[  26% ] [90m[1m_update_scan_actions[22m | prop_cooler.png[39m[0m
+[  28% ] [90m[1m_update_scan_actions[22m | prop_counter.png[39m[0m
+[  30% ] [90m[1m_update_scan_actions[22m | prop_desk.png[39m[0m
+[  32% ] [90m[1m_update_scan_actions[22m | prop_filing_cabinet.png[39m[0m
+[  34% ] [90m[1m_update_scan_actions[22m | prop_fridge.png[39m[0m
+[  36% ] [90m[1m_update_scan_actions[22m | prop_lamp.png[39m[0m
+[  38% ] [90m[1m_update_scan_actions[22m | prop_lockers.png[39m[0m
+[  40% ] [90m[1m_update_scan_actions[22m | prop_pingpong.png[39m[0m
+[  42% ] [90m[1m_update_scan_actions[22m | prop_plant.png[39m[0m
+[  44% ] [90m[1m_update_scan_actions[22m | prop_pouf.png[39m[0m
+[  46% ] [90m[1m_update_scan_actions[22m | prop_rack.png[39m[0m
+[  48% ] [90m[1m_update_scan_actions[22m | prop_reading_chair.png[39m[0m
+[  50% ] [90m[1m_update_scan_actions[22m | prop_round_table.png[39m[0m
+[  52% ] [90m[1m_update_scan_actions[22m | prop_rug_blue.png[39m[0m
+[  54% ] [90m[1m_update_scan_actions[22m | prop_rug_checker.png[39m[0m
+[  56% ] [90m[1m_update_scan_actions[22m | prop_rug_pink.png[39m[0m
+[  58% ] [90m[1m_update_scan_actions[22m | prop_rug_warm.png[39m[0m
+[  60% ] [90m[1m_update_scan_actions[22m | prop_shelf.png[39m[0m
+[  62% ] [90m[1m_update_scan_actions[22m | prop_side_table.png[39m[0m
+[  64% ] [90m[1m_update_scan_actions[22m | prop_sofa.png[39m[0m
+[  66% ] [90m[1m_update_scan_actions[22m | prop_table.png[39m[0m
+[  68% ] [90m[1m_update_scan_actions[22m | prop_tv_stand.png[39m[0m
+[  70% ] [90m[1m_update_scan_actions[22m | prop_vending.png[39m[0m
+[  72% ] [90m[1m_update_scan_actions[22m | prop_wall_tv.png[39m[0m
+[  74% ] [90m[1m_update_scan_actions[22m | prop_water_cooler.png[39m[0m
+[  76% ] [90m[1m_update_scan_actions[22m | prop_whiteboard.png[39m[0m
+[  78% ] [90m[1m_update_scan_actions[22m | prop_window.png[39m[0m
+[  80% ] [90m[1m_update_scan_actions[22m | tiles_floor.png[39m[0m
+[  82% ] [90m[1m_update_scan_actions[22m | wall_clock.png[39m[0m
+[  84% ] [90m[1m_update_scan_actions[22m | wall_frame_art.png[39m[0m
+[  86% ] [90m[1m_update_scan_actions[22m | wall_pinboard.png[39m[0m
+[  88% ] [90m[1m_update_scan_actions[22m | wall_poster.png[39m[0m
+[  90% ] [90m[1m_update_scan_actions[22m | wall_screen.png[39m[0m
+[  92% ] [90m[1m_update_scan_actions[22m | wall_side.png[39m[0m
+[  94% ] [90m[1m_update_scan_actions[22m | wall_sign.png[39m[0m
+[  96% ] [90m[1m_update_scan_actions[22m | wall_top.png[39m[0m
+[92m[ DONE ][39m [1m_update_scan_actions[22m
+[0m
+[   0% ] [90m[1mloading_editor_layout[22m | Started Loading editor (5 steps)[39m[0m
+[   0% ] [90m[1mloading_editor_layout[22m | Loading editor layout...[39m[0m
+[  16% ] [90m[1mloading_editor_layout[22m | Loading docks...[39m[0m
+[92m[ DONE ][39m [1mloading_editor_layout[22m
+[0m
+SCRIPT ERROR: Parse Error: Could not parse global class "ChromeToggles" from "res://ui/shell/chrome_toggles.gd".
+          at: GDScript::reload (res://app/main.gd:32)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "hiding" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://app/main.gd:805)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "reduced" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://app/main.gd:928)
+ERROR: Failed to load script "res://app/main.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+SCRIPT ERROR: Parse Error: Unindent doesn't match the previous indentation level.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:230)
+ERROR: Failed to load script "res://ui/shell/chrome_toggles.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+IMPORT_EXIT=0

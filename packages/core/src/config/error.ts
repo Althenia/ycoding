@@ -16,3 +16,6 @@ export const InvalidError = NamedError.create("ConfigInvalidError", {
   issues: Schema.optional(Schema.Array(Issue)),
   message: Schema.optional(Schema.String),
 })
+
+/** Instance type of `InvalidError`, for annotating effect error channels. */
+export type InvalidErrorType = InstanceType<typeof InvalidError>

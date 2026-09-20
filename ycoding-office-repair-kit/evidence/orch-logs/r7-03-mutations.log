@@ -1,0 +1,11 @@
+an unread page reads as empty                      passed=39   failed=3   CAUGHT             an unread page is LOADING (expected load
+a failed read reads as empty                       passed=42   failed=0   *** NOT CAUGHT *** 
+a daily chart is drawn from nothing                passed=41   failed=1   CAUGHT             the page does not claim a daily chart
+the calendar is drawn from nothing                 passed=41   failed=1   CAUGHT             the page does not claim an activity cale
+attempts are shown as steps                        passed=40   failed=2   CAUGHT             the attempts card shows the physical cou
+an unreported token becomes zero                   passed=41   failed=1   CAUGHT             an unreported component reads as unrepor
+a provider row invents a share                     passed=40   failed=2   CAUGHT             a provider row carries no invented share
+the model filter does not narrow the cards         passed=40   failed=2   CAUGHT             only the filtered model's row remains (e
+the row loses its source                           passed=41   failed=1   CAUGHT             the row names the session its figures ca
+a stale read is not marked                         passed=40   failed=2   CAUGHT             a reloaded projection is marked stale
+restored: True

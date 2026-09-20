@@ -4,6 +4,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Deferred, Duration, Effect, Fiber, Layer, Option, Schedule, Stream } from "effect"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
@@ -25,7 +26,7 @@ const it = testEffect(AppNodeBuilder.build(LayerNode.group([FSUtil.node, EventV2
 
 const configLayer = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  stubConfig({
     entries: () => Effect.succeed([]),
   }),
 )

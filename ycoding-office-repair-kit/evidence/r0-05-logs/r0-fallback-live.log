@@ -1,0 +1,8 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+PROBE[live] before mode=DEMO conn=syncing actors=0 error='' demo_playing=true
+PROBE[live] after  mode=LIVE conn=live actors=0 stale=false error='' demo_playing=false
+PROBE[live] actors=[]
+PROBE[live] prompt_panel_state=n/a
+PROBE[live] capture=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r0-05-live-attached.png err=0 (1280x720)

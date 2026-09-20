@@ -1,0 +1,5 @@
+shells are not collected into the drawer at all            passed=37   failed=6   CAUGHT             the drawer shows the command the session
+the drawer says nothing about shell output paging          passed=42   failed=1   CAUGHT             the drawer states how much of the output
+the drawer hides a running shell's status                  passed=42   failed=1   CAUGHT             the drawer states the runtime's status
+the drawer lets a shell row accept a command (a fake terminal) passed=41   failed=2   CAUGHT             nothing in a shell row accepts typed inp
+restored: True

@@ -54,6 +54,20 @@ export class UnknownError extends Schema.TaggedErrorClass<UnknownError>()(
   { httpApiStatus: 500 },
 ) {}
 
+/**
+ * A configuration read, preview, or write was rejected. `message` is a sanitized, actionable
+ * reason; it never contains file contents or credential material.
+ */
+export class ConfigInvalidError extends Schema.TaggedErrorClass<ConfigInvalidError>()(
+  "ConfigInvalidError",
+  {
+    message: Schema.String,
+    path: Schema.optional(Schema.String),
+    issues: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String, path: Schema.Array(Schema.String) }))),
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export class ProviderNotFoundError extends Schema.TaggedErrorClass<ProviderNotFoundError>()(
   "ProviderNotFoundError",
   {

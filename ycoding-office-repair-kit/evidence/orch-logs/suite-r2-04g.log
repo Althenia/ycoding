@@ -1,0 +1,342 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Cannot infer the type of "current" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://ui/shell/sidebar_panel.gd:596)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://ui/shell/chrome_toggles.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://ui/shell/office_shell_layout.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/suites/test_shell_layout.gd:0)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/run_tests.gd:0)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_mode_text_distinguishes_demo_from_live (res://tests/suites/test_sidebar.gd:45)
+          GDScript backtrace (most recent call first):
+              [0] test_mode_text_distinguishes_demo_from_live (res://tests/suites/test_sidebar.gd:45)
+              [1] run (res://tests/suites/test_sidebar.gd:10)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_demo_and_live_use_different_accent (res://tests/suites/test_sidebar.gd:62)
+          GDScript backtrace (most recent call first):
+              [0] test_demo_and_live_use_different_accent (res://tests/suites/test_sidebar.gd:62)
+              [1] run (res://tests/suites/test_sidebar.gd:11)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_empty_store_shows_empty_state (res://tests/suites/test_sidebar.gd:82)
+          GDScript backtrace (most recent call first):
+              [0] test_empty_store_shows_empty_state (res://tests/suites/test_sidebar.gd:82)
+              [1] run (res://tests/suites/test_sidebar.gd:12)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_error_overrides_the_detail_line (res://tests/suites/test_sidebar.gd:101)
+          GDScript backtrace (most recent call first):
+              [0] test_error_overrides_the_detail_line (res://tests/suites/test_sidebar.gd:101)
+              [1] run (res://tests/suites/test_sidebar.gd:13)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_agents_round_trip (res://tests/suites/test_sidebar.gd:118)
+          GDScript backtrace (most recent call first):
+              [0] test_agents_round_trip (res://tests/suites/test_sidebar.gd:118)
+              [1] run (res://tests/suites/test_sidebar.gd:14)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_team_rows_are_built_per_actor (res://tests/suites/test_sidebar.gd:130)
+          GDScript backtrace (most recent call first):
+              [0] test_team_rows_are_built_per_actor (res://tests/suites/test_sidebar.gd:130)
+              [1] run (res://tests/suites/test_sidebar.gd:15)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_selection_marker_is_not_colour_only (res://tests/suites/test_sidebar.gd:154)
+          GDScript backtrace (most recent call first):
+              [0] test_selection_marker_is_not_colour_only (res://tests/suites/test_sidebar.gd:154)
+              [1] run (res://tests/suites/test_sidebar.gd:16)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_team_line_spells_out_attention (res://tests/suites/test_sidebar.gd:171)
+          GDScript backtrace (most recent call first):
+              [0] test_team_line_spells_out_attention (res://tests/suites/test_sidebar.gd:171)
+              [1] run (res://tests/suites/test_sidebar.gd:17)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_sessions_group_children_under_their_root (res://tests/suites/test_sidebar.gd:185)
+          GDScript backtrace (most recent call first):
+              [0] test_sessions_group_children_under_their_root (res://tests/suites/test_sidebar.gd:185)
+              [1] run (res://tests/suites/test_sidebar.gd:18)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_a_group_can_be_collapsed (res://tests/suites/test_sidebar.gd:223)
+          GDScript backtrace (most recent call first):
+              [0] test_a_group_can_be_collapsed (res://tests/suites/test_sidebar.gd:223)
+              [1] run (res://tests/suites/test_sidebar.gd:19)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_the_status_bar_carries_the_location (res://tests/suites/test_sidebar.gd:245)
+          GDScript backtrace (most recent call first):
+              [0] test_the_status_bar_carries_the_location (res://tests/suites/test_sidebar.gd:245)
+              [1] run (res://tests/suites/test_sidebar.gd:20)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_a_shared_location_is_reported_and_a_split_one_is_not (res://tests/suites/test_sidebar.gd:263)
+          GDScript backtrace (most recent call first):
+              [0] test_a_shared_location_is_reported_and_a_split_one_is_not (res://tests/suites/test_sidebar.gd:263)
+              [1] run (res://tests/suites/test_sidebar.gd:21)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_demo_never_reports_a_live_connection (res://tests/suites/test_sidebar.gd:295)
+          GDScript backtrace (most recent call first):
+              [0] test_demo_never_reports_a_live_connection (res://tests/suites/test_sidebar.gd:295)
+              [1] run (res://tests/suites/test_sidebar.gd:22)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_a_wire_activity_name_reads_as_words (res://tests/suites/test_sidebar.gd:332)
+          GDScript backtrace (most recent call first):
+              [0] test_a_wire_activity_name_reads_as_words (res://tests/suites/test_sidebar.gd:332)
+              [1] run (res://tests/suites/test_sidebar.gd:24)
+              [2] _init (res://tests/run_tests.gd:52)
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_a_launch_without_a_registration_fabricates_nothing (res://tests/suites/test_production_boot.gd:107)
+              [2] run (res://tests/suites/test_production_boot.gd:38)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_a_launch_without_a_registration_fabricates_nothing (res://tests/suites/test_production_boot.gd:108)
+          GDScript backtrace (most recent call first):
+              [0] test_a_launch_without_a_registration_fabricates_nothing (res://tests/suites/test_production_boot.gd:108)
+              [1] run (res://tests/suites/test_production_boot.gd:38)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_the_disconnected_rail_offers_a_wired_retry (res://tests/suites/test_production_boot.gd:147)
+              [2] run (res://tests/suites/test_production_boot.gd:39)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_the_disconnected_rail_offers_a_wired_retry (res://tests/suites/test_production_boot.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] test_the_disconnected_rail_offers_a_wired_retry (res://tests/suites/test_production_boot.gd:148)
+              [1] run (res://tests/suites/test_production_boot.gd:39)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_retrying_without_a_registration_keeps_the_composer_draft (res://tests/suites/test_production_boot.gd:159)
+              [2] run (res://tests/suites/test_production_boot.gd:40)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_retrying_without_a_registration_keeps_the_composer_draft (res://tests/suites/test_production_boot.gd:160)
+          GDScript backtrace (most recent call first):
+              [0] test_retrying_without_a_registration_keeps_the_composer_draft (res://tests/suites/test_production_boot.gd:160)
+              [1] run (res://tests/suites/test_production_boot.gd:40)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_a_registration_attaches_live_without_a_toggle (res://tests/suites/test_production_boot.gd:182)
+              [2] run (res://tests/suites/test_production_boot.gd:41)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_a_registration_attaches_live_without_a_toggle (res://tests/suites/test_production_boot.gd:183)
+          GDScript backtrace (most recent call first):
+              [0] test_a_registration_attaches_live_without_a_toggle (res://tests/suites/test_production_boot.gd:183)
+              [1] run (res://tests/suites/test_production_boot.gd:41)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_the_registered_value_reaches_the_transport_and_is_never_rendered (res://tests/suites/test_production_boot.gd:209)
+              [2] run (res://tests/suites/test_production_boot.gd:42)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_the_registered_value_reaches_the_transport_and_is_never_rendered (res://tests/suites/test_production_boot.gd:210)
+          GDScript backtrace (most recent call first):
+              [0] test_the_registered_value_reaches_the_transport_and_is_never_rendered (res://tests/suites/test_production_boot.gd:210)
+              [1] run (res://tests/suites/test_production_boot.gd:42)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_live_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:238)
+              [2] run (res://tests/suites/test_production_boot.gd:43)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_live_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:239)
+          GDScript backtrace (most recent call first):
+              [0] test_live_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:239)
+              [1] run (res://tests/suites/test_production_boot.gd:43)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_a_live_state_change_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:263)
+              [2] run (res://tests/suites/test_production_boot.gd:44)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'store' on a base object of type 'Nil'.
+          at: test_a_live_state_change_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:264)
+          GDScript backtrace (most recent call first):
+              [0] test_a_live_state_change_never_installs_the_synthetic_catalogue (res://tests/suites/test_production_boot.gd:264)
+              [1] run (res://tests/suites/test_production_boot.gd:44)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_demo_still_offers_the_labelled_synthetic_catalogue (res://tests/suites/test_production_boot.gd:282)
+              [2] run (res://tests/suites/test_production_boot.gd:45)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid access to property or key 'store' on a base object of type 'Nil'.
+          at: test_demo_still_offers_the_labelled_synthetic_catalogue (res://tests/suites/test_production_boot.gd:283)
+          GDScript backtrace (most recent call first):
+              [0] test_demo_still_offers_the_labelled_synthetic_catalogue (res://tests/suites/test_production_boot.gd:283)
+              [1] run (res://tests/suites/test_production_boot.gd:45)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_demo_is_reached_only_through_the_explicit_action (res://tests/suites/test_production_boot.gd:294)
+              [2] run (res://tests/suites/test_production_boot.gd:46)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_demo_is_reached_only_through_the_explicit_action (res://tests/suites/test_production_boot.gd:295)
+          GDScript backtrace (most recent call first):
+              [0] test_demo_is_reached_only_through_the_explicit_action (res://tests/suites/test_production_boot.gd:295)
+              [1] run (res://tests/suites/test_production_boot.gd:46)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_leaving_demo_without_a_service_discards_the_synthetic_office (res://tests/suites/test_production_boot.gd:319)
+              [2] run (res://tests/suites/test_production_boot.gd:47)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_leaving_demo_without_a_service_discards_the_synthetic_office (res://tests/suites/test_production_boot.gd:320)
+          GDScript backtrace (most recent call first):
+              [0] test_leaving_demo_without_a_service_discards_the_synthetic_office (res://tests/suites/test_production_boot.gd:320)
+              [1] run (res://tests/suites/test_production_boot.gd:47)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_a_prompt_id_survives_the_retry_it_must_reconcile (res://tests/suites/test_production_boot.gd:350)
+              [2] run (res://tests/suites/test_production_boot.gd:48)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_prompt_message_id' in base 'Nil'.
+          at: test_a_prompt_id_survives_the_retry_it_must_reconcile (res://tests/suites/test_production_boot.gd:351)
+          GDScript backtrace (most recent call first):
+              [0] test_a_prompt_id_survives_the_retry_it_must_reconcile (res://tests/suites/test_production_boot.gd:351)
+              [1] run (res://tests/suites/test_production_boot.gd:48)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_a_different_draft_gets_its_own_prompt_id (res://tests/suites/test_production_boot.gd:362)
+              [2] run (res://tests/suites/test_production_boot.gd:49)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_prompt_message_id' in base 'Nil'.
+          at: test_a_different_draft_gets_its_own_prompt_id (res://tests/suites/test_production_boot.gd:363)
+          GDScript backtrace (most recent call first):
+              [0] test_a_different_draft_gets_its_own_prompt_id (res://tests/suites/test_production_boot.gd:363)
+              [1] run (res://tests/suites/test_production_boot.gd:49)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_the_id_is_retired_by_durable_admission_not_by_the_request (res://tests/suites/test_production_boot.gd:376)
+              [2] run (res://tests/suites/test_production_boot.gd:50)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_the_id_is_retired_by_durable_admission_not_by_the_request (res://tests/suites/test_production_boot.gd:377)
+          GDScript backtrace (most recent call first):
+              [0] test_the_id_is_retired_by_durable_admission_not_by_the_request (res://tests/suites/test_production_boot.gd:377)
+              [1] run (res://tests/suites/test_production_boot.gd:50)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_another_inputs_admission_does_not_retire_the_draft (res://tests/suites/test_production_boot.gd:406)
+              [2] run (res://tests/suites/test_production_boot.gd:51)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_another_inputs_admission_does_not_retire_the_draft (res://tests/suites/test_production_boot.gd:407)
+          GDScript backtrace (most recent call first):
+              [0] test_another_inputs_admission_does_not_retire_the_draft (res://tests/suites/test_production_boot.gd:407)
+              [1] run (res://tests/suites/test_production_boot.gd:51)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _bootable (res://tests/suites/test_production_boot.gd:70)
+          GDScript backtrace (most recent call first):
+              [0] _bootable (res://tests/suites/test_production_boot.gd:70)
+              [1] test_the_send_reports_admission_not_completion (res://tests/suites/test_production_boot.gd:426)
+              [2] run (res://tests/suites/test_production_boot.gd:52)
+              [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function '_boot_with' in base 'Nil'.
+          at: test_the_send_reports_admission_not_completion (res://tests/suites/test_production_boot.gd:427)
+          GDScript backtrace (most recent call first):
+              [0] test_the_send_reports_admission_not_completion (res://tests/suites/test_production_boot.gd:427)
+              [1] run (res://tests/suites/test_production_boot.gd:52)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_controls_are_at_least_their_own_minimum_size (res://tests/suites/test_scale_ownership.gd:239)
+          GDScript backtrace (most recent call first):
+              [0] test_controls_are_at_least_their_own_minimum_size (res://tests/suites/test_scale_ownership.gd:239)
+              [1] run (res://tests/suites/test_scale_ownership.gd:33)
+              [2] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: test_the_rail_offers_every_route_and_marks_the_current_one (res://tests/suites/test_routes.gd:237)
+          GDScript backtrace (most recent call first):
+              [0] test_the_rail_offers_every_route_and_marks_the_current_one (res://tests/suites/test_routes.gd:237)
+              [1] run (res://tests/suites/test_routes.gd:31)
+              [2] _init (res://tests/run_tests.gd:52)
+
+=== office test summary ===
+passed: 6901
+failed: 0
+RESULT: PASSED
+SCRIPT ERROR: Trying to assign value of type 'PanelContainer' to a variable of type 'sidebar_panel.gd'.
+          at: OfficeMain._ready (res://app/main.gd:83)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://app/main.gd:83)
+SCRIPT ERROR: Trying to assign value of type 'PanelContainer' to a variable of type 'sidebar_panel.gd'.
+          at: OfficeMain._ready (res://app/main.gd:83)
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://app/main.gd:83)
+WARNING: 15 RIDs of type "Canvas" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 379 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 1554 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 12 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+ERROR: 15 RID allocations of type 'N16RendererViewport8ViewportE' were leaked at exit.
+ERROR: 26 RID allocations of type 'PN13RendererDummy14TextureStorage12DummyTextureE' were leaked at exit.
+ERROR: 294 RID allocations of type 'PN18TextServerAdvanced22ShapedTextDataAdvancedE' were leaked at exit.
+ERROR: 1 RID allocations of type 'PN18TextServerAdvanced12FontAdvancedE' were leaked at exit.
+EXIT=0

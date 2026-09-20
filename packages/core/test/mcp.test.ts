@@ -13,6 +13,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { ConfigMCP } from "@ycoding-ai/core/config/mcp"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { Credential } from "@ycoding-ai/core/credential"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -178,7 +179,7 @@ function resourceMcpLayer(
       Layer.mergeAll(
         Layer.succeed(
           Config.Service,
-          Config.Service.of({
+          stubConfig({
             entries: () =>
               Effect.succeed([
                 new Config.Document({

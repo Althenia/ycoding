@@ -699,7 +699,12 @@ const toolLifecycleLayer = (endpoint: string) => {
   })
   return AppNodeBuilder.build(
     LayerNode.group([Database.node, EventV2.node, SdkPlugins.node, LocationServiceMap.node, provider]),
-    [[Config.node, Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))]],
+    [[Config.node, Layer.succeed(Config.Service, {
+            entries: () => Effect.succeed([]),
+            read: () => Effect.die("unused Config.read"),
+            preview: () => Effect.die("unused Config.preview"),
+            commit: () => Effect.die("unused Config.commit"),
+          })]],
   )
 }
 

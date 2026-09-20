@@ -1,0 +1,41 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R707 PASS  composing the export writes no file
+R707 PASS  the requested write succeeds
+R707 csv=
+label,value,count,spend
+'=1+1,'=SUM(A1:A9),3,1.25
+Delta,spend change,-5,-2.50
+note,[redacted],1,0
+
+R707 json_head={
+  "columns": [
+    "label",
+    "value",
+    "count",
+    "spend"
+  ],
+  "note": "The export writes a local file only: no network call is made and nothing is uploaded, published 
+R707 PASS  no CSV cell would be read as a formula
+R707 PASS  a formula-leading TEXT cell carries the text guard ('=1+1,'=SUM(A1:A9),3,1.25)
+R707 PASS  a negative NUMBER is left bare
+R707 PASS  and is not escaped into text
+R707 PASS  a credential-shaped value is redacted from the CSV
+R707 PASS  and from the JSON, so the two forms agree
+R707 PASS  the JSON preserves the value, because JSON is not a formula surface
+R707 PASS  the preview equals the written file exactly
+R707 PASS  and the export states it uploads nothing
+R707 PASS  the export exposes no upload method
+R707 panel_has_export=true
+R707 PASS  the statistics surface offers an export control
+R707 product_export_error=Exported 0 rows to /Users/viadz/Library/Application Support/Godot/app_userdata/YCoding Office/statistics-export.csv
+R707 PASS  the product's export path reports what it wrote (Exported 0 rows to /Users/viadz/Library/Application Support/Godot/app_userdata/YCoding Office/statistics-export.csv)
+R707 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r7-07/r7-07-export.png
+R707 checks=14 fails=0
+R707 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

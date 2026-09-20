@@ -1,0 +1,82 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+ERROR: ConfigFile parse error at user://test-corrupt-1789652300.cfg:3: Expected value, got 'EOF'.
+   at: _parse (core/io/config_file.cpp:293)
+   GDScript backtrace (most recent call first):
+       [0] load (res://core/project_ledger.gd:195)
+       [1] test_a_corrupt_store_falls_back_instead_of_failing (res://tests/suites/test_project_ledger.gd:218)
+       [2] run (res://tests/suites/test_project_ledger.gd:31)
+       [3] _initialize (res://tests/run_tests.gd:78)
+SCRIPT ERROR: Invalid assignment of property or key 'text' with value of type 'String' on a base object of type 'Nil'.
+          at: ConversationPanel.show_actor (res://ui/conversation/conversation_panel.gd:153)
+          GDScript backtrace (most recent call first):
+              [0] show_actor (res://ui/conversation/conversation_panel.gd:153)
+              [1] test_a_request_from_any_session_in_the_family_is_answerable (res://tests/suites/test_drawer.gd:274)
+              [2] _bootable (res://tests/suites/test_drawer.gd:417)
+SCRIPT ERROR: Cannot call method 'get_child_count' on a null value.
+          at: test_a_request_from_any_session_in_the_family_is_answerable (res://tests/suites/test_drawer.gd:275)
+          GDScript backtrace (most recent call first):
+              [0] test_a_request_from_any_session_in_the_family_is_answerable (res://tests/suites/test_drawer.gd:275)
+              [1] _bootable (res://tests/suites/test_drawer.gd:417)
+SCRIPT ERROR: Invalid assignment of property or key 'text' with value of type 'String' on a base object of type 'Nil'.
+          at: ConversationPanel.show_actor (res://ui/conversation/conversation_panel.gd:153)
+          GDScript backtrace (most recent call first):
+              [0] show_actor (res://ui/conversation/conversation_panel.gd:153)
+              [1] test_every_waiting_request_in_the_family_is_shown (res://tests/suites/test_drawer.gd:295)
+              [2] _bootable (res://tests/suites/test_drawer.gd:417)
+SCRIPT ERROR: Cannot call method 'get_children' on a null value.
+          at: _attention_text (res://tests/suites/test_drawer.gd:362)
+          GDScript backtrace (most recent call first):
+              [0] _attention_text (res://tests/suites/test_drawer.gd:362)
+              [1] test_every_waiting_request_in_the_family_is_shown (res://tests/suites/test_drawer.gd:296)
+              [2] _bootable (res://tests/suites/test_drawer.gd:417)
+SCRIPT ERROR: Invalid assignment of property or key 'text' with value of type 'String' on a base object of type 'Nil'.
+          at: ConversationPanel.show_actor (res://ui/conversation/conversation_panel.gd:153)
+          GDScript backtrace (most recent call first):
+              [0] show_actor (res://ui/conversation/conversation_panel.gd:153)
+              [1] test_attention_is_answerable_from_any_page (res://tests/suites/test_drawer.gd:310)
+              [2] _bootable (res://tests/suites/test_drawer.gd:417)
+SCRIPT ERROR: Cannot call method 'get_child_count' on a null value.
+          at: test_attention_is_answerable_from_any_page (res://tests/suites/test_drawer.gd:316)
+          GDScript backtrace (most recent call first):
+              [0] test_attention_is_answerable_from_any_page (res://tests/suites/test_drawer.gd:316)
+              [1] _bootable (res://tests/suites/test_drawer.gd:417)
+SCRIPT ERROR: Invalid assignment of property or key 'text' with value of type 'String' on a base object of type 'Nil'.
+          at: ConversationPanel.show_actor (res://ui/conversation/conversation_panel.gd:153)
+          GDScript backtrace (most recent call first):
+              [0] show_actor (res://ui/conversation/conversation_panel.gd:153)
+              [1] test_answering_never_steals_focus_or_moves_the_view (res://tests/suites/test_drawer.gd:335)
+              [2] _bootable (res://tests/suites/test_drawer.gd:417)
+
+=== office test summary ===
+passed: 7971
+failed: 4
+  FAIL: the first request is shown
+  FAIL: the second request is shown too
+  FAIL: the drawer stays shown on the sessions page
+  FAIL: nor does it close the drawer the user was reading
+RESULT: FAILED
+WARNING: 2 RIDs of type "Canvas" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 952 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 1542 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 65 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+ERROR: 2 RID allocations of type 'N16RendererViewport8ViewportE' were leaked at exit.
+ERROR: 69 RID allocations of type 'PN13RendererDummy14TextureStorage12DummyTextureE' were leaked at exit.
+ERROR: 82 RID allocations of type 'PN18TextServerAdvanced22ShapedTextDataAdvancedE' were leaked at exit.
+ERROR: 1 RID allocations of type 'PN18TextServerAdvanced12FontAdvancedE' were leaked at exit.
+EXIT=1

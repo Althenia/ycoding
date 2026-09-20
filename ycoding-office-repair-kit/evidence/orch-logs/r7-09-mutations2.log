@@ -1,0 +1,4 @@
+baseline passed=37   failed=0  
+a recorded failure loses its source verification     passed=37   failed=0   *** NOT CAUGHT *** 
+the page stops naming its source session             passed=36   failed=1   CAUGHT             and the page names its source (Source:
+restored: True

@@ -1,0 +1,5 @@
+fixture server: http://127.0.0.1:50479
+integration    exit=0 engine_errors=0
+  INTEG: pass=21 fail=0
+  LIVE-ATTACH: pass=26 fail=0
+VERIFY-INTEGRATION: PASSED

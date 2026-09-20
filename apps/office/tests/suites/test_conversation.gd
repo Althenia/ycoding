@@ -51,6 +51,10 @@ func run(t) -> void:
 	test_a_file_change_names_its_source(t)
 	test_a_file_change_never_claims_a_change_kind(t)
 	test_a_large_patch_is_stored_bounded(t)
+	test_the_projection_keeps_source_order(t)
+	test_two_assignments_in_one_session_are_two_reports(t)
+	test_a_completion_without_a_report_says_so(t)
+	test_every_row_carries_its_source_identifiers(t)
 
 
 ## --- fixtures ---------------------------------------------------------------
@@ -59,6 +63,154 @@ func _store() -> OfficeStore:
 	var store := OfficeStore.new()
 	store.apply({"type": Wire.CONNECTED, "sessionID": "", "data": {}, "sourceEpoch": "epoch-a"})
 	return store
+
+
+## R6-01. Order is causal, and the projection must not decide it by guesswork.
+##
+## The kit requires "canonical messages, ordered and source-linked" and forbids sorting
+## concurrent source events by wall clock alone where the runtime supplies causal order.
+## The wire supplies a sequence number on the session log, and the projection carries the
+## order the events arrived in; that order is what the drawer must render.
+func test_the_projection_keeps_source_order(t) -> void:
+	var store := _store()
+	_session(store, "ses_a", "Lead")
+	# Four observations, in the order the runtime produced them. The wall-clock stamps
+	# deliberately DECREASE, so an implementation that sorted by time would reorder them.
+	_completion(store, "ses_a", "seq-4", 4000, "fourth")
+	_completion(store, "ses_a", "seq-3", 3000, "third")
+	_completion(store, "ses_a", "seq-2", 2000, "second")
+	_completion(store, "ses_a", "seq-1", 1000, "first")
+	var rows := store.conversation_items("ses_a")
+	var descriptions: Array[String] = []
+	for row in rows:
+		descriptions.append(str(row.get("description", "")))
+	t.check_equal(
+		descriptions, ["fourth", "third", "second", "first"] as Array[String],
+		"the projection renders source order, not wall-clock order"
+	)
+
+
+## R6-01. The kit forbids duplicate report projections: "no duplicate report projections".
+## Two completions of ONE assignment are two reports, and both must appear; the same
+## completion repeated must not.
+func test_two_assignments_in_one_session_are_two_reports(t) -> void:
+	var store := _store()
+	_session(store, "ses_a", "Lead")
+	_completion(store, "ses_a", "run-1", 1000, "first assignment done")
+	_completion(store, "ses_a", "run-2", 2000, "second assignment done")
+	var rows := store.conversation_items("ses_a")
+	var reports := rows.filter(func(r): return str(r.get("kind", "")) == "report")
+	t.check_equal(
+		reports.size(), 2,
+		"two assignments produce two reports (%d)" % reports.size()
+	)
+	# The SAME completion delivered twice is one observation, not two rows.
+	_completion(store, "ses_a", "run-2", 2000, "second assignment done")
+	var again := store.conversation_items("ses_a").filter(
+		func(r): return str(r.get("kind", "")) == "report"
+	)
+	t.check_equal(again.size(), 2, "a repeated completion does not add a row")
+
+
+## R6-01. A completion with NO report text must say so rather than render an empty
+## success. The kit: "A completion status without a report message supports 'Completed;
+## open session', not an invented success statement."
+func test_a_completion_without_a_report_says_so(t) -> void:
+	var store := _store()
+	_session(store, "ses_a", "Lead")
+	_completion(store, "ses_a", "run-1", 1000, "")
+	var rows := store.conversation_items("ses_a")
+	t.check_equal(rows.size(), 1, "the completion is still recorded")
+	var report: Dictionary = rows[0]
+	var text := str(report.get("description", ""))
+	t.check(
+		not text.strip_edges().is_empty(),
+		"a completion with no report does not render as an empty success"
+	)
+	t.check(
+		not bool(report.get("source_verified", true)),
+		"and it is marked as a status rather than a verified source message"
+	)
+	# A completion WITH a report is a real source message and keeps its text.
+	_completion(store, "ses_a", "run-2", 2000, "the real report")
+	var real := store.conversation_items("ses_a").filter(
+		func(r): return str(r.get("description", "")) == "the real report"
+	)
+	t.check_equal(real.size(), 1, "a completion that carries a report keeps its text")
+
+
+## R6-01. Every row must carry the durable identifiers the kit requires, so a row can be
+## traced to its source: the session, and the message or call it came from when the wire
+## supplies one.
+func test_every_row_carries_its_source_identifiers(t) -> void:
+	var store := _store()
+	_session(store, "ses_parent", "Lead")
+	_session(store, "ses_child", "Child", "ses_parent")
+	_r6_delegation(store, "ses_parent", "ses_child", "call_1", 1000, "delegated work")
+	_completion(store, "ses_child", "run-1", 2000, "child done")
+	var rows := store.conversation_items("ses_child")
+	t.check(rows.size() >= 1, "the child has a row")
+	for row in rows:
+		t.check(
+			not str(row.get("session_id", "")).is_empty(),
+			"every row names its source session"
+		)
+		t.check(
+			not str(row.get("source", "")).is_empty(),
+			"and names the event it came from"
+		)
+	# The delegation names BOTH ends, so a parent-child thread can be drawn from
+	# provenance rather than from guessed dialogue.
+	var parent_rows := store.conversation_items("ses_parent")
+	var delegations := parent_rows.filter(
+		func(r): return str(r.get("kind", "")) == "delegation"
+	)
+	t.check_equal(delegations.size(), 1, "the delegation is recorded on the parent")
+	if delegations.size() == 1:
+		t.check_equal(
+			str(delegations[0].get("target_session_id", "")), "ses_child",
+			"and names the child it was delegated to"
+		)
+
+
+## --- fixtures --------------------------------------------------------------
+
+func _session(store: OfficeStore, session_id: String, title: String, parent: String = "") -> void:
+	var data := {"agent": "lead", "title": title}
+	if not parent.is_empty():
+		data["parentID"] = parent
+	store.apply({
+		"type": Wire.SESSION_CREATED, "sessionID": session_id, "data": data,
+		"sourceEpoch": "epoch-a",
+	})
+
+
+## One completion of one assignment. `run_id` is the assignment, so two different runs of
+## the same session are two reports while a repeat of one run is not.
+func _completion(
+	store: OfficeStore, session_id: String, run_id: String, _created: int, excerpt: String
+) -> void:
+	var change := {"type": Wire.CHANGE_COMPLETED, "runID": run_id}
+	if not excerpt.is_empty():
+		change["excerpt"] = excerpt
+	store.apply({
+		"type": Wire.TASK_UPDATED, "sessionID": session_id,
+		"data": {"change": change}, "sourceEpoch": "epoch-a",
+	})
+
+
+func _r6_delegation(
+	store: OfficeStore, parent: String, child: String, call_id: String,
+	_created: int, description: String
+) -> void:
+	store.apply({
+		"type": Wire.TASK_UPDATED, "sessionID": parent,
+		"data": {"change": {
+			"type": Wire.CHANGE_LAUNCHED, "inputID": child, "parentID": parent,
+			"toolCallID": call_id, "description": description,
+		}},
+		"sourceEpoch": "epoch-a",
+	})
 
 
 ## One root with one child, both real sessions. The child deliberately has no

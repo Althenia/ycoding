@@ -19,6 +19,15 @@ const KIND_GUARDRAIL := "guardrail"
 ## The replies the schema allows for permission and guardrail requests.
 const REPLIES := ["once", "always", "reject"]
 
+## The replies a HARD review allows. The runtime states the restriction on the wire
+## (`Guardrail.Request.hardReview`), and a hard review permits only a ONE-TIME approval or a
+## rejection - never a session-wide one. Offering `always` for one would present a permission
+## the user does not have, and the runtime would refuse it.
+const HARD_REPLIES := ["once", "reject"]
+
+## The wire field that marks a request as a hard review (packages/schema/src/guardrail.ts).
+const HARD_REVIEW_FIELD := "hardReview"
+
 var _requests: Dictionary = {}
 var _order: Array[String] = []
 
@@ -95,7 +104,10 @@ func clear() -> void:
 static func reply_shape(request: Dictionary) -> Dictionary:
 	match str(request.get("kind", "")):
 		KIND_PERMISSION, KIND_GUARDRAIL:
-			return {"type": "literal", "allowed": REPLIES}
+			# A hard review offers the restricted set, so the controls the UI builds can never
+			# be the ones the runtime would refuse.
+			var allowed := HARD_REPLIES if is_hard_review(request) else REPLIES
+			return {"type": "literal", "allowed": allowed}
 		KIND_QUESTION:
 			var questions: Array = (request.get("data", {}) as Dictionary).get("questions", [])
 			var options: Array = []
@@ -127,3 +139,28 @@ static func literal_payload(reply: String) -> Dictionary:
 	if not REPLIES.has(reply):
 		return {}
 	return {"reply": reply}
+
+
+## The payload for a literal reply to a specific request, so a restriction on the REQUEST is
+## enforced where the payload is built rather than only where the controls are.
+##
+## `hard` is passed in rather than read from a request dictionary because the two callers have
+## different things in hand: the UI has the request, and a test has only the fact. The
+## restriction itself is one rule either way.
+static func literal_payload_for(request_id: String, reply: String, hard: bool) -> Dictionary:
+	request_id = request_id
+	if hard and not HARD_REPLIES.has(reply):
+		return {}
+	return literal_payload(reply)
+
+
+## Whether the runtime marked this request a HARD review.
+##
+## Read from the wire, never inferred: the schema declares `hardReview` on a guardrail request
+## and gives a permission request no such field, so the flag is absent rather than false for
+## everything else. A request that does not carry it is an ordinary one.
+static func is_hard_review(request: Dictionary) -> bool:
+	var data: Variant = request.get("data", {})
+	if not (data is Dictionary):
+		return false
+	return bool((data as Dictionary).get(HARD_REVIEW_FIELD, false))

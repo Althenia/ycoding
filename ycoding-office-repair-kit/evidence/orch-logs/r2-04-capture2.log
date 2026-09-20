@@ -1,0 +1,41 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+R204 start outdir=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r2-04
+R204 rail rows=3
+R204 row office text=▦   Office   ●
+R204 row sessions text=≡   Sessions
+R204 row statistics text=◫   Statistics
+R204 route now=office shows_world=true
+ERROR: Parameter "t" is null.
+   at: texture_2d_get (./servers/rendering/dummy/storage/texture_storage.h:110)
+   GDScript backtrace (most recent call first):
+       [0] _capture (res://r2_04_capture_tmp.gd:81)
+       [1] _process (res://r2_04_capture_tmp.gd:61)
+SCRIPT ERROR: Cannot call method 'save_png' on a null value.
+          at: _capture (res://r2_04_capture_tmp.gd:83)
+          GDScript backtrace (most recent call first):
+              [0] _capture (res://r2_04_capture_tmp.gd:83)
+              [1] _process (res://r2_04_capture_tmp.gd:61)
+ERROR: Parameter "t" is null.
+   at: texture_2d_get (./servers/rendering/dummy/storage/texture_storage.h:110)
+   GDScript backtrace (most recent call first):
+       [0] _capture (res://r2_04_capture_tmp.gd:81)
+       [1] _process (res://r2_04_capture_tmp.gd:65)
+SCRIPT ERROR: Cannot call method 'save_png' on a null value.
+          at: _capture (res://r2_04_capture_tmp.gd:83)
+          GDScript backtrace (most recent call first):
+              [0] _capture (res://r2_04_capture_tmp.gd:83)
+              [1] _process (res://r2_04_capture_tmp.gd:65)
+ERROR: Parameter "t" is null.
+   at: texture_2d_get (./servers/rendering/dummy/storage/texture_storage.h:110)
+   GDScript backtrace (most recent call first):
+       [0] _capture (res://r2_04_capture_tmp.gd:81)
+       [1] _process (res://r2_04_capture_tmp.gd:67)
+SCRIPT ERROR: Cannot call method 'save_png' on a null value.
+          at: _capture (res://r2_04_capture_tmp.gd:83)
+          GDScript backtrace (most recent call first):
+              [0] _capture (res://r2_04_capture_tmp.gd:83)
+              [1] _process (res://r2_04_capture_tmp.gd:67)
+R204 returned route=office shows_world=true
+R204 done
+EXIT=0

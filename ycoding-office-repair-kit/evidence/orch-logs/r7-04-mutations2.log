@@ -1,0 +1,11 @@
+a missing limit renders as zero                  passed=47   failed=2   CAUGHT             and its limit reads as unreported, not
+a missing limit reads as unlimited               passed=48   failed=1   CAUGHT             a missing limit is not an unlimited fl
+a percentage is derived from no denominator      passed=48   failed=1   CAUGHT             so NO percentage is derived for it (92
+a missing used figure renders as zero            passed=47   failed=2   CAUGHT             an unreported used figure is NOT rende
+an unsupported provider is dropped from the list passed=43   failed=2   CAUGHT             both providers appear, including the u
+a stale page reads as fresh                      passed=47   failed=2   CAUGHT             a stale page does not read as a fresh 
+a combined total is offered                      passed=47   failed=2   CAUGHT             the page offers no total across window
+a window with no unit is half-read               passed=47   failed=2   CAUGHT             a malformed snapshot is not half-read 
+a never-answering read is not bounded            passed=?    failed=?   CAUGHT (hung)      
+an abandoned request is left to drain            passed=48   failed=1   CAUGHT             and the abandoned request was cancelle
+restored: True

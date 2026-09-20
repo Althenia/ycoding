@@ -4,6 +4,7 @@
 ## across the floor rather than the instant it starts. Follows the same two-stage
 ## shape as capture_scene.gd: advance the production handlers, then present.
 extends SceneTree
+const DemoCapture := preload("res://tools/demo_capture.gd")
 const STEP_MS := 16
 var _scene: Node
 var _stage := 0
@@ -17,6 +18,9 @@ func _initialize() -> void:
 	root.add_child(_scene)
 func _process(_delta: float) -> bool:
 	if _stage == 0:
+		# Opt in explicitly: production boot no longer has to imply DEMO.
+		if not DemoCapture.started(_scene):
+			return false
 		while _elapsed < 40000:
 			_elapsed += STEP_MS
 			_scene.demo.advance(STEP_MS)

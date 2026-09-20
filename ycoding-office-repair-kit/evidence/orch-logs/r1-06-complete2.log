@@ -1,0 +1,12 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+R106 start url=http://127.0.0.1:43094 (credential withheld)
+R106 event server.connected
+R106 event server.connected
+R106 event session.created
+R106 session created id=ses_f53b969cfffer3m3ISM2w6yYWM
+R106 submitted TOOL prompt to session=ses_f53b969cfffer3m3ISM2w6yYWM
+R106 live failure: The service returned HTTP 409.
+R106 event shell.created
+R106 result=timeout created=true tool_submitted=true tool_started=false tool_called=false history=false
+EXIT=1

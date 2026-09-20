@@ -1,0 +1,21 @@
+Godot: 4.7.2.stable.official.ed1daf0bf
+import         exit=0 engine_errors=0
+tests          exit=0 engine_errors=14
+  engine reported errors; see /var/folders/qc/jlsb8bw944v3tn_1bnd1x9hw0000gn/T//ycoding-office-verify/tests.log
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+flow           exit=0 engine_errors=0
+  passed: 8575
+  RESULT: PASSED
+  checks: 34, failures: 0
+  FLOW RESULT: PASSED
+VERIFY: FAILED
+EXIT=1

@@ -1,0 +1,9 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Could not preload resource script "res://tests/suites/test_folder_target.gd".
+          at: GDScript::reload (res://tests/run_tests.gd:51)
+SCRIPT ERROR: Parse Error: Could not resolve script "res://tests/suites/test_folder_target.gd".
+          at: GDScript::reload (res://tests/run_tests.gd:51)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+EXIT=0

@@ -1577,73 +1577,100 @@ export interface ProjectArtifactApi<E = never> {
   }
 }
 
-export type Endpoint29_0Output = EffectValue<ReturnType<RawClient["server.debug"]["debug.location"]>>
-export type DebugLocationListOperation<E = never> = () => Effect.Effect<Endpoint29_0Output, E>
+type Endpoint29_0Request = Parameters<RawClient["server.config"]["config.get"]>[0]
+export type Endpoint29_0Input = { readonly location?: Endpoint29_0Request["query"]["location"] }
+export type Endpoint29_0Output = EffectValue<ReturnType<RawClient["server.config"]["config.get"]>>
+export type ConfigGetOperation<E = never> = (input?: Endpoint29_0Input) => Effect.Effect<Endpoint29_0Output, E>
 
-type Endpoint29_1Request = Parameters<RawClient["server.debug"]["debug.location.evict"]>[0]
-export type Endpoint29_1Input = { readonly location?: Endpoint29_1Request["query"]["location"] }
-export type Endpoint29_1Output = EffectValue<ReturnType<RawClient["server.debug"]["debug.location.evict"]>>
-export type DebugLocationEvictOperation<E = never> = (input?: Endpoint29_1Input) => Effect.Effect<Endpoint29_1Output, E>
+type Endpoint29_1Request = Parameters<RawClient["server.config"]["config.preview"]>[0]
+export type Endpoint29_1Input = {
+  readonly location?: Endpoint29_1Request["query"]["location"]
+  readonly payload: Endpoint29_1Request["payload"]
+}
+export type Endpoint29_1Output = EffectValue<ReturnType<RawClient["server.config"]["config.preview"]>>
+export type ConfigPreviewOperation<E = never> = (input: Endpoint29_1Input) => Effect.Effect<Endpoint29_1Output, E>
+
+type Endpoint29_2Request = Parameters<RawClient["server.config"]["config.commit"]>[0]
+export type Endpoint29_2Input = {
+  readonly location?: Endpoint29_2Request["query"]["location"]
+  readonly payload: Endpoint29_2Request["payload"]
+}
+export type Endpoint29_2Output = EffectValue<ReturnType<RawClient["server.config"]["config.commit"]>>
+export type ConfigCommitOperation<E = never> = (input: Endpoint29_2Input) => Effect.Effect<Endpoint29_2Output, E>
+
+export interface ConfigApi<E = never> {
+  readonly get: ConfigGetOperation<E>
+  readonly preview: ConfigPreviewOperation<E>
+  readonly commit: ConfigCommitOperation<E>
+}
+
+export type Endpoint30_0Output = EffectValue<ReturnType<RawClient["server.debug"]["debug.location"]>>
+export type DebugLocationListOperation<E = never> = () => Effect.Effect<Endpoint30_0Output, E>
+
+type Endpoint30_1Request = Parameters<RawClient["server.debug"]["debug.location.evict"]>[0]
+export type Endpoint30_1Input = { readonly location?: Endpoint30_1Request["query"]["location"] }
+export type Endpoint30_1Output = EffectValue<ReturnType<RawClient["server.debug"]["debug.location.evict"]>>
+export type DebugLocationEvictOperation<E = never> = (input?: Endpoint30_1Input) => Effect.Effect<Endpoint30_1Output, E>
 
 export interface DebugApi<E = never> {
   readonly location: { readonly list: DebugLocationListOperation<E>; readonly evict: DebugLocationEvictOperation<E> }
 }
 
-type Endpoint30_0Request = Parameters<RawClient["server.browser"]["browser.status"]>[0]
-export type Endpoint30_0Input = { readonly sessionID: Endpoint30_0Request["params"]["sessionID"] }
-export type Endpoint30_0Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.status"]>>["data"]
-export type BrowserStatusOperation<E = never> = (input: Endpoint30_0Input) => Effect.Effect<Endpoint30_0Output, E>
+type Endpoint31_0Request = Parameters<RawClient["server.browser"]["browser.status"]>[0]
+export type Endpoint31_0Input = { readonly sessionID: Endpoint31_0Request["params"]["sessionID"] }
+export type Endpoint31_0Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.status"]>>["data"]
+export type BrowserStatusOperation<E = never> = (input: Endpoint31_0Input) => Effect.Effect<Endpoint31_0Output, E>
 
-type Endpoint30_1Request = Parameters<RawClient["server.browser"]["browser.tabs"]>[0]
-export type Endpoint30_1Input = { readonly sessionID: Endpoint30_1Request["params"]["sessionID"] }
-export type Endpoint30_1Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.tabs"]>>["data"]
-export type BrowserTabsOperation<E = never> = (input: Endpoint30_1Input) => Effect.Effect<Endpoint30_1Output, E>
+type Endpoint31_1Request = Parameters<RawClient["server.browser"]["browser.tabs"]>[0]
+export type Endpoint31_1Input = { readonly sessionID: Endpoint31_1Request["params"]["sessionID"] }
+export type Endpoint31_1Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.tabs"]>>["data"]
+export type BrowserTabsOperation<E = never> = (input: Endpoint31_1Input) => Effect.Effect<Endpoint31_1Output, E>
 
-type Endpoint30_2Request = Parameters<RawClient["server.browser"]["browser.start"]>[0]
-export type Endpoint30_2Input = { readonly sessionID: Endpoint30_2Request["params"]["sessionID"] }
-export type Endpoint30_2Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.start"]>>["data"]
-export type BrowserStartOperation<E = never> = (input: Endpoint30_2Input) => Effect.Effect<Endpoint30_2Output, E>
+type Endpoint31_2Request = Parameters<RawClient["server.browser"]["browser.start"]>[0]
+export type Endpoint31_2Input = { readonly sessionID: Endpoint31_2Request["params"]["sessionID"] }
+export type Endpoint31_2Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.start"]>>["data"]
+export type BrowserStartOperation<E = never> = (input: Endpoint31_2Input) => Effect.Effect<Endpoint31_2Output, E>
 
-type Endpoint30_3Request = Parameters<RawClient["server.browser"]["browser.observe"]>[0]
-export type Endpoint30_3Input = {
-  readonly sessionID: Endpoint30_3Request["params"]["sessionID"]
-  readonly tabID: Endpoint30_3Request["payload"]["tabID"]
-  readonly generation: Endpoint30_3Request["payload"]["generation"]
-  readonly callID: Endpoint30_3Request["payload"]["callID"]
+type Endpoint31_3Request = Parameters<RawClient["server.browser"]["browser.observe"]>[0]
+export type Endpoint31_3Input = {
+  readonly sessionID: Endpoint31_3Request["params"]["sessionID"]
+  readonly tabID: Endpoint31_3Request["payload"]["tabID"]
+  readonly generation: Endpoint31_3Request["payload"]["generation"]
+  readonly callID: Endpoint31_3Request["payload"]["callID"]
 }
-export type Endpoint30_3Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.observe"]>>["data"]
-export type BrowserObserveOperation<E = never> = (input: Endpoint30_3Input) => Effect.Effect<Endpoint30_3Output, E>
+export type Endpoint31_3Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.observe"]>>["data"]
+export type BrowserObserveOperation<E = never> = (input: Endpoint31_3Input) => Effect.Effect<Endpoint31_3Output, E>
 
-type Endpoint30_4Request = Parameters<RawClient["server.browser"]["browser.action"]>[0]
-export type Endpoint30_4Input = {
-  readonly sessionID: Endpoint30_4Request["params"]["sessionID"]
-  readonly tabID: Endpoint30_4Request["payload"]["tabID"]
-  readonly generation: Endpoint30_4Request["payload"]["generation"]
-  readonly documentGeneration: Endpoint30_4Request["payload"]["documentGeneration"]
-  readonly observationRevision: Endpoint30_4Request["payload"]["observationRevision"]
-  readonly callID: Endpoint30_4Request["payload"]["callID"]
-  readonly action: Endpoint30_4Request["payload"]["action"]
+type Endpoint31_4Request = Parameters<RawClient["server.browser"]["browser.action"]>[0]
+export type Endpoint31_4Input = {
+  readonly sessionID: Endpoint31_4Request["params"]["sessionID"]
+  readonly tabID: Endpoint31_4Request["payload"]["tabID"]
+  readonly generation: Endpoint31_4Request["payload"]["generation"]
+  readonly documentGeneration: Endpoint31_4Request["payload"]["documentGeneration"]
+  readonly observationRevision: Endpoint31_4Request["payload"]["observationRevision"]
+  readonly callID: Endpoint31_4Request["payload"]["callID"]
+  readonly action: Endpoint31_4Request["payload"]["action"]
 }
-export type Endpoint30_4Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.action"]>>["data"]
-export type BrowserActionOperation<E = never> = (input: Endpoint30_4Input) => Effect.Effect<Endpoint30_4Output, E>
+export type Endpoint31_4Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.action"]>>["data"]
+export type BrowserActionOperation<E = never> = (input: Endpoint31_4Input) => Effect.Effect<Endpoint31_4Output, E>
 
-type Endpoint30_5Request = Parameters<RawClient["server.browser"]["browser.control"]>[0]
-export type Endpoint30_5Input = {
-  readonly sessionID: Endpoint30_5Request["params"]["sessionID"]
-  readonly action: Endpoint30_5Request["payload"]["action"]
+type Endpoint31_5Request = Parameters<RawClient["server.browser"]["browser.control"]>[0]
+export type Endpoint31_5Input = {
+  readonly sessionID: Endpoint31_5Request["params"]["sessionID"]
+  readonly action: Endpoint31_5Request["payload"]["action"]
 }
-export type Endpoint30_5Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.control"]>>["data"]
-export type BrowserControlOperation<E = never> = (input: Endpoint30_5Input) => Effect.Effect<Endpoint30_5Output, E>
+export type Endpoint31_5Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.control"]>>["data"]
+export type BrowserControlOperation<E = never> = (input: Endpoint31_5Input) => Effect.Effect<Endpoint31_5Output, E>
 
-type Endpoint30_6Request = Parameters<RawClient["server.browser"]["browser.stop"]>[0]
-export type Endpoint30_6Input = { readonly sessionID: Endpoint30_6Request["params"]["sessionID"] }
-export type Endpoint30_6Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.stop"]>>
-export type BrowserStopOperation<E = never> = (input: Endpoint30_6Input) => Effect.Effect<Endpoint30_6Output, E>
+type Endpoint31_6Request = Parameters<RawClient["server.browser"]["browser.stop"]>[0]
+export type Endpoint31_6Input = { readonly sessionID: Endpoint31_6Request["params"]["sessionID"] }
+export type Endpoint31_6Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.stop"]>>
+export type BrowserStopOperation<E = never> = (input: Endpoint31_6Input) => Effect.Effect<Endpoint31_6Output, E>
 
-type Endpoint30_7Request = Parameters<RawClient["server.browser"]["browser.forget"]>[0]
-export type Endpoint30_7Input = { readonly sessionID: Endpoint30_7Request["params"]["sessionID"] }
-export type Endpoint30_7Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.forget"]>>
-export type BrowserForgetOperation<E = never> = (input: Endpoint30_7Input) => Effect.Effect<Endpoint30_7Output, E>
+type Endpoint31_7Request = Parameters<RawClient["server.browser"]["browser.forget"]>[0]
+export type Endpoint31_7Input = { readonly sessionID: Endpoint31_7Request["params"]["sessionID"] }
+export type Endpoint31_7Output = EffectValue<ReturnType<RawClient["server.browser"]["browser.forget"]>>
+export type BrowserForgetOperation<E = never> = (input: Endpoint31_7Input) => Effect.Effect<Endpoint31_7Output, E>
 
 export interface BrowserApi<E = never> {
   readonly status: BrowserStatusOperation<E>
@@ -1656,83 +1683,83 @@ export interface BrowserApi<E = never> {
   readonly forget: BrowserForgetOperation<E>
 }
 
-type Endpoint31_0Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.status"]>[0]
-export type Endpoint31_0Input = { readonly sessionID: Endpoint31_0Request["params"]["sessionID"] }
-export type Endpoint31_0Output = EffectValue<
+type Endpoint32_0Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.status"]>[0]
+export type Endpoint32_0Input = { readonly sessionID: Endpoint32_0Request["params"]["sessionID"] }
+export type Endpoint32_0Output = EffectValue<
   ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.status"]>
 >["data"]
 export type IsolatedBrowserStatusOperation<E = never> = (
-  input: Endpoint31_0Input,
-) => Effect.Effect<Endpoint31_0Output, E>
+  input: Endpoint32_0Input,
+) => Effect.Effect<Endpoint32_0Output, E>
 
-type Endpoint31_1Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.start"]>[0]
-export type Endpoint31_1Input = {
-  readonly sessionID: Endpoint31_1Request["params"]["sessionID"]
-  readonly url: Endpoint31_1Request["payload"]["url"]
+type Endpoint32_1Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.start"]>[0]
+export type Endpoint32_1Input = {
+  readonly sessionID: Endpoint32_1Request["params"]["sessionID"]
+  readonly url: Endpoint32_1Request["payload"]["url"]
 }
-export type Endpoint31_1Output = EffectValue<
+export type Endpoint32_1Output = EffectValue<
   ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.start"]>
 >["data"]
 export type IsolatedBrowserStartOperation<E = never> = (
-  input: Endpoint31_1Input,
-) => Effect.Effect<Endpoint31_1Output, E>
+  input: Endpoint32_1Input,
+) => Effect.Effect<Endpoint32_1Output, E>
 
-type Endpoint31_2Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.tabs"]>[0]
-export type Endpoint31_2Input = { readonly sessionID: Endpoint31_2Request["params"]["sessionID"] }
-export type Endpoint31_2Output = EffectValue<
+type Endpoint32_2Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.tabs"]>[0]
+export type Endpoint32_2Input = { readonly sessionID: Endpoint32_2Request["params"]["sessionID"] }
+export type Endpoint32_2Output = EffectValue<
   ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.tabs"]>
 >["data"]
-export type IsolatedBrowserTabsOperation<E = never> = (input: Endpoint31_2Input) => Effect.Effect<Endpoint31_2Output, E>
+export type IsolatedBrowserTabsOperation<E = never> = (input: Endpoint32_2Input) => Effect.Effect<Endpoint32_2Output, E>
 
-type Endpoint31_3Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.observe"]>[0]
-export type Endpoint31_3Input = {
-  readonly sessionID: Endpoint31_3Request["params"]["sessionID"]
-  readonly tabID: Endpoint31_3Request["payload"]["tabID"]
-  readonly generation: Endpoint31_3Request["payload"]["generation"]
-  readonly callID: Endpoint31_3Request["payload"]["callID"]
-  readonly instanceID: Endpoint31_3Request["payload"]["instanceID"]
+type Endpoint32_3Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.observe"]>[0]
+export type Endpoint32_3Input = {
+  readonly sessionID: Endpoint32_3Request["params"]["sessionID"]
+  readonly tabID: Endpoint32_3Request["payload"]["tabID"]
+  readonly generation: Endpoint32_3Request["payload"]["generation"]
+  readonly callID: Endpoint32_3Request["payload"]["callID"]
+  readonly instanceID: Endpoint32_3Request["payload"]["instanceID"]
 }
-export type Endpoint31_3Output = EffectValue<
+export type Endpoint32_3Output = EffectValue<
   ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.observe"]>
 >["data"]
 export type IsolatedBrowserObserveOperation<E = never> = (
-  input: Endpoint31_3Input,
-) => Effect.Effect<Endpoint31_3Output, E>
+  input: Endpoint32_3Input,
+) => Effect.Effect<Endpoint32_3Output, E>
 
-type Endpoint31_4Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.action"]>[0]
-export type Endpoint31_4Input = {
-  readonly sessionID: Endpoint31_4Request["params"]["sessionID"]
-  readonly tabID: Endpoint31_4Request["payload"]["tabID"]
-  readonly generation: Endpoint31_4Request["payload"]["generation"]
-  readonly documentGeneration: Endpoint31_4Request["payload"]["documentGeneration"]
-  readonly observationRevision: Endpoint31_4Request["payload"]["observationRevision"]
-  readonly callID: Endpoint31_4Request["payload"]["callID"]
-  readonly action: Endpoint31_4Request["payload"]["action"]
-  readonly instanceID: Endpoint31_4Request["payload"]["instanceID"]
+type Endpoint32_4Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.action"]>[0]
+export type Endpoint32_4Input = {
+  readonly sessionID: Endpoint32_4Request["params"]["sessionID"]
+  readonly tabID: Endpoint32_4Request["payload"]["tabID"]
+  readonly generation: Endpoint32_4Request["payload"]["generation"]
+  readonly documentGeneration: Endpoint32_4Request["payload"]["documentGeneration"]
+  readonly observationRevision: Endpoint32_4Request["payload"]["observationRevision"]
+  readonly callID: Endpoint32_4Request["payload"]["callID"]
+  readonly action: Endpoint32_4Request["payload"]["action"]
+  readonly instanceID: Endpoint32_4Request["payload"]["instanceID"]
 }
-export type Endpoint31_4Output = EffectValue<
+export type Endpoint32_4Output = EffectValue<
   ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.action"]>
 >["data"]
 export type IsolatedBrowserActionOperation<E = never> = (
-  input: Endpoint31_4Input,
-) => Effect.Effect<Endpoint31_4Output, E>
+  input: Endpoint32_4Input,
+) => Effect.Effect<Endpoint32_4Output, E>
 
-type Endpoint31_5Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.control"]>[0]
-export type Endpoint31_5Input = {
-  readonly sessionID: Endpoint31_5Request["params"]["sessionID"]
-  readonly action: Endpoint31_5Request["payload"]["action"]
+type Endpoint32_5Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.control"]>[0]
+export type Endpoint32_5Input = {
+  readonly sessionID: Endpoint32_5Request["params"]["sessionID"]
+  readonly action: Endpoint32_5Request["payload"]["action"]
 }
-export type Endpoint31_5Output = EffectValue<
+export type Endpoint32_5Output = EffectValue<
   ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.control"]>
 >["data"]
 export type IsolatedBrowserControlOperation<E = never> = (
-  input: Endpoint31_5Input,
-) => Effect.Effect<Endpoint31_5Output, E>
+  input: Endpoint32_5Input,
+) => Effect.Effect<Endpoint32_5Output, E>
 
-type Endpoint31_6Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.stop"]>[0]
-export type Endpoint31_6Input = { readonly sessionID: Endpoint31_6Request["params"]["sessionID"] }
-export type Endpoint31_6Output = EffectValue<ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.stop"]>>
-export type IsolatedBrowserStopOperation<E = never> = (input: Endpoint31_6Input) => Effect.Effect<Endpoint31_6Output, E>
+type Endpoint32_6Request = Parameters<RawClient["server.isolatedBrowser"]["isolatedBrowser.stop"]>[0]
+export type Endpoint32_6Input = { readonly sessionID: Endpoint32_6Request["params"]["sessionID"] }
+export type Endpoint32_6Output = EffectValue<ReturnType<RawClient["server.isolatedBrowser"]["isolatedBrowser.stop"]>>
+export type IsolatedBrowserStopOperation<E = never> = (input: Endpoint32_6Input) => Effect.Effect<Endpoint32_6Output, E>
 
 export interface IsolatedBrowserApi<E = never> {
   readonly status: IsolatedBrowserStatusOperation<E>
@@ -1774,6 +1801,7 @@ export interface AppApi<E = never> {
   readonly projectCopy: ProjectCopyApi<E>
   readonly vcs: VcsApi<E>
   readonly projectArtifact: ProjectArtifactApi<E>
+  readonly config: ConfigApi<E>
   readonly debug: DebugApi<E>
   readonly browser: BrowserApi<E>
   readonly isolatedBrowser: IsolatedBrowserApi<E>

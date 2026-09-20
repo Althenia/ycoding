@@ -1,0 +1,52 @@
+{
+  "source": "proposed test matrix; no captures yet",
+  "windows": [
+    [
+      1024,
+      768
+    ],
+    [
+      1280,
+      720
+    ],
+    [
+      1440,
+      900
+    ],
+    [
+      1600,
+      900
+    ],
+    [
+      1920,
+      1080
+    ],
+    [
+      2560,
+      1440
+    ]
+  ],
+  "text_scales": [
+    1,
+    1.5,
+    2
+  ],
+  "themes": [
+    "dark",
+    "light"
+  ],
+  "required_states": [
+    "office_idle",
+    "composer_focus",
+    "streaming",
+    "attention",
+    "project_switch",
+    "settings",
+    "provider_model",
+    "statistics",
+    "quota_error",
+    "walk_interact",
+    "reduced_motion"
+  ],
+  "capture": "Actual Control logical rects plus physical device scale, revision, clock and screenshot file"
+}

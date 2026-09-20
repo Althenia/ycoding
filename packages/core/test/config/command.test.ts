@@ -6,6 +6,7 @@ import { Config as ConfigSchema } from "@ycoding-ai/schema/config"
 import { CommandV2 } from "@ycoding-ai/core/command"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { ConfigCommandPlugin } from "@ycoding-ai/core/config/plugin/command"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -70,7 +71,7 @@ Review files`,
           ).pipe(
             Effect.provideService(
               Config.Service,
-              Config.Service.of({
+              stubConfig({
                 entries: () =>
                   Effect.succeed([
                     new Config.Document({

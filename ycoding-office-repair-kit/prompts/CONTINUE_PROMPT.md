@@ -1,0 +1,5 @@
+Continue the existing YCoding Godot desktop repair using this kit and the actual checkout. Read repository instructions, Git status, `tracking/HANDOFF.md`, `tracking/tasks.json`, evidence and current matrices. Reverify any stale premise. Preserve all unrelated/staged/untracked work; no stage/commit/push/reset/clean/stash.
+
+Select the highest-priority dependency-ready unfinished repair task, or a task whose previous evidence failed. Implement the smallest complete change, run targeted tests, exercise the native UI and compare references. Continue fixing, not only planning. A credentials/runtime-tool blocker should block only the evidence/work it truly prevents; continue independent tasks and document the exact remaining gate.
+
+Never auto-fallback to demo, invent conversation/model options, duplicate the provider runtime, or declare completion from builds. Update task/evidence JSON, parity/provider/mock matrices and HANDOFF; regenerate readable tracking and validate. Finish with actual state, changed files, exact test/runtime evidence, remaining blockers and next precise action.

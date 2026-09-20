@@ -1,0 +1,7 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Invalid escape in string.
+          at: GDScript::reload (res://tests/suites/test_project_ledger.gd:199)
+ERROR: Failed to load script "res://tests/suites/test_project_ledger.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+EXIT=0

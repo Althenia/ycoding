@@ -1,0 +1,5 @@
+Review the actual running YCoding Godot client against `references/REQUEST.md`, all six reference images and `docs/UI_SPEC.md`. Do not review only scene code. Record physical and logical window size, UI/device scale and office zoom; reproduce matching conditions before judging geometry.
+
+Check normal office, focus/composer, long input, generating/stop, sidebar expanded/rail, model/effort popover where supported, settings, history, errors and approval dialogs in light/dark and compact/high-scale states. Check that the office stays primary, UI is not double-scaled, input focus and popovers work, actor clicks map correctly and labels/controls do not clip. Inspect normal-speed movement and bubbles; do not infer fine animation from stills.
+
+For each issue record source image/requirement → actual screenshot/steps → severity → measured symptom → root-cause hypothesis (or verified cause) → specific repair → verification. Do not call a mismatch acceptable just because code compiles. Do not claim user approval until the user has actually reviewed the result.

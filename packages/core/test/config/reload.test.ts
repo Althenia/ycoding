@@ -5,6 +5,7 @@ import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { CommandV2 } from "@ycoding-ai/core/command"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { ConfigAgentPlugin } from "@ycoding-ai/core/config/plugin/agent"
 import { ConfigCommandPlugin } from "@ycoding-ai/core/config/plugin/command"
 import { ConfigProviderPlugin } from "@ycoding-ai/core/config/plugin/provider"
@@ -37,7 +38,7 @@ describe("config plugin reloads", () => {
       const skills = yield* SkillV2.Service
       const host = yield* PluginHost.make(plugins)
       let entries: Config.Entry[] = [config("first")]
-      const service = Config.Service.of({ entries: () => Effect.sync(() => entries) })
+      const service = stubConfig({ entries: () => Effect.sync(() => entries) })
       const setup = <R>(effect: Effect.Effect<void, never, R>) =>
         effect.pipe(Effect.provideService(Config.Service, service))
 

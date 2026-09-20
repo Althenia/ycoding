@@ -4,6 +4,7 @@ import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
@@ -132,7 +133,7 @@ let efficiencyConfig: ConfigEfficiency.Info | undefined
 let compactionConfig: readonly ConfigCompaction.Info[] = []
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  stubConfig({
     entries: () =>
       Effect.succeed([
         ...compactionConfig.map(

@@ -1,0 +1,10 @@
+Godot: 4.7.2.stable.official.ed1daf0bf
+import         exit=0 engine_errors=0
+tests          exit=0 engine_errors=0
+flow           exit=0 engine_errors=0
+  passed: 8522
+  RESULT: PASSED
+  checks: 34, failures: 0
+  FLOW RESULT: PASSED
+VERIFY: PASSED
+EXIT=0

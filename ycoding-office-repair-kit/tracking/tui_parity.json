@@ -1,0 +1,675 @@
+{
+  "status": "audited_from_tui_source",
+  "note": "Built from the TUI's own settings dialog, which is the functional baseline. Each row keeps the source's own `category`, `path`, `default` and legal `values`, because scope and precedence are what a desktop equivalent must respect and the kit forbids recording a guess as a capability. `desktop_equivalent`, `gap` and `decision` stay null until a row is actually audited: absence in one search result is not proof of absence.",
+  "source_files": [
+    "packages/tui/src/component/dialog-config.tsx",
+    "packages/tui/src/config/index.tsx"
+  ],
+  "capabilities": [
+    {
+      "id": "TUI-THEME",
+      "title": "Theme",
+      "category": "Appearance",
+      "path": [
+        "theme",
+        "name"
+      ],
+      "default": "ycoding",
+      "values": null,
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-COLOR-MODE",
+      "title": "Color mode",
+      "category": "Appearance",
+      "path": [
+        "theme",
+        "mode"
+      ],
+      "default": "system",
+      "values": [
+        "system",
+        "dark",
+        "light"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-ANIMATIONS",
+      "title": "Animations",
+      "category": "Appearance",
+      "path": [
+        "animations"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-ONBOARDING",
+      "title": "Onboarding",
+      "category": "Appearance",
+      "path": [
+        "hints",
+        "onboarding"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-SIDEBAR",
+      "title": "Sidebar",
+      "category": "Session",
+      "path": [
+        "session",
+        "sidebar"
+      ],
+      "default": "auto",
+      "values": [
+        "hide",
+        "auto"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-SCROLLBAR",
+      "title": "Scrollbar",
+      "category": "Session",
+      "path": [
+        "session",
+        "scrollbar"
+      ],
+      "default": "false",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-THINKING",
+      "title": "Thinking",
+      "category": "Session",
+      "path": [
+        "session",
+        "thinking"
+      ],
+      "default": "hide",
+      "values": [
+        "hide",
+        "show"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-GROUPING",
+      "title": "Grouping",
+      "category": "Session",
+      "path": [
+        "session",
+        "grouping"
+      ],
+      "default": "auto",
+      "values": [
+        "none",
+        "auto"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-LAYOUT",
+      "title": "Layout",
+      "category": "Diffs",
+      "path": [
+        "diffs",
+        "view"
+      ],
+      "default": "auto",
+      "values": [
+        "auto",
+        "split",
+        "unified"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-WRAPPING",
+      "title": "Wrapping",
+      "category": "Diffs",
+      "path": [
+        "diffs",
+        "wrap"
+      ],
+      "default": "word",
+      "values": [
+        "none",
+        "word"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-FILE-TREE",
+      "title": "File tree",
+      "category": "Diffs",
+      "path": [
+        "diffs",
+        "tree"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-SINGLE-PATCH",
+      "title": "Single patch",
+      "category": "Diffs",
+      "path": [
+        "diffs",
+        "single"
+      ],
+      "default": "false",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-SCROLL-SPEED",
+      "title": "Scroll speed",
+      "category": "Input",
+      "path": [
+        "scroll",
+        "speed"
+      ],
+      "default": "3",
+      "values": null,
+      "labels": null,
+      "min": "0.25",
+      "max": "10",
+      "step": "0.25",
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-ACCELERATION",
+      "title": "Acceleration",
+      "category": "Input",
+      "path": [
+        "scroll",
+        "acceleration"
+      ],
+      "default": "false",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-MOUSE",
+      "title": "Mouse",
+      "category": "Input",
+      "path": [
+        "mouse"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-EDITOR-CONTEXT",
+      "title": "Editor context",
+      "category": "Input",
+      "path": [
+        "prompt",
+        "editor"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-LARGE-PASTES",
+      "title": "Large pastes",
+      "category": "Input",
+      "path": [
+        "prompt",
+        "paste"
+      ],
+      "default": "compact",
+      "values": [
+        "compact",
+        "full"
+      ],
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-LEADER-TIMEOUT",
+      "title": "Leader timeout",
+      "category": "Input",
+      "path": [
+        "leader",
+        "timeout"
+      ],
+      "default": "2000",
+      "values": null,
+      "labels": null,
+      "min": "250",
+      "max": "10000",
+      "step": "250",
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-ATTENTION",
+      "title": "Attention",
+      "category": "Alerts",
+      "path": [
+        "attention",
+        "enabled"
+      ],
+      "default": "false",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-NOTIFICATIONS",
+      "title": "Notifications",
+      "category": "Alerts",
+      "path": [
+        "attention",
+        "notifications"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-SOUNDS",
+      "title": "Sounds",
+      "category": "Alerts",
+      "path": [
+        "attention",
+        "sound"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-VOLUME",
+      "title": "Volume",
+      "category": "Alerts",
+      "path": [
+        "attention",
+        "volume"
+      ],
+      "default": "0.4",
+      "values": null,
+      "labels": null,
+      "min": "0",
+      "max": "1",
+      "step": "0.1",
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-WINDOW-TITLE",
+      "title": "Window title",
+      "category": "Terminal",
+      "path": [
+        "terminal",
+        "title"
+      ],
+      "default": "true",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-COPY-ON-SELECT",
+      "title": "Copy on select",
+      "category": "Terminal",
+      "path": [
+        "terminal",
+        "copy_on_select"
+      ],
+      "default": "process.platform !== \"win32\"",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-DEVTOOLS",
+      "title": "DevTools",
+      "category": "Debug",
+      "path": [
+        "debug",
+        "devtools"
+      ],
+      "default": "false",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-TIMING",
+      "title": "Timing",
+      "category": "Debug",
+      "path": [
+        "debug",
+        "timing"
+      ],
+      "default": "false",
+      "values": [
+        false,
+        true
+      ],
+      "labels": [
+        "off",
+        "on"
+      ],
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-PREVIOUS-VALUE",
+      "title": "Previous value",
+      "category": null,
+      "path": null,
+      "default": null,
+      "values": null,
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    },
+    {
+      "id": "TUI-NEXT-VALUE",
+      "title": "Next value",
+      "category": null,
+      "path": null,
+      "default": null,
+      "values": null,
+      "labels": null,
+      "min": null,
+      "max": null,
+      "step": null,
+      "source": "packages/tui/src/component/dialog-config.tsx",
+      "desktop_equivalent": null,
+      "gap": "not audited against the desktop",
+      "decision": null,
+      "evidence": []
+    }
+  ]
+}

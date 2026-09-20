@@ -15,6 +15,15 @@ signal session_selected(session_id: String)
 signal new_session_requested()
 signal agent_selected(agent_id: String)
 signal mode_toggle_requested()
+## Emitted when the user asks to try the registered service again. The rail cannot
+## connect anything itself: the composition root owns discovery and the transports.
+signal retry_connection_requested()
+## The user asked to show a route. The rail cannot route: the composition root owns
+## which surface is showing, exactly as it owns the transports.
+signal route_requested(route: String)
+## The user chose a project from the recent/pinned list. The rail cannot open a
+## folder itself: resolution and the transports belong to the composition root.
+signal project_requested(local_entry_id: String)
 
 ## Text markers. These are what make state legible without colour (F-08).
 const MARK_SELECTED := "●"
@@ -25,6 +34,10 @@ const MARK_UNSELECTED := "○"
 const MARK_ATTENTION := "!"
 const MARK_GROUP_OPEN := "▾"
 const MARK_GROUP_CLOSED := "▸"
+## Project-row markers: a pin for a pinned project, a folder for a recent one. Text,
+## like every other marker here, so the distinction survives without colour.
+const MARK_PINNED := "★"
+const MARK_PROJECT := "▸"
 
 ## A wrapping label needs a known minimum width, or at zero width it reports one
 ## glyph per line and inflates the whole panel's minimum height.
@@ -40,6 +53,9 @@ var zone_provider: Callable = Callable()
 var _product_button: Button
 var _mode_label: Label
 var _detail_label: Label
+## The connection retry. Present but disabled while the office is attached or is
+## synthetic, because a control that cannot act must be disabled and say so.
+var _retry_button: Button
 var _new_button: Button
 var _sessions_box: VBoxContainer
 var _team_box: VBoxContainer
@@ -52,6 +68,12 @@ var _collapsed: Dictionary = {}
 var _agents: Array[String] = []
 var _current_agent: String = ""
 var _built := false
+## The nav rows, so the current one can be marked without colour.
+var _route_buttons: Dictionary = {}
+var _nav_box: VBoxContainer
+## The recent and pinned project rows, rebuilt from the ledger on every refresh.
+var _projects_box: VBoxContainer
+var _route: String = OfficeRoute.DEFAULT
 var _store: OfficeStore
 
 
@@ -92,11 +114,38 @@ func _ensure_built() -> void:
 	_detail_label.custom_minimum_size = Vector2(WRAP_MIN_WIDTH * ui_scale, 0.0)
 	outer.add_child(_detail_label)
 
+	# The retry sits directly under the message that says why it is needed, so the
+	# disconnected state is actionable rather than merely described.
+	_retry_button = OfficeTheme.pill_button("Retry connection")
+	_retry_button.custom_minimum_size = Vector2(0, 30)
+	_retry_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	OfficeTheme.apply_font(_retry_button, 12)
+	_retry_button.pressed.connect(func(): retry_connection_requested.emit())
+	_retry_button.visible = false
+	outer.add_child(_retry_button)
+
 	_new_button = OfficeTheme.pill_button("✎   New session")
 	_new_button.custom_minimum_size = Vector2(0, 34)
 	_new_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	_new_button.pressed.connect(func(): new_session_requested.emit())
 	outer.add_child(_new_button)
+
+	# --- route navigation ---------------------------------------------------
+	# The surfaces the shell can show. Each row names its route AND carries a
+	# distinct glyph, so the current one is legible without colour. These are
+	# navigation: they change what is being looked at and nothing else.
+	_nav_box = VBoxContainer.new()
+	_nav_box.add_theme_constant_override("separation", 2)
+	for route in OfficeRoute.ALL:
+		var row := OfficeTheme.pill_button(
+			"%s   %s" % [OfficeRoute.glyph(route), OfficeRoute.label(route)]
+		)
+		row.custom_minimum_size = Vector2(0, 32)
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.pressed.connect(func(): route_requested.emit(route))
+		_nav_box.add_child(row)
+		_route_buttons[route] = row
+	outer.add_child(_nav_box)
 
 	# --- scrolling sections -------------------------------------------------
 	var scroll := ScrollContainer.new()
@@ -107,6 +156,12 @@ func _ensure_built() -> void:
 	box.add_theme_constant_override("separation", 10)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(box)
+
+	# --- projects: pinned first, then recents ------------------------------
+	box.add_child(OfficeTheme.section_label("Projects"))
+	_projects_box = VBoxContainer.new()
+	_projects_box.add_theme_constant_override("separation", 2)
+	box.add_child(_projects_box)
 
 	_sessions_box = VBoxContainer.new()
 	_sessions_box.add_theme_constant_override("separation", 2)
@@ -154,7 +209,6 @@ func _ensure_built() -> void:
 
 func _ready() -> void:
 	_ensure_built()
-
 
 
 ## Re-apply what `_ready` baked into styleboxes and colours.
@@ -258,12 +312,34 @@ func _refresh_mode(store: OfficeStore, playing: bool) -> void:
 	_mode_label.add_theme_color_override(
 		"font_color", OfficeTheme.accent_warm() if demo else OfficeTheme.ok()
 	)
+	_refresh_retry(store)
 	if store.last_error.is_empty():
 		_detail_label.text = _detail_text(store, playing)
 		_detail_label.add_theme_color_override("font_color", OfficeTheme.text_muted())
 		return
 	_detail_label.text = store.last_error
 	_detail_label.add_theme_color_override("font_color", OfficeTheme.danger())
+
+
+## Offer the connection retry exactly when it can act: a LIVE office that has not
+## reached the service. A synthetic office has nothing to attach to, so the
+## control is hidden rather than left as an affordance that does nothing.
+func _refresh_retry(store: OfficeStore) -> void:
+	var attached := store.connection_state == OfficeStore.CONNECTION_LIVE
+	var offered := store.mode == OfficeStore.MODE_LIVE and not attached
+	_retry_button.visible = offered
+	_retry_button.disabled = not offered
+	_retry_button.tooltip_text = (
+		"Try the registered local service again"
+		if offered
+		else "Retry is offered when a live connection has not been reached"
+	)
+
+
+## Whether the retry is currently reachable by the user.
+func retry_available() -> bool:
+	_ensure_built()
+	return _retry_button.visible and not _retry_button.disabled
 
 
 func _detail_text(store: OfficeStore, playing: bool) -> String:
@@ -517,6 +593,80 @@ func _is_selected(actor: ActorPresentation) -> bool:
 
 
 func _clear(container: VBoxContainer) -> void:
+	for child in container.get_children():
+		container.remove_child(child)
+		child.queue_free()
+
+## Show which route is currently displayed. A setter rather than an argument to
+## `refresh`, because the route is shell state and not part of the projection.
+##
+## The current row is marked with the selection glyph, so the reader can tell which
+## surface is showing without relying on colour.
+func set_route(route: String) -> void:
+	_route = OfficeRoute.clamp_route(route)
+	if not _built:
+		return
+	for key in _route_buttons:
+		var name := str(key)
+		var button: Button = _route_buttons[name]
+		button.text = "%s   %s%s" % [
+			OfficeRoute.glyph(name),
+			OfficeRoute.label(name),
+			"   " + MARK_SELECTED if name == _route else "",
+		]
+
+
+## Rebuild the project rows from the ledger, with the per-project counts the store
+## can answer for right now.
+##
+## Counts are DERIVED on each refresh rather than stored on the entry, so a session
+## that starts or a review that arrives shows up without the ledger being rewritten.
+## The count is COMPACT: a project with nothing to report carries no suffix at all,
+## because a row of zeroes is noise rather than information.
+func set_projects(ledger: ProjectLedger, store: OfficeStore) -> void:
+	if not _built or _projects_box == null:
+		return
+	_clear_children(_projects_box)
+	for entry in ledger.entries():
+		var local_entry_id := str(entry["local_entry_id"])
+		var directory := str(entry["canonical_directory"])
+		var label := str(entry["display_name"])
+		var pinned := int(entry["pin_order"]) > ProjectLedger.UNPINNED
+		var summary := ledger.summary_for(directory, store)
+		var row := Button.new()
+		row.flat = true
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.text = "%s  %s%s" % [
+			MARK_PINNED if pinned else MARK_PROJECT,
+			label,
+			_project_suffix(summary),
+		]
+		OfficeTheme.apply_font(row, 13)
+		row.add_theme_color_override("font_color", OfficeTheme.text_muted())
+		# The tooltip carries the FULL path, because the row deliberately shortens it:
+		# a shortened label must never be the only way to learn where work would run.
+		row.tooltip_text = directory
+		row.pressed.connect(func(): project_requested.emit(local_entry_id))
+		_projects_box.add_child(row)
+
+
+## The compact suffix for a project row: running work and pending attention, and
+## nothing when there is none of either.
+func _project_suffix(summary: Dictionary) -> String:
+	var parts: Array[String] = []
+	var running := int(summary.get("running", 0))
+	var attention := int(summary.get("attention", 0))
+	if running > 0:
+		parts.append("%d running" % running)
+	if attention > 0:
+		parts.append("%d!" % attention)
+	if parts.is_empty():
+		return ""
+	return "  ·  " + "  ".join(parts)
+
+
+## Remove every child of a container, so a rebuild does not stack old rows.
+func _clear_children(container: Node) -> void:
 	for child in container.get_children():
 		container.remove_child(child)
 		child.queue_free()

@@ -1,0 +1,2 @@
+a shipped module opens a file kind it does not own   passed=663  failed=1   CAUGHT             the runtime opens only client surfaces, not /p
+restored: True

@@ -1,0 +1,8 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+SCRIPT ERROR: Invalid call. Nonexistent function 'select_actor' in base 'Node (OfficeMain)'.
+          at: _run (res://r6_05_capture_tmp.gd:108)
+          GDScript backtrace (most recent call first):
+              [0] _run (res://r6_05_capture_tmp.gd:108)
+Terminated: 15

@@ -1,0 +1,31 @@
+# Statistics, provider quota and local budgets
+
+Status: required desktop feature. Tokscale is a reference for overview/model/day breakdowns and activity history, not a new runtime or a dependency to install. Its cross-client aggregation and public leaderboard are outside this MVP. No background scan of unrelated CLI histories and no public usage upload.
+
+## Screens
+
+Statistics uses the content region with the app sidebar retained. Header: date range, timezone, project/folder/all-projects, provider and model filters; reset filters; last updated; export. Overview cards: observed requests, logical steps, input/output/cache token components, known spend and **estimated** spend separately, errors/cancellations and active sessions. Unknown values show “Not reported”, not zero. Chart: daily activity/spend with accessible table equivalent; activity calendar/heatmap; top models/providers/projects table; sortable drilldown to source sessions. No arbitrary mock graph in production: use proper empty, partial, loading, stale and error states.
+
+Quota is a separate tab or linked page. Provider cards show each reported window independently (session, weekly, model/lane, monthly, credits, requests, tokens). Show unit, used/limit/remaining when reported, reset time with timezone, source, stability, freshness and refresh action. Distinguish unavailable, unsupported, unauthorized, stale and temporary error. Missing denominator means no invented percentage; an unlimited flag needs source evidence. Never sum percentages across windows or providers. Local model context length is not a provider account quota.
+
+## Reuse existing YCoding
+
+The inspected repository already defines `ProviderUsage.Snapshot`/`Window`: status, source, stability, updatedAt, providerID, label, windows; used/limit/remaining/unlimited/resetAt/periodSeconds are optional. Read the existing normalized API (`/api/provider/usage`, `/api/provider/:providerID/usage`, refresh query) through YCoding. Keep provider authentication and source adapters in Core, not Godot. Existing source descriptions include OpenRouter, OpenAI API admin usage, Meta, Claude subscription and Codex lanes; current configuration docs also describe Copilot best-effort reporting. Audit implemented adapters and tests locally; do not promise each provider works for every account.
+
+Normal inference permission is not org billing/admin permission. Do not request broader credentials just to complete a chart. A failed quota refresh never blocks sending a valid coding prompt. Cache by provider and opaque credential identity in the owning service, not just provider name. Never expose key fragments, tokens, account emails or raw responses in desktop payloads. New display preferences live in desktop state; new aggregation/query features belong in minimal public Schema/Protocol/Core read models, not direct Godot database access.
+
+## Correct accounting
+
+Count physical request attempts separately from logical steps and user prompts. Include actually observed retries/failed/canceled attempts when the runtime reports usage; do not infer zero cost from an error. Deduplicate stable request/event identities when merging history with live updates or reconnect snapshots. Stream deltas, finalized totals, provider cumulative snapshots and parent summaries must not be added together. Parent/child sessions roll up once by root family and once by project without double counting. Hidden title/goal/compaction helpers are a separate operation class and remain included when billed.
+
+Input, output, cache-read/write and reasoning fields follow the provider normalization contract. Do not blindly add cached/reasoning tokens to totals where they are already subsets. Explicitly document the equation and missing-value handling per normalized record. Do not mix currencies or sum USD with credits; preserve pricing version, effective date, tier and provenance for estimates. Zero known spend with missing pricing is not “free”. Show completeness counters (e.g. known cost for N of M attempts), data coverage period and current timezone. Use UTC storage and local calendar grouping; test DST, midnight and date-range boundaries.
+
+## Budget vs limit
+
+A **provider-reported quota** is provider data. A **rate limit** is a time-window constraint/429 observation. A **local budget** is a user's warning or execution policy. Each needs its own label. MVP includes persisted advisory budgets with explicit currency/unit, period, scope, threshold, warning/dismissal state. Proposed scopes: provider account, project/folder and session; only expose scopes with real accounting support. Overlapping warnings may appear but cannot multiply the cost.
+
+A budget presented as **hard/enforced** requires backend admission/continuation enforcement shared with the TUI and all concurrent sessions, not disabling the desktop Send button. Implement and test reservations/reconciliation only if a new enforced budget is explicitly approved; advisory-only budgets are sufficient for this initial quota/statistics scope. Unknown cost policy, in-flight overshoot and reset semantics must be explicit. No setting silently stops work because a best-effort remote quota is stale. No desktop quota editor changes provider-side billing limits. No automatic switch to a different credential/provider without explicit user policy.
+
+## Verification
+
+Hand-calculated synthetic unit data (clearly test-only): duplicate/replay, retry, canceled attempt, missing usage/price, cached input overlap, helper and child rollups, multiple credentials, malformed window, stale refresh, unlimited, no limit denominator, DST and date edges. Cross-check one real provider session against authoritative YCoding telemetry; distinguish estimates from provider invoice data. Exercise filters, table/graph parity, detail links, accessibility and CSV/JSON exports; escape spreadsheet-formula-leading strings in CSV. Export only user-selected local data, with a privacy preview. Quota failure must leave coding available. A proposed hard-budget option must remain unavailable unless concurrent runtime enforcement and TUI parity are proven; it is not an unrequested prerequisite for the initial statistics page.

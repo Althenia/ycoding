@@ -1,0 +1,10 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SINGLE passed=57 failed=6
+  SINGLE FAIL: the projection renders source order, not wall-clock order (expected ["fourth", "third", "second", "first"], got ["fourth"])
+  SINGLE FAIL: two assignments produce two reports (1) (expected 2, got 1)
+  SINGLE FAIL: a repeated completion does not add a row (expected 2, got 1)
+  SINGLE FAIL: a completion with no report does not render as an empty success
+  SINGLE FAIL: and it is marked as a status rather than a verified source message
+  SINGLE FAIL: a completion that carries a report keeps its text (expected 1, got 0)
+EXIT=1

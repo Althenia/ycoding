@@ -3,10 +3,11 @@ export * as Config from "./config"
 import { makeLocationNode } from "./effect/app-node"
 import path from "path"
 import { isDeepStrictEqual } from "node:util"
-import { type ParseError, parse } from "jsonc-parser"
+import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
+import { randomUUID } from "node:crypto"
 import { Context, Effect, Fiber, Layer, Option, PubSub, Schema, Semaphore, Stream } from "effect"
 import { Permission } from "@ycoding-ai/schema/permission"
-import { Event } from "@ycoding-ai/schema/config"
+import { Change, Commit, Event, Patch, Preview, Read, REDACTED, Source, WriteScope } from "@ycoding-ai/schema/config"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { Credential } from "./credential"
 import { EventV2 } from "./event"
@@ -39,6 +40,8 @@ import { ConfigShell } from "./config/shell"
 import { ConfigToolOutput } from "./config/tool-output"
 import { ConfigVariable } from "./config/variable"
 import { ConfigWatcher } from "./config/watcher"
+import { ConfigError } from "./config/error"
+import { Hash } from "./util/hash"
 import { WellKnown } from "./wellknown"
 
 export class Info extends Schema.Class<Info>("Config.Info")({
@@ -180,15 +183,96 @@ export class ClaudeDirectory extends Schema.Class<ClaudeDirectory>("Config.Claud
 
 export type Entry = Document | Directory | File | AgentsDirectory | ClaudeDirectory
 
-export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
+/** The highest-priority document that defines `key`, scanning lowest priority first. */
+export function document(entries: readonly Entry[], key: keyof Info) {
   return entries
     .filter((entry): entry is Document => entry.type === "document")
-    .findLast((entry) => entry.info[key] !== undefined)?.info[key]
+    .findLast((entry) => entry.info[key] !== undefined)
+}
+
+export function latest<K extends keyof Info>(entries: readonly Entry[], key: K): Info[K] | undefined {
+  return document(entries, key)?.info[key]
+}
+
+const PROJECT_CONFIG_NAMES = new Set(["ycoding.json", "ycoding.jsonc"])
+const PROJECT_CONFIG_DIRECTORIES = new Set([".ycoding", ".agents", ".claude"])
+
+/**
+ * Classify a document path by where discovery found it. `global` is the platform configuration
+ * directory, `project` is any discovered project document, and a document without a path is virtual.
+ */
+export function scopeOf(filepath: string | undefined, globalDirectory: string) {
+  if (filepath === undefined) return "virtual" as const
+  if (FSUtil.contains(globalDirectory, filepath)) return "global" as const
+  return "project" as const
+}
+
+/** Whether `filepath` is a discoverable project configuration document the runtime may write. */
+export function writable(filepath: string, globalDirectory: string) {
+  const directory = path.dirname(filepath)
+  const name = path.basename(filepath)
+  return (
+    scopeOf(filepath, globalDirectory) === "global" ||
+    PROJECT_CONFIG_DIRECTORIES.has(path.basename(directory)) ||
+    PROJECT_CONFIG_NAMES.has(name)
+  )
+}
+
+/**
+ * Replace secret-bearing leaves with `Config.REDACTED` so reads never return resolved
+ * credentials. Whole records are replaced when the record itself is secret by contract
+ * (provider `headers`, MCP `environment`); individual leaves are replaced for credential
+ * field names such as `apiKey` and `client_secret`. Keys stay visible so clients can report
+ * which values are configured without receiving them.
+ */
+export function redact(values: Record<string, unknown>): Record<string, unknown> {
+  const secretRecords = new Set(["headers", "environment"])
+  const secretKeys = new Set([
+    "apiKey",
+    "api_key",
+    "apikey",
+    "authorization",
+    "access_token",
+    "refresh_token",
+    "client_secret",
+    "clientSecret",
+    "password",
+    "token",
+  ])
+  const scrub = (input: unknown, key?: string): unknown => {
+    if (key !== undefined && secretRecords.has(key) && typeof input === "object" && input !== null)
+      return Object.fromEntries(Object.keys(input).map((name) => [name, REDACTED]))
+    if (key !== undefined && secretKeys.has(key)) return REDACTED
+    if (Array.isArray(input)) return input.map((item) => scrub(item))
+    if (typeof input !== "object" || input === null) return input
+    return Object.fromEntries(Object.entries(input).map(([name, value]) => [name, scrub(value, name)]))
+  }
+  return scrub(values) as Record<string, unknown>
+}
+
+/** A validated patch with the exact bytes that would be written. */
+interface Plan {
+  readonly scope: WriteScope
+  readonly path: string
+  readonly current: string
+  readonly keys: string[]
+  readonly changes: Change[]
+  readonly settled: string
 }
 
 export interface Interface {
   /** Returns location config documents and discovery sources from lowest to highest priority. */
   readonly entries: () => Effect.Effect<Entry[]>
+  /** Returns effective values with per-document provenance and secret-bearing values redacted. */
+  readonly read: () => Effect.Effect<Read>
+  /** Validates a patch and reports the changes and resulting revision without writing. */
+  readonly preview: (patch: Patch) => Effect.Effect<Preview, ConfigError.InvalidErrorType>
+  /**
+   * Re-reads the target document, rejects a stale `expectedRevision`, applies the validated
+   * patch with a comment- and formatting-preserving JSONC edit, writes atomically, and returns
+   * the settled readback.
+   */
+  readonly commit: (patch: Patch) => Effect.Effect<Commit, ConfigError.InvalidErrorType>
 }
 
 export const Options = Schema.Struct({
@@ -512,10 +596,202 @@ export const layer = (options?: Options) =>
       )
       yield* reconcile(initial)
 
+      const globalDirectory = AbsolutePath.make(global.config)
+
+      const sources = (entries: readonly Entry[]): Effect.Effect<Source[], never, never> =>
+        Effect.gen(function* () {
+          return yield* Effect.forEach(
+            entries.filter((entry): entry is Document => entry.type === "document"),
+            (entry) =>
+              Effect.gen(function* () {
+                const text = entry.path ? yield* fs.readFileStringSafe(entry.path).pipe(Effect.orDie) : undefined
+                const keys = Object.keys(entry.info).filter(
+                  (key) => (entry.info as Record<string, unknown>)[key] !== undefined,
+                )
+                return new Source({
+                  path: entry.path ?? "",
+                  scope: scopeOf(entry.path, globalDirectory),
+                  keys,
+                  // A virtual or unreadable document still needs a stable identity so clients can
+                  // report provenance; the decoded value set is the only available revision.
+                  revision: Hash.sha256(text ?? JSON.stringify(entry.info)),
+                })
+              }),
+          )
+        })
+
+      const readEntries = (entries: readonly Entry[]): Effect.Effect<Read, never, never> =>
+        Effect.gen(function* () {
+          const values = Object.fromEntries(
+            Object.keys(Info.fields).flatMap((key) => {
+              const value = latest(entries, key as keyof Info)
+              return value === undefined ? [] : [[key, value]]
+            }),
+          )
+          return new Read({ values: redact(values), sources: yield* sources(entries) })
+        })
+
+      /** The project document a write targets, or the global document when none is project-scoped. */
+      const targetOf = (entries: readonly Entry[], scope: WriteScope) => {
+        const documents = entries.filter(
+          (entry): entry is Document => entry.type === "document" && entry.path !== undefined,
+        )
+        return documents.findLast((entry) => scopeOf(entry.path, globalDirectory) === scope)
+      }
+
+      const requireDocument = (entries: readonly Entry[], input: Patch) => {
+        const target = targetOf(entries, input.scope)
+        if (!target?.path) return undefined
+        if (!writable(target.path, globalDirectory)) return undefined
+        return target
+      }
+
+      const validate = (info: Info) =>
+        Schema.decodeUnknownResult(Schema.Struct(Info.fields), {
+          errors: "all",
+          onExcessProperty: "error",
+        })(info)
+
+      /** Validate a patch against the target document and compute the settled file text. */
+      const plan = (patch: Patch): Effect.Effect<Plan, ConfigError.InvalidErrorType> =>
+        Effect.gen(function* () {
+          const entries = configs
+          const target = requireDocument(entries, patch)
+          const targetPath = target?.path
+          if (!targetPath) {
+            return yield* Effect.fail(
+              new ConfigError.InvalidError({
+                path: "",
+                message: `no ${patch.scope} configuration document is available to write`,
+              }),
+            )
+          }
+          const text = (yield* fs.readFileStringSafe(targetPath).pipe(Effect.orDie)) ?? "{}"
+          const current = Hash.sha256(text)
+          if (patch.expectedRevision !== undefined && patch.expectedRevision !== current) {
+            return yield* Effect.fail(
+              new ConfigError.InvalidError({
+                path: targetPath,
+                message: "configuration changed since it was read; re-read before writing",
+              }),
+            )
+          }
+
+          const keys = Object.keys(patch.patch)
+          const removed = keys.filter((key) => removedConfigKeys({ [key]: patch.patch[key] }).length > 0)
+          if (removed.length) {
+            return yield* Effect.fail(
+              new ConfigError.InvalidError({
+                path: targetPath,
+                message: `removed configuration keys: ${removed.join(", ")}`,
+              }),
+            )
+          }
+
+          const next = Object.fromEntries(
+            Object.entries({ ...(target.info as Record<string, unknown>) }).filter(([key]) => key !== "$schema"),
+          )
+          for (const key of keys) {
+            const value = patch.patch[key]
+            if (value === null) delete next[key]
+            else next[key] = value
+          }
+          const decoded = validate(next)
+          if (decoded._tag === "Failure") {
+            const fields = keys.filter((key) => Object.hasOwn(Info.fields, key))
+            return yield* Effect.fail(
+              new ConfigError.InvalidError({
+                path: targetPath,
+                message: fields.length
+                  ? `invalid configuration values for ${fields.join(", ")}; check the configuration schema`
+                  : "invalid configuration keys or values; check the configuration schema",
+              }),
+            )
+          }
+
+          const visible = redact(patch.patch)
+          const changes = keys.map(
+            (key) =>
+              new Change({
+                key,
+                value: patch.patch[key] === null ? undefined : visible[key],
+              }),
+          )
+          const edits = keys.reduce(
+            (accumulated, key) =>
+              applyEdits(
+                accumulated,
+                modify(accumulated, [key], patch.patch[key] === null ? undefined : patch.patch[key], {
+                  formattingOptions: { tabSize: 2, insertSpaces: true },
+                }),
+              ),
+            text,
+          )
+          return {
+            scope: patch.scope,
+            path: targetPath,
+            current,
+            keys,
+            changes,
+            settled: edits.endsWith("\n") ? edits : edits + "\n",
+          }
+        })
+
+      const preview = (input: Patch): Effect.Effect<Preview, ConfigError.InvalidErrorType> =>
+        Effect.gen(function* () {
+          const planned = yield* plan(input)
+          return new Preview({
+            scope: planned.scope,
+            path: planned.path,
+            // Preview validates against the current bytes and reports the revision the caller must
+            // pass back to commit, so a concurrent edit is still detected at write time.
+            revision: planned.current,
+            result: Hash.sha256(planned.settled),
+            changes: planned.changes,
+          })
+        })
+
+      const commit = (input: Patch): Effect.Effect<Commit, ConfigError.InvalidErrorType> =>
+        Effect.gen(function* () {
+          const planned = yield* plan(input)
+
+          // Preserve an existing restrictive mode instead of widening a config file's permissions.
+          const mode = yield* fs.stat(planned.path).pipe(
+            Effect.map((info) => info.mode & 0o777),
+            Effect.catch(() => Effect.succeed(undefined)),
+          )
+          const temp = `${planned.path}.${randomUUID()}.tmp`
+          yield* fs.writeFileString(temp, planned.settled, mode === undefined ? undefined : { mode }).pipe(Effect.orDie)
+          yield* fs.rename(temp, planned.path).pipe(Effect.orDie)
+
+          // The write target is always a document discovery already found, so its watch exists;
+          // only the decoded values and the derived policies need to be refreshed here.
+          // `ConfigVariable.substitute` reaches for `FSUtil` from context, so satisfy it with the
+          // service this layer already holds instead of widening the public requirement.
+          const reloaded = yield* discover().pipe(Effect.provideService(FSUtil.Service, fs))
+          configs = reloaded
+          yield* loadPolicies(reloaded)
+          yield* events.publish(Event.Updated, {})
+
+          return new Commit({
+            scope: planned.scope,
+            path: planned.path,
+            revision: Hash.sha256(planned.settled),
+            changes: planned.changes,
+            unsettled: planned.keys.filter((key) => document(reloaded, key as keyof Info)?.path !== planned.path),
+            read: yield* readEntries(reloaded),
+          })
+        })
+
       return Service.of({
         entries: Effect.fn("Config.entries")(function* () {
           return configs
         }),
+        read: Effect.fn("Config.read")(function* () {
+          return yield* readEntries(configs)
+        }),
+        preview,
+        commit,
       })
     }),
   )

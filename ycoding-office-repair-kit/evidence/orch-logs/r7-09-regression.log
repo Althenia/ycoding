@@ -1,0 +1,5 @@
+the session list publishes nothing                   passed=46   failed=5   CAUGHT             the list publishes one event per ses
+a published event is not a session.created           passed=48   failed=5   CAUGHT             each published event is a session.cr
+the published event loses its session id             passed=49   failed=4   CAUGHT             both ids are published
+the first attach never reads the canonical state     passed=53   failed=0   *** NOT CAUGHT *** 
+restored: True

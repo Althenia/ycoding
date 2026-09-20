@@ -294,6 +294,12 @@ import type {
   ProjectArtifactArtifactShadowConfirmOutput,
   ProjectArtifactArtifactPurgeInput,
   ProjectArtifactArtifactPurgeOutput,
+  ConfigGetInput,
+  ConfigGetOutput,
+  ConfigPreviewInput,
+  ConfigPreviewOutput,
+  ConfigCommitInput,
+  ConfigCommitOutput,
   DebugLocationListOutput,
   DebugLocationEvictInput,
   DebugLocationEvictOutput,
@@ -2459,6 +2465,46 @@ export function make(options: ClientOptions) {
             requestOptions,
           ).then((value) => value.data),
       },
+    },
+    config: {
+      get: (input?: ConfigGetInput, requestOptions?: RequestOptions) =>
+        request<ConfigGetOutput>(
+          {
+            method: "GET",
+            path: `/api/config`,
+            query: { location: input?.["location"] },
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      preview: (input: ConfigPreviewInput, requestOptions?: RequestOptions) =>
+        request<ConfigPreviewOutput>(
+          {
+            method: "POST",
+            path: `/api/config/preview`,
+            query: { location: input["location"] },
+            body: input["payload"],
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
+      commit: (input: ConfigCommitInput, requestOptions?: RequestOptions) =>
+        request<ConfigCommitOutput>(
+          {
+            method: "PUT",
+            path: `/api/config`,
+            query: { location: input["location"] },
+            body: input["payload"],
+            successStatus: 200,
+            declaredStatuses: [400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ),
     },
     debug: {
       location: {

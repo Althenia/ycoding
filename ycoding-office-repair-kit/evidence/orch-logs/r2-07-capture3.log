@@ -1,0 +1,151 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R207 start outdir=/Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r2-07 cases=12
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _ready (res://ui/shell/chrome_toggles.gd:129)
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _ready (res://app/main.gd:98)
+R207 1024x768-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x788
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1024x768-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x730
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1024x768-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x672
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1280x720-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x548
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1280x720-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x490
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1280x720-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x432
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1440x900-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x628
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1440x900-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x570
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1440x900-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x512
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1920x1080-s1.00 content_w=983 sidebar=297 composer=840x116 drawer=452x548
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1920x1080-s1.50 content_w=834 sidebar=446 composer=786x174 drawer=384x490
+SCRIPT ERROR: Cannot call method 'remove_child' on a null value.
+          at: ChromeToggles.wrap_to (res://ui/shell/chrome_toggles.gd:148)
+          GDScript backtrace (most recent call first):
+              [0] wrap_to (res://ui/shell/chrome_toggles.gd:148)
+              [1] _apply_regions (res://app/main.gd:159)
+              [2] _apply_case (res://r2_07_capture_tmp.gd:103)
+              [3] _process (res://r2_07_capture_tmp.gd:78)
+R207 1920x1080-s2.00 content_w=686 sidebar=594 composer=638x232 drawer=316x432
+R207 captured=12
+R207 objective_problems=4
+R207 PROBLEM 1024x768-s2.00: toggles overlaps the sidebar
+R207 PROBLEM 1280x720-s2.00: toggles overlaps the sidebar
+R207 PROBLEM 1440x900-s2.00: toggles overlaps the sidebar
+R207 PROBLEM 1920x1080-s2.00: toggles overlaps the sidebar
+R207 done
+WARNING: 6 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+ERROR: Texture with GL ID of 73: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 74: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 76: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 77: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 82: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 83: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 89: leaked 174762 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 90: leaked 174762 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 105: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 91: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 93: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 99: leaked 524288 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 100: leaked 524288 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 101: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 103: leaked 131072 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+ERROR: Texture with GL ID of 104: leaked 174762 bytes.
+   at: ~Utilities (drivers/gles3/storage/utilities.cpp:82)
+WARNING: 77 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 16 RID allocations of type 'N5GLES37TextureE' were leaked at exit.
+ERROR: 30 RID allocations of type 'PN18TextServerAdvanced22ShapedTextDataAdvancedE' were leaked at exit.
+ERROR: 1 RID allocations of type 'PN18TextServerAdvanced12FontAdvancedE' were leaked at exit.
+EXIT=1

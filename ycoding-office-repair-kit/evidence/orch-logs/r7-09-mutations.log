@@ -1,0 +1,8 @@
+the prompting path waits on the quota read       passed=35   failed=2   CAUGHT             the prompting path does not refere
+the prompting path waits on the usage read       passed=36   failed=1   CAUGHT             the prompting path does not refere
+an estimate is labelled as billed                passed=36   failed=1   CAUGHT             and their labels differ, which is 
+a stale quota reads as fresh                     passed=36   failed=1   CAUGHT             the three freshness states read di
+an errored quota reads as fresh                  passed=36   failed=1   CAUGHT             the three freshness states read di
+a bounded quota read is unbounded                passed=?    failed=?   CAUGHT (hung)      
+a quota row loses its source verification        passed=37   failed=0   *** NOT CAUGHT *** 
+restored: True

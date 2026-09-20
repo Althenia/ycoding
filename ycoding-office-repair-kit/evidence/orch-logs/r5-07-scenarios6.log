@@ -1,0 +1,40 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+R507 start; service=http://127.0.0.1:43094
+R507 PASS: the repository resolves to a project
+R507 PASS: a NESTED folder resolves to a project of its own
+R507 PASS: the nested folder keeps its OWN location, distinct from the repository's
+R507 PASS: and the kit's monorepo case holds: one backend project, two distinct locations
+R507 PASS: a folder reached through a symlink resolves to the SAME location as its real path
+R507 PASS: a folder whose name carries a space round-trips exactly (got '/tmp/ycoding-r507-spaced folder')
+R507 PASS: a folder whose name carries non-ASCII characters round-trips exactly (got '/tmp/ycoding-r507-ünïcodé—folder')
+R507 PASS: a folder whose name contains a PERCENT SIGN round-trips exactly (got '/tmp/ycoding-r507-100%-folder')
+R507 locations: repo=3e5803fe818b6335dfb7f71ec17671f3fa4cd538 nested=3e5803fe818b6335dfb7f71ec17671f3fa4cd538 symlink=global
+R507 both sessions requested
+R507 session created: ses_f502329fbffdBH82p3vjr0c0fn
+R507 session created: ses_f502329fbffe3JVBEJin2tl50D
+R507 job A prompted in 3e5803fe818b6335dfb7f71ec17671f3fa4cd538
+R507 job B prompted in 3e5803fe818b6335dfb7f71ec17671f3fa4cd538
+R507 both jobs accepted and carried concurrently (A messages=true B messages=true)
+R507 PASS: two real jobs ran concurrently in two locations
+R507 PASS: the two jobs are two different sessions
+R507 PASS: project A's history carries A's own prompt
+R507 PASS: project B's history carries B's own prompt
+R507 PASS: project A's history never carries project B's words (leak=false)
+R507 PASS: project B's history never carries project A's words (leak=false)
+R507 PASS: the two sessions sit in two different locations (/Users/viadz/Workspace/Project/ycoding vs /Users/viadz/Workspace/Project/ycoding/packages/schema)
+R507 FAIL: project A's session reports the nested folder it was created in (got '/Users/viadz/Workspace/Project/ycoding')
+R507 FAIL: project B's session reports the repository it was created in (got '/Users/viadz/Workspace/Project/ycoding/packages/schema')
+R507 isolation: A words=197 B words=195 A project=3e5803fe818b6335dfb7f71ec17671f3fa4cd538 B project=3e5803fe818b6335dfb7f71ec17671f3fa4cd538
+R507 PASS: the stop for project A is accepted: ''
+R507 stop asked for project A's session
+R507 PASS: the service acknowledged the stop for project A's session (interrupted)
+R507 PASS: the stop named project A's session and not project B's
+R507 PASS: after a restart the two sessions still report two different locations
+R507 FAIL: and project A still reports the nested folder it was created in
+R507 FAIL: and project B still reports the repository
+R507 PASS: both session ids are known, so the restart read something real
+R507 restart: A=3e5803fe818b6335dfb7f71ec17671f3fa4cd538 B=3e5803fe818b6335dfb7f71ec17671f3fa4cd538
+R507 summary: checks=24 failed=4
+R507 RESULT: FAILED
+EXIT=1

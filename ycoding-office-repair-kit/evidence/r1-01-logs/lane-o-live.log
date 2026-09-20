@@ -1,0 +1,21 @@
+ERROR: Could not create directory: '/nonexistent-ycoding-lane-o'.
+   at: make_dir_recursive (core/io/dir_access.cpp:179)
+ERROR: Error attempting to create data dir: /nonexistent-ycoding-lane-o/Library/Application Support/Godot/app_userdata/YCoding Office.
+   at: ensure_user_data_dir (core/os/os.cpp:442)
+ERROR: Could not create directory: 'user://logs'.
+   at: make_dir_recursive (core/io/dir_access.cpp:179)
+ERROR: Failed to open log file for writing: user://logs/godot.log
+   at: rotate_file (core/io/logger.cpp:169)
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+ERROR: Can't create shader cache folder, no shader caching will happen: user://
+   at: RasterizerGLES3 (drivers/gles3/rasterizer_gles3.cpp:345)
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+[live] scene instantiated
+[live] mode=LIVE conn=live actors=1 interactions=0 root='ses_lane_o_fixture'
+[live] stale=false last_error=''
+[live] detail_label='Idle'
+[live] retry_available=false demo_playing=false live_playing=true
+[live] model_pill='Default' disabled=false
+[live] window=(1280, 720)
+[live] wrote /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r1-01-live-attached-1280x720.png (1280x720)

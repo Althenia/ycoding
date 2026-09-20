@@ -34,6 +34,9 @@ var _password: String = ""
 var _connected := false
 var _running := false
 var _last_error := ""
+## The location this transport forwards to its inner transport, held so a caller can
+## confirm what it was given rather than inferring it from the inner object.
+var _location := ""
 ## The event feed is subscribed once; reconnects re-issue it explicitly.
 var _stream_id := 0
 ## The epoch the service reported. A reload is stamped with it, so the store never
@@ -81,6 +84,7 @@ func credentials() -> Dictionary:
 ## Forward the session scope. Session routes derive their own location, so this is
 ## only needed for the location-scoped routes such as the model list.
 func set_location(directory: String, workspace_id: String = "") -> void:
+	_location = directory
 	if _transport != null:
 		_transport.set_location(directory, workspace_id)
 
@@ -102,6 +106,13 @@ func stop() -> void:
 	if _transport != null:
 		_transport.cancel_all()
 	_set_connected(false, OfficeStore.CONNECTION_DISCONNECTED)
+
+
+## The location this transport was given, or "" when none has been set. Exposed so a
+## caller (and a test) can confirm the location actually reached the transport rather
+## than being remembered beside it.
+func location_directory() -> String:
+	return _location
 
 
 func is_playing() -> bool:

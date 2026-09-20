@@ -3,6 +3,7 @@
 ## Reports frame time, draw-call count and process memory over a bounded run, and
 ## prints a compact trend so a leak or an unbounded queue shows up as a slope.
 extends SceneTree
+const DemoCapture := preload("res://tools/demo_capture.gd")
 var _scene: Node
 var _frames := 0
 var _samples: Array = []
@@ -12,6 +13,9 @@ func _initialize() -> void:
 	root.add_child(_scene)
 	_last = Time.get_ticks_msec()
 func _process(_d: float) -> bool:
+	# Opt in explicitly: production boot no longer has to imply DEMO.
+	if not DemoCapture.started(_scene):
+		return false
 	_frames += 1
 	var now := Time.get_ticks_msec()
 	var elapsed := now - _last

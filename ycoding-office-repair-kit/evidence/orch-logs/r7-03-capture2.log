@@ -1,0 +1,28 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R703 PASS  the Statistics route shows the statistics surface
+R703 PASS  and the office world is not drawn on it
+R703 PASS  and the composer, which belongs to the office, is not drawn either
+R703 registered=http://127.0.0.1:43094
+R703 PASS  a fresh page is LOADING before any read settles
+R703 session=ses_6d647b68-4d3b-4ef7-8967-4eaf422220f3
+R703 reported=true logical=3899 physical=3903 helpers=4
+R703 cost=$18.06 provenance=estimated priced=4 of 4
+R703 PASS  a real read reaches READY
+R703 PASS  steps and attempts are DIFFERENT figures on the cards (3899 vs 3903)
+R703 PASS  known and estimated spend are separate cards
+R703 PASS  the daily chart is NOT claimed, because there is no per-day source
+R703 PASS  and its reason names the actual limitation
+R703 PASS  the activity calendar is NOT claimed either
+R703 panel_names_requests=true
+R703 panel_names_daily_reason=true
+R703 PASS  the surface renders either figures or the reason it has none
+R703 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r7-03/r7-03-statistics.png
+R703 checks=11 fails=0
+R703 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=0

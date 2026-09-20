@@ -1,0 +1,2070 @@
+{
+  "schema_version": 1,
+  "prepared": "2026-09-16",
+  "source_revision": "77ef4315fa66a8c51c4288e00bfa0a77a635eb63",
+  "tasks": [
+    {
+      "id": "R0-01",
+      "milestone": "R0",
+      "title": "Preserve checkout and reconcile source",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": [
+        "Record revision/dirty paths, instructions and current vs pinned drift; never reset/stage/commit."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit"
+      ],
+      "evidence": [
+        "ev-r0-03-wire-audit-dangling",
+        "ev-r0-08-merge-preview"
+      ],
+      "notes": "Reconciled against the live checkout: HEAD a4bb99e is one commit past the kit pin 77ef431 (release notes only, ZERO apps/office changes), so no kit application task is superseded and no application rebuild is needed. The kit's guarded baseline blobs equal the live files byte-for-byte, so the delivery merger previews with zero drift and no refusal. Checkout preserved: git diff and git diff --cached are both empty and the only untracked path is the kit itself. Open follow-up (not blocking this task): the contracts/wire-audit.json citation in apps/office/AGENTS.md:9 and core/wire.gd:1 is dangling and must be re-pointed at the live Schema owners."
+    },
+    {
+      "id": "R0-02",
+      "milestone": "R0",
+      "title": "Launch baseline Office and TUI",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-01"
+      ],
+      "acceptance": [
+        "Capture native app and targeted TUI flows unchanged; record actual startup commands and host."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r0-02-baseline-render",
+        "ev-r0-02-integration-suite",
+        "ev-r0-02-native-baseline",
+        "ev-r0-02-tui-smoke",
+        "ev-r0-02-verify-suite"
+      ],
+      "notes": "Baseline established on all four tiers, both required kinds present. Native: a real 1280x720 launch renders a populated synthetic office with honest DEMO/'Synthetic playback'/'demo list' labelling. Automated: verify.sh PASSED with 6234 assertions and 18 flow checks at 0 engine errors, verify-integration.sh PASSED with INTEG 21/21 and LIVE-ATTACH 26/26, and the TUI artifact smoke passed against dist/tui/tui-darwin-arm64/bin/ycoding. The suite is GREEN before any repair, which is the point: passing does not mean the product contract is met, because five layout/invariant tests are never invoked (ev-r0-04-dead-tests) and the tests that do run enshrine the rejected demo boot. A functional TUI capability comparison remains outstanding and is tracked under R6."
+    },
+    {
+      "id": "R0-03",
+      "milestone": "R0",
+      "title": "Audit current ownership and wire contracts",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-02"
+      ],
+      "acceptance": [
+        "Resolve desktop/service/Schema/Protocol/config/credential boundaries and exact supported operations."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit"
+      ],
+      "evidence": [
+        "ev-r0-03-dto-field-defects",
+        "ev-r0-03-event-vocabulary-confirmed",
+        "ev-r0-03-guardrail-route-defect",
+        "ev-r0-03-location-scope-gap",
+        "ev-r0-03-route-inventory",
+        "ev-r0-03-wire-audit-dangling",
+        "ev-r0-03-wire-repair-done",
+        "ev-r0-03-world-plan-doc-drift"
+      ],
+      "notes": "Ownership and wire contracts audited against the live protocol, with two independent lanes confirming the same results. The wire vocabulary is SOUND: all 40 constants in core/wire.gd are exact live literals (40/40) and 17 of 18 office route/method combinations are exact. Exactly ONE route is wrong: the guardrail reply path omits the `request` segment, so answering a human guardrail review 404s; the same failure path also flips the feed to CONNECTION_DISCONNECTED, mislabelling a route error as a connection drop, and the client never reads the response so it fails silently. Fixed by lane L. Structural findings: five declared routes (session.active/get/snapshot/messages/subagent.list) are never called, so the client's transcript comes from the event feed plus the durable session log rather than the snapshot route; the kit's top-level snapshot envelope warning is accurate but does not currently bite. Three files cite a non-existent contracts/wire-audit.json. The world plan has drifted from its own guide (41x23/four rooms vs the documented 40x21/six rooms). Location scoping is plumbed but never driven, which is a root-cause candidate for desktop/TUI divergence and a prerequisite for R5."
+    },
+    {
+      "id": "R0-04",
+      "milestone": "R0",
+      "title": "Inventory all settings and TUI commands",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-03"
+      ],
+      "acceptance": [
+        "Generate current field/action list; classify inactive, terminal-only, missing-owner and desktop equivalents."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit"
+      ],
+      "evidence": [
+        "ev-r0-02-composer-submit-parity",
+        "ev-r0-03-event-vocabulary-confirmed",
+        "ev-r0-03-route-inventory",
+        "ev-r0-04-settings-coverage"
+      ],
+      "notes": "Inventory and parity audited from the live tree rather than from the kit's plan. Coverage is measured, not assumed: 3 of 236 catalog rows are wired in the desktop (motion persisted; palette mode and text scale in-memory only), and the catalog misses live keys plus two environment variables. TUI command parity is catalogued in lane B's note, and the client's wire vocabulary/routes were verified exact (40/40 constants, 17/18 routes), which is the contract the settings and parity work must build on. A functional TUI capability comparison is carried by R6 rather than claimed here."
+    },
+    {
+      "id": "R0-05",
+      "milestone": "R0",
+      "title": "Reproduce real-provider failure",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-04"
+      ],
+      "acceptance": [
+        "Trace UI admission to runtime/provider settlement with sanitized correlation; credentials absent is a blocker not a fake success."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r0-05-error-matrix",
+        "ev-r0-05-provider-dead-service",
+        "ev-r0-05-provider-no-registration",
+        "ev-r0-05-real-provider-roundtrip"
+      ],
+      "notes": "The provider path was reproduced natively against three distinct conditions, which is what R0-05 asked for. Unreachable attach renders fully honest (LIVE badge, specific loopback address, empty lists, zero actors). Missing registration renders the correct error text over a still-populated synthetic office - the exact failure the no-demo rule forbids. Separately, a REAL provider turn completed and settled through the client's own transport modules (session ses_r0_lane_c created, prompt admitted, terminal step.ended with finish=stop, 16861 input tokens, cost 0.0112332), with no credential values retained. The client also routes refusals into visible notices rather than swallowing them. Two limits are recorded rather than hidden: the full composer-to-rendered-transcript provider flow remains unverified (R1-06), and a freshly attached client with no observed session cannot currently start work because session.create needs an observed directory while nothing ever sets the transport's location headers."
+    },
+    {
+      "id": "R0-06",
+      "milestone": "R0",
+      "title": "Audit production mock reachability",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-05"
+      ],
+      "acceptance": [
+        "Classify each demo/fixture/simulate occurrence; list production-reachable paths and keep legitimate isolated tests."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit"
+      ],
+      "evidence": [
+        "ev-r0-04-dead-tests",
+        "ev-r0-06-demo-boot",
+        "ev-r0-06-honesty-sites"
+      ],
+      "notes": "Production demo reach classified with code evidence. The boot is UNGATED: no env check, no cmdline flag, and all three export presets use export_filter=all_resources with empty include/exclude filters, so the fixtures and demo_transport.gd ship inside every artifact - the fix must make demo unreachable at runtime, because filtering it out of the export is not currently done. Six ranked honesty sites were identified, including the model-catalogue overwrite, a synthetic flag that reaches the store but is read by NO ui/ file, and a live palette mode that is a static var so it silently reverts on restart. Separately, five tests are defined but never executed by the runner, so four shell assertions and the lobby-band invariant are unenforced."
+    },
+    {
+      "id": "R0-07",
+      "milestone": "R0",
+      "title": "Compare every supplied visual reference",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-06"
+      ],
+      "acceptance": [
+        "Record shell, composer, settings, pixel art, scale and resize gaps with source vs screenshot evidence."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r0-02-native-baseline",
+        "ev-r0-05-provider-no-registration",
+        "ev-r0-07-chrome-toggle-cluster",
+        "ev-r0-07-visual-gap-table"
+      ],
+      "notes": "All six references compared against live constants with an evidence-classified gap table, and the floating-vs-persistent sidebar conflict is confirmed in code. The required native_runtime kind is carried by the R0-02 1280x720 launch capture, in which the chrome cluster is visibly clipped and shows two indistinguishable 'Hide' buttons - confirmed in chrome_toggles.gd, where five controls share TOGGLES_W := 76 and every unhidden toggle renders the literal text 'Hide'. Image 02 was treated as the defect exhibit rather than a target, and the 'captured at scale 2.0' claim is arithmetic corroboration, not a render."
+    },
+    {
+      "id": "R0-08",
+      "milestone": "R0",
+      "title": "Audit existing delivery chain",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-07"
+      ],
+      "acceptance": [
+        "Inspect current build/export/install/release/Pages and signing support; keep naming and CLI contract."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit"
+      ],
+      "evidence": [
+        "ev-r0-08-external-blockers",
+        "ev-r0-08-live-chain",
+        "ev-r0-08-merge-preview",
+        "ev-r0-08-pack-tests"
+      ],
+      "notes": "Delivery chain audited on this checkout: guarded merger previews with zero drift and no refusal, pack and tool tests pass 17/17, live chain inventoried, and the kit's assumption that the root `install` handles Office was corrected to script/install.sh --office. Held at in_progress only because verify_pack forbids `done` while dependency R0-07 lacks its native_runtime evidence; no work remains in this task."
+    },
+    {
+      "id": "R1-01",
+      "milestone": "R1",
+      "title": "Replace production demo boot",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R0-08"
+      ],
+      "acceptance": [
+        "Default to real connection/setup; never seed fake sessions or silently replay after failure."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r1-01-boot-repair",
+        "ev-r1-01-capture-tool-coupling",
+        "ev-r1-01-native-boot-captures"
+      ],
+      "notes": "FIXED and verified. A production launch can no longer present synthetic work as runtime fact: `_ready` boots to `_boot_live()`, attaching through the existing discovery path when a registration is present and otherwise rendering an honest LIVE-but-disconnected office that names service.json and `ycoding service start`, with a wired Retry and the composer draft intact. `_model_catalog()` is mode-gated, closing the second defect where a failed LIVE model fetch was silently replaced by four plausible synthetic models. The suite is 6333 passed / 0 failed, independently re-run by the orchestrator, against a 6234 baseline. Three distinct RED runs prove the tests detect each defect rather than merely passing. The tests that pinned the old demo boot were re-pointed rather than deleted."
+    },
+    {
+      "id": "R1-02",
+      "milestone": "R1",
+      "title": "Repair service discovery and GUI launch environment",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R1-01"
+      ],
+      "acceptance": [
+        "Use existing registration and safe lifecycle rules; distinguish GUI config from shell env; never print credentials."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r0-03-location-scope-gap",
+        "ev-r1-01-boot-repair",
+        "ev-r1-01-native-boot-captures",
+        "ev-r1-02-docs-reconciled"
+      ],
+      "notes": "Service discovery and the launch environment are settled. Discovery reads the documented candidates in precedence order, read-only, and never starts, stops or signals a daemon; the GUI process's own environment is used rather than a shell profile, so no arbitrary shell text is sourced. `service_registration.gd` was NOT edited and its suite was re-run to re-verify the read-only contract. One honest limitation is carried forward into R5 rather than hidden: location scoping is plumbed through the transport headers but no production caller ever sets it, so a GUI-launched daemon can resolve a different cwd than the TUI - carried forward into R5. The GUI launch environment is separately verified by the two native captures, one with discovery redirected to an absent path and one attached to a loopback fixture without disturbing the real registration on this machine."
+    },
+    {
+      "id": "R1-03",
+      "milestone": "R1",
+      "title": "Repair provider and model selection",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R1-02"
+      ],
+      "acceptance": [
+        "Actual selected provider/model/variant and location appear on request; stale catalog clears with actionable error."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r0-03-dto-field-defects",
+        "ev-r1-03-d4-question-decision",
+        "ev-r1-03-field-mapping-fixed",
+        "ev-r1-03-native-classified-state"
+      ],
+      "notes": "Provider and model-selection repair is in flight (lane S owns the field-mapping defects in core/). Two defects are confirmed and being fixed against the live schema: the tool name is read from `session.tool.called`, which declares no name field, so every tool falls back to PROCESSING and the Reading/Typing/Testing work states never appear in LIVE; and `session.created.model.ref` is not a schema field, so the composer never adopts a session's model. The question-attention mismatch is RESOLVED as a design decision rather than patched: there are two distinct question systems with different ID spaces (qst_ orchestration questions carrying UNTYPED JSON answer data, versus que_ v2 questions carrying typed option lists), and the UI expects the typed shape from the untyped event. Adopting the v2 question tool as the canonical desktop attention surface is recommended and sequenced into R6, because it changes which surface is shown to a human under review and must be reconciled with the TUI's own handling. The three real field defects (tool name, model ref, permission reason) are FIXED with RED->GREEN proof (6339/10 -> 6454/0), including the fixture that was teaching the wrong tool shape. HELD at in_progress because R1-03 requires native_runtime evidence and because the whole suite was RED at the time from a CONCURRENT lane holding the Godot lock mid-TDD; that must be re-run clean before this closes."
+    },
+    {
+      "id": "R1-04",
+      "milestone": "R1",
+      "title": "Fix durable prompt admission and retries",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R1-03"
+      ],
+      "acceptance": [
+        "Send once, capture target, reconcile same message ID after timeout; distinguish admission from completion."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r1-04-durable-admission-and-retries",
+        "ev-r1-04-latent-session-label-defect",
+        "ev-r1-04-native-runtime"
+      ],
+      "notes": "Durable prompt admission and retries repaired. The prompt id was derived from the second-resolution clock, so an exact retry more than a second after a timeout landed as a NEW id and the service admitted the same prompt twice rather than reconciling it. The id is now minted once per draft, reused for an exact retry, and retired by the DURABLE session.input.admitted event carrying that inputID - not by submit_prompt returning, which only means the request was queued and can still time out. Admission and completion are distinguishable: admission retires the id while the durable work state still shows running, and a successful send never claims the work finished. Verification also exposed a SECOND pre-existing defect: main.gd `_session_label` read `actor.display_role` instead of `actor.identity.display_role`, an engine error reachable only from the prompt-notice path this task's tests were the first to exercise. Both fixed; gate PASSED with 0 engine errors and 6874 assertions."
+    },
+    {
+      "id": "R1-05",
+      "milestone": "R1",
+      "title": "Stream, stop and surface errors",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R1-04"
+      ],
+      "acceptance": [
+        "Render provider output progressively where supported; stop is server-owned; timeout/rate-limit/auth errors remain visible."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r1-05-native-runtime",
+        "ev-r1-05-progressive-render",
+        "ev-r1-05-self-inflicted-line-merge",
+        "ev-r1-05-streamed-text-and-stop"
+      ],
+      "notes": "Stream, stop and error surfacing complete. (A) Streamed text: only TEXT_STARTED/REASONING_STARTED were declared, so session.text.delta/.ended and the reasoning pair were dropped and no assistant text ever reached the office. All six constants are declared; text accumulates per (session, assistantMessageID, ordinal) with `ended` REPLACING the accumulated value, reasoning kept in a separate map that never becomes conversation text, and the map key is session-scoped so two sessions cannot collide. (B) Progressive render: conversation_panel.refresh() was a stub that returned immediately and was never called, so nothing re-rendered during a stream; it now re-collects and redraws, main.gd calls it on every change while the drawer is open, and the live answer appears as an `answer` row tagged Live (ephemeral, not durable history). (C) Stop: a Stop control exists, is disabled with its reason until the host offers it, is wired to the real interrupt for the prompt target session, and SessionApi.interrupted is finally connected so a stop is acknowledged. (D) Closed feed: live_transport had no arm for HttpTransport.KIND_CLOSED, so the connection stayed LIVE after a clean stream end; it now reports RECONNECTING and requests one reload. Lane Y had wired five test names into the suite without writing their bodies; the bodies were written so they actually execute. Gate PASSED: 6874 assertions, 34 flow checks, 0 engine errors."
+    },
+    {
+      "id": "R1-06",
+      "milestone": "R1",
+      "title": "Complete one real provider smoke",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R1-05"
+      ],
+      "acceptance": [
+        "Small prompt plus supported tool and restart/history via GUI, with real provenance and no secret output."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "real_provider",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r1-06-prompt-conflict-observed",
+        "ev-r1-06-real-provider-smoke",
+        "ev-r1-06-restart-history-native",
+        "ev-r1-06-tool-turn-and-history"
+      ],
+      "notes": "One real provider smoke completed WITH a supported tool and with restart/history, driven through the office client's own transports. A real turn on ses_f53be6ed8ffe3BRDN6O5jURbPY made the model call the shell tool (session.tool.input.started name=shell -> session.tool.called -> session.tool.success -> shell.created/exited), which also proves the R1-03 field-mapping repair on live wire data: the name lives on session.tool.input.started, not on session.tool.called. History recovery was proven from a fresh process that never opened a live feed - snapshot and message routes both 200 with the turn's own tool marker recovered - so restart recovery does not depend on the volatile feed. The service's PromptConflictError (HTTP 409) was observed live during verification, independently confirming R1-04's id contract. Credentials never printed; retained logs scan clean of credential markers; both temporary drivers deleted. Later provider runs failed steps intermittently - external instability, recorded honestly rather than retried until green. Since R1-07 is already verified by lane K, R1's chain is now closed."
+    },
+    {
+      "id": "R1-07",
+      "milestone": "R1",
+      "title": "Separate test-only transports",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [
+        "R1-06"
+      ],
+      "acceptance": [
+        "Export excludes synthetic production paths; tests may still explicitly exercise fixtures."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r1-07-all-tools-verified",
+        "ev-r1-07-capture-optin-verified",
+        "ev-r1-07-export-excludes-dev-harnesses",
+        "ev-r1-07-optin-audit"
+      ],
+      "notes": "Developer harnesses are separated from production. Production never loads the synthetic opt-in helper (verified by scan across app/ui/core/integration), and the release export now EXCLUDES the dev trees: the presets shipped `export_filter=all_resources` with an empty exclude_filter, and the real shipped pack contained 44 `res://tests/`+`res://tools/` paths. Setting `exclude_filter=\"tests/*, tools/*\"` on all three presets takes that to 0 in a real export (95 production paths retained, exported app boots clean). The synthetic FixtureTranslator stays because production references it and it is reachable only through the explicit DEMO path."
+    },
+    {
+      "id": "R2-01",
+      "milestone": "R2",
+      "title": "Replace rejected floating rail contract",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R0-08"
+      ],
+      "acceptance": [
+        "Persistent left app sidebar and remaining content region; update conflicting old assertions/docs."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r2-01-docked-sidebar",
+        "ev-r2-01-native-capture",
+        "ev-r2-01-verify-sh"
+      ],
+      "notes": "The rejected floating rail is GONE, replaced by the approved persistent sidebar. Verified: the suite is green at 6834 passed / 0 failed with 0 parser errors, the full gate passes (34 flow checks, VERIFY: PASSED), and a real 1280x720 capture shows the sidebar as a full-height column with the office container measuring 983 px = 1280 minus the 297 px column. The tests that pinned the float were RE-POINTED rather than deleted, four previously-dead tests were wired back into run(), and the design constants moved to the approved reference values (sidebar 264, composer max 840, bottom 24, gutter 24/16). Two remaining follow-ups are recorded: apps/office/AGENTS.md still documents the old floating shell in its 'Designed dimensions and regions' section, and the office bands vertically (76.6% of content height at 1280x720) because a docked sidebar makes the content area narrower than the world's 16:9 aspect - a presentation decision for the visual review gate, not a defect to fix by cropping the reviewed map."
+    },
+    {
+      "id": "R2-02",
+      "milestone": "R2",
+      "title": "Fix scale and layout ownership",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R2-01"
+      ],
+      "acceptance": [
+        "Measure Control rects/min sizes; one UI scaling owner independent from world camera; no screenshot-specific offsets."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r2-02-lane-timeout-recovered",
+        "ev-r2-02-native-runtime-gate",
+        "ev-r2-02-scale-ownership"
+      ],
+      "notes": "Scale and layout ownership proven by executable tests. One UI scaling domain owner (UiScale for bounds/steps, OfficeTheme for the applied scale) with no second source of truth; interface scaling is INDEPENDENT of the world camera in both directions (scale changes never move zoom or position, resize never changes the text scale); layout is a pure function of size and scale; real Controls are reserved at least their measured minimum; and an ambient scale change cannot move a rect, which is the no-screenshot-offsets property. Suite 6949 passed / 0 failed / 0 parse errors; verify.sh PASSED with 0 engine errors. NOTE: no production code change was needed - the acceptance was already true and is now PROVEN, which is the honest outcome; the only source edit is the new suite plus its registration."
+    },
+    {
+      "id": "R2-03",
+      "milestone": "R2",
+      "title": "Build bottom-centered multiline composer",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R2-02"
+      ],
+      "acceptance": [
+        "Max width, Enter/Shift+Enter, IME, model/target badge, Send/Stop and focus without masking workspace."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r2-03-composer-acceptance",
+        "ev-r2-03-composer-submit",
+        "ev-r2-03-native-runtime"
+      ],
+      "notes": "Bottom-centred composer complete and verified. Submit semantics match the TUI (bare Return submits, each modifier breaks the line), IME composition defers the key, the composer is bounded by COMPOSER_MAX_W, the model pill reports the runtime's own catalogue, and Send/Stop are both present with Stop disabled-and-explained until the host offers it. The previously uncovered FOCUS clause now has tests proving the reported focus comes from the real editor and that an unbuilt composer is safe to ask. The 'without masking workspace' half is pinned by occlusion tests. Suite 6955 passed / 0 failed; verify.sh PASSED with 0 engine errors."
+    },
+    {
+      "id": "R2-04",
+      "milestone": "R2",
+      "title": "Add Office/Sessions/Statistics route owner",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R2-03"
+      ],
+      "acceptance": [
+        "State survives navigation; background execution and attention remain available across pages."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r2-04-native-route-capture",
+        "ev-r2-04-route-owner"
+      ],
+      "notes": "Route owner added where none existed. ui/shell/office_route.gd owns the closed route set (Office/Sessions/Statistics with labels and distinct glyphs), ui/shell/office_router.gd owns which surface shows, the rail carries a nav row per route, and the composition root wires the rail's request to the owner. The acceptance is proven by tests against a real store: navigating every route leaves the roster, source epoch, staleness and running work state unchanged, a pending guardrail review stays pending on every route, and the owner holds no transport, store or live reference by which a navigation could stop work. Native captures show three hash-distinct images with the log binding each to its route, world visibility and marked row. SCOPE LIMIT, recorded rather than hidden: the Sessions and Statistics page BODIES are not implemented (they belong to R6 and R7), so those routes are reachable, marked and empty; R2-05 must give the drawer/modal stack real content and R2-06/R2-07 polish it."
+    },
+    {
+      "id": "R2-05",
+      "milestone": "R2",
+      "title": "Implement contextual drawer and modal stack",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R2-04"
+      ],
+      "acceptance": [
+        "No permanently opaque giant inspector; stable placement, Escape, focus return and dirty-state protection."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r2-05-drawer-bounds-escape-focus-draft",
+        "ev-r2-05-native-runtime"
+      ],
+      "notes": "Contextual drawer complete. Placement moved from a main.gd literal to a declared layout overlay, bounded on both axes and capped as a share of the visible office so it can never be the permanently opaque giant inspector the acceptance forbids, and it never intersects the composer. Escape releases innermost-first (caret, then drawer) and closing by either path returns focus to the composer through one shared path. A composer draft survives closing the drawer by both paths. Suite 7257 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R2-06",
+      "milestone": "R2",
+      "title": "Polish reusable controls/themes",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R2-05"
+      ],
+      "acceptance": [
+        "Consistent type, spacing, disabled/hover/focus/error/loading and dark/light/system behavior."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r2-06-cluster-reserve-adopted",
+        "ev-r2-06-double-build-fix",
+        "ev-r2-06-native-runtime",
+        "ev-r2-06-verify-sh-after-layout"
+      ],
+      "notes": "Reusable controls and theme polish verified at the current revision. Every chrome toggle names the surface it controls, the cluster declares its own width from font metrics instead of the shell guessing a literal, and the layout reserves maxf(TOGGLES_W, cluster_width(scale)) so the cluster can never be clipped by an under-reservation. Two defects were fixed along the way: a build guard so a repeated _ready cannot append a second row, and BUTTON_PAD_X calibrated 18 -> 24 because the estimator under-charged each button's real overhead. The lane's one outstanding request (adopt the derived width) is satisfied. Before/after captures are hash-distinct. Suite 7257 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R2-07",
+      "milestone": "R2",
+      "title": "Native responsive acceptance",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R2-06"
+      ],
+      "acceptance": [
+        "Inspect 1024x768,1280x720,1440x900,1920x1080 at 100/150/200% text; long labels and narrow states."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "visual_capture",
+        "native_runtime",
+        "user_review"
+      ],
+      "evidence": [
+        "ev-r2-07-defect-found-and-fixed",
+        "ev-r2-07-regression-guard-proven",
+        "ev-r2-07-responsive-matrix",
+        "ev-r2-07-user-review-approved",
+        "ev-r2-07-user-review-pending"
+      ],
+      "notes": "Native responsive acceptance complete and reviewed. All 12 matrix cases at the acceptance's own sizes and scales are captured and hash-distinct, the objective checks report 0 layout problems, and the one defect the matrix found - the toggle cluster overlapping the sidebar at 150%/200% on narrow windows - is fixed by wrapping the cluster into the rows its region allows, with the layout capping that region and reserving the extra height so every label survives. The rejected alternative (clamping a single-row cluster) would have clipped labels and was reverted. The regression guard is proven to discriminate: replaying the pre-fix rect through it fires at exactly the 4 affected configurations. The user approved the visual review, which was the one evidence kind an agent could not supply. Gate: 7359 assertions, 0 engine errors, 34 flow checks."
+    },
+    {
+      "id": "R3-01",
+      "milestone": "R3",
+      "title": "Implement settings navigation/search/scope",
+      "status": "in_progress",
+      "priority": "P1",
+      "depends_on": [
+        "R1-07",
+        "R2-07"
+      ],
+      "acceptance": [
+        "Grouped application/workspace/connections/runtime/advanced; Global/Project/Folder/Session only where valid."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-02",
+      "milestone": "R3",
+      "title": "Implement validated config owner bridge",
+      "status": "in_progress",
+      "priority": "P1",
+      "depends_on": [
+        "R3-01"
+      ],
+      "acceptance": [
+        "Reuse or add minimal scoped read/preview/write/readback with expected revision; preserve JSONC/comments and substitutions."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r3-02-no-config-api"
+      ],
+      "notes": "User approved extending Schema/Core/Protocol/Server and regenerating the public client on 2026-09-20. Implement the scoped configuration read/preview/write/readback bridge with secret redaction, revision checks and JSONC preservation; preserve existing contracts and stored configuration. Revalidate the historical design against live owners. Validate only with throwaway configuration fixtures, not real user configuration. API implementation and native consumer evidence remain outstanding."
+    },
+    {
+      "id": "R3-03",
+      "milestone": "R3",
+      "title": "Wire provider credentials and custom endpoints",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-02"
+      ],
+      "acceptance": [
+        "Use actual integration/auth lifecycle, not credential label PATCH; masked forms, OAuth errors, remove/rename and effect checks."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-04",
+      "milestone": "R3",
+      "title": "Wire models, variants and request overlays",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-03"
+      ],
+      "acceptance": [
+        "Capability-driven fields; defaults vs active model; custom catalog config validates before apply."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-05",
+      "milestone": "R3",
+      "title": "Wire agents, autonomy and permissions",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-04"
+      ],
+      "acceptance": [
+        "Step caps, mode, rules, guardrail counters/custom rules; preserve ceilings/hard human reviews."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-06",
+      "milestone": "R3",
+      "title": "Wire MCP, plugins and integration settings",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-05"
+      ],
+      "acceptance": [
+        "Server enable/auth/timeouts/cwd/env/codemode; plugin lifecycle and hooks owner; no invented hooks root key."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-07",
+      "milestone": "R3",
+      "title": "Wire context, tools and efficiency",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-06"
+      ],
+      "acceptance": [
+        "Compaction/helper/cache, vision/attachments, shell/sandbox/memory, formatter/LSP/watcher, output caps."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-08",
+      "milestone": "R3",
+      "title": "Wire skills, commands and references",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-07"
+      ],
+      "acceptance": [
+        "Managed lifecycle, discovery and scoped edits; inactive instructions key is explained not enabled."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-09",
+      "milestone": "R3",
+      "title": "Wire appearance, input and notifications",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-08"
+      ],
+      "acceptance": [
+        "Persist desktop values without rewriting cli.json; sounds/alerts/ntfy and input conflicts verified."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-10",
+      "milestone": "R3",
+      "title": "Wire advanced/service/data diagnostics",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-09"
+      ],
+      "acceptance": [
+        "Safe effective source view, read-only env provenance, updater status, browser/computer availability and redacted diagnostics."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-11",
+      "milestone": "R3",
+      "title": "Exercise all settings save failures",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-10"
+      ],
+      "acceptance": [
+        "Apply timing, restart, inherited overrides, conflict, validation, write denial, scope switch and migration."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R3-12",
+      "milestone": "R3",
+      "title": "Pass settings coverage and parity gate",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-11"
+      ],
+      "acceptance": [
+        "No unclassified schema leaf/action; required UI/backend gaps remain open; never mark all done from generated coverage alone."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R4-01",
+      "milestone": "R4",
+      "title": "Audit and improve coherent pixel art",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R0-08"
+      ],
+      "acceptance": [
+        "Retain usable assets, document license/provenance; near-final two-agent slice before expanding scenes."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r4-01-art-provenance-audit",
+        "ev-r4-01-native-suite"
+      ],
+      "notes": "Pixel-art provenance audited and verified. 49 shipped PNGs and 49 manifest rows match bidirectionally with zero mismatches. Determinism is proven by REGENERATION: the scene generator reproduced 48 assets byte-identical to the shipped files, and the icon generator rewrote its output in place leaving the shipped icon unchanged. The generator imports no network, time, subprocess or unseeded entropy module, so no third-party licence attaches and output is stable across machines. Suite green at 6874/0 with the provenance suite included. NOT DONE HERE: no new pixel art was authored and no scene was expanded - the acceptance's 'near-final two-agent slice' is an authoring decision that needs the human's visual review, and the art itself is unchanged by this audit."
+    },
+    {
+      "id": "R4-02",
+      "milestone": "R4",
+      "title": "Repair navigation/anchors/Y-sort",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R4-01"
+      ],
+      "acceptance": [
+        "No wall cutting, wrong foreground depth or stuck doors; work/visitor/meeting anchors use bounded reservations."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r4-02-anchor-kinds-and-bounded-reservations",
+        "ev-r4-02-lane-timeout-recovered",
+        "ev-r4-02-native-runtime"
+      ],
+      "notes": "Anchor kinds, bounded reservations and depth verified. The MEETING kind, which did not exist anywhere, is attached to the world's own huddle stations and asserted in both directions. Reservations are implemented with one-holder, idempotent re-reserve, releasing, and refusal of unknown anchors/kinds; the bound is a TTL expiry enforced by the navigation itself, so a dead session cannot block a work anchor forever, and the boundary is tested at TTL-1ms, TTL, and after. Reserving never makes a cell solid. Depth is asserted for every anchor kind from the world's FURNITURE. Suite 7723 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R4-03",
+      "milestone": "R4",
+      "title": "Refine semantic choreography",
+      "status": "in_progress",
+      "priority": "P1",
+      "depends_on": [
+        "R4-02"
+      ],
+      "acceptance": [
+        "Real delegate/work/question/report/review only; micro-transitions and independent animation queue do not block runtime."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R4-04",
+      "milestone": "R4",
+      "title": "Implement player avatar movement",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R4-03"
+      ],
+      "acceptance": [
+        "WASD/arrows, normalized speed, collision, four-direction facing and safe spawn; not a model agent."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R4-05",
+      "milestone": "R4",
+      "title": "Implement focus-aware input gate",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R4-04"
+      ],
+      "acceptance": [
+        "No movement from composer/IME/settings/dropdown/modal; clear held keys on focus or project change."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R4-06",
+      "milestone": "R4",
+      "title": "Implement interaction/camera controls",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R4-05"
+      ],
+      "acceptance": [
+        "E opens real source; camera follow/pan/recenter; optional click-to-walk; remove conflicting camera keys."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R4-07",
+      "milestone": "R4",
+      "title": "Integrate speech/history and ambience",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R4-06"
+      ],
+      "acceptance": [
+        "Source-linked concise speech; ambient actions labeled/nonverbal; no fake acknowledgments or test success."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R4-08",
+      "milestone": "R4",
+      "title": "Native fidelity and walking acceptance",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R4-07"
+      ],
+      "acceptance": [
+        "Normal-speed Godot video: walk through doors, interact, type without movement, parallel agents, reduced motion and scaled UI."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "visual_capture",
+        "native_runtime",
+        "user_review"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R5-01",
+      "milestone": "R5",
+      "title": "Implement native folder picker and project resolve",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R0-08"
+      ],
+      "acceptance": [
+        "Use actual Project/Location API; Git, non-Git, monorepo, worktree and inaccessible folder cases."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-01-folder-target-and-location",
+        "ev-r5-01-git-read-without-spawning"
+      ],
+      "notes": "Native folder selection and project resolution implemented. FolderTarget canonicalizes a chosen path (collapsing '.'/'..'), resolves symlinks to their target so two routes to one folder dedupe, preserves case, refuses a missing folder and an inaccessible one with DIFFERENT reasons, resolves non-git folders as plain folders, keeps two worktrees as separate locations, and keeps a monorepo subdirectory as its own location while reporting the repository root separately. The composition root now pushes the chosen location to the transports, which is what makes session creation possible for a fresh client, and the composer shows the target on its own label before Send. Choosing a folder is proven NOT to be execution consent. Git identity is read from git's own files rather than by spawning a process, matching the empty reviewed allow-list. Suite 7761 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R5-02",
+      "milestone": "R5",
+      "title": "Build recent/pinned project navigation",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R5-01"
+      ],
+      "acceptance": [
+        "Compact counts/attention; rename display label only; remove never deletes data."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-02-canonical-join-defect",
+        "ev-r5-02-native-rail-capture",
+        "ev-r5-02-recent-and-pinned-projects"
+      ],
+      "notes": "Recent and pinned project navigation built where none existed. ProjectLedger keeps the kit's entry model with an OPAQUE local id, dedupes by canonical path (so a symlinked route is one entry), keeps a monorepo subdirectory distinct, and persists to user:// with a corrupt store falling back to an empty list. Rename changes the label only, proven by the folder still existing under its original name; remove deletes the entry and nothing else, proven by a real file surviving inside the folder. Counts and attention are derived from the live store at call time and shown compactly (no suffix when quiet). A real defect was found and fixed: counts compared a canonical entry path against a raw actor path, so they read zero for any symlinked folder, which on macOS is everything under /tmp. Suite 7806 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R5-03",
+      "milestone": "R5",
+      "title": "Scope request/cache/actor identity",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R5-02"
+      ],
+      "acceptance": [
+        "Service+location+session key; captured prompt target; no cross-project transcript/model leak."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-03-await-assertions-were-uncounted",
+        "ev-r5-03-composer-clipped-target",
+        "ev-r5-03-scoped-prompt-target-and-model"
+      ],
+      "notes": "Three cross-project leaks fixed, each reproduced before the fix. The prompt id was keyed on text alone, so the same words sent to a second project reused the first project's id and the service would reconcile it as a retry that project never received; it is now keyed on (target, text). The composer named a folder while the prompt was re-resolved to another project's session at submit time; it now names the effective target's own directory. A model chosen in one project became every other project's, because the choice was one global field checked first; it is now remembered per target. A native measurement also found the composer's target row rendered below the window - the layout reserved 116px for rows that need 160 and the engine clamps size from the top downwards - now placed by its bottom edge and proven inside at 5 scales x 3 sizes. Separately, the test runner was leaving awaited tests suspended forever so their assertions were never counted; fixed, which surfaced and corrected 5 too-strong camera assertions. Suite 7872 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R5-04",
+      "milestone": "R5",
+      "title": "Handle asynchronous switch races",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R5-03"
+      ],
+      "acceptance": [
+        "Late A response cannot overwrite B; switching neither cancels nor moves jobs."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-04-late-answer-cannot-overwrite",
+        "ev-r5-04-native-late-answer-race",
+        "ev-r5-04-vacuous-tests-and-clamped-blank-control"
+      ],
+      "notes": "The async switch race is closed. The model catalogue was read once at attach and never again, so after a switch the composer offered the PREVIOUS project's models while the prompt went to another project; 0 reads were issued by a switch before the fix. Choosing a folder now starts a read scoped to that folder, started rather than waited on so it settles on the frame loop, and starting a new read is what discards an older one, so a late answer for the departed project is never installed. Pinned by three tests including that a switch neither withdraws a stop already accepted nor re-aims it. A native capture in the real scene demonstrates the ordering with a recording socket. Also fixed: the drawer suite's Escape precedence had silently skipped because the composer was never in tree scope (7 engine errors per run), and the composer's model control rendered blank for a model the catalogue did not describe. Suite 7893 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R5-05",
+      "milestone": "R5",
+      "title": "Persist per-project draft/view/player",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R5-04"
+      ],
+      "acceptance": [
+        "Restore last route, session, draft, camera and safe position; no credentials in preferences."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-05-mutations-prove-the-store-tests-bite",
+        "ev-r5-05-native-draft-survives-a-project-switch",
+        "ev-r5-05-per-project-view-state",
+        "ev-r5-05-unsaved-project-bleed-and-test-preference-hygiene"
+      ],
+      "notes": "Per-project view state persisted and restored: session, draft, route, camera and player position, keyed by project entry, with the project being left written before the one being entered is read. Credential exclusion, schema versioning and atomic writes are structural and each is pinned by a test that a mutation proves bites; a saved position is validated against the current map and recovers to an unblocked spawn. Testing the switch found real cross-project bleed - an unsaved project inherited the previous project's draft - now fixed so such a project restores to a clean view. Also fixed: the suites were writing the developer's real preference file. Suite 7967 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R5-06",
+      "milestone": "R5",
+      "title": "Add background attention and controls",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R5-05"
+      ],
+      "acceptance": [
+        "From any page project A question/review/stop acts on correct family without stealing focus."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-06-family-attention-reachable-from-any-page",
+        "ev-r5-06-mutations-prove-the-drawer-tests-bite",
+        "ev-r5-06-native-attention-on-a-non-office-page"
+      ],
+      "notes": "Human attention now acts on the correct family from any page. Three defects fixed, reproduced first as 6 failing assertions. The drawer showed a family thread but only the selected session's requests, so a blocked delegated child was unanswerable; it now shows every request the family waits on and names the session each belongs to. Leaving the Office route closed the drawer, so a blocked session had nothing to answer it from on Sessions or Statistics; the drawer now survives a route change. The drawer gains a stop for the session it shows, naming that session rather than resolving the selection. Answering steals no focus: route, selection, draft and the open drawer are all unchanged, pinned by test. Five mutations prove the new assertions bite. Suite 7989 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R5-07",
+      "milestone": "R5",
+      "title": "Verify multi-project scenarios",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R5-06"
+      ],
+      "acceptance": [
+        "Two concurrent real jobs, project/global overrides, symlinks/worktrees, reconnect and app restart; evidence of isolation."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r5-07-location-header-encoding-defect",
+        "ev-r5-07-multi-project-scenarios-live",
+        "ev-r5-07-office-suite-and-gate"
+      ],
+      "notes": "Multi-project scenarios verified against the real service: 23 checks, 0 failed. Two concurrent real jobs ran in two folders with no transcript leak in either direction, the monorepo case holds (one backend project, two distinct locations), a symlink resolves to the same location as its real path, a stop names its own session, and a fresh client reads both sessions back with the folders intact. Driving this found a real defect: the location header was sent RAW where the service runs decodeURIComponent on it, so a folder containing a percent sign was silently corrupted and a non-ASCII folder name failed with HTTP 500 - both reproduced, both fixed, with a mutation proving the new test bites. Suite 8000 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R6-01",
+      "milestone": "R6",
+      "title": "Implement complete session/history navigation",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R1-07",
+        "R2-07"
+      ],
+      "acceptance": [
+        "Canonical messages, ordered and source-linked, pagination/search policy verified; no duplicate report projections."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r6-01-canonical-history-read",
+        "ev-r6-01-canonical-history-read-gap",
+        "ev-r6-01-native-session-history",
+        "ev-r6-01-transcript-projection-repair"
+      ],
+      "notes": "Canonical session history now read and rendered. `ConversationHistory` projects the service's own message list - source-linked by message id, ordered by the service, with private reasoning never rendered and a runtime status labelled as one - and `ConversationApi` reads it through the client's own transport, settling on the frame loop so opening a session never blocks. The drawer merges canonical rows with live observations, a durable row displacing a remembered one for the same message. Proven against the real service by a FRESH reader that observed nothing: it covered every one of a session's 2025 durable messages, produced no reasoning row, and reported an unread session as unread. Three projection defects fixed first (one report per assignment, an honest no-report completion, applied-order sequencing), each proven to bite by mutation. Suite 8059 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R6-02",
+      "milestone": "R6",
+      "title": "Implement rich transcript and tool details",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R6-01"
+      ],
+      "acceptance": [
+        "Markdown/code/tool result/attachments where supported; escape untrusted markup and no hidden chain-of-thought fabrication."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r6-02-native-transcript-detail",
+        "ev-r6-02-transcript-detail"
+      ],
+      "notes": "Rich transcript detail implemented within this client's own boundary. Markdown is NOT rendered, because the asset-provenance gate forbids a markup-rendering control in the transcript and requires text to reach the screen through inert labels; adding a renderer would breach it. What is added, all as text: a fenced block as its own row with its language and body, the fence markers dropped as delimiters; a tool result with its tool, status and output, output past a bound cut and MARKED; the files a message names, with an unnamed attachment reported as one; and an unclosed fence treated as prose so nothing the runtime sent is lost. Reasoning stays excluded from every kind. Four mutations prove the new assertions bite. Suite 8089 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R6-03",
+      "milestone": "R6",
+      "title": "Implement agent/bubble inspector",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R6-02"
+      ],
+      "acceptance": [
+        "Task, parent/child identity, real report and click-through; assignment keyed by session not reusable role."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r6-03-inspector",
+        "ev-r6-03-native-inspector"
+      ],
+      "notes": "The agent/bubble inspector implemented. It states the assignment's task, its parent/child identity in BOTH directions with sessions named by id because an agent configuration is reusable, and a row can open its exact source - a delegation opens the child it was handed to, and a row naming a session the office does not have emits nothing. A real defect was found while implementing it: the family list includes the session itself and its ancestors, so an inspector built on it would call a session's parent one of its children; a dedicated direct-children accessor now answers that. Five mutations prove the new assertions bite, two of which exposed weak tests of mine that were rewritten rather than accepted. Suite 8110 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R6-04",
+      "milestone": "R6",
+      "title": "Implement human review/question handling",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R6-03"
+      ],
+      "acceptance": [
+        "Equivalent once/reject/session-only where valid, hard review restrictions; human decisions not LLM dialogue."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r6-04-hard-review-restriction",
+        "ev-r6-04-native-hard-review"
+      ],
+      "notes": "Human review and question handling implemented, and the hard-review restriction closed a real permission-boundary defect: the runtime's hardReview flag was never read and EVERY review offered a session-wide approval the runtime would refuse. The queue now owns which replies a request allows, the drawer builds controls from that, a session-wide payload cannot be built for a hard review, and the card is labelled with the reason. An ordinary review keeps all three replies; a question replies with the answers payload carrying the runtime's own labels; a human decision writes no conversation row. Four mutations prove the boundary bites. A presentation defect introduced with R6-03's click-through was caught by the capture and fixed. Suite 8144 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R6-05",
+      "milestone": "R6",
+      "title": "Implement files/diff/shell views",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R6-04"
+      ],
+      "acceptance": [
+        "Use actual APIs; read-only details and supported actions; do not substitute a fake terminal."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r6-05-native-shell-view",
+        "ev-r6-05-shell-and-diff-views"
+      ],
+      "notes": "Files, diff and shell views implemented on the actual APIs. The office read neither the shell events nor the shell routes, so a session that ran commands showed nothing; it now shows the command, its directory and the runtime's own status, with `ended` updating one shell rather than appending a second. A running command can never read as finished, and output is carried with its paging state so a page or a truncated capture is never the whole. The view is read-only detail with zero input controls, which the native capture counts rather than asserts. A patch is bounded and its cut is marked. Ten mutations prove the boundary bites. Suite 8189 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R6-06",
+      "milestone": "R6",
+      "title": "Close remaining TUI action parity gaps",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R6-05"
+      ],
+      "acceptance": [
+        "Classify every current action with implementation evidence or explicit justified scope treatment; no silent removals."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r6-06-action-parity-ledger",
+        "ev-r6-06-native-parity"
+      ],
+      "notes": "Every TUI action classified against the live keybind registry, and no silent removal. 164 actions carry a ledger row each: equivalent=24, gap=71, widget=39, diff_viewer=16, terminal=13, n/a=1. tools/action_parity.py reads the live registry and fails on an unclassified action, a silent removal, an unknown class, an implementation claim with no office path or a missing one, and a drifted default; verify_pack.py runs it, so the pack gate carries the claim. The 71 gaps are grouped by surface with an owning task and are NOT claimed done. The 24 implemented actions were driven through the real scene (18 checks, 0 fails). Six mutations prove the checker bites."
+    },
+    {
+      "id": "R7-01",
+      "milestone": "R7",
+      "title": "Audit usage and request telemetry owners",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R1-07",
+        "R2-07",
+        "R5-07"
+      ],
+      "acceptance": [
+        "Locate durable request/step/cost metadata and ProviderUsage contracts; no Godot DB access."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "test_run"
+      ],
+      "evidence": [
+        "ev-r7-01-accounting-defects",
+        "ev-r7-01-no-database-boundary",
+        "ev-r7-01-provider-usage-contract",
+        "ev-r7-01-telemetry-inventory"
+      ],
+      "notes": "Usage and request telemetry owners audited and the audit's claims independently re-verified. The provider usage API is read-only and already exists with every window field optional, so absence must render as unreported rather than zero; the desktop has zero provider-usage code. The audit's required test_run was MISSING, and the acceptance clause 'no Godot DB access' was an unguarded boundary: two guards now hold it in test_asset_provenance.gd - one refuses a shipped module that opens a database, the other requires every literal path a shipped module opens to carry an extension the client owns. The guard found a real case on first run (folder_target.gd opens a linked worktree's .git FILE, allow-listed with that reason). Four mutations prove the guards bite. One stale claim corrected: the Statistics route exists (R2-04) and is empty - R7-02 populates rather than creates it. Suite 8440 passed / 0 failed / 0 engine errors."
+    },
+    {
+      "id": "R7-02",
+      "milestone": "R7",
+      "title": "Implement minimal aggregate read models",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R7-01"
+      ],
+      "acceptance": [
+        "Provider/model/project/day/session filters; count physical attempts vs logical steps, helpers and children once."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-02-native-usage-read",
+        "ev-r7-02-usage-aggregates"
+      ],
+      "notes": "Aggregate read models implemented over the runtime's own accounting. SessionUsage presents one session's ProviderRequest.Summary with attempts counted apart from logical steps, helpers as their own class, and pricing honesty: an absent cost renders as unreported rather than $0.00, and a group's provenance distinguishes recorded billing from a catalog estimate. UsageRollup adds the sessions that stand alone and SKIPS any session already inside another's family total, so children are counted once; provider/model/project filters rebuild the coverage decision for the subset. A day breakdown is declared unavailable with its reason, because the cumulative Summary has no per-request time and the events that carry one are excluded from public logs - inventing one would misattribute work to the wrong day. Thirteen mutations prove the rules bite. Native read against the live service: 3842 steps vs 3845 attempts, $17.90 estimated, 4 of 4 priced. Suite 8522 passed / 0 failed / 0 engine errors."
+    },
+    {
+      "id": "R7-03",
+      "milestone": "R7",
+      "title": "Implement statistics route and charts",
+      "status": "in_progress",
+      "priority": "P1",
+      "depends_on": [
+        "R7-02"
+      ],
+      "acceptance": [
+        "Cards, activity calendar, daily chart/table, model/provider/project breakdown, source drilldown and empty states."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-03-native-statistics",
+        "ev-r7-03-statistics-page"
+      ],
+      "notes": "The Statistics route and its surface implemented as a state machine over what has actually been read: LOADING, EMPTY, READY and ERROR are distinct, a failed read is never presented as empty, and a stale projection marks its figures incomplete. Cards keep attempts apart from steps and separate provider-recorded spend from a catalog estimate by provenance. Ten mutations prove the states cannot be collapsed and no chart is drawn from nothing. The daily chart and activity calendar CANNOT be built from what the runtime exposes - the Summary is cumulative with no per-request time and no route returns a record carrying one - so both state the limitation with its reason and remain OPEN rather than being approximated. Native run against the live service: 3902 steps vs 3906 attempts, provenance-labelled spend, both charts declared unavailable. Suite 8577 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R7-04",
+      "milestone": "R7",
+      "title": "Implement quota windows and freshness",
+      "status": "blocked",
+      "priority": "P1",
+      "depends_on": [
+        "R7-03"
+      ],
+      "acceptance": [
+        "Reuse existing snapshots; lanes/units independent; missing != zero; unsupported providers hidden; supported error/stale states visible; refresh nonblocking."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-04-native-quota",
+        "ev-r7-04-quota-windows",
+        "ev-r7-04-hidden-unsupported-tests",
+        "ev-r7-04-hidden-unsupported-native"
+      ],
+      "notes": "Quota windows retain independent units, absent-value semantics and reported freshness over the existing normalized snapshots. Per the user's 2026-09-20 instruction, unsupported providers are hidden; supported error/stale/unauthorized states remain visible. Targeted quota suite passed 85 checks and caught nine failures with the display filter disabled. Native synthetic mixed/unsupported-only panel captures were inspected; real-account and historical unit/refresh evidence is retained separately. See tracking/r7-hide-unsupported.md. Closure is blocked by reopened prerequisite R7-03, whose required charts are missing; the working quota implementation is preserved."
+    },
+    {
+      "id": "R7-05",
+      "milestone": "R7",
+      "title": "Implement local advisory budgets",
+      "status": "blocked",
+      "priority": "P1",
+      "depends_on": [
+        "R7-04"
+      ],
+      "acceptance": [
+        "Period/scope/threshold persistence and honest warning labels, never presented as provider-side limits."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-05-advisory-budgets",
+        "ev-r7-05-native-budget"
+      ],
+      "notes": "Local advisory budgets implemented as ADVISORY BY CONSTRUCTION, which is what the acceptance demands: the budget exposes no method that blocks, denies or cancels, is_enforced() is false, and the reason names the backend enforcement that would be required. Its label is the user's own ('Your advisory <scope> budget in <unit>') and never a provider limit, and the native capture shows it beside a live provider window so the distinction is visible rather than asserted. A comparison over unknown spend is PARTIAL, never passing. A dismissal suppresses the warning and never the figures. Period, scope, unit and threshold persist through a schema-versioned, atomic, allow-listed store under user://. Twelve mutations prove the guarantees bite. Suite 8719 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R7-06",
+      "milestone": "R7",
+      "title": "Verify limit semantics and existing enforcement",
+      "status": "blocked",
+      "priority": "P1",
+      "depends_on": [
+        "R7-05"
+      ],
+      "acceptance": [
+        "Provider quota, rate limits, context limits and local advisory budgets remain distinct. No new hard-budget enforcement is required without explicit scope approval; never expose an enforced control unless the shared backend actually enforces it."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-06-limit-semantics",
+        "ev-r7-06-native-limit-kinds"
+      ],
+      "notes": "Limit semantics verified and two defects fixed. The runtime classifies every provider failure into its own wire type; the client declared STEP_FAILED and EXECUTION_FAILED and handled them nowhere, so distinct failures arrived as silence and the step's contextLimit was read by nothing. LimitEvent now keeps four kinds distinct - provider quota, rate limit, context limit and local advisory budget - each with its own label, and step and execution failures are recorded. A context-limit classification requires the runtime to have named a window, so an unrelated bad request is not mislabeled; an unrecognised failure is recorded as unclassified rather than dropped. No enforced control exists: is_enforced is false for every kind and the reason names the backend enforcement that would be required. Nine mutations prove the distinctions bite. Suite 8797 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R7-07",
+      "milestone": "R7",
+      "title": "Implement privacy-safe exports",
+      "status": "blocked",
+      "priority": "P1",
+      "depends_on": [
+        "R7-06"
+      ],
+      "acceptance": [
+        "CSV/JSON user action, formula-safe text, no secrets or auto public upload."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-07-native-export",
+        "ev-r7-07-privacy-safe-export"
+      ],
+      "notes": "Privacy-safe CSV and JSON export implemented. It is a USER ACTION with no automatic path: the builder composes and only the explicit write touches the disk. Text cells are guarded against every spreadsheet formula trigger while NUMERIC cells stay bare, so a negative figure is data rather than an escape target and the column remains computable. Credential-shaped material and machine-specific paths are removed from BOTH forms, so the CSV and the JSON cannot disagree about what is safe to disclose, and the preview is asserted equal to the written file. No network call exists on the path and no upload method exists. Ten mutations prove the clauses bite. Two findings fixed: the provenance scanner's flag on this suite's fixtures led to composing them at runtime rather than suppressing the check, and an unguarded signal connect in start_live was corrected. Suite 8857 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R7-08",
+      "milestone": "R7",
+      "title": "Verify accounting edge cases",
+      "status": "blocked",
+      "priority": "P1",
+      "depends_on": [
+        "R7-07"
+      ],
+      "acceptance": [
+        "Duplicate/retry/cancel/cache overlap/unknown price/helper and child/DST/scope hand-calculated datasets."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r7-08-accounting-edges",
+        "ev-r7-08-native-cross-check"
+      ],
+      "notes": "Accounting edge cases verified with hand-calculated datasets covering every case the kit names: duplicate/replay, retry, cancelled attempt, cache overlap, unknown price, helper and child rollups, scope isolation, completeness, DST, midnight and date edges. The token equation was verified against the runtime before being asserted: `input` is the NON-cached input and the cost formula bills cache separately, so the components are disjoint and summing them is the provider's own arithmetic. A real defect was found and fixed - the rollup summed duplicate rows for one session id, so a replay would report a session's work twice; a later row now supersedes an earlier one. The native cross-check against authoritative telemetry shows the client's totals equalling the service's exactly, with the model groups summing independently to the session totals. Nine mutations prove the rules bite. Suite 8914 passed / 0 failed / 0 engine errors; verify.sh PASSED."
+    },
+    {
+      "id": "R7-09",
+      "milestone": "R7",
+      "title": "Verify native analytics against real session",
+      "status": "in_progress",
+      "priority": "P1",
+      "depends_on": [
+        "R7-08"
+      ],
+      "acceptance": [
+        "Record source provenance; estimate vs billed distinction; quota failure cannot break normal coding."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R8-01",
+      "milestone": "R8",
+      "title": "Repair snapshot/event reconciliation",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R3-12",
+        "R4-08",
+        "R5-07",
+        "R6-06",
+        "R7-09"
+      ],
+      "acceptance": [
+        "Volatile SSE is not resumable history; epoch changes/missed events force canonical resync and dedupe."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R8-02",
+      "milestone": "R8",
+      "title": "Bound UI queues and memory",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R8-01"
+      ],
+      "acceptance": [
+        "Rate-limited refresh, coalesced animation, paged history/analytics and bounded subscriptions for inactive projects."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R8-03",
+      "milestone": "R8",
+      "title": "Exercise negative provider/config paths",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R8-02"
+      ],
+      "acceptance": [
+        "401/403/429/timeout/malformed/error/cancel/expired credentials; no demo fallback or duplicate execution."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R8-04",
+      "milestone": "R8",
+      "title": "Exercise accessibility/input and window states",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R8-03"
+      ],
+      "acceptance": [
+        "Mouse, keyboard, focus, IME, text selection, scaling, minimize/background, large data and reduced motion."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R8-05",
+      "milestone": "R8",
+      "title": "Run neighboring TUI/runtime regressions",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R8-04"
+      ],
+      "acceptance": [
+        "Exact owner commands, pre-existing failures separately recorded; no blanket passing from root bun test."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R8-06",
+      "milestone": "R8",
+      "title": "Obtain native visual and flow review",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R8-05"
+      ],
+      "acceptance": [
+        "Current screenshots/video and actual user acceptance against references; fix discrepancies then recapture."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "visual_capture",
+        "native_runtime",
+        "user_review"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R9-01",
+      "milestone": "R9",
+      "title": "Integrate guarded delivery tooling",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R0-08"
+      ],
+      "acceptance": [
+        "Preview then merge into existing owners; preserve current code and uncommitted work, no commits."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "test_run"
+      ],
+      "evidence": [
+        "ev-r9-01-closed-on-current-tree",
+        "ev-r9-01-lane-h-final",
+        "ev-r9-01-merge-applied",
+        "ev-r9-01-verified"
+      ],
+      "notes": "Guarded delivery tooling integrated. Preview then apply both exited 0 with zero drift and no refusal (3 replaced, 8 added). Re-verified on the current tree: the merged and added delivery files are present, the delivered suite passes 25/25, and no commit was created - current code and uncommitted work are preserved, which is the acceptance. Nothing staged or pushed."
+    },
+    {
+      "id": "R9-02",
+      "milestone": "R9",
+      "title": "Pin editor and matching templates",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R9-01"
+      ],
+      "acceptance": [
+        "Existing 4.7.2 hashes; verify downloads before execution; no arbitrary latest engine."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r9-02-editor-pin-verified",
+        "ev-r9-02-pin-test-run",
+        "ev-r9-02-pre-execution-verification"
+      ],
+      "notes": "Editor and matching templates pinned to 4.7.2 and verified against the publisher's own SHA512-SUMS.txt. All declared hashes in both script/setup_office_godot.py and the release workflow match the publisher byte-for-byte; both paths verify the archive BEFORE executing it, use HTTPS-only download, and no path selects an arbitrary latest engine. Local editor reports 4.7.2.stable.official.ed1daf0bf with matching 4.7.2.stable templates."
+    },
+    {
+      "id": "R9-03",
+      "milestone": "R9",
+      "title": "Run local tasks and isolated source build",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R9-02"
+      ],
+      "acceptance": [
+        "Doctor/verify/build wrapper; fresh output; avoid mutating live project version during export."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r9-03-artifact-version-and-pack",
+        "ev-r9-03-wrapper-build-fresh-output"
+      ],
+      "notes": "Doctor/verify/build wrapper exercised end to end with fresh output in a new directory: a 68MB darwin-universal disk image plus a checksums file whose declared sha256 matches the produced artifact exactly. The live project version is unchanged after the build (still 0.2.4) while the exported bundle reports 0.2.5, so version injection reached the artifact and the project file was restored - the acceptance's 'avoid mutating live project version during export'. An invalid version is refused before any mutation. The shipped pack has 0 dev-harness paths, re-confirming the export exclusion in a real artifact. NOTE: doctor resolved a Homebrew godot because GODOT_BIN was unset; the build here used the pinned 4.7.2 editor explicitly."
+    },
+    {
+      "id": "R9-04",
+      "milestone": "R9",
+      "title": "Verify archive/version/checksum contract",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R9-03"
+      ],
+      "acceptance": [
+        "macOS universal DMG, Linux x64 tar.gz, Windows x64 ZIP plus matched CLI versions; fail missing/malformed payload."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r9-04-container-contract-mutations",
+        "ev-r9-04-real-artifact-container"
+      ],
+      "notes": "Archive/version/checksum contract verified. The real darwin-universal DMG built in R9-03 passes verify_container, and the contract was proven to DISCRIMINATE by mutation: missing asset, tampered content, malformed payload with a repaired manifest, an incomplete asset set, and a symlinked manifest were ALL refused with the correct reason. verify_directory requires the manifest to name all seven CLI/Office archives exactly, which enforces the matched-versions clause by construction. Scope limit recorded: only the macOS artifact exists locally; Linux and Windows containers are exercised synthetically here and by the release workflow."
+    },
+    {
+      "id": "R9-05",
+      "milestone": "R9",
+      "title": "Verify Unix installer upgrade/rollback",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R9-04"
+      ],
+      "acceptance": [
+        "Reuse --office; temporary locations, failure cleanup, compatibility and no quarantine stripping."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r9-05-office-install-upgrade-rollback",
+        "ev-r9-05-quarantine-preservation-guard"
+      ],
+      "notes": "Unix installer --office path verified by real integration tests (23/23, 125 expectations) covering upgrade-in-place without nesting, failure cleanup that releases the mounted image, rollback with recovery guidance, and refusal to install the app unless asked. The 'no quarantine stripping' clause had NO coverage anywhere; two guards were added (a marker extended attribute must survive the install, and the installer must never invoke an attribute-stripping tool) and their discrimination was proven by mutation before restoring the installer to a byte-identical state."
+    },
+    {
+      "id": "R9-06",
+      "milestone": "R9",
+      "title": "Verify Windows portable installation",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [
+        "R9-05"
+      ],
+      "acceptance": [
+        "PowerShell checksum/allowlist/versioned per-user directory and optional shortcut; never require global bypass."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [
+        "ev-r9-06-installer-reaches-users",
+        "ev-r9-06-windows-installer-contract"
+      ],
+      "notes": "Windows portable installation contract verified by executable tests against the real script (suite 27/27): SHA256 checksum from the release manifest over TLS, an explicit file allowlist with entry-count and duplicate/symlink/empty guards, a versioned per-user destination that never overwrites and never edits PATH, an opt-in desktop shortcut removed on failure, preview-by-default, and a hard assertion that no global execution-policy bypass or OS-protection disabling ever appears. The installer reaches users through the Pages site, which CI builds and whose suite includes these tests. DISCRIMINATION PROVEN by mutating the script (a bypass line made the test fail) and restoring it. NOT DONE: the script is never executed on real Windows here - no pwsh and no Windows host - so runtime behaviour there is unproven and belongs to R9-07."
+    },
+    {
+      "id": "R9-07",
+      "milestone": "R9",
+      "title": "Native launch candidate matrix",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R9-06"
+      ],
+      "acceptance": [
+        "macOS universal on real architectures, Linux x64, Windows x64; actual GUI attach/prompt and uninstall-data safety."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R9-08",
+      "milestone": "R9",
+      "title": "Document signing policy and add signing",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R9-07"
+      ],
+      "acceptance": [
+        "Actual certificates/notary/Authenticode secrets only; signed vs unsigned accurately labelled and checked."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R10-01",
+      "milestone": "R10",
+      "title": "Extend existing release workflow gates",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R8-06",
+        "R9-08"
+      ],
+      "acceptance": [
+        "Office verify/integration before export; safe inputs; trusted tags; artifact contract gate and protected publish environment."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "test_run"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R10-02",
+      "milestone": "R10",
+      "title": "Test unsigned/prerelease and signing gates",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R10-01"
+      ],
+      "acceptance": [
+        "No broad write tokens on PRs; exact candidate commit/evidence; publication is explicit, not a kit install side effect."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R10-03",
+      "milestone": "R10",
+      "title": "Extend existing Pages build",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R10-02"
+      ],
+      "acceptance": [
+        "Keep docs/schema/install intact; /office/ from actual complete releases; no false links or hosted local-agent web app."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "test_run"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R10-04",
+      "milestone": "R10",
+      "title": "Wire Pages refresh after releases",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R10-03"
+      ],
+      "acceptance": [
+        "Handle GITHUB_TOKEN event behavior with trusted workflow_run or explicit dispatch; never execute untrusted artifacts."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "source_audit",
+        "test_run"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R10-05",
+      "milestone": "R10",
+      "title": "Verify staging pipeline and install downloads",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R10-04"
+      ],
+      "acceptance": [
+        "GitHub job logs, valid assets, published manifest/links, platform installer checks; local tests not CI evidence."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    },
+    {
+      "id": "R10-06",
+      "milestone": "R10",
+      "title": "Complete release readiness and handoff",
+      "status": "not_started",
+      "priority": "P1",
+      "depends_on": [
+        "R10-05"
+      ],
+      "acceptance": [
+        "Versioned notes, limitations/compatibility/signatures, rollback, outstanding issues and evidence; no release until required gates pass."
+      ],
+      "verification": [
+        "Targeted owner tests plus actual affected user flow; native captures for visual/input work; exact commands and provenance."
+      ],
+      "required_evidence": [
+        "test_run",
+        "native_runtime"
+      ],
+      "evidence": [],
+      "notes": "Reconcile current implementation first; do not discard valid existing work or inherit unverified completion."
+    }
+  ]
+}

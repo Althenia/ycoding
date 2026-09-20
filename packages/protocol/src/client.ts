@@ -65,6 +65,7 @@ export const groupNames = {
   "server.projectCopy": "projectCopy",
   "server.vcs": "vcs",
   "server.projectArtifact": "projectArtifact",
+  "server.config": "config",
 } as const
 
 export const promiseOmitEndpoints = new Set(["browser.connect", "pty.connect"])

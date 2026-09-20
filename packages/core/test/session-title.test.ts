@@ -3,6 +3,7 @@ import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigEfficiency } from "@ycoding-ai/core/config/efficiency"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -89,7 +90,7 @@ const cacheRuntime = Layer.succeed(
 )
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  stubConfig({
     entries: () =>
       Effect.succeed([
         new Config.Document({

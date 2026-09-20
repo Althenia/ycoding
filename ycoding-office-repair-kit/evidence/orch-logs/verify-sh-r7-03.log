@@ -1,0 +1,39 @@
+Godot: 4.7.2.stable.official.ed1daf0bf
+import         exit=0 engine_errors=0
+tests          exit=0 engine_errors=18
+  engine reported errors; see /var/folders/qc/jlsb8bw944v3tn_1bnd1x9hw0000gn/T//ycoding-office-verify/tests.log
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'visible' with value of type 'bool' on a base object of type 'Nil'.
+SCRIPT ERROR: Trying to assign value of type 'PanelContainer' to a variable of type 'statistics_panel.gd'.
+SCRIPT ERROR: Trying to assign value of type 'PanelContainer' to a variable of type 'statistics_panel.gd'.
+SCRIPT ERROR: Invalid assignment of property or key 'size' with value of type 'Vector2' on a base object of type 'Nil'.
+SCRIPT ERROR: Invalid assignment of property or key 'size' with value of type 'Vector2' on a base object of type 'Nil'.
+flow           exit=1 engine_errors=1
+  stage failed; see /var/folders/qc/jlsb8bw944v3tn_1bnd1x9hw0000gn/T//ycoding-office-verify/flow.log
+          GDScript backtrace (most recent call first):
+              [0] _ready (res://app/main.gd:117)
+  FAIL: the boot did not enter DEMO
+  FAIL: the boot takes the live path
+  FAIL: the missing service is stated as a disconnection
+  FAIL: the disconnected office says why
+  FAIL: it names the registration that was not found
+  FAIL: and names the command that fixes it
+  FAIL: and offers a reachable retry
+checks: 34, failures: 7
+FLOW RESULT: FAILED
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+  engine reported errors; see /var/folders/qc/jlsb8bw944v3tn_1bnd1x9hw0000gn/T//ycoding-office-verify/flow.log
+SCRIPT ERROR: Trying to assign value of type 'PanelContainer' to a variable of type 'statistics_panel.gd'.
+  passed: 8558
+  RESULT: PASSED
+  checks: 34, failures: 7
+  FLOW RESULT: FAILED
+VERIFY: FAILED
+EXIT=1

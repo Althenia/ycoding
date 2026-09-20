@@ -1,0 +1,42 @@
+{
+  "source": "User-supplied images, 2026-09-16",
+  "reuse": "Private development and comparison only. Not application assets or a license to redistribute third-party artwork. No font files included.",
+  "images": [
+    {
+      "original_filename": "40a445d8-efcd-4f07-9639-c079810fee0a.png",
+      "file": "images/01-app-shell-reference.png",
+      "role": "App composition reference; not a diagnosis of YCoding service limits.",
+      "sha256": "67a48ac690bcf9fb538bf340308d2a60debe37daf1e772f51d95193e2b199a9b"
+    },
+    {
+      "original_filename": "light_200_v8.png",
+      "file": "images/02-current-ycoding-problem.png",
+      "role": "Current supplied YCoding render: oversized opaque UI and visible synthetic playback.",
+      "sha256": "3656f60ab6e01f8970bd7361e5739d89c67db8e92b5615b8697ed188beda7059"
+    },
+    {
+      "original_filename": "SCR-20260916-ghrc.png",
+      "file": "images/03-model-effort-reference.png",
+      "role": "Compact model/effort affordance; supported values must come from YCoding, not this image.",
+      "sha256": "a798dccf5dadf652ebdb20a16635ba693c0961f360cfd2a6e027c8a5a48296e4"
+    },
+    {
+      "original_filename": "SCR-20260916-ghfd.png",
+      "file": "images/04-sidebar-reference.png",
+      "role": "Sidebar density, grouping and anchored footer reference.",
+      "sha256": "4608a8ad7145f52709c238782ae9f0f7e88fb0f3070092fa575d0442802563ff"
+    },
+    {
+      "original_filename": "SCR-20260916-gheb.png",
+      "file": "images/05-composer-reference.png",
+      "role": "Multiline composer and compact lower action row reference.",
+      "sha256": "6a1ed8c7d0a33b58065232fa4b3aae0cfb19b250ed0f9ec8d4ff7ab59ed2bc42"
+    },
+    {
+      "original_filename": "95226607-f45c-4d7e-871c-532d9deb261e.png",
+      "file": "images/06-settings-reference.png",
+      "role": "Settings navigation, grouped rows and spacing reference, not a feature list to copy.",
+      "sha256": "ae49f2acc393af81dd9a2c79653fdacf685a2e9c4eb568a0b19a83919fddb3b0"
+    }
+  ]
+}

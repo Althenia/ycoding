@@ -1,0 +1,13 @@
+Godot: 4.7.2.stable.official.ed1daf0bf
+import         exit=0 engine_errors=0
+tests          exit=0 engine_errors=2
+  engine reported errors; see /var/folders/qc/jlsb8bw944v3tn_1bnd1x9hw0000gn/T//ycoding-office-verify/tests.log
+SCRIPT ERROR: Invalid access to property or key 'display_role' on a base object of type 'RefCounted (ActorPresentation)'.
+SCRIPT ERROR: Invalid access to property or key 'display_role' on a base object of type 'RefCounted (ActorPresentation)'.
+flow           exit=0 engine_errors=0
+  passed: 6874
+  RESULT: PASSED
+  checks: 34, failures: 0
+  FLOW RESULT: PASSED
+VERIFY: FAILED
+EXIT=1

@@ -26,6 +26,14 @@ const EVENT_STREAM := "/api/event"
 ## before reading it; the reader never guesses a location.
 const MODELS := "/api/model"
 
+## Normalized provider quota snapshots. Location-scoped, and it takes an optional `refresh`
+## query that asks the runtime to re-poll the providers
+## (packages/protocol/src/groups/provider-usage.ts).
+const PROVIDER_USAGE := "/api/provider/usage"
+
+static func provider_usage(provider_id: String) -> String:
+	return "/api/provider/%s/usage" % provider_id
+
 static func session(session_id: String) -> String:
 	return "/api/session/%s" % session_id
 
@@ -49,6 +57,15 @@ static func switch_model(session_id: String) -> String:
 
 static func subagents(parent_id: String) -> String:
 	return "/api/session/%s/subagent" % parent_id
+
+## Durable provider-request usage and spend for one session.
+##
+## The body is `{data: ProviderRequest.Summary}` with NO location wrapper
+## (packages/server/src/handlers/session.ts builds it that way), and a ROOT session's
+## Summary already includes its descendant subagent family while a child's is scoped to
+## itself (packages/protocol/src/groups/session.ts).
+static func usage(session_id: String) -> String:
+	return "/api/session/%s/usage" % session_id
 
 ## Human attention. A session blocked on a question, a permission or a guardrail
 ## review is answered through these. All three take a JSON body and answer 204.
@@ -150,3 +167,26 @@ const LOCATION_DIRECTORY_QUERY := "location[directory]"
 const LOCATION_WORKSPACE_QUERY := "location[workspace]"
 const LOCATION_DIRECTORY_HEADER := "x-ycoding-directory"
 const LOCATION_WORKSPACE_HEADER := "x-ycoding-workspace"
+
+## --- Integrations and credentials ------------------------------------------
+
+## Integration discovery. Answers `Location.response(Schema.Array(Integration.Info))`,
+## so the payload is nested under `data`. The only route that reports a stored profile's
+## label and whether it is active; no route returns credential material.
+const INTEGRATION_LIST := "/api/integration"
+
+static func integration(integration_id: String) -> String:
+	return "/api/integration/%s" % integration_id
+
+## Run a key authentication method and store the resulting credential. Answers 204
+## NoContent, so the client re-reads the list rather than parsing an answer body.
+static func integration_connect_key(integration_id: String) -> String:
+	return "/api/integration/%s/connect/key" % integration_id
+
+## A stored credential, addressed for rename (`PATCH`) and removal (`DELETE`).
+static func credential(credential_id: String) -> String:
+	return "/api/credential/%s" % credential_id
+
+## Activation, a POST with no body. Answers 204 NoContent.
+static func credential_activate(credential_id: String) -> String:
+	return "/api/credential/%s/activate" % credential_id

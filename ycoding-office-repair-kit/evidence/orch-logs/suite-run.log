@@ -1,0 +1,147 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Could not parse global class "ChromeToggles" from "res://ui/shell/chrome_toggles.gd".
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:56)
+SCRIPT ERROR: Parse Error: Could not parse global class "ChromeToggles" from "res://ui/shell/chrome_toggles.gd".
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:60)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:38)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:40)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:47)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:50)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:81)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:81)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "measured" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:84)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:93)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:93)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:95)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:105)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:105)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:120)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:120)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:139)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:151)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:151)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:173)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:173)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:184)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:184)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:199)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:199)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:216)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:216)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:236)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:236)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:238)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:263)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:263)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:269)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:281)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:302)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:302)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:305)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:307)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:310)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:317)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:323)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:335)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:335)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:362)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:362)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:385)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "toggles" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:385)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:389)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "size" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:389)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:405)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:423)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "width" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:423)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:424)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "height" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:424)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:451)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:453)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:458)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:458)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:462)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_chrome_toggles.gd:462)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_shortcuts.gd:108)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_shortcuts.gd:155)
+SCRIPT ERROR: Parse Error: Could not parse global class "ChromeToggles" from "res://ui/shell/chrome_toggles.gd".
+          at: GDScript::reload (res://app/main.gd:32)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "hiding" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://app/main.gd:805)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "reduced" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://app/main.gd:928)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/suites/test_asset_provenance.gd:0)
+SCRIPT ERROR: Parse Error: Could not resolve class "ChromeToggles", because of a parser error.
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:70)
+SCRIPT ERROR: Parse Error: Could not resolve external class member "chrome_toggles".
+          at: GDScript::reload (res://tests/suites/test_production_boot.gd:70)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/run_tests.gd:0)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _init (res://tests/run_tests.gd:49)
+          GDScript backtrace (most recent call first):
+              [0] _init (res://tests/run_tests.gd:49)
+Terminated: 15

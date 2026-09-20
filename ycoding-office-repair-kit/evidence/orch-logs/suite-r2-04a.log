@@ -1,0 +1,125 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:37)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:38)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:39)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:41)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:45)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:50)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:51)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:55)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:56)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:61)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:62)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "glyph" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:62)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:72)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:76)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:77)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRouter" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:82)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "router" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:82)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:83)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:87)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:94)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:94)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRouter" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:95)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "router" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:95)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:96)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:99)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:102)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:102)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRouter" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:110)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "router" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:110)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:114)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:115)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:116)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:119)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:120)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:123)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:123)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:123)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRouter" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:152)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "router" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:152)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:153)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:153)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:153)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRouter" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:201)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "router" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:201)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRoute" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:202)
+SCRIPT ERROR: Parse Error: Identifier "OfficeRouter" not declared in the current scope.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:214)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "router" variable because the value doesn't have a set type.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:214)
+SCRIPT ERROR: Parse Error: Function "type()" not found in base self.
+          at: GDScript::reload (res://tests/suites/test_routes.gd:218)
+SCRIPT ERROR: Compile Error: Failed to compile depended scripts.
+          at: GDScript::reload (res://tests/run_tests.gd:0)
+ERROR: Failed to load script "res://tests/run_tests.gd" with error "Compilation failed".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+ERROR: Condition "!is_inside_tree()" is true.
+   at: release_focus (scene/gui/control.cpp:3027)
+   GDScript backtrace (most recent call first):
+       [0] release_input_focus (res://ui/prompt/prompt_panel.gd:455)
+       [1] test_focus_is_reported_from_the_real_editor (res://tests/suites/test_composer_submit.gd:356)
+       [2] run (res://tests/suites/test_composer_submit.gd:36)
+       [3] _init (res://tests/run_tests.gd:52)
+SCRIPT ERROR: Invalid call. Nonexistent function 'new' in base 'GDScript'.
+          at: _init (res://tests/run_tests.gd:51)
+          GDScript backtrace (most recent call first):
+              [0] _init (res://tests/run_tests.gd:51)
+Terminated: 15

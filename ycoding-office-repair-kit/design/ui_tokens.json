@@ -1,0 +1,39 @@
+{
+  "status": "proposed design tokens, not integrated app config",
+  "spacing": [
+    4,
+    8,
+    12,
+    16,
+    24,
+    32,
+    48
+  ],
+  "font_size": {
+    "body": 14,
+    "secondary": 12,
+    "page_title": 24
+  },
+  "radius": {
+    "control": 8,
+    "card": 12,
+    "composer": 16
+  },
+  "sidebar_width": 264,
+  "compact_rail": 56,
+  "composer_max_width": 840,
+  "dark": {
+    "background": "#181A20",
+    "surface": "#252831",
+    "text": "#ECEEF4",
+    "muted": "#A5ADBD",
+    "accent": "#79AFF5"
+  },
+  "light": {
+    "background": "#F5F6F8",
+    "surface": "#FFFFFF",
+    "text": "#252A35",
+    "muted": "#616C7D",
+    "accent": "#245FA7"
+  }
+}

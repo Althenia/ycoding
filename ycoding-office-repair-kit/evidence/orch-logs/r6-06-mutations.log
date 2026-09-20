@@ -1,0 +1,7 @@
+a new TUI action is unclassified            exit=1  unclassified action: probe_new_action
+a silent removal is caught                  exit=1  ledger row for an action the registry does not have: help_show
+an implemented row citing a missing file    exit=1  sidebar_toggle: equivalent cites a missing path apps/office/ui/shell/does_
+an implemented row with no office path      exit=1  status_view: equivalent cites no office path
+an unknown classification is refused        exit=1  command_list: unknown classification 'probably_fine'
+a drifted default is caught                 exit=1  help_show: default drifted (ledger 'ctrl+h', registry 'none')
+restored: True True

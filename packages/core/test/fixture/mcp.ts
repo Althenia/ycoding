@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { Location } from "@ycoding-ai/core/location"
 import { MCP } from "@ycoding-ai/core/mcp/index"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -23,7 +24,7 @@ export const emptyMcpLayer = Layer.succeed(
   }),
 )
 
-export const emptyConfigLayer = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+export const emptyConfigLayer = Layer.succeed(Config.Service, stubConfig({ entries: () => Effect.succeed([]) }))
 
 export const testLocationLayer = Layer.succeed(
   Location.Service,

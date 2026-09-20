@@ -2,6 +2,7 @@ import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { ConfigSkillPlugin } from "@ycoding-ai/core/config/plugin/skill"
 import { Global } from "@ycoding-ai/core/global"
 import { Location } from "@ycoding-ai/core/location"
@@ -43,7 +44,7 @@ describe("ConfigSkillPlugin.Plugin", () => {
         Effect.provideService(Location.Service, Location.Service.of(location({ directory }))),
         Effect.provideService(
           Config.Service,
-          Config.Service.of({
+          stubConfig({
             entries: () =>
               Effect.succeed([
                 new Config.ClaudeDirectory({ type: "claude", path: AbsolutePath.make("/repo/.claude") }),

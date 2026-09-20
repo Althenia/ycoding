@@ -1,0 +1,1482 @@
+{
+ "note": "Every TUI keybind action from packages/tui/src/config/keybind.ts, classified against apps/office as it exists today. See docs/TUI_ACTION_PARITY.md for the classes and the open gaps.",
+ "registry": "packages/tui/src/config/keybind.ts",
+ "actions": [
+  {
+   "name": "agent_cycle",
+   "command": "agent.cycle",
+   "default": "tab",
+   "bound_by_default": true,
+   "description": "Next agent",
+   "classification": "gap",
+   "basis": "No agent cycle."
+  },
+  {
+   "name": "agent_cycle_reverse",
+   "command": "agent.cycle.reverse",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Previous agent",
+   "classification": "gap",
+   "basis": "No agent cycle."
+  },
+  {
+   "name": "agent_list",
+   "command": "agent.list",
+   "default": "<leader>a",
+   "bound_by_default": true,
+   "description": "List agents",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/shell/sidebar_panel.gd agent/team rail"
+  },
+  {
+   "name": "app_console",
+   "command": "app.console",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle console",
+   "classification": "gap",
+   "basis": "No debug panel, console, or heap snapshot; exit is the OS window close."
+  },
+  {
+   "name": "app_debug",
+   "command": "app.debug",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle debug panel",
+   "classification": "gap",
+   "basis": "No debug panel, console, or heap snapshot; exit is the OS window close."
+  },
+  {
+   "name": "app_exit",
+   "command": "app.exit",
+   "default": "ctrl+c,ctrl+d,<leader>q",
+   "bound_by_default": true,
+   "description": "Exit the application",
+   "classification": "gap",
+   "basis": "No debug panel, console, or heap snapshot; exit is the OS window close."
+  },
+  {
+   "name": "app_heap_snapshot",
+   "command": "app.heap_snapshot",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Write heap snapshot",
+   "classification": "gap",
+   "basis": "No debug panel, console, or heap snapshot; exit is the OS window close."
+  },
+  {
+   "name": "app_toggle_animations",
+   "command": "app.toggle.animations",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle animations",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/shell/chrome_toggles.gd ENTRIES motion"
+  },
+  {
+   "name": "app_toggle_diffwrap",
+   "command": "app.toggle.diffwrap",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle diff wrapping",
+   "classification": "gap",
+   "basis": "No diff-wrap toggle (no diff viewer)."
+  },
+  {
+   "name": "app_toggle_file_context",
+   "command": "app.toggle.file_context",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle file context",
+   "classification": "gap",
+   "basis": "No file-context toggle."
+  },
+  {
+   "name": "app_toggle_paste_summary",
+   "command": "app.toggle.paste_summary",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle paste summary",
+   "classification": "gap",
+   "basis": "The attach/paste affordance is a disabled placeholder."
+  },
+  {
+   "name": "command_list",
+   "command": "command.palette.show",
+   "default": "ctrl+p",
+   "bound_by_default": true,
+   "description": "List available commands",
+   "classification": "gap",
+   "basis": "No command surface in the client."
+  },
+  {
+   "name": "debug_view",
+   "command": "ycoding.debug",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "View debug info",
+   "classification": "gap",
+   "basis": "No debug surface."
+  },
+  {
+   "name": "diff_close",
+   "command": "diff.close",
+   "default": "escape,q",
+   "bound_by_default": true,
+   "description": "Close diff viewer",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_collapse",
+   "command": "diff.collapse",
+   "default": "left",
+   "bound_by_default": true,
+   "description": "Collapse diff viewer item",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_expand",
+   "command": "diff.expand",
+   "default": "right",
+   "bound_by_default": true,
+   "description": "Expand diff viewer item",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_expand_all",
+   "command": "diff.expand_all",
+   "default": "E",
+   "bound_by_default": true,
+   "description": "Expand all diff viewer folders",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_help",
+   "command": "diff.help",
+   "default": "?",
+   "bound_by_default": true,
+   "description": "Show more diff viewer shortcuts",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_next_file",
+   "command": "diff.next_file",
+   "default": "n",
+   "bound_by_default": true,
+   "description": "Jump to next diff file",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_next_hunk",
+   "command": "diff.next_hunk",
+   "default": "]",
+   "bound_by_default": true,
+   "description": "Jump to next diff hunk",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_open",
+   "command": "diff.open",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Open diff viewer",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_previous_file",
+   "command": "diff.previous_file",
+   "default": "p",
+   "bound_by_default": true,
+   "description": "Jump to previous diff file",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_previous_hunk",
+   "command": "diff.previous_hunk",
+   "default": "[",
+   "bound_by_default": true,
+   "description": "Jump to previous diff hunk",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_single_patch",
+   "command": "diff.single_patch",
+   "default": "s",
+   "bound_by_default": true,
+   "description": "Toggle single patch view",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_switch_focus",
+   "command": "diff.switch_focus",
+   "default": "tab",
+   "bound_by_default": true,
+   "description": "Switch diff viewer focus",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_switch_source",
+   "command": "diff.switch_source",
+   "default": "d",
+   "bound_by_default": true,
+   "description": "Switch diff viewer source",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_toggle",
+   "command": "diff.toggle",
+   "default": "enter,space",
+   "bound_by_default": true,
+   "description": "Toggle diff viewer item",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_toggle_file_tree",
+   "command": "diff.toggle_file_tree",
+   "default": "b",
+   "bound_by_default": true,
+   "description": "Toggle diff viewer file tree",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "diff_toggle_view",
+   "command": "diff.toggle_view",
+   "default": "v",
+   "bound_by_default": true,
+   "description": "Toggle diff viewer split or unified view",
+   "classification": "diff_viewer",
+   "basis": "The TUI diff viewer is a separate full-screen surface; the office presents changes as drawer detail (apps/office/core/conversation_history.gd code rows + file-change rows)."
+  },
+  {
+   "name": "display_thinking",
+   "command": "session.toggle.thinking",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle thinking blocks visibility",
+   "classification": "n/a",
+   "basis": "Reasoning is deliberately never rendered (apps/office/AGENTS.md)."
+  },
+  {
+   "name": "docs_open",
+   "command": "docs.open",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Open documentation",
+   "classification": "gap",
+   "basis": "No documentation surface."
+  },
+  {
+   "name": "editor_open",
+   "command": "prompt.editor",
+   "default": "<leader>e",
+   "bound_by_default": true,
+   "description": "Open external editor",
+   "classification": "gap",
+   "basis": "No external-editor handoff."
+  },
+  {
+   "name": "help_show",
+   "command": "help.show",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Open help dialog",
+   "classification": "gap",
+   "basis": "Shortcuts.DESCRIPTIONS exists but had no rendered surface."
+  },
+  {
+   "name": "history_next",
+   "command": "prompt.history.next",
+   "default": "down",
+   "bound_by_default": true,
+   "description": "Next history item",
+   "classification": "widget",
+   "basis": "Prompt recall history; the office's TextEdit exposes no history buffer, and the TUI's own is a keymap device."
+  },
+  {
+   "name": "history_previous",
+   "command": "prompt.history.previous",
+   "default": "up",
+   "bound_by_default": true,
+   "description": "Previous history item",
+   "classification": "widget",
+   "basis": "Prompt recall history; the office's TextEdit exposes no history buffer, and the TUI's own is a keymap device."
+  },
+  {
+   "name": "input_backspace",
+   "command": "input.backspace",
+   "default": "backspace,shift+backspace",
+   "bound_by_default": true,
+   "description": "Backspace in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_buffer_end",
+   "command": "input.buffer.end",
+   "default": "end",
+   "bound_by_default": true,
+   "description": "Move to end of buffer in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_buffer_home",
+   "command": "input.buffer.home",
+   "default": "home",
+   "bound_by_default": true,
+   "description": "Move to start of buffer in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_clear",
+   "command": "prompt.clear",
+   "default": "ctrl+c",
+   "bound_by_default": true,
+   "description": "Clear input field",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_delete",
+   "command": "input.delete",
+   "default": "ctrl+d,delete,shift+delete",
+   "bound_by_default": true,
+   "description": "Delete character in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_delete_line",
+   "command": "input.delete.line",
+   "default": "ctrl+shift+d",
+   "bound_by_default": true,
+   "description": "Delete line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_delete_to_line_end",
+   "command": "input.delete.to.line.end",
+   "default": "ctrl+k",
+   "bound_by_default": true,
+   "description": "Delete to end of line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_delete_to_line_start",
+   "command": "input.delete.to.line.start",
+   "default": "ctrl+u",
+   "bound_by_default": true,
+   "description": "Delete to start of line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_delete_word_backward",
+   "command": "input.delete.word.backward",
+   "default": "ctrl+w,ctrl+backspace,alt+backspace",
+   "bound_by_default": true,
+   "description": "Delete word backward in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_delete_word_forward",
+   "command": "input.delete.word.forward",
+   "default": "alt+d,alt+delete,ctrl+delete",
+   "bound_by_default": true,
+   "description": "Delete word forward in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_line_end",
+   "command": "input.line.end",
+   "default": "ctrl+e",
+   "bound_by_default": true,
+   "description": "Move to end of line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_line_home",
+   "command": "input.line.home",
+   "default": "ctrl+a",
+   "bound_by_default": true,
+   "description": "Move to start of line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_move_down",
+   "command": "input.move.down",
+   "default": "down",
+   "bound_by_default": true,
+   "description": "Move cursor down in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_move_left",
+   "command": "input.move.left",
+   "default": "left,ctrl+b",
+   "bound_by_default": true,
+   "description": "Move cursor left in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_move_right",
+   "command": "input.move.right",
+   "default": "right,ctrl+f",
+   "bound_by_default": true,
+   "description": "Move cursor right in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_move_up",
+   "command": "input.move.up",
+   "default": "up",
+   "bound_by_default": true,
+   "description": "Move cursor up in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_newline",
+   "command": "input.newline",
+   "default": "shift+return,ctrl+return,alt+return,ctrl+j",
+   "bound_by_default": true,
+   "description": "Insert newline in input",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/prompt_panel.gd composer newline"
+  },
+  {
+   "name": "input_paste",
+   "command": "prompt.paste",
+   "default": "[ { key: \"ctrl+v\", preventDefault: false }, { key: \"super+v\", preventDefault: false }, ]",
+   "bound_by_default": true,
+   "description": "Paste from clipboard",
+   "classification": "widget",
+   "basis": "Text-editing mechanics; TextEdit owns paste."
+  },
+  {
+   "name": "input_redo",
+   "command": "input.redo",
+   "default": "ctrl+.,super+shift+z",
+   "bound_by_default": true,
+   "description": "Redo in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_all",
+   "command": "input.select.all",
+   "default": "super+a",
+   "bound_by_default": true,
+   "description": "Select all in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_buffer_end",
+   "command": "input.select.buffer.end",
+   "default": "shift+end",
+   "bound_by_default": true,
+   "description": "Select to end of buffer in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_buffer_home",
+   "command": "input.select.buffer.home",
+   "default": "shift+home",
+   "bound_by_default": true,
+   "description": "Select to start of buffer in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_down",
+   "command": "input.select.down",
+   "default": "shift+down",
+   "bound_by_default": true,
+   "description": "Select down in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_left",
+   "command": "input.select.left",
+   "default": "shift+left",
+   "bound_by_default": true,
+   "description": "Select left in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_line_end",
+   "command": "input.select.line.end",
+   "default": "ctrl+shift+e",
+   "bound_by_default": true,
+   "description": "Select to end of line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_line_home",
+   "command": "input.select.line.home",
+   "default": "ctrl+shift+a",
+   "bound_by_default": true,
+   "description": "Select to start of line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_right",
+   "command": "input.select.right",
+   "default": "shift+right",
+   "bound_by_default": true,
+   "description": "Select right in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_up",
+   "command": "input.select.up",
+   "default": "shift+up",
+   "bound_by_default": true,
+   "description": "Select up in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_visual_line_end",
+   "command": "input.select.visual.line.end",
+   "default": "alt+shift+e",
+   "bound_by_default": true,
+   "description": "Select to end of visual line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_visual_line_home",
+   "command": "input.select.visual.line.home",
+   "default": "alt+shift+a",
+   "bound_by_default": true,
+   "description": "Select to start of visual line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_word_backward",
+   "command": "input.select.word.backward",
+   "default": "alt+shift+b,alt+shift+left",
+   "bound_by_default": true,
+   "description": "Select word backward in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_select_word_forward",
+   "command": "input.select.word.forward",
+   "default": "alt+shift+f,alt+shift+right",
+   "bound_by_default": true,
+   "description": "Select word forward in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_submit",
+   "command": "input.submit",
+   "default": "return",
+   "bound_by_default": true,
+   "description": "Submit input",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/prompt_panel.gd composer submit"
+  },
+  {
+   "name": "input_undo",
+   "command": "input.undo",
+   "default": "ctrl+-,super+z",
+   "bound_by_default": true,
+   "description": "Undo in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_visual_line_end",
+   "command": "input.visual.line.end",
+   "default": "alt+e",
+   "bound_by_default": true,
+   "description": "Move to end of visual line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_visual_line_home",
+   "command": "input.visual.line.home",
+   "default": "alt+a",
+   "bound_by_default": true,
+   "description": "Move to start of visual line in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_word_backward",
+   "command": "input.word.backward",
+   "default": "alt+b,alt+left,ctrl+left",
+   "bound_by_default": true,
+   "description": "Move word backward in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "input_word_forward",
+   "command": "input.word.forward",
+   "default": "alt+f,alt+right,ctrl+right",
+   "bound_by_default": true,
+   "description": "Move word forward in input",
+   "classification": "widget",
+   "basis": "Text-editing mechanics of a multiline editor; GDScript TextEdit/LineEdit own them natively."
+  },
+  {
+   "name": "leader",
+   "command": "",
+   "default": "LeaderDefault",
+   "bound_by_default": true,
+   "description": "Leader key for keybind combinations",
+   "classification": "widget",
+   "basis": "A leader key is a keymap-composition device; the office binds intents directly in apps/office/app/shortcuts.gd."
+  },
+  {
+   "name": "mcp_list",
+   "command": "mcp.list",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "List MCP servers",
+   "classification": "gap",
+   "basis": "No MCP surface."
+  },
+  {
+   "name": "messages_copy",
+   "command": "messages.copy",
+   "default": "<leader>o",
+   "bound_by_default": true,
+   "description": "Copy message",
+   "classification": "gap",
+   "basis": "No message copy control."
+  },
+  {
+   "name": "messages_first",
+   "command": "session.first",
+   "default": "ctrl+g,home,alt+home",
+   "bound_by_default": true,
+   "description": "Navigate to first message",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_half_page_down",
+   "command": "session.half.page.down",
+   "default": "ctrl+alt+d",
+   "bound_by_default": true,
+   "description": "Scroll messages down by half page",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_half_page_up",
+   "command": "session.half.page.up",
+   "default": "ctrl+alt+u",
+   "bound_by_default": true,
+   "description": "Scroll messages up by half page",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_last",
+   "command": "session.last",
+   "default": "ctrl+alt+g,end",
+   "bound_by_default": true,
+   "description": "Navigate to last message",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_last_user",
+   "command": "session.messages_last_user",
+   "default": "alt+end",
+   "bound_by_default": true,
+   "description": "Navigate to last user message",
+   "classification": "gap",
+   "basis": "No user-message navigation."
+  },
+  {
+   "name": "messages_line_down",
+   "command": "session.line.down",
+   "default": "ctrl+alt+e",
+   "bound_by_default": true,
+   "description": "Scroll messages down by one line",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_line_up",
+   "command": "session.line.up",
+   "default": "ctrl+alt+y",
+   "bound_by_default": true,
+   "description": "Scroll messages up by one line",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_next",
+   "command": "session.message.next",
+   "default": "alt+down",
+   "bound_by_default": true,
+   "description": "Navigate to next message",
+   "classification": "gap",
+   "basis": "No message-to-message navigation; the drawer scrolls continuously."
+  },
+  {
+   "name": "messages_next_user",
+   "command": "session.message.user.next",
+   "default": "alt+shift+down",
+   "bound_by_default": true,
+   "description": "Navigate to next user message",
+   "classification": "gap",
+   "basis": "No user-message navigation."
+  },
+  {
+   "name": "messages_page_down",
+   "command": "session.page.down",
+   "default": "pagedown,ctrl+alt+f",
+   "bound_by_default": true,
+   "description": "Scroll messages down by one page",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_page_up",
+   "command": "session.page.up",
+   "default": "pageup,ctrl+alt+b",
+   "bound_by_default": true,
+   "description": "Scroll messages up by one page",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/conversation/conversation_panel.gd thread scroll"
+  },
+  {
+   "name": "messages_previous",
+   "command": "session.message.previous",
+   "default": "alt+up",
+   "bound_by_default": true,
+   "description": "Navigate to previous message",
+   "classification": "gap",
+   "basis": "No message-to-message navigation; the drawer scrolls continuously."
+  },
+  {
+   "name": "messages_previous_user",
+   "command": "session.message.user.previous",
+   "default": "alt+shift+up",
+   "bound_by_default": true,
+   "description": "Navigate to previous user message",
+   "classification": "gap",
+   "basis": "No user-message navigation."
+  },
+  {
+   "name": "messages_redo",
+   "command": "session.redo",
+   "default": "<leader>r",
+   "bound_by_default": true,
+   "description": "Redo message",
+   "classification": "gap",
+   "basis": "No message redo."
+  },
+  {
+   "name": "messages_undo",
+   "command": "session.undo",
+   "default": "<leader>u",
+   "bound_by_default": true,
+   "description": "Undo message",
+   "classification": "gap",
+   "basis": "No message undo."
+  },
+  {
+   "name": "model_cycle_favorite",
+   "command": "model.cycle_favorite",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Next favorite model",
+   "classification": "gap",
+   "basis": "No favourite-model cycle."
+  },
+  {
+   "name": "model_cycle_favorite_reverse",
+   "command": "model.cycle_favorite_reverse",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Previous favorite model",
+   "classification": "gap",
+   "basis": "No favourite-model cycle."
+  },
+  {
+   "name": "model_cycle_recent",
+   "command": "model.cycle_recent",
+   "default": "f2",
+   "bound_by_default": true,
+   "description": "Next recently used model",
+   "classification": "gap",
+   "basis": "No recent-model cycle."
+  },
+  {
+   "name": "model_cycle_recent_reverse",
+   "command": "model.cycle_recent_reverse",
+   "default": "shift+f2",
+   "bound_by_default": true,
+   "description": "Previous recently used model",
+   "classification": "gap",
+   "basis": "No recent-model cycle."
+  },
+  {
+   "name": "model_favorite_toggle",
+   "command": "model.dialog.favorite",
+   "default": "ctrl+f",
+   "bound_by_default": true,
+   "description": "Toggle model favorite status",
+   "classification": "gap",
+   "basis": "No model favourite."
+  },
+  {
+   "name": "model_list",
+   "command": "model.list",
+   "default": "<leader>m",
+   "bound_by_default": true,
+   "description": "List available models",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/prompt_panel.gd model pill popover"
+  },
+  {
+   "name": "model_provider_list",
+   "command": "model.dialog.provider",
+   "default": "ctrl+a",
+   "bound_by_default": true,
+   "description": "Open provider list from model dialog",
+   "classification": "gap",
+   "basis": "No provider list."
+  },
+  {
+   "name": "plugin_install",
+   "command": "plugins.install",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Install plugin",
+   "classification": "gap",
+   "basis": "No plugin install surface."
+  },
+  {
+   "name": "plugin_manager",
+   "command": "plugins.list",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Open plugin manager dialog",
+   "classification": "gap",
+   "basis": "No plugin manager surface."
+  },
+  {
+   "name": "prompt_editor_context_clear",
+   "command": "prompt.editor_context.clear",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Clear editor context",
+   "classification": "gap",
+   "basis": "No editor-context affordance."
+  },
+  {
+   "name": "prompt_skills",
+   "command": "prompt.skills",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Open skill selector",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/prompt_panel.gd skills affordance"
+  },
+  {
+   "name": "prompt_stash",
+   "command": "prompt.stash",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Stash prompt",
+   "classification": "gap",
+   "basis": "No prompt stash."
+  },
+  {
+   "name": "prompt_stash_list",
+   "command": "prompt.stash.list",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "List stashed prompts",
+   "classification": "gap",
+   "basis": "No prompt stash."
+  },
+  {
+   "name": "prompt_stash_pop",
+   "command": "prompt.stash.pop",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Pop stashed prompt",
+   "classification": "gap",
+   "basis": "No prompt stash."
+  },
+  {
+   "name": "prompt_steer",
+   "command": "prompt.steer",
+   "default": "<leader>d",
+   "bound_by_default": true,
+   "description": "Send prompt and steer immediately",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/prompt_panel.gd composer steer"
+  },
+  {
+   "name": "prompt_submit",
+   "command": "prompt.submit",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Submit prompt",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/prompt_panel.gd composer submit"
+  },
+  {
+   "name": "provider_connect",
+   "command": "provider.connect",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Connect integration",
+   "classification": "gap",
+   "basis": "No provider-connect surface."
+  },
+  {
+   "name": "scrollbar_toggle",
+   "command": "session.toggle.scrollbar",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle session scrollbar",
+   "classification": "gap",
+   "basis": "No scrollbar-visibility toggle."
+  },
+  {
+   "name": "session_archive",
+   "command": "session.archive",
+   "default": "ctrl+a",
+   "bound_by_default": true,
+   "description": "Archive or unarchive session in the session list",
+   "classification": "gap",
+   "basis": "No archive control."
+  },
+  {
+   "name": "session_autonomy_normal",
+   "command": "session.autonomy.normal",
+   "default": "<leader>y",
+   "bound_by_default": true,
+   "description": "Disable YOLO",
+   "classification": "gap",
+   "basis": "No autonomy-mode control in the desktop."
+  },
+  {
+   "name": "session_background",
+   "command": "session.background",
+   "default": "ctrl+b",
+   "bound_by_default": true,
+   "description": "Background blocking session tools",
+   "classification": "gap",
+   "basis": "No background control."
+  },
+  {
+   "name": "session_child_cycle",
+   "command": "session.child.next",
+   "default": "right",
+   "bound_by_default": true,
+   "description": "Go to next child session",
+   "classification": "gap",
+   "basis": "No child navigation."
+  },
+  {
+   "name": "session_child_cycle_reverse",
+   "command": "session.child.previous",
+   "default": "left",
+   "bound_by_default": true,
+   "description": "Go to previous child session",
+   "classification": "gap",
+   "basis": "No child navigation."
+  },
+  {
+   "name": "session_child_first",
+   "command": "session.child.first",
+   "default": "down,<leader>down",
+   "bound_by_default": true,
+   "description": "Toggle subagent picker",
+   "classification": "gap",
+   "basis": "No child navigation."
+  },
+  {
+   "name": "session_compact",
+   "command": "session.compact",
+   "default": "<leader>c",
+   "bound_by_default": true,
+   "description": "Compact the session",
+   "classification": "gap",
+   "basis": "No compaction control."
+  },
+  {
+   "name": "session_copy",
+   "command": "session.copy",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Copy session transcript",
+   "classification": "gap",
+   "basis": "No copy-transcript control."
+  },
+  {
+   "name": "session_delete",
+   "command": "session.delete",
+   "default": "ctrl+d",
+   "bound_by_default": true,
+   "description": "Delete session",
+   "classification": "gap",
+   "basis": "No delete control."
+  },
+  {
+   "name": "session_export",
+   "command": "session.export",
+   "default": "<leader>x",
+   "bound_by_default": true,
+   "description": "Export session to editor",
+   "classification": "gap",
+   "basis": "No export control (R7-07 owns privacy-safe exports)."
+  },
+  {
+   "name": "session_fork",
+   "command": "session.fork",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Fork session from message",
+   "classification": "gap",
+   "basis": "No fork control."
+  },
+  {
+   "name": "session_interrupt",
+   "command": "session.interrupt",
+   "default": "escape",
+   "bound_by_default": true,
+   "description": "Interrupt current session",
+   "classification": "equivalent",
+   "basis": "apps/office/app/main.gd stop-session action"
+  },
+  {
+   "name": "session_list",
+   "command": "session.list",
+   "default": "<leader>l",
+   "bound_by_default": true,
+   "description": "List all sessions",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/shell/sidebar_panel.gd session list"
+  },
+  {
+   "name": "session_move",
+   "command": "session.move",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Move session",
+   "classification": "gap",
+   "basis": "No move control."
+  },
+  {
+   "name": "session_new",
+   "command": "session.new",
+   "default": "<leader>n",
+   "bound_by_default": true,
+   "description": "Create a new session",
+   "classification": "equivalent",
+   "basis": "apps/office/app/main.gd new-session action (LIVE)"
+  },
+  {
+   "name": "session_parent",
+   "command": "session.parent",
+   "default": "up",
+   "bound_by_default": true,
+   "description": "Go to parent session",
+   "classification": "gap",
+   "basis": "No parent navigation (the inspector states identity but does not navigate)."
+  },
+  {
+   "name": "session_pin_toggle",
+   "command": "session.pin.toggle",
+   "default": "ctrl+f",
+   "bound_by_default": true,
+   "description": "Pin or unpin session in the session list",
+   "classification": "gap",
+   "basis": "No pin control."
+  },
+  {
+   "name": "session_queued_prompts",
+   "command": "session.queued_prompts",
+   "default": "<leader>q",
+   "bound_by_default": true,
+   "description": "Manage queued prompts",
+   "classification": "gap",
+   "basis": "No queued-prompt surface."
+  },
+  {
+   "name": "session_quick_switch_1",
+   "command": "session.quick_switch.1",
+   "default": "<leader>1",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 1",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_2",
+   "command": "session.quick_switch.2",
+   "default": "<leader>2",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 2",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_3",
+   "command": "session.quick_switch.3",
+   "default": "<leader>3",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 3",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_4",
+   "command": "session.quick_switch.4",
+   "default": "<leader>4",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 4",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_5",
+   "command": "session.quick_switch.5",
+   "default": "<leader>5",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 5",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_6",
+   "command": "session.quick_switch.6",
+   "default": "<leader>6",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 6",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_7",
+   "command": "session.quick_switch.7",
+   "default": "<leader>7",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 7",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_8",
+   "command": "session.quick_switch.8",
+   "default": "<leader>8",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 8",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_quick_switch_9",
+   "command": "session.quick_switch.9",
+   "default": "<leader>9",
+   "bound_by_default": true,
+   "description": "Switch to session in quick slot 9",
+   "classification": "gap",
+   "basis": "No session quick-switch."
+  },
+  {
+   "name": "session_rename",
+   "command": "session.rename",
+   "default": "ctrl+r",
+   "bound_by_default": true,
+   "description": "Rename session",
+   "classification": "gap",
+   "basis": "No rename control."
+  },
+  {
+   "name": "session_share",
+   "command": "session.share",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Share current session",
+   "classification": "gap",
+   "basis": "No share control."
+  },
+  {
+   "name": "session_skill_conflict_resolve",
+   "command": "session.skill_conflict.resolve",
+   "default": "<leader>i",
+   "bound_by_default": true,
+   "description": "Resolve a session skill conflict",
+   "classification": "gap",
+   "basis": "No skill-conflict surface."
+  },
+  {
+   "name": "session_timeline",
+   "command": "session.timeline",
+   "default": "<leader>g",
+   "bound_by_default": true,
+   "description": "Show session timeline",
+   "classification": "gap",
+   "basis": "No timeline surface (the drawer is a thread, not a timeline)."
+  },
+  {
+   "name": "session_unshare",
+   "command": "session.unshare",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Unshare current session",
+   "classification": "gap",
+   "basis": "No unshare control."
+  },
+  {
+   "name": "shell_output_back",
+   "command": "shell-output.back",
+   "default": "escape",
+   "bound_by_default": true,
+   "description": "Go back from shell output",
+   "classification": "gap",
+   "basis": "No shell output log surface (R6-05 shows captured output, read-only)."
+  },
+  {
+   "name": "shell_output_kill",
+   "command": "shell-output.kill",
+   "default": "ctrl+d",
+   "bound_by_default": true,
+   "description": "Kill shell command from shell output",
+   "classification": "gap",
+   "basis": "No shell kill control."
+  },
+  {
+   "name": "sidebar_toggle",
+   "command": "session.sidebar.toggle",
+   "default": "<leader>b",
+   "bound_by_default": true,
+   "description": "Toggle sidebar",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/shell/chrome_toggles.gd ENTRIES sidebar"
+  },
+  {
+   "name": "stash_delete",
+   "command": "stash.delete",
+   "default": "ctrl+d",
+   "bound_by_default": true,
+   "description": "Delete stash entry",
+   "classification": "gap",
+   "basis": "No prompt stash."
+  },
+  {
+   "name": "status_view",
+   "command": "ycoding.status",
+   "default": "<leader>s",
+   "bound_by_default": true,
+   "description": "View status",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/shell/sidebar_panel.gd footer status"
+  },
+  {
+   "name": "terminal_suspend",
+   "command": "terminal.suspend",
+   "default": "ctrl+z",
+   "bound_by_default": true,
+   "description": "Suspend terminal",
+   "classification": "terminal",
+   "basis": "Terminal suspend and window title do not exist in a windowed desktop application."
+  },
+  {
+   "name": "terminal_title_toggle",
+   "command": "terminal.title.toggle",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Toggle terminal title",
+   "classification": "terminal",
+   "basis": "Terminal suspend and window title do not exist in a windowed desktop application."
+  },
+  {
+   "name": "theme_list",
+   "command": "theme.switch",
+   "default": "<leader>t",
+   "bound_by_default": true,
+   "description": "List available themes",
+   "classification": "gap",
+   "basis": "The office cycles the mode; it has no theme list."
+  },
+  {
+   "name": "theme_mode_lock",
+   "command": "theme.mode.lock",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Lock or unlock theme mode",
+   "classification": "gap",
+   "basis": "No palette-mode lock."
+  },
+  {
+   "name": "theme_switch_mode",
+   "command": "theme.switch_mode",
+   "default": "none",
+   "bound_by_default": false,
+   "description": "Switch between light and dark theme mode",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/shell/chrome_toggles.gd ACTIONS theme"
+  },
+  {
+   "name": "variant_cycle",
+   "command": "variant.cycle",
+   "default": "ctrl+t",
+   "bound_by_default": true,
+   "description": "Cycle model variants",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/effort_slider.gd variant/effort control"
+  },
+  {
+   "name": "variant_list",
+   "command": "variant.list",
+   "default": "<leader>v",
+   "bound_by_default": true,
+   "description": "List model variants",
+   "classification": "equivalent",
+   "basis": "apps/office/ui/prompt/effort_slider.gd variant/effort control"
+  },
+  {
+   "name": "which_key_end",
+   "command": "which-key.end",
+   "default": "ctrl+alt+end",
+   "bound_by_default": true,
+   "description": "Jump to last which-key binding",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_group_next",
+   "command": "which-key.group.next",
+   "default": "ctrl+alt+right,ctrl+alt+]",
+   "bound_by_default": true,
+   "description": "Next which-key group",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_group_previous",
+   "command": "which-key.group.previous",
+   "default": "ctrl+alt+left,ctrl+alt+[",
+   "bound_by_default": true,
+   "description": "Previous which-key group",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_home",
+   "command": "which-key.home",
+   "default": "ctrl+alt+home",
+   "bound_by_default": true,
+   "description": "Jump to first which-key binding",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_layout_toggle",
+   "command": "which-key.layout.toggle",
+   "default": "ctrl+alt+shift+k",
+   "bound_by_default": true,
+   "description": "Switch which-key layout",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_page_down",
+   "command": "which-key.page.down",
+   "default": "ctrl+alt+pagedown",
+   "bound_by_default": true,
+   "description": "Page which-key down",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_page_up",
+   "command": "which-key.page.up",
+   "default": "ctrl+alt+pageup",
+   "bound_by_default": true,
+   "description": "Page which-key up",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_pending_toggle",
+   "command": "which-key.pending.toggle",
+   "default": "ctrl+alt+shift+p",
+   "bound_by_default": true,
+   "description": "Toggle which-key pending preview",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_scroll_down",
+   "command": "which-key.scroll.down",
+   "default": "ctrl+alt+down,ctrl+alt+n",
+   "bound_by_default": true,
+   "description": "Scroll which-key down",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_scroll_up",
+   "command": "which-key.scroll.up",
+   "default": "ctrl+alt+up,ctrl+alt+p",
+   "bound_by_default": true,
+   "description": "Scroll which-key up",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  },
+  {
+   "name": "which_key_toggle",
+   "command": "which-key.toggle",
+   "default": "ctrl+alt+k",
+   "bound_by_default": true,
+   "description": "Toggle which-key panel",
+   "classification": "terminal",
+   "basis": "A which-key overlay is a terminal keymap affordance: it exists to make an unbounded keymap discoverable in a keyboard-only surface. A desktop app with a visible sidebar, visible chrome controls and a help surface has no equivalent, and adding an overlay would duplicate those controls rather than add capability."
+  }
+ ]
+}

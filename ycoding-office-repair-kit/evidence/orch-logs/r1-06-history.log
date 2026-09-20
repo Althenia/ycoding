@@ -1,0 +1,9 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+SCRIPT ERROR: Parse Error: Cannot get return value of call to "configure()" because it returns "void".
+          at: GDScript::reload (res://r1_06_history_tmp.gd:63)
+SCRIPT ERROR: Parse Error: Cannot infer the type of "cfg" variable because the value is "null".
+          at: GDScript::reload (res://r1_06_history_tmp.gd:63)
+ERROR: Failed to load script "res://r1_06_history_tmp.gd" with error "Parse error".
+   at: load (modules/gdscript/gdscript_resource_format.cpp:46)
+EXIT=0

@@ -1,0 +1,10 @@
+attempts are added to steps                          passed=48   failed=2   CAUGHT             the physical attempts are counted separate
+an unpriced group is counted as priced               passed=46   failed=4   CAUGHT             and the other is reported as unpriced, not
+an absent cost renders as a zero amount              passed=47   failed=3   CAUGHT             and it renders as unreported rather than a
+an estimate is labelled as recorded billing          passed=49   failed=1   CAUGHT             and an estimate says it is an estimate, no
+helpers are folded into the steps                    passed=48   failed=2   CAUGHT             helpers are counted on their own (expected
+a covered child is counted again                     passed=46   failed=4   CAUGHT             the root's total is used and the child is 
+a provider filter matches every session              passed=48   failed=2   CAUGHT             the provider filter keeps only its session
+a day breakdown is invented                          passed=50   failed=0   *** NOT CAUGHT *** 
+a day grouping returns one mislabelled bucket        passed=49   failed=1   CAUGHT             and asking for one yields no invented buck
+restored: True

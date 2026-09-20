@@ -1,0 +1,30 @@
+test_checksum_parse (test_delivery.DeliveryTests.test_checksum_parse) ... ok
+test_complete_directory (test_delivery.DeliveryTests.test_complete_directory) ... ok
+test_dmg_truncated (test_delivery.DeliveryTests.test_dmg_truncated) ... ok
+test_duplicate_checksum (test_delivery.DeliveryTests.test_duplicate_checksum) ... ok
+test_empty_download_page (test_delivery.DeliveryTests.test_empty_download_page) ... ok
+test_readiness_refuses_empty (test_delivery.DeliveryTests.test_readiness_refuses_empty) ... ok
+test_readiness_requires_every_flow (test_delivery.DeliveryTests.test_readiness_requires_every_flow) ... ok
+test_readiness_stable_requires_signature (test_delivery.DeliveryTests.test_readiness_stable_requires_signature) ... ok
+test_select_bad_url (test_delivery.DeliveryTests.test_select_bad_url) ... ok
+test_select_complete (test_delivery.DeliveryTests.test_select_complete) ... ok
+test_select_highest_stable (test_delivery.DeliveryTests.test_select_highest_stable) ... ok
+test_select_missing (test_delivery.DeliveryTests.test_select_missing) ... ok
+test_select_prerelease (test_delivery.DeliveryTests.test_select_prerelease) ... ok
+test_setup_pins (test_delivery.DeliveryTests.test_setup_pins) ... ok
+test_setup_zip_safety (test_delivery.DeliveryTests.test_setup_zip_safety) ... ok
+test_seven_assets (test_delivery.DeliveryTests.test_seven_assets) ... ok
+test_site_preserves_docs (test_delivery.DeliveryTests.test_site_preserves_docs) ... ok
+test_tar_extra (test_delivery.DeliveryTests.test_tar_extra) ... ok
+test_tar_layout (test_delivery.DeliveryTests.test_tar_layout) ... ok
+test_tar_symlink_rejected (test_delivery.DeliveryTests.test_tar_symlink_rejected) ... ok
+test_unsafe_checksum_name (test_delivery.DeliveryTests.test_unsafe_checksum_name) ... ok
+test_version_invalid (test_delivery.DeliveryTests.test_version_invalid) ... ok
+test_version_valid (test_delivery.DeliveryTests.test_version_valid) ... ok
+test_zip_layout (test_delivery.DeliveryTests.test_zip_layout) ... ok
+test_zip_traversal (test_delivery.DeliveryTests.test_zip_traversal) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 0.007s
+
+OK

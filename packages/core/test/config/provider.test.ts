@@ -3,6 +3,7 @@ import { Money } from "@ycoding-ai/schema/money"
 import { Effect, Schema } from "effect"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "../fixture/config"
 import { ConfigProviderPlugin } from "@ycoding-ai/core/config/plugin/provider"
 import { Integration } from "@ycoding-ai/core/integration"
 import { ModelV2 } from "@ycoding-ai/core/model"
@@ -85,7 +86,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
               model.capabilities = { tools: false, input: ["text", "image"], output: ["text"] }
             }),
           )
-          const config = Config.Service.of({
+          const config = stubConfig({
             entries: () =>
               Effect.succeed([
                 new Config.Document({
@@ -125,7 +126,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const catalog = yield* Catalog.Service
       const providerID = ProviderV2.ID.opencode
       const modelID = ModelV2.ID.make("alpha-gpt-next")
-      const config = Config.Service.of({
+      const config = stubConfig({
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -177,7 +178,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
       const catalog = yield* Catalog.Service
       const providerID = ProviderV2.ID.opencode
       const modelID = ModelV2.ID.make("alpha-gpt-next")
-      const config = Config.Service.of({
+      const config = stubConfig({
         entries: () =>
           Effect.succeed([
             new Config.Document({
@@ -225,7 +226,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
         const integrations = yield* Integration.Service
         const providerID = ProviderV2.ID.make("custom")
         const modelID = ModelV2.ID.make("chat")
-        const config = Config.Service.of({
+        const config = stubConfig({
           entries: () =>
             Effect.succeed([
               new Config.Document({

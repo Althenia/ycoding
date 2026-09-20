@@ -265,6 +265,35 @@ exec /bin/mv "$@"
     expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(true)
   })
 
+  // R9-05: the installer must never strip extended attributes. A quarantined app
+  // carries `com.apple.quarantine`, and silently removing it would bypass the
+  // user's own security decision. Two independent checks pin that: a marker
+  // attribute placed on the fixture bundle must SURVIVE the install (which is what
+  // `ditto` preserves and `cp` would not), and the installer source must never
+  // invoke an attribute-stripping tool.
+  macTest("preserves extended attributes instead of stripping quarantine", async () => {
+    const fixture = await setup(undefined, { office: true })
+    const appDir = path.join(fixture.home, "Applications")
+    const result = await runInstaller(fixture, { YCODING_OFFICE_DIR: appDir }, ["--office"])
+
+    expect(result.exitCode).toBe(0)
+
+    // The fixture's own bundle carries a marker attribute, so the assertion is a
+    // real read of the installed file rather than a property of the source.
+    const installed = path.join(appDir, "YCoding Office.app")
+    const read = Bun.spawnSync(["xattr", "-p", "com.ycoding.test-marker", installed])
+    expect(read.exitCode).toBe(0)
+    expect(read.stdout.toString().trim()).toBe("preserved")
+  })
+
+  test("never invokes an attribute-stripping tool", async () => {
+    const source = await readFile(installer, "utf8")
+    // Either spelling would silently defeat a user's quarantine decision.
+    expect(source).not.toContain("xattr -d")
+    expect(source).not.toContain("xattr -c")
+    expect(source).not.toContain("xattr -cr")
+  })
+
   test("installs the Linux desktop app beside the terminal executable", async () => {
     const fixture = await setup({ system: "Linux", machine: "x86_64" }, { office: true })
     const result = await runInstaller(fixture, {}, ["--office"])
@@ -456,6 +485,18 @@ async function writeOfficeArtifact(fixture: string, system: string, options: { u
       await writeFile(binary, "#!/bin/sh\nexit 0\n")
       await chmod(binary, 0o755)
     }
+    // Give the bundle a marker attribute so the install's preservation can be
+    // asserted on the INSTALLED copy. `com.apple.quarantine` itself is set by the
+    // download agent, not by this fixture, so a neutral name is used: what matters
+    // is that any attribute survives.
+    const marker = Bun.spawnSync([
+      "xattr",
+      "-w",
+      "com.ycoding.test-marker",
+      "preserved",
+      path.join(stage, "YCoding Office.app"),
+    ])
+    expect(marker.exitCode).toBe(0)
     await symlink("/Applications", path.join(stage, "Applications"))
     const officeAsset = `ycoding-office-${fixtureVersion}-darwin-universal.dmg`
     const archive = Bun.spawnSync([

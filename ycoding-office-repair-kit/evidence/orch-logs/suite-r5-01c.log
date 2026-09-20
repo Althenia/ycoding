@@ -1,0 +1,89 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+chrome_toggles calib sidebar text=(81.0, 31.0) width=55 over=+26
+chrome_toggles calib composer text=(80.0, 31.0) width=54 over=+26
+chrome_toggles calib motion text=(78.0, 31.0) width=52 over=+26
+chrome_toggles calib theme text=(107.0, 31.0) width=74 over=+33
+chrome_toggles calib scale text=(92.0, 31.0) width=63 over=+29
+chrome_toggles calib total text=298 engine=454 declared=459 row_over=156
+chrome_toggles: declared 459x31 at scale 1.00; shell reserves 76x28
+chrome_toggles: declared 533x34 at scale 1.25; shell reserves 76x28
+chrome_toggles: declared 608x37 at scale 1.50; shell reserves 76x28
+chrome_toggles: declared 680x40 at scale 1.75; shell reserves 76x28
+chrome_toggles: declared 756x43 at scale 2.00; shell reserves 76x28
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] _close_drawer (res://app/main.gd:1217)
+       [2] _apply_shortcut (res://app/main.gd:1004)
+       [3] test_escape_releases_the_caret_before_the_drawer (res://tests/suites/test_drawer.gd:128)
+       [4] run (res://tests/suites/test_drawer.gd:28)
+       [5] _init (res://tests/run_tests.gd:55)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] test_escape_releases_the_caret_before_the_drawer (res://tests/suites/test_drawer.gd:137)
+       [2] run (res://tests/suites/test_drawer.gd:28)
+       [3] _init (res://tests/run_tests.gd:55)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] _close_drawer (res://app/main.gd:1217)
+       [2] test_closing_the_drawer_returns_focus_to_the_composer (res://tests/suites/test_drawer.gd:166)
+       [3] run (res://tests/suites/test_drawer.gd:29)
+       [4] _init (res://tests/run_tests.gd:55)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] test_closing_the_drawer_returns_focus_to_the_composer (res://tests/suites/test_drawer.gd:175)
+       [2] run (res://tests/suites/test_drawer.gd:29)
+       [3] _init (res://tests/run_tests.gd:55)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] _close_drawer (res://app/main.gd:1217)
+       [2] test_closing_the_drawer_returns_focus_to_the_composer (res://tests/suites/test_drawer.gd:184)
+       [3] run (res://tests/suites/test_drawer.gd:29)
+       [4] _init (res://tests/run_tests.gd:55)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] _close_drawer (res://app/main.gd:1217)
+       [2] test_closing_the_drawer_never_costs_the_draft (res://tests/suites/test_drawer.gd:206)
+       [3] run (res://tests/suites/test_drawer.gd:30)
+       [4] _init (res://tests/run_tests.gd:55)
+ERROR: Condition "!is_inside_tree()" is true.
+   at: grab_focus (scene/gui/control.cpp:3001)
+   GDScript backtrace (most recent call first):
+       [0] focus_input (res://ui/prompt/prompt_panel.gd:485)
+       [1] _close_drawer (res://app/main.gd:1217)
+       [2] _apply_shortcut (res://app/main.gd:1004)
+       [3] test_closing_the_drawer_never_costs_the_draft (res://tests/suites/test_drawer.gd:215)
+       [4] run (res://tests/suites/test_drawer.gd:30)
+       [5] _init (res://tests/run_tests.gd:55)
+SCRIPT ERROR: Invalid access to property or key 'close_requested' on a base object of type 'Nil'.
+          at: OfficeMain._wire_signals (res://app/main.gd:123)
+          GDScript backtrace (most recent call first):
+              [0] _wire_signals (res://app/main.gd:123)
+              [1] test_choosing_a_folder_is_not_execution_consent (res://tests/suites/test_folder_target.gd:228)
+              [2] run (res://tests/suites/test_folder_target.gd:32)
+              [3] _init (res://tests/run_tests.gd:55)
+
+=== office test summary ===
+passed: 7761
+failed: 0
+RESULT: PASSED
+WARNING: 855 RIDs of type "CanvasItem" were leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2735)
+WARNING: 1042 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 47 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
+ERROR: 41 RID allocations of type 'PN13RendererDummy14TextureStorage12DummyTextureE' were leaked at exit.
+EXIT=0

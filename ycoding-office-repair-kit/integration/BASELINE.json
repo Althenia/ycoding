@@ -1,0 +1,23 @@
+{
+  "repository": "Althenia/ycoding",
+  "commit": "77ef4315fa66a8c51c4288e00bfa0a77a635eb63",
+  "retrieved": "2026-09-16",
+  "scope": "Public source inspected through GitHub. Local source/runtime unverified.",
+  "existing_files": [
+    {
+      "path": ".github/workflows/release.yml",
+      "git_blob_sha1": "b0c1cf274d8cc50cb137c42bd6d52dd8ca043f4b",
+      "url": "https://github.com/Althenia/ycoding/blob/77ef4315fa66a8c51c4288e00bfa0a77a635eb63/.github/workflows/release.yml"
+    },
+    {
+      "path": ".github/workflows/pages.yml",
+      "git_blob_sha1": "c837bd27048fcbce6edcadfdee1b2463681a88b1",
+      "url": "https://github.com/Althenia/ycoding/blob/77ef4315fa66a8c51c4288e00bfa0a77a635eb63/.github/workflows/pages.yml"
+    },
+    {
+      "path": "apps/office/tools/verify-integration.sh",
+      "git_blob_sha1": "a547b6bfa56ae96ef4502391329314ef87f9c6cc",
+      "url": "https://github.com/Althenia/ycoding/blob/77ef4315fa66a8c51c4288e00bfa0a77a635eb63/apps/office/tools/verify-integration.sh"
+    }
+  ]
+}

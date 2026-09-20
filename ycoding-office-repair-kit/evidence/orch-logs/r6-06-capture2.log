@@ -1,0 +1,26 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R606 checks=14 fails=1
+R606 PASS  toggle_sidebar changes the sidebar's visibility
+R606 PASS  toggle_composer changes the composer's visibility
+R606 PASS  toggle_composer restores the composer
+R606 PASS  toggle_theme changes the palette mode
+R606 PASS  toggle_scale changes the text scale
+R606 PASS  the office has a roster to select within (1)
+R606 PASS  inspect opens the source drawer
+R606 FAIL  dismiss closes the open drawer
+R606 PASS  prompt_submit sends the draft through the panel's own signal
+R606 PASS  and it sends the text that was typed
+R606 PASS  a modified Return does not submit
+R606 PASS  input_newline breaks the line instead (line one
+)
+R606 PASS  the model control names a model (openrouter/deepseek/deepseek-v4.1-flash#high)
+R606 PASS  the inspected session has a family (1)
+R606 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r6-06/r6-06-parity-real-scene.png
+R606 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=1

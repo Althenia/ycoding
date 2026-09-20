@@ -1,0 +1,6 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+
+PROBE project=/Users/viadz/Workspace/Project/ycoding/apps/office/
+PROBE path=/Users/viadz/Workspace/Project/ycoding/apps/packages/tui/src/config/keybind.ts
+PROBE exists=false
+EXIT=0

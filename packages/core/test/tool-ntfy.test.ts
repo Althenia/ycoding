@@ -6,6 +6,7 @@ import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { ConfigNtfy } from "@ycoding-ai/core/config/ntfy"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { SessionV2 } from "@ycoding-ai/core/session"
@@ -31,7 +32,7 @@ let responseStatus = 200
 
 const config = Layer.succeed(
   Config.Service,
-  Config.Service.of({
+  stubConfig({
     entries: () => Effect.succeed(configs),
   }),
 )

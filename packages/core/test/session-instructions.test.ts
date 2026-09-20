@@ -7,6 +7,7 @@ import { AgentV2 } from "@ycoding-ai/core/agent"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { Database } from "@ycoding-ai/core/database/database"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -72,7 +73,7 @@ const permission = Layer.succeed(
     list: () => Effect.die("unused"),
   }),
 )
-const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+const config = Layer.succeed(Config.Service, stubConfig({ entries: () => Effect.succeed([]) }))
 const imageLayer = AppNodeBuilder.build(Image.node, [[Config.node, config]])
 
 const testLayer = AppNodeBuilder.build(

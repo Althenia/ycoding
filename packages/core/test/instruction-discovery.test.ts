@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import { Config } from "@ycoding-ai/core/config"
+import { stubConfig } from "./fixture/config"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
@@ -30,7 +31,7 @@ const instructionLayer = (input: {
       Config.node,
       Layer.succeed(
         Config.Service,
-        Config.Service.of({
+        stubConfig({
           entries: () =>
             Effect.succeed(
               input.instructionMaxBytes === undefined

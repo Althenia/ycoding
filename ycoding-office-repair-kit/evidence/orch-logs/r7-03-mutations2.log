@@ -1,0 +1,3 @@
+baseline (strengthened test)  passed=43   failed=0  
+a failed read reads as empty                   passed=42   failed=1   CAUGHT             and its text does not read as the empty messag
+restored: True

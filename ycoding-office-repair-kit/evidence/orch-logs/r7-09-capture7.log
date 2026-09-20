@@ -1,0 +1,41 @@
+Godot Engine v4.7.2.stable.official.ed1daf0bf - https://godotengine.org
+OpenGL API 4.1 Metal - 90.5 - Compatibility - Using Device: Apple - Apple M5 Pro
+
+R709 registered=http://127.0.0.1:43094
+R709 mode=LIVE connection=syncing
+R709 EVENT connection=live
+R709 attempt=0 actors=0 reloading=false conn=live
+R709 attempt=20 actors=0 reloading=false conn=live
+R709 attempt=60 actors=0 reloading=false conn=live
+R709 attempt=119 actors=0 reloading=false conn=live
+R709 roster=0 reloaded=false reloading=false
+R709 session=ses_238c8a62-345f-4a30-a16f-f69bb3ffce26
+R709 selected=false target=
+R709 cost=$0.00 provenance=Not reported priced=0 of 0
+R709 source_text=Source: ses_238c8a62-345f-4a30-a16f-f69bb3ffce26
+R709 PASS  the page names the session its figures came from (Source: ses_238c8a62-345f-4a30-a16f-f69bb3ffce26)
+R709 FAIL  the answer carries model groups (0)
+R709 FAIL  the spend carries its own provenance (Not reported)
+R709 provenance_labels=[]
+R709 PASS  every group's provenance resolves to billed or estimated ([])
+R709 FAIL  the surface shows the spend cards with their provenance labels
+R709 broken_quota snapshots=0 error=could not connect to 127.0.0.1:1
+R709 PASS  the quota read fails against a dead endpoint
+R709 PASS  and reports its failure (could not connect to 127.0.0.1:1)
+R709 FAIL  the product's prompt target is the selected session ()
+R709 prompt_notice=No session is selected to receive that prompt
+R709 FAIL  the prompt was QUEUED while the quota read was failing (No session is selected to receive that prompt)
+R709 PASS  the quota failure did not become the session's error ()
+R709 PASS  and nothing in the session's own state mentions the quota
+R709 prompt_marker=r709-quota-failure-probe-1081
+R709 before=0
+R709 quota_error_after=could not connect to 127.0.0.1:1
+R709 PASS  the quota read is STILL failing when the prompt is submitted (could not connect to 127.0.0.1:1)
+R709 captured /Users/viadz/Workspace/Project/ycoding/ycoding-office-repair-kit/evidence/r7-09/r7-09-analytics.png
+R709 checks=12 fails=5
+R709 done
+WARNING: 1 RID of type "CanvasItem" was leaked.
+   at: _free_rids (servers/rendering/renderer_canvas_cull.cpp:2733)
+WARNING: 2 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+EXIT=1
