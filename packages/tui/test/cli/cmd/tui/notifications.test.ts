@@ -85,7 +85,8 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
           wait: async ({ sessionID }: { sessionID: string }) => waits.get(sessionID)?.promise,
           autonomy: {
-            get: async ({ sessionID }: { sessionID: string }) => autonomy.get(sessionID) ?? { mode: "normal", yolo: false },
+            get: async ({ sessionID }: { sessionID: string }) =>
+              autonomy.get(sessionID) ?? { mode: "normal", yolo: false },
           },
         },
       } as unknown as Context["client"],
@@ -163,10 +164,7 @@ function form(id: string, sessionID = "session"): Extract<YCodingEvent, { type: 
   }
 }
 
-function permission(
-  id: string,
-  sessionID = "session",
-): Extract<YCodingEvent, { type: "permission.v2.asked" }>["data"] {
+function permission(id: string, sessionID = "session"): Extract<YCodingEvent, { type: "permission.v2.asked" }>["data"] {
   return {
     id,
     sessionID,
@@ -384,7 +382,7 @@ describe("internal notifications TUI plugin", () => {
     ])
   })
 
-  test("uses sound-only attention when a child session reaches stable idle", async () => {
+  test("keeps routine child completion silent", async () => {
     const harness = await setup()
     const idle = Promise.withResolvers<void>()
     harness.waits.set("subagent", idle)
@@ -400,12 +398,50 @@ describe("internal notifications TUI plugin", () => {
     await idle.promise
     await settle()
 
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("keeps active goal settlement silent and alerts once when the goal completes", async () => {
+    const harness = await setup()
+    const goal = { text: "Finish the task", status: "active" as const, iteration: 1, noProgress: 0, maxNoProgress: 2 }
+    harness.autonomy.set("session", { mode: "normal", yolo: false, goal })
+    harness.emit(executionStarted("event-1"))
+    harness.emit(executionSucceeded("event-2"))
+    await settle()
+    expect(harness.notifications).toEqual([])
+
+    harness.emit(executionStarted("event-3"))
+    await settle()
+    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: { ...goal, status: "completed" } })
+    harness.emit(executionSucceeded("event-4"))
+    harness.emit(executionSucceeded("event-5"))
+    await settle()
     expect(harness.notifications).toEqual([
       {
-        title: "Subagent session",
+        title: "Demo session",
         message: "Session done",
-        notification: false,
-        sound: { name: "subagent_done", when: "always" },
+        notification: { when: "blurred" },
+        sound: { name: "done", when: "always" },
+      },
+    ])
+  })
+
+  test("does not replay a retained exhausted goal alert for later ordinary work", async () => {
+    const harness = await setup()
+    harness.autonomy.set("session", {
+      mode: "normal",
+      yolo: false,
+      goal: { text: "Earlier task", status: "exhausted", iteration: 2, noProgress: 2, maxNoProgress: 2 },
+    })
+    harness.emit(executionStarted("event-1"))
+    harness.emit(executionSucceeded("event-2"))
+    await settle()
+    expect(harness.notifications).toEqual([
+      {
+        title: "Demo session",
+        message: "Session done",
+        notification: { when: "blurred" },
+        sound: { name: "done", when: "always" },
       },
     ])
   })
@@ -414,7 +450,10 @@ describe("internal notifications TUI plugin", () => {
     const harness = await setup()
     const idle = Promise.withResolvers<void>()
     harness.waits.set("session", idle)
-    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
+    harness.autonomy.set("session", {
+      mode: "normal",
+      yolo: false,
+      goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 1,
@@ -429,7 +468,10 @@ describe("internal notifications TUI plugin", () => {
     harness.emit(executionSucceeded("event-4"))
     expect(harness.notifications).toEqual([])
 
-    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
+    harness.autonomy.set("session", {
+      mode: "normal",
+      yolo: false,
+      goal: {
         text: "Finish the migration",
         status: "completed",
         iteration: 2,
@@ -454,7 +496,10 @@ describe("internal notifications TUI plugin", () => {
     const harness = await setup()
     const idle = Promise.withResolvers<void>()
     harness.waits.set("session", idle)
-    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
+    harness.autonomy.set("session", {
+      mode: "normal",
+      yolo: false,
+      goal: {
         text: "Finish the migration",
         status: "active",
         iteration: 1,
@@ -464,7 +509,10 @@ describe("internal notifications TUI plugin", () => {
     })
     harness.emit(executionStarted("event-1"))
     harness.emit(executionSucceeded("event-2"))
-    harness.autonomy.set("session", { mode: "normal", yolo: false, goal: {
+    harness.autonomy.set("session", {
+      mode: "normal",
+      yolo: false,
+      goal: {
         text: "Finish the migration",
         status: "exhausted",
         iteration: 2,
@@ -641,12 +689,6 @@ describe("internal notifications TUI plugin", () => {
         message: "Input needs response",
         notification: false,
         sound: { name: "question", when: "always" },
-      },
-      {
-        title: "Subagent session",
-        message: "Session done",
-        notification: false,
-        sound: { name: "subagent_done", when: "always" },
       },
     ])
   })

@@ -51,7 +51,7 @@ const defaults: Resolved = {
   advisory: { considerPercent: 70, stronglyAdvisedPercent: 90 },
 }
 
-const algorithmRevision = 3
+const algorithmRevision = 4
 
 export const admissionDigest = (policy: Resolved, revision = algorithmRevision) =>
   Hash.sha256(JSON.stringify({ revision, policy }))

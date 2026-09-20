@@ -1196,6 +1196,113 @@ test("distinguishes initial connection from reconnection", async () => {
   }
 })
 
+test("preserves execution events received while the active snapshot is loading", async () => {
+  const events = createEventStream()
+  const snapshot = Promise.withResolvers<Response>()
+  let requested = false
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/session/active") return
+    requested = true
+    return snapshot.promise
+  }, events)
+  let data!: ReturnType<typeof useData>
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  try {
+    await wait(() => requested)
+    emitEvent(events, {
+      id: "evt_started",
+      created: 0,
+      type: "session.execution.started",
+      durable: durable("session-new"),
+      data: { sessionID: "session-new" },
+    })
+    emitEvent(events, {
+      id: "evt_old_started",
+      created: 0,
+      type: "session.execution.started",
+      durable: durable("session-old"),
+      data: { sessionID: "session-old" },
+    })
+    await wait(() => data.session.status("session-old") === "running")
+    emitEvent(events, {
+      id: "evt_finished",
+      created: 0,
+      type: "session.execution.succeeded",
+      durable: durable("session-old"),
+      data: { sessionID: "session-old" },
+    })
+    await wait(() => data.session.status("session-old") === "idle")
+    snapshot.resolve(
+      json({
+        data: {
+          "session-old": { type: "running" },
+          "session-untouched": { type: "running" },
+        },
+      }),
+    )
+    await wait(() => data.session.status("session-untouched") === "running")
+    expect(data.session.status("session-old")).toBe("idle")
+    expect(data.session.status("session-new")).toBe("running")
+  } finally {
+    snapshot.resolve(json({ data: {} }))
+    app.renderer.destroy()
+  }
+})
+
+test("ignores an active snapshot from a disconnected event stream", async () => {
+  const events = createEventStream()
+  const snapshot = Promise.withResolvers<Response>()
+  let requests = 0
+  const calls = createFetch((url) => {
+    if (url.pathname !== "/api/session/active") return
+    requests++
+    return requests === 1 ? snapshot.promise : json({ data: { "session-current": { type: "running" } } })
+  }, events)
+  let data!: ReturnType<typeof useData>
+  function Probe() {
+    data = useData()
+    return <box />
+  }
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+  try {
+    await wait(() => requests === 1)
+    events.disconnect()
+    await wait(() => data.session.status("session-current") === "running")
+    snapshot.resolve(json({ data: { "session-stale": { type: "running" } } }))
+    await snapshot.promise
+    await Bun.sleep(30)
+    expect(data.session.status("session-current")).toBe("running")
+    expect(data.session.status("session-stale")).toBe("idle")
+  } finally {
+    snapshot.resolve(json({ data: {} }))
+    app.renderer.destroy()
+  }
+})
+
 test("tracks session status from active sessions and execution events", async () => {
   const events = createEventStream()
   let settled = false

@@ -72,6 +72,9 @@ export const sourceOrder = [
   "orchestration",
 ] as const satisfies ReadonlyArray<ProtectedStateSource>
 
+/** Stable identity prefix for the live-state observation and its checkpointed copy. */
+export const authoritativeStatePrefix = "Authoritative current Session state (JSON):"
+
 export const goalReminder = (autonomy: SessionAutonomy.State) => {
   if (!autonomy.goal) return undefined
   if (autonomy.goal.status !== "active")
@@ -257,7 +260,8 @@ export const layer = Layer.effect(
       const guardrail = yield* guardrails.snapshot(sessionID)
       if (before.sequence !== guardrail.sequence || before.digest !== guardrail.digest) return yield* load(sessionID)
       const text = [
-        "Authoritative current Session state (JSON):\n" +
+        authoritativeStatePrefix +
+          "\n" +
           SessionRunnerCache.canonicalJson({
             todos: current.todos,
             autonomy: current.autonomy,

@@ -37,6 +37,7 @@ import { Location } from "../location";
 import { LocationMutation } from "../location-mutation";
 import { ModelsDev } from "../models-dev";
 import { Memory } from "../memory";
+import { MCP } from "../mcp";
 import { Npm } from "../npm";
 import { PermissionV2 } from "../permission";
 import { ProviderUsageV2 } from "../provider-usage";
@@ -392,6 +393,7 @@ export const node = makeLocationNode({
     LocationMutation.node,
     ModelsDev.node,
     Memory.node,
+    MCP.node,
     Npm.node,
     PermissionV2.node,
     ProviderUsageV2.node,

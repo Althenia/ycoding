@@ -17,6 +17,8 @@ import { managedDefaults } from "@ycoding-ai/core/project-artifact/adapter/agent
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SkillV2 } from "@ycoding-ai/core/skill"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
+import { MCP } from "@ycoding-ai/core/mcp/index"
+import { emptyMcpLayer } from "./fixture/mcp"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -28,7 +30,10 @@ const discovery = Layer.succeed(
 const it = testEffect(
   AppNodeBuilder.build(
     LayerNode.group([SkillV2.node, AgentV2.node, EventV2.node, FSUtil.node]),
-    [[SkillDiscovery.node, discovery]],
+    [
+      [SkillDiscovery.node, discovery],
+      [MCP.node, emptyMcpLayer],
+    ],
   ),
 )
 

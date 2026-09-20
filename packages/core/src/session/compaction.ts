@@ -251,9 +251,6 @@ const make = (dependencies: Dependencies): Interface => {
         },
       ]
     })
-    const liveState = yield* dependencies.liveState
-      .load(job.sessionID)
-      .pipe(Effect.mapError(() => new ManifestError({ code: "migration_failed" })))
     const decodedMessages = rows.flatMap((row) => {
       if (!Schema.is(Schema.Json)(row.data) || !jsonObject(row.data)) return []
       const decoded = Schema.decodeUnknownOption(SessionMessage.Info)({ ...row.data, id: row.id, type: row.type })
@@ -294,7 +291,7 @@ const make = (dependencies: Dependencies): Interface => {
       recentTail: recentTailCount === 0 ? [] : uncoveredItems.slice(-recentTailCount).map(ContextManifest.selector),
       protectedTargets: [],
       providerLinks: [],
-      protectedState: SessionLiveState.toProtectedState(liveState.sources),
+      protectedState: [],
     }
     const activeSkills = SessionSkillStatus.list(
       decodedMessages.filter((entry) => entry.seq <= summaryThrough).map((entry) => entry.message),
@@ -311,7 +308,6 @@ const make = (dependencies: Dependencies): Interface => {
         SKILL_TEXT_MAX_CHARS,
       ),
     )
-    const requiredTexts = messageText(liveState.rendered)
     const inputTokens = SessionHistory.modelTokens(selectedBefore)
     const retainedTokens = (summary: string, through: number) =>
       SessionHistory.modelTokens([
@@ -336,7 +332,7 @@ const make = (dependencies: Dependencies): Interface => {
       maxBytes: dependencies.config.maxManifestBytes,
       maxInputTokens,
       acceptsModelInput,
-      requiredTexts,
+      requiredTexts: [],
       requiredSkills,
       previousMemory,
     }
@@ -346,19 +342,25 @@ const make = (dependencies: Dependencies): Interface => {
             Effect.timeoutOption(Duration.seconds(dependencies.config.timeoutSeconds)),
           )
         : Option.some(yield* generateCheckpoint(generation))
-    const summary = Option.isSome(generated)
+    const candidate = Option.isSome(generated)
       ? generated.value
       : yield* generateCheckpoint({ ...generation, resolved: undefined })
 
     const currentLiveState = yield* dependencies.liveState
       .load(job.sessionID)
       .pipe(Effect.mapError(() => new ManifestError({ code: "migration_failed" })))
+    const summary = finalizeCheckpoint(
+      { ...generation, requiredTexts: messageText(currentLiveState.rendered) },
+      candidate,
+    )
+    if (!summary) return yield* new ManifestError({ code: "context_limit_unresolved" })
+    const protectedState = SessionLiveState.toProtectedState(currentLiveState.sources)
     const validated = ContextManifest.validate({
       candidate: {
         schemaVersion: 1,
         baseContextRevision: evidence.baseContextRevision,
         coveredThrough: evidence.coveredThrough,
-        protectedState: evidence.protectedState,
+        protectedState,
         exclusions: [],
       },
       summary: {
@@ -371,7 +373,7 @@ const make = (dependencies: Dependencies): Interface => {
       },
       evidence: {
         ...evidence,
-        protectedState: SessionLiveState.toProtectedState(currentLiveState.sources),
+        protectedState,
       },
       modelTokens: {
         before: inputTokens,
@@ -507,6 +509,10 @@ function localCheckpoint(
   )
 }
 
+const supersedesAuthority = (existing: string, incoming: string) =>
+  existing.startsWith(SessionLiveState.authoritativeStatePrefix) &&
+  incoming.startsWith(SessionLiveState.authoritativeStatePrefix)
+
 function parsedMemory(text: string, through: number, maxBytes: number) {
   const parsed = SessionSummaryToon.parse(text, { throughSequence: through, maxSummaryBytes: maxBytes })
   return "_tag" in parsed ? undefined : parsed
@@ -603,14 +609,17 @@ function validateCheckpoint(
   memory: SessionSummaryToon.Memory | undefined,
   through: number,
 ): string | undefined {
+  const refreshed = memory
+    ? SessionSummaryToon.retainRequiredTexts({ ...memory, skill: [] }, input.requiredTexts, supersedesAuthority)
+    : undefined
   const continuity = retainLocalContinuity(
     input.source.map((entry) => entry.extract),
     through,
     input.maxBytes,
     input.acceptsModelInput,
-    memory ? { ...memory, skill: [] } : undefined,
+    refreshed,
   )
-  const required = SessionSummaryToon.retainRequiredTexts(continuity, input.requiredTexts)
+  const required = SessionSummaryToon.retainRequiredTexts(continuity, input.requiredTexts, supersedesAuthority)
   const coverage = input.source.map((entry) => ({ text: entry.capsule, confidence: "confirmed" as const }))
   const encoded = SessionSummaryToon.encode({
     ...required,

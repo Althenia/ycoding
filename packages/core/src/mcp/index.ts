@@ -2,6 +2,7 @@ export * as MCP from "./index"
 
 import { Mcp } from "@ycoding-ai/schema/mcp"
 import { McpEvent } from "@ycoding-ai/schema/mcp-event"
+import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Command } from "@ycoding-ai/schema/command"
 import { createHash } from "node:crypto"
 import { Cause, Context, Deferred, Effect, Exit, FiberSet, Layer, Schema, Scope, Stream } from "effect"
@@ -18,6 +19,7 @@ import { Location } from "../location"
 import { waitForAbort } from "../process"
 import { State } from "../state"
 import { MCPClient } from "./client"
+import { MCPSkills } from "./skills"
 import { MCPOAuth } from "./oauth"
 
 export const ServerName = Schema.String.pipe(Schema.brand("MCP.ServerName"))
@@ -111,6 +113,40 @@ export class ToolCallError extends Schema.TaggedErrorClass<ToolCallError>()("MCP
   message: Schema.String,
 }) {}
 
+/**
+ * A skill entry the server does not serve, or one a host must not load as-is. `dynamic` means the
+ * entry declares generated content, which offers no content integrity.
+ */
+export class SkillUnavailableError extends Schema.TaggedErrorClass<SkillUnavailableError>()(
+  "MCP.SkillUnavailableError",
+  {
+    server: ServerName,
+    uri: Schema.String,
+    reason: McpSkill.Reason,
+  },
+) {
+  override get message() {
+    return `MCP skill unavailable (${this.reason}): ${this.uri}`
+  }
+}
+
+/**
+ * A skill file whose retrieved bytes do not match the held entry's manifest. The content must not
+ * be used; recover by refreshing the entry and re-obtaining approval.
+ */
+export class SkillVerificationError extends Schema.TaggedErrorClass<SkillVerificationError>()(
+  "MCP.SkillVerificationError",
+  {
+    server: ServerName,
+    uri: Schema.String,
+    reason: McpSkill.Reason,
+  },
+) {
+  override get message() {
+    return `MCP skill verification failed (${this.reason}): ${this.uri}`
+  }
+}
+
 type ServerEntry = {
   readonly config: typeof ConfigMCP.Server.Type
   status: Status
@@ -153,6 +189,29 @@ export interface Interface {
     readonly server: ServerName | string
     readonly uri: string
   }) => Effect.Effect<ResourceContent | undefined, NotFoundError>
+  /**
+   * Metadata-only skill entries from every connected server that declares the skills extension.
+   * Never retrieves skill files: listing, connection, and approval must not fetch content.
+   */
+  readonly skillCatalog: () => Effect.Effect<McpSkill.Entry[]>
+  /**
+   * One skill entry by its `SKILL.md` URI, including a skill the server's listing did not mention.
+   * Fails when the server does not serve that URI as a skill, or the entry must not be loaded.
+   */
+  readonly getSkill: (input: {
+    readonly server: ServerName | string
+    readonly uri: string
+  }) => Effect.Effect<McpSkill.Entry, NotFoundError | SkillUnavailableError>
+  /**
+   * Reads one file of a held skill entry and verifies it against that entry's manifest. This is the
+   * only supported way to retrieve skill content: the manifest is authoritative for what may be read,
+   * so an unlisted file, a size mismatch, or a digest mismatch fails without returning bytes.
+   */
+  readonly readSkillResource: (input: {
+    readonly server: ServerName | string
+    readonly entry: McpSkill.Entry
+    readonly uri: string
+  }) => Effect.Effect<McpSkill.File, NotFoundError | SkillUnavailableError | SkillVerificationError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/MCP") {}
@@ -767,6 +826,90 @@ export const layer = Layer.effect(
           uri: input.uri,
           contents: result.contents,
         })
+      }),
+      skillCatalog: Effect.fn("MCP.skillCatalog")(function* () {
+        yield* whenAllReady
+        // Best-effort like the resource catalog: a server that fails to list contributes nothing
+        // rather than failing the whole catalog.
+        const entries = yield* Effect.forEach(
+          Array.from(runtime),
+          ([, entry]) =>
+            entry.client
+              ? entry.client.skillEntries().pipe(Effect.catch(() => Effect.succeed([])))
+              : Effect.succeed([]),
+          { concurrency: "unbounded" },
+        )
+        return entries.flat().toSorted((a, b) => a.server.localeCompare(b.server) || a.uri.localeCompare(b.uri))
+      }),
+      getSkill: Effect.fn("MCP.getSkill")(function* (input) {
+        const target = yield* requireServer(input.server)
+        yield* Deferred.await(target.entry.startup)
+        if (!target.entry.client)
+          return yield* new SkillUnavailableError({
+            server: target.name,
+            uri: input.uri,
+            reason: "extension-unsupported",
+          })
+        const result = yield* target.entry.client.skillEntry({ uri: input.uri }).pipe(Effect.exit)
+        if (Exit.isFailure(result)) {
+          const error = Cause.squash(result.cause)
+          const reason =
+            error instanceof MCPClient.EntryRejectedError
+              ? error.reason
+              : error instanceof MCPClient.SkillRequestError
+                ? error.code === -32602
+                  ? "not-found"
+                  : error.code === -32601
+                    ? "extension-unsupported"
+                    : "decode-error"
+                : "decode-error"
+          return yield* new SkillUnavailableError({ server: target.name, uri: input.uri, reason })
+        }
+        return result.value
+      }),
+      readSkillResource: Effect.fn("MCP.readSkillResource")(function* (input) {
+        const target = yield* requireServer(input.server)
+        yield* Deferred.await(target.entry.startup)
+        if (!target.entry.client)
+          return yield* new SkillUnavailableError({
+            server: target.name,
+            uri: input.uri,
+            reason: "extension-unsupported",
+          })
+        const held = MCPSkills.entry(input.entry.server, input.entry)
+        if (!held.ok)
+          return yield* new SkillVerificationError({ server: target.name, uri: input.uri, reason: held.reason })
+        if (held.entry.server !== target.name)
+          return yield* new SkillVerificationError({ server: target.name, uri: input.uri, reason: "origin-mismatch" })
+        if (held.entry.resources === "dynamic")
+          return yield* new SkillUnavailableError({ server: target.name, uri: input.uri, reason: "dynamic" })
+        const listed = held.entry.resources.find((resource) => resource.uri === input.uri)
+        if (!listed)
+          return yield* new SkillVerificationError({ server: target.name, uri: input.uri, reason: "unlisted-resource" })
+        const result = yield* target.entry.client
+          .readResource({ uri: input.uri })
+          .pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (!result)
+          return yield* new SkillUnavailableError({
+            server: target.name,
+            uri: input.uri,
+            reason: "extension-unsupported",
+          })
+        const part = result.contents.find((content) => content.uri === input.uri)
+        if (!part)
+          return yield* new SkillVerificationError({ server: target.name, uri: input.uri, reason: "unlisted-resource" })
+        const bytes = part.type === "text" ? Buffer.from(part.text, "utf8") : Buffer.from(part.blob, "base64")
+        const verified = MCPSkills.file({
+          entry: held.entry,
+          uri: input.uri,
+          size: bytes.byteLength,
+          digest: MCPSkills.digest(bytes),
+          mimeType: part.mimeType,
+          ...(part.type === "text" ? { text: part.text } : { blob: bytes.toString("base64") }),
+        })
+        if (!verified.ok)
+          return yield* new SkillVerificationError({ server: target.name, uri: input.uri, reason: verified.reason })
+        return verified.file
       }),
     })
   }),

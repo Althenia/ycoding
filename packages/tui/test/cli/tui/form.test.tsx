@@ -145,7 +145,8 @@ test("keeps a form surface immediately above the session footer", async () => {
     const footer = lines.findIndex((line) => line.includes("Session footer"))
 
     expect(footer).toBe(19)
-    expect(lines[footer - 1]).toContain("│")
+    // The form surface is a SplitBorder, whose vertical glyph is the heavy "┃" rather than "│".
+    expect(lines[footer - 1]).toContain("┃")
   } finally {
     prompt.app.renderer.destroy()
   }

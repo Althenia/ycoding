@@ -7,6 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
+import { z } from "zod"
 import {
   CallToolResultSchema,
   ElicitationCompleteNotificationSchema,
@@ -27,9 +28,11 @@ import {
   ToolListChangedNotificationSchema,
   ToolSchema,
 } from "@modelcontextprotocol/sdk/types.js"
+import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Cause, Effect, Exit, Schema } from "effect"
 import { ConfigMCP } from "../config/mcp"
 import { InstallationVersion } from "../installation/version"
+import { MCPSkills } from "./skills"
 
 const DEFAULT_STARTUP_TIMEOUT = 30_000
 const DEFAULT_CATALOG_TIMEOUT = 30_000
@@ -58,6 +61,28 @@ export class ConnectError extends Schema.TaggedErrorClass<ConnectError>()("MCP.C
   server: Schema.String,
   message: Schema.String,
 }) {}
+
+/** A `skills/get` or `skills/list` request the server rejected; `code` is its JSON-RPC error code. */
+export class SkillRequestError extends Schema.TaggedErrorClass<SkillRequestError>()("MCPClient.SkillRequestError", {
+  server: Schema.String,
+  uri: Schema.String,
+  code: Schema.Number,
+}) {
+  override get message() {
+    return `MCP skill request failed (${this.code}): ${this.uri}`
+  }
+}
+
+/** A retrieved skill entry that the host must not load, carrying the extension's rejection reason. */
+export class EntryRejectedError extends Schema.TaggedErrorClass<EntryRejectedError>()("MCPClient.EntryRejectedError", {
+  server: Schema.String,
+  uri: Schema.String,
+  reason: McpSkill.Reason,
+}) {
+  override get message() {
+    return `MCP skill entry rejected (${this.reason}): ${this.uri}`
+  }
+}
 
 export interface ToolDefinition {
   readonly name: string
@@ -109,6 +134,17 @@ export interface ReadResourceResult {
   readonly contents: ReadonlyArray<ResourceContentPart>
 }
 
+/** Result of a directory read: direct children of a directory resource, never recursive. */
+export interface ResourceDirectoryEntry {
+  readonly uri: string
+  readonly name: string | undefined
+  readonly mimeType: string | undefined
+}
+
+export interface ResourceDirectoryResult {
+  readonly resources: ReadonlyArray<ResourceDirectoryEntry>
+}
+
 export type CallToolContent =
   | { readonly type: "text"; readonly text: string }
   | { readonly type: "media"; readonly data: string; readonly mimeType: string }
@@ -145,6 +181,23 @@ export interface LogMessage {
 export interface Connection {
   /** Server-supplied usage instructions from the initialize result, if any. */
   readonly instructions: string | undefined
+  /**
+   * The server's declared `io.modelcontextprotocol/skills` capability settings, or undefined when the
+   * server does not implement the extension. The extension's methods are only valid when this is present.
+   */
+  readonly skills: MCPSkills.Capability | undefined
+  /**
+   * Lists the connected server's skill entries, verifying each entry and its limits before returning it.
+   * Malformed entries are dropped rather than surfaced, since hosts MUST NOT load them.
+   */
+  readonly skillEntries: () => Effect.Effect<MCPSkills.Entry[], Error>
+  /**
+   * Returns one skill entry by the URI of its `SKILL.md`, confirming a skill the listing does not mention.
+   * Fails when the server does not serve that URI as a skill.
+   */
+  readonly skillEntry: (input: {
+    readonly uri: string
+  }) => Effect.Effect<MCPSkills.Entry, Error | SkillRequestError | EntryRejectedError>
   /** Lists the server's tools; returns [] when the server doesn't advertise tool support, fails on a transport error. */
   readonly tools: () => Effect.Effect<ToolDefinition[], Error>
   /** Lists the server's prompts; returns [] when the server doesn't advertise prompt support, fails on a transport error. */
@@ -155,6 +208,13 @@ export interface Connection {
   readonly resourceTemplates: () => Effect.Effect<ResourceTemplateDefinition[], Error>
   /** Reads one resource; returns undefined when the server doesn't advertise resource support. */
   readonly readResource: (input: { readonly uri: string }) => Effect.Effect<ReadResourceResult | undefined, Error>
+  /**
+   * Lists the direct children of a directory resource. Returns undefined when the server has not declared
+   * the extension's `directoryRead` setting, which the client must not call without.
+   */
+  readonly readResourceDirectory: (input: {
+    readonly uri: string
+  }) => Effect.Effect<ResourceDirectoryResult | undefined, Error>
   /** Invokes a prompt on the server. Interruption aborts the in-flight request. */
   readonly prompt: (input: {
     readonly name: string
@@ -242,8 +302,70 @@ export const connect = Effect.fnUntraced(function* (
     const executionTimeout = config.timeout?.execution ?? DEFAULT_EXECUTION_TIMEOUT
     let resourceListSupported = !!client.getServerCapabilities()?.resources
     let resourceTemplateListSupported = resourceListSupported
+    const skills = MCPSkills.capability(client.getServerCapabilities())
     return {
       instructions: client.getInstructions()?.trim() || undefined,
+      skills,
+      skillEntries: () => {
+        if (!skills) return Effect.succeed([])
+        return Effect.tryPromise({
+          try: () =>
+            paginate(
+              (cursor) =>
+                client.request(
+                  { method: MCPSkills.LIST_METHOD, params: cursor === undefined ? {} : { cursor } },
+                  SkillListResult,
+                  {
+                    timeout: catalogTimeout,
+                  },
+                ),
+              (result) => result.skills,
+            ),
+          catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+        }).pipe(
+          Effect.map((entries) =>
+            entries.flatMap((raw) => {
+              const verified = MCPSkills.entry(server, raw)
+              if (verified.ok) return [verified.entry]
+              return []
+            }),
+          ),
+          Effect.tapError((error) => Effect.logWarning("failed to list MCP skills", { server, error: error.message })),
+        )
+      },
+      skillEntry: (input) => {
+        if (!skills) return Effect.fail(new Error(`MCP server does not implement the skills extension: ${server}`))
+        return Effect.tryPromise({
+          try: (signal) =>
+            client.request({ method: MCPSkills.GET_METHOD, params: { uri: input.uri } }, SkillGetResult, {
+              signal,
+              timeout: executionTimeout,
+            }),
+          catch: (error) =>
+            error instanceof Error && "code" in error && typeof error.code === "number"
+              ? new SkillRequestError({ server, uri: input.uri, code: error.code })
+              : error instanceof Error
+                ? error
+                : new Error(String(error)),
+        }).pipe(
+          Effect.flatMap((result) => {
+            if (
+              typeof result.skill === "object" &&
+              result.skill !== null &&
+              "uri" in result.skill &&
+              typeof result.skill.uri === "string" &&
+              result.skill.uri !== input.uri
+            )
+              return Effect.fail(new EntryRejectedError({ server, uri: input.uri, reason: "uri-mismatch" }))
+            const verified = MCPSkills.entry(server, result.skill)
+            if (verified.ok) return Effect.succeed(verified.entry)
+            return Effect.fail(new EntryRejectedError({ server, uri: input.uri, reason: verified.reason }))
+          }),
+          Effect.tapError((error) =>
+            Effect.logWarning("failed to get MCP skill", { server, uri: input.uri, error: error.message }),
+          ),
+        )
+      },
       tools: () =>
         Effect.gen(function* () {
           if (!client.getServerCapabilities()?.tools) return []
@@ -382,6 +504,41 @@ export const connect = Effect.fnUntraced(function* (
             ),
           }
         }),
+      readResourceDirectory: (input) =>
+        Effect.gen(function* () {
+          if (!skills?.directoryRead) return undefined
+          const resources = yield* Effect.tryPromise({
+            try: () =>
+              paginate(
+                (cursor) =>
+                  client.request(
+                    {
+                      method: MCPSkills.DIRECTORY_READ_METHOD,
+                      params: cursor === undefined ? { uri: input.uri } : { uri: input.uri, cursor },
+                    },
+                    ResourceDirectoryResult,
+                    { timeout: executionTimeout },
+                  ),
+                (result) => result.resources,
+              ),
+            catch: (error) => (error instanceof Error ? error : new Error(String(error))),
+          }).pipe(
+            Effect.tapError((error) =>
+              Effect.logWarning("failed to read MCP resource directory", {
+                server,
+                uri: input.uri,
+                error: error.message,
+              }),
+            ),
+          )
+          return {
+            resources: resources.map((resource) => ({
+              uri: resource.uri,
+              name: resource.name,
+              mimeType: resource.mimeType,
+            })),
+          }
+        }),
       prompt: (input) =>
         Effect.tryPromise({
           try: (signal) =>
@@ -499,6 +656,34 @@ const childPids = (pid: number) =>
         })
       }),
   )
+
+// The extension's result shapes are defined by the stable Skills extension spec and are not part of
+// SDK 1.29.0's type surface. The extension only exists at base revision 2026-07-28 and later, where
+// `resultType`, `ttlMs`, and `cacheScope` are REQUIRED on these results, so they are required here.
+const SkillListResult = z.object({
+  resultType: z.literal("complete"),
+  ttlMs: z.number(),
+  cacheScope: z.string(),
+  skills: z.array(z.unknown()),
+  nextCursor: z.string().optional(),
+})
+const SkillGetResult = z.object({
+  resultType: z.literal("complete"),
+  ttlMs: z.number(),
+  cacheScope: z.string(),
+  skill: z.unknown(),
+})
+const ResourceDirectoryResult = z.object({
+  resultType: z.literal("complete"),
+  resources: z.array(
+    z.object({
+      uri: z.string(),
+      name: z.string().optional(),
+      mimeType: z.string().optional(),
+    }),
+  ),
+  nextCursor: z.string().optional(),
+})
 
 async function paginate<R extends { nextCursor?: string }, T>(
   list: (cursor: string | undefined) => Promise<R>,

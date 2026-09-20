@@ -647,7 +647,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
       }
     }
 
+    let activeSnapshot: Map<string, DataSessionStatus> | undefined
+
     function setSessionActive(sessionID: string, status: DataSessionStatus) {
+      activeSnapshot?.set(sessionID, status)
       setStore("session", "active", sessionID, status)
     }
 
@@ -2166,6 +2169,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
 
     createEffect(() => {
       if (client.connection.status() === "connected") return
+      activeSnapshot = undefined
       sync.invalidate()
       subagentGeneration.forEach((generation, parentID) => subagentGeneration.set(parentID, generation + 1))
       messageSyncLoad.clear()
@@ -2174,15 +2178,19 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     onCleanup(
       client.event.listen(({ details }) => {
         if (details.type === "server.connected") {
+          const mutations = new Map<string, DataSessionStatus>()
+          activeSnapshot = mutations
           void client.api.session
             .active()
             .then(async (active) => {
-              const sessionIDs = Object.keys(active)
-              setStore(
-                "session",
-                "active",
-                reconcile(Object.fromEntries(sessionIDs.map((sessionID) => [sessionID, "running" as const]))),
-              )
+              if (activeSnapshot !== mutations) return
+              activeSnapshot = undefined
+              const statuses = {
+                ...Object.fromEntries(Object.keys(active).map((sessionID) => [sessionID, "running" as const])),
+                ...Object.fromEntries(mutations),
+              }
+              const sessionIDs = Object.keys(statuses).filter((sessionID) => statuses[sessionID] === "running")
+              setStore("session", "active", reconcile(statuses))
               // The root preload below omits children. Resolve every active
               // Session first, then hydrate each durable parent task list so
               // the subagent indicator is complete immediately after restart.
@@ -2200,7 +2208,9 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
                 [...parentIDs].map((parentID) => result.session.subagent.sync(parentID).catch(() => undefined)),
               )
             })
-            .catch(() => undefined)
+            .catch(() => {
+              if (activeSnapshot === mutations) activeSnapshot = undefined
+            })
           void client.api.location
             .get({ location: locationQuery(defaultLocation()) })
             .then((location) => {

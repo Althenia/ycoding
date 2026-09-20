@@ -52,7 +52,9 @@ test("renders Copilot AI credits beside tokens without changing non-Copilot rows
         </ConfigProvider>
       </TestTuiContexts>
     ),
-    { width: 100, height: 40 },
+    // Both session blocks must fit in the dialog viewport, so the non-Copilot row is measurable
+    // beside the Copilot one; at 40 rows the second block is clipped and the assertion is vacuous.
+    { width: 100, height: 60 },
   )
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("Raw input"))

@@ -97,6 +97,44 @@ describe("SessionSkillStatus.list", () => {
     ])
   })
 
+  test("recovers the latest MCP entry when one assistant message contains repeated activations", () => {
+    const message = SessionMessage.Assistant.make({
+      id: messageID("repeated"),
+      type: "assistant",
+      agent: AgentV2.defaultID,
+      model,
+      content: ["old", "new"].map((description, index) =>
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: `call_repeated_${index}`,
+          name: "skill",
+          state: SessionMessage.ToolStateCompleted.make({
+            status: "completed",
+            input: { id: "git-workflow" },
+            content: [],
+            structured: {
+              name: "git-workflow",
+              directory: "",
+              output: `${description} content`,
+              entry: {
+                server: "skills",
+                uri: "skill://git-workflow/SKILL.md",
+                frontmatter: { name: "git-workflow", description },
+                resources: "dynamic",
+              },
+            },
+          }),
+          time: { created, completed: created },
+        }),
+      ),
+      time: { created, completed: created },
+    })
+
+    expect(SessionSkillStatus.mcpActivation([message], skillID("git-workflow"))?.entry.frontmatter.description).toBe(
+      "new",
+    )
+  })
+
   test("excludes prose and incomplete or failed tool calls and compactions", () => {
     const incomplete = assistant(
       "running",

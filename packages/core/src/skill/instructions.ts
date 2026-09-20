@@ -5,20 +5,38 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { SkillV2 } from "../skill"
 import { Instructions } from "../instructions/index"
+import { optional } from "@ycoding-ai/schema/schema"
 
 const Summary = Schema.Struct({
   id: SkillV2.ID,
   name: SkillV2.Name,
   description: Schema.String,
+  // Present only for MCP-served skills. The extension requires the originating server to be visible to
+  // the model, and requires names to be resolved within a per-origin namespace.
+  server: Schema.String.pipe(optional),
 })
 type Summary = typeof Summary.Type
+
+/**
+ * Skill names and descriptions are remote-authored text placed in the model's context inside XML-shaped
+ * markup, so every interpolated value is escaped. An unescaped name could close the element and inject
+ * sibling instructions.
+ */
+const escapeXML = (value: string) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;")
 
 const entries = (skills: ReadonlyArray<Summary>) =>
   skills.flatMap((skill) => [
     "  <skill>",
-    `    <id>${skill.id}</id>`,
-    `    <name>${skill.name}</name>`,
-    `    <description>${skill.description}</description>`,
+    `    <id>${escapeXML(skill.id)}</id>`,
+    `    <name>${escapeXML(skill.name)}</name>`,
+    `    <description>${escapeXML(skill.description)}</description>`,
+    ...(skill.server === undefined ? [] : [`    <origin>${escapeXML(skill.server)}</origin>`]),
     "  </skill>",
   ])
 
@@ -60,6 +78,12 @@ export interface Interface {
   readonly load: (agent: AgentV2.Selection) => Effect.Effect<Instructions.Instructions>
 }
 
+/**
+ * Renders the catalog prompt for given summaries. Exported so the escaping and origin-tagging rules
+ * are verifiable without assembling a full instruction source.
+ */
+export const renderForTest = (skills: ReadonlyArray<Summary>) => render(skills)
+
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SkillInstructions") {}
 
 const layer = Layer.effect(
@@ -72,17 +96,24 @@ const layer = Layer.effect(
         const agent = selection.info
         if (!agent) return Instructions.empty
         const permitted = SkillV2.available(yield* skills.list(), agent)
-        const available = permitted
-          .flatMap((skill) =>
-            skill.description === undefined || skill.autoinvoke === false
-              ? []
-              : [{ id: skill.id, name: skill.name, description: skill.description }],
-          )
-          .toSorted((a, b) => a.id.localeCompare(b.id))
+        const available = permitted.flatMap((skill) =>
+          skill.description === undefined || skill.autoinvoke === false
+            ? []
+            : [{ id: skill.id, name: skill.name, description: skill.description }],
+        )
+        // MCP-served skills are advertised from their listings alone. The entry's name and description
+        // are remote-authored text, so they are escaped at render and tagged with their origin.
+        const mcpAvailable = SkillV2.available(yield* skills.mcp(), agent).map((skill) => ({
+          id: skill.id,
+          name: skill.name,
+          description: skill.description,
+          server: skill.server,
+        }))
+        const all = [...available, ...mcpAvailable].toSorted((a, b) => a.id.localeCompare(b.id))
         return Instructions.make<ReadonlyArray<Summary>>({
           key: Instructions.Key.make("core/skill-guidance"),
           codec: Schema.toCodecJson(Schema.Array(Summary)),
-          read: Effect.succeed(available.length === 0 ? Instructions.removed : available),
+          read: Effect.succeed(all.length === 0 ? Instructions.removed : all),
           render: {
             initial: render,
             changed: update,

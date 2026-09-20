@@ -189,30 +189,64 @@ export function encode(memory: MemoryInput): string {
   ).join("\n")
 }
 
-/** Retains source-backed text verbatim in the structured TOON handoff. */
-export function retainRequiredTexts(memory: Memory, texts: ReadonlyArray<string>): Memory {
+/**
+ * Retains source-backed text verbatim in the structured TOON handoff. An optional
+ * `supersedes` predicate drops every earlier memory value that an incoming text
+ * replaces, in whichever categorized field it was routed to, so a refreshed value
+ * does not accumulate beside the value it replaced.
+ */
+export function retainRequiredTexts(
+  memory: Memory,
+  texts: ReadonlyArray<string>,
+  supersedes?: (existing: string, incoming: string) => boolean,
+): Memory {
+  const withoutSuperseded = (current: Memory, incoming: string): Memory => {
+    if (supersedes === undefined) return current
+    const kept = (values: ReadonlyArray<string>) => values.filter((value) => !supersedes(value, incoming))
+    const scalar = (value: string) => (supersedes(value, incoming) ? "" : value)
+    return {
+      ...current,
+      objective: scalar(current.objective),
+      requirements: kept(current.requirements),
+      acceptance_criteria: kept(current.acceptance_criteria),
+      in_progress: kept(current.in_progress),
+      current_state: scalar(current.current_state),
+      preferences: kept(current.preferences),
+      constraints: kept(current.constraints),
+      completed: kept(current.completed),
+      pending: kept(current.pending),
+      blocked: kept(current.blocked),
+      skill: kept(current.skill),
+      unresolved: kept(current.unresolved),
+      important_identifiers: kept(current.important_identifiers),
+      decision: current.decision.filter((decision) => !supersedes(decision.text, incoming)),
+      facts: current.facts.filter((fact) => !supersedes(fact.text, incoming)),
+      continuation: scalar(current.continuation),
+    }
+  }
   return texts
     .filter((text, index) => text.trim() && texts.indexOf(text) === index)
     .reduce<Memory>((result, text) => {
-      if (memoryTexts(result).some((value) => value.includes(text))) return result
-      if (/^objective\s*:/i.test(text)) return { ...result, objective: text }
-      if (/\bactive skill\b/i.test(text)) return { ...result, skill: [...result.skill, text] }
+      const current = withoutSuperseded(result, text)
+      if (memoryTexts(current).some((value) => value.includes(text))) return current
+      if (/^objective\s*:/i.test(text)) return { ...current, objective: text }
+      if (/\bactive skill\b/i.test(text)) return { ...current, skill: [...current.skill, text] }
       if (/\baccept(?:ance)?[ _-]?criteria\b/i.test(text))
-        return { ...result, acceptance_criteria: [...result.acceptance_criteria, text] }
-      if (/\brequirement\b/i.test(text)) return { ...result, requirements: [...result.requirements, text] }
+        return { ...current, acceptance_criteria: [...current.acceptance_criteria, text] }
+      if (/\brequirement\b/i.test(text)) return { ...current, requirements: [...current.requirements, text] }
       if (/\b(?:accepted|rejected|superseded) decision\b/i.test(text)) {
         const status = /\brejected decision\b/i.test(text)
           ? "rejected"
           : /\bsuperseded decision\b/i.test(text)
             ? "superseded"
             : "accepted"
-        return { ...result, decision: [...result.decision, { text, status }] }
+        return { ...current, decision: [...current.decision, { text, status }] }
       }
-      if (/\bblocker\b/i.test(text)) return { ...result, blocked: [...result.blocked, text] }
-      if (/\b(?:pending|todo|next action)\b/i.test(text)) return { ...result, pending: [...result.pending, text] }
+      if (/\bblocker\b/i.test(text)) return { ...current, blocked: [...current.blocked, text] }
+      if (/\b(?:pending|todo|next action)\b/i.test(text)) return { ...current, pending: [...current.pending, text] }
       if (/\b(?:progress|in[_ -]?progress|completed|validation)\b/i.test(text))
-        return { ...result, in_progress: [...result.in_progress, text] }
-      return { ...result, facts: [...result.facts, { text, confidence: "confirmed" }] }
+        return { ...current, in_progress: [...current.in_progress, text] }
+      return { ...current, facts: [...current.facts, { text, confidence: "confirmed" }] }
     }, memory)
 }
 

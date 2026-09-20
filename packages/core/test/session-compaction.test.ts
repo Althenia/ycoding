@@ -41,6 +41,7 @@ import {
   SessionProviderRequestTable,
   SessionTable,
   SessionTaskTable,
+  SessionTodoTable,
 } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SkillV2 } from "@ycoding-ai/core/skill"
@@ -548,6 +549,29 @@ function expectStrictFrozenSummary(manifest: ContextManifest.Manifest) {
 function selectedTokens(messages: ReadonlyArray<SessionMessage.Info>) {
   const encode = Schema.encodeSync(SessionMessage.Info)
   return Token.estimate(JSON.stringify(messages.map((message) => encode(message))))
+}
+
+const authorityStatePrefix = "Authoritative current Session state (JSON):"
+
+function authorityTexts(memory: SessionSummaryToon.Memory) {
+  return [
+    memory.objective,
+    memory.current_state,
+    memory.continuation,
+    ...memory.facts.map((fact) => fact.text),
+    ...memory.decision.map((decision) => decision.text),
+    ...memory.requirements,
+    ...memory.acceptance_criteria,
+    ...memory.in_progress,
+    ...memory.preferences,
+    ...memory.constraints,
+    ...memory.completed,
+    ...memory.pending,
+    ...memory.blocked,
+    ...memory.skill,
+    ...memory.unresolved,
+    ...memory.important_identifiers,
+  ].filter((text) => text.startsWith(authorityStatePrefix))
 }
 
 function retainManifestGuardrail(sessionID: SessionSchema.ID, manifest: ContextManifest.Manifest) {
@@ -1554,27 +1578,191 @@ itWithTotalTimeout.effect("recovers source pressure locally after the helper tim
   }),
 )
 
-it.effect("rejects the combined candidate when protected state changes during generation", () =>
+it.effect("refreshes protected state after generation without repeating the helper request", () =>
   Effect.gen(function* () {
     reset()
     const sessionID = SessionSchema.ID.make("ses_manifest_protected_change")
     const firstID = SessionMessage.ID.make("msg_manifest_protected_change_first")
     const boundaryID = SessionMessage.ID.make("msg_manifest_protected_change_boundary")
     yield* seedSession(sessionID, 2)
+    const db = (yield* Database.Service).db
+    yield* SessionContextState.initialize(db, sessionID, 0)
     yield* insertAssistant(sessionID, firstID, 1, "immutable compacted source ".repeat(200))
     yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
     responseForRequest = () => checkpoint(1)
-    beforeResponse = (yield* Database.Service).db
+    beforeResponse = db
       .update(SessionTable)
-      .set({ autonomy_revision: 1 })
+      .set({ autonomy_revision: 1, autonomy: { mode: "normal", yolo: 1 }, orchestration_revision: 1 })
       .where(eq(SessionTable.id, sessionID))
       .run()
       .pipe(Effect.orDie, Effect.asVoid)
 
-    const error = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 })).pipe(Effect.flip)
+    const manifest = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }))
 
-    expect(error.code).toBe("protected_state_changed")
+    expect(manifest.protectedState.find((entry) => entry.source === "autonomy")?.revision).toBe(1)
+    expect(manifest.protectedState.find((entry) => entry.source === "goal")?.revision).toBe(1)
+    expect(manifest.protectedState.find((entry) => entry.source === "orchestration")?.revision).toBe(1)
+    const memory = SessionSummaryToon.parse(manifest.summary!.text, {
+      throughSequence: 1,
+      maxSummaryBytes: Buffer.byteLength(manifest.summary!.text),
+    })
+    if ("_tag" in memory) throw memory
+    const authority = memory.facts.find((fact) => fact.text.startsWith("Authoritative current Session state"))
+    expect(authority?.text).toContain('"yolo":1')
+    expect(authority?.text).not.toContain('"yolo":0')
+    retainManifestGuardrail(sessionID, manifest)
+    const context = yield* SessionContextState.Service
+    yield* context.activate({ sessionID, manifest })
+    expect(JSON.stringify(yield* SessionHistory.forModel(db, sessionID))).toContain("yolo")
     expect(requests).toHaveLength(1)
+  }),
+)
+
+itMandatory.effect("supersedes stale authority relocated into every scalar on a second compaction", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const context = yield* SessionContextState.Service
+    const sessionID = SessionSchema.ID.make("ses_manifest_authority_supersede")
+    const firstID = SessionMessage.ID.make("msg_manifest_authority_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_authority_boundary")
+    const laterID = SessionMessage.ID.make("msg_manifest_authority_later")
+    yield* seedSession(sessionID, 2)
+    yield* SessionContextState.initialize(db, sessionID, 0)
+    yield* insertAssistant(sessionID, firstID, 1, "compacted authority source ".repeat(400))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+    responseForRequest = () => checkpoint(2)
+
+    const first = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }, 4_096, "mandatory"))
+    const firstMemory = SessionSummaryToon.parse(first.summary!.text, {
+      throughSequence: first.summary!.coveredThrough.seq,
+      maxSummaryBytes: Buffer.byteLength(first.summary!.text),
+    })
+    if ("_tag" in firstMemory) throw firstMemory
+    const firstAuthority = firstMemory.facts.filter((fact) =>
+      fact.text.startsWith("Authoritative current Session state"),
+    )
+    expect(firstAuthority).toHaveLength(1)
+    expect(firstAuthority[0]!.text).toContain('"yolo":0')
+    const staleAuthority = firstAuthority[0]!.text
+    retainManifestGuardrail(sessionID, first)
+    yield* context.activate({ sessionID, manifest: first })
+
+    // The Session's authoritative live state moves between compactions.
+    yield* db
+      .update(SessionTable)
+      .set({ autonomy_revision: 1, autonomy: { mode: "normal", yolo: 1 }, orchestration_revision: 1 })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* insertAssistant(
+      sessionID,
+      laterID,
+      10,
+      `Objective: preserve ordinary objective. Preserve ordinary current state. ${"detail ".repeat(400)}`,
+    )
+    yield* db
+      .update(EventSequenceTable)
+      .set({ seq: 10 })
+      .where(eq(EventSequenceTable.aggregate_id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    responseForRequest = () =>
+      SessionSummaryToon.encode({
+        ...checkpointMemory(10),
+        objective: staleAuthority,
+        current_state: staleAuthority,
+        continuation: staleAuthority,
+      })
+
+    const second = yield* generateManifest({
+      ...manifestJob(sessionID, { messageID: laterID, seq: 10 }, 4_096, "mandatory"),
+      baseContextRevision: 1,
+    })
+    const secondMemory = SessionSummaryToon.parse(second.summary!.text, {
+      throughSequence: second.summary!.coveredThrough.seq,
+      maxSummaryBytes: Buffer.byteLength(second.summary!.text),
+    })
+    if ("_tag" in secondMemory) throw secondMemory
+    const authority = authorityTexts(secondMemory)
+    expect(authority).toHaveLength(1)
+    expect(authority[0]).toContain('"yolo":1')
+    expect(authority[0]).not.toContain('"yolo":0')
+    expect(secondMemory.objective).not.toBe(staleAuthority)
+    expect(secondMemory.current_state).not.toBe(staleAuthority)
+    expect(secondMemory.continuation).not.toBe(staleAuthority)
+    expect(secondMemory.objective).toContain("Objective: preserve ordinary objective.")
+    expect(secondMemory.current_state).toContain("Preserve ordinary current state.")
+  }),
+)
+
+itMandatory.effect("supersedes an authoritative fact routed into a categorized field across todos", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const context = yield* SessionContextState.Service
+    const sessionID = SessionSchema.ID.make("ses_manifest_authority_todos")
+    const firstID = SessionMessage.ID.make("msg_manifest_authority_todos_first")
+    const boundaryID = SessionMessage.ID.make("msg_manifest_authority_todos_boundary")
+    const laterID = SessionMessage.ID.make("msg_manifest_authority_todos_later")
+    yield* seedSession(sessionID, 2)
+    yield* SessionContextState.initialize(db, sessionID, 0)
+    yield* db
+      .insert(SessionTodoTable)
+      .values({ session_id: sessionID, content: "ship it", status: "pending", priority: "high", position: 0 })
+      .run()
+      .pipe(Effect.orDie)
+    yield* insertAssistant(sessionID, firstID, 1, "compacted authority source ".repeat(400))
+    yield* insertMessage(sessionID, boundaryID, 2, "retained boundary")
+    responseForRequest = () => checkpoint(2)
+
+    const first = yield* generateManifest(manifestJob(sessionID, { messageID: boundaryID, seq: 2 }, 4_096, "mandatory"))
+    const firstMemory = SessionSummaryToon.parse(first.summary!.text, {
+      throughSequence: first.summary!.coveredThrough.seq,
+      maxSummaryBytes: Buffer.byteLength(first.summary!.text),
+    })
+    if ("_tag" in firstMemory) throw firstMemory
+    expect(authorityTexts(firstMemory)).toHaveLength(1)
+    expect(authorityTexts(firstMemory)[0]).toContain('"status":"pending"')
+    retainManifestGuardrail(sessionID, first)
+    yield* context.activate({ sessionID, manifest: first })
+
+    // The todo completes and the Session's authoritative live state moves.
+    yield* db
+      .update(SessionTodoTable)
+      .set({ status: "completed" })
+      .where(eq(SessionTodoTable.session_id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(SessionTable)
+      .set({ autonomy_revision: 1, autonomy: { mode: "normal", yolo: 1 } })
+      .where(eq(SessionTable.id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    yield* insertAssistant(sessionID, laterID, 10, `later material remains useful ${"detail ".repeat(400)}`)
+    yield* db
+      .update(EventSequenceTable)
+      .set({ seq: 10 })
+      .where(eq(EventSequenceTable.aggregate_id, sessionID))
+      .run()
+      .pipe(Effect.orDie)
+    responseForRequest = () => checkpoint(10)
+
+    const second = yield* generateManifest({
+      ...manifestJob(sessionID, { messageID: laterID, seq: 10 }, 4_096, "mandatory"),
+      baseContextRevision: 1,
+    })
+    const secondMemory = SessionSummaryToon.parse(second.summary!.text, {
+      throughSequence: second.summary!.coveredThrough.seq,
+      maxSummaryBytes: Buffer.byteLength(second.summary!.text),
+    })
+    if ("_tag" in secondMemory) throw secondMemory
+    const authority = authorityTexts(secondMemory)
+    expect(authority).toHaveLength(1)
+    expect(authority[0]).toContain('"status":"completed"')
+    expect(authority[0]).toContain('"yolo":1')
+    expect(authority[0]).not.toContain('"status":"pending"')
   }),
 )
 

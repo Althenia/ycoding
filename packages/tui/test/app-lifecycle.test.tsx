@@ -138,6 +138,10 @@ test("session lifecycle updates the terminal title and prints the epilogue after
     if (url.pathname === "/api/session/dummy/message") return json({ data: [], cursor: {} })
     if (url.pathname === "/api/session/dummy/pending") return json({ data: [] })
     if (url.pathname === "/api/session/dummy/permission") return json({ data: [] })
+    // The session route hydrates durable subagent tasks for the root transcript, so the fixture
+    // must answer the subagent list.
+    if (url.pathname === "/api/session/dummy/subagent")
+      return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
     if (url.pathname === "/api/vcs/branch") return json({ location: { directory }, data: {} })
     return undefined
   }, events)

@@ -491,13 +491,13 @@ describe("Session hard context gate", () => {
     }),
   )
 
-  it.effect("does not let an algorithm revision 2 failure suppress the repaired revision 3 job", () =>
+  it.effect("does not let an algorithm revision 3 failure suppress the repaired revision 4 job", () =>
     Effect.gen(function* () {
-      const fixture = yield* setup("revision_two_failure")
+      const fixture = yield* setup("revision_three_failure")
       const jobs = yield* SessionCompactionJob.Service
       const execution = yield* SessionCompactionExecution.Service
-      const revisionTwoDigest = ConfigCompaction.admissionDigest(policy, 2)
-      const legacy = yield* jobs.admit(admission(fixture, { configDigest: revisionTwoDigest }))
+      const revisionThreeDigest = ConfigCompaction.admissionDigest(policy, 3)
+      const legacy = yield* jobs.admit(admission(fixture, { configDigest: revisionThreeDigest }))
       worker = () => new SessionCompaction.ManifestError({ code: "context_limit_unresolved" })
       yield* execution.run({
         jobID: legacy.id,
@@ -513,7 +513,7 @@ describe("Session hard context gate", () => {
 
       expect(result.compacted).toBe(true)
       expect(yield* allJobs()).toMatchObject([
-        { status: "failed", errorCode: "context_limit_unresolved", configDigest: revisionTwoDigest },
+        { status: "failed", errorCode: "context_limit_unresolved", configDigest: revisionThreeDigest },
         { status: "ended", configDigest: ConfigCompaction.admissionDigest(policy) },
       ])
     }),

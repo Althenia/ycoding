@@ -41,7 +41,7 @@ const manual = SkillV2.Info.make({
 
 const layer = (list: () => SkillV2.Info[]) =>
   AppNodeBuilder.build(SkillInstructions.node, [
-    [SkillV2.node, Layer.mock(SkillV2.Service, { list: () => Effect.succeed(list()) })],
+    [SkillV2.node, Layer.mock(SkillV2.Service, { list: () => Effect.succeed(list()), mcp: () => Effect.succeed([]) })],
   ])
 
 describe("SkillInstructions", () => {

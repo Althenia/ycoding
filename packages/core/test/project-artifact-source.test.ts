@@ -45,6 +45,7 @@ const modelRef = { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("
 const details = new Map<string, ProjectArtifact.ArtifactDetails>()
 let listFailure = false
 const observed: ProjectArtifactAccounting.ObserveInput[] = []
+const activations: ProjectArtifact.Activation[] = []
 const governors: ProjectArtifactStore.GovernorEvaluationInput[] = []
 let observeResult: ReadonlyArray<ProjectArtifact.Observation> = []
 const store = Layer.mock(ProjectArtifactStore.Service, {
@@ -88,7 +89,7 @@ const store = Layer.mock(ProjectArtifactStore.Service, {
     ),
 })
 const accounting = Layer.mock(ProjectArtifactAccounting.Service, {
-  activate: (input) => Effect.succeed(input),
+  activate: (input) => Effect.sync(() => activations.push(input)).pipe(Effect.as(input)),
   observe: (input) => Effect.sync(() => observed.push(input)).pipe(Effect.as(observeResult)),
 })
 const sessions = Layer.mock(SessionStore.Service, {
@@ -252,6 +253,11 @@ describe("ProjectArtifactSource", () => {
           const commands = yield* CommandV2.Service
           const agents = yield* AgentV2.Service
 
+          yield* commands.transform((draft) => {
+            draft.update("jcodemunch:assess", (command) => {
+              command.template = "Assess the selected source."
+            })
+          })
           yield* Effect.scoped(source.refresh())
           expect((yield* skills.list()).filter((skill) => skill.id === "review")).toMatchObject([
             { id: "review", content: "First guidance" },
@@ -262,6 +268,8 @@ describe("ProjectArtifactSource", () => {
             permissions: managedDefaults,
           })
           expect(yield* source.provenance("plugin", "blocked-plugin")).toBeUndefined()
+          expect(yield* source.provenance("command", "jcodemunch:assess")).toBeUndefined()
+          expect(yield* commands.get("jcodemunch:assess")).toMatchObject({ template: "Assess the selected source." })
 
           yield* writeSkill("pav_source-two", "Updated guidance", 2)
           yield* source.refresh()
@@ -275,6 +283,87 @@ describe("ProjectArtifactSource", () => {
             { id: "review", content: "Updated guidance" },
           ])
         }),
+      () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
+    ),
+  )
+
+  terminalIt.effect("anchors repeated managed invocations and exact retries to their durable events", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => fs.mkdir(dataRoot, { recursive: true })),
+      () => Effect.gen(function* () {
+        details.clear()
+        activations.length = 0
+        listFailure = false
+        yield* writeSkill("pav_invocations", "Invocation skill", 1)
+        const source = yield* ProjectArtifactSource.Service
+        yield* source.refresh()
+        const events = yield* EventV2.Service
+        const sessionID = SessionV2.ID.make("ses_managed_invocations")
+        yield* seedTerminalSession((yield* Database.Service).db, sessionID, 99)
+        const first = yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID, assistantMessageID: SessionMessage.ID.make("msg_invocations"), callID: "call_first", input: {}, executed: false,
+        })
+        const input = {
+          kind: "skill" as const, id: "review", sessionID, source: "skill-tool" as const,
+          messageID: "msg_invocations", callID: "call_first",
+        }
+        yield* source.activate(input)
+        yield* TestClock.adjust("1 second")
+        const second = yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID, assistantMessageID: SessionMessage.ID.make("msg_invocations"), callID: "call_second", input: {}, executed: false,
+        })
+        yield* source.activate({ ...input, callID: "call_second" })
+        yield* source.activate(input)
+        expect(activations.map((item) => item.boundarySeq)).toEqual([first.durable.seq, second.durable.seq, first.durable.seq])
+        expect(activations.map((item) => item.activatedAt)).toEqual([
+          DateTime.toEpochMillis(first.created), DateTime.toEpochMillis(second.created), DateTime.toEpochMillis(first.created),
+        ])
+        expect(activations[0]).toEqual(activations[2])
+        expect(activations[0]?.id).not.toBe(activations[1]?.id)
+      }),
+      () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
+    ),
+  )
+
+  terminalIt.effect("anchors repeated commands to admissions even after their inputs are promoted", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => fs.mkdir(dataRoot, { recursive: true })),
+      () => Effect.gen(function* () {
+        details.clear()
+        activations.length = 0
+        listFailure = false
+        yield* writeDefinition("review-command", "pav_command-invocations", {
+          kind: "command", name: "Review command", description: "Review", template: "Review.", subtask: false,
+        }, 1)
+        const source = yield* ProjectArtifactSource.Service
+        yield* source.refresh()
+        const events = yield* EventV2.Service
+        const sessionID = SessionV2.ID.make("ses_command_invocations")
+        yield* seedTerminalSession((yield* Database.Service).db, sessionID, 100)
+        const first = yield* events.publish(SessionEvent.InputAdmitted, {
+          sessionID, inputID: SessionMessage.ID.make("msg_command_first"),
+          input: { type: "user", delivery: "steer", data: { text: "Review." } },
+        })
+        const input = {
+          kind: "command" as const, id: "review-command", sessionID, source: "command" as const,
+          messageID: "msg_command_first",
+        }
+        yield* source.activate(input)
+        yield* events.publish(SessionEvent.InputPromoted, { sessionID, inputID: SessionMessage.ID.make(input.messageID) })
+        yield* TestClock.adjust("1 second")
+        const second = yield* events.publish(SessionEvent.InputAdmitted, {
+          sessionID, inputID: SessionMessage.ID.make("msg_command_second"),
+          input: { type: "user", delivery: "steer", data: { text: "Review again." } },
+        })
+        yield* source.activate({ ...input, messageID: "msg_command_second" })
+        yield* source.activate(input)
+        expect(activations.map((item) => item.boundarySeq)).toEqual([first.durable.seq, second.durable.seq, first.durable.seq])
+        expect(activations[0]).toEqual(activations[2])
+        expect(activations[0]?.id).not.toBe(activations[1]?.id)
+        const missing = yield* source.activate({ ...input, messageID: "msg_not_admitted" }).pipe(Effect.flip)
+        expect(missing.message).toBe("Managed activation requires a durable invocation")
+        expect(activations).toHaveLength(3)
+      }),
       () => Effect.promise(() => fs.rm(dataRoot, { recursive: true, force: true })),
     ),
   )
@@ -447,6 +536,14 @@ describe("ProjectArtifactSource", () => {
           for (const [index, profile] of profiles.entries()) {
             const sessionID = SessionV2.ID.make(`ses_${profile.id}`)
             yield* seedTerminalSession(db, sessionID, 20 + index, undefined, profile.tools)
+            for (const tool of profile.tools)
+              yield* events.publish(SessionEvent.Tool.Called, {
+                sessionID,
+                assistantMessageID: SessionMessage.ID.make(`msg_terminal_latest_${20 + index}`),
+                callID: `call-${tool}-${20 + index}`,
+                input: {},
+                executed: false,
+              })
             if (profile.managed === "skill")
               yield* source.activate({
                 kind: "skill",
@@ -454,7 +551,6 @@ describe("ProjectArtifactSource", () => {
                 sessionID,
                 agentID: AgentV2.ID.make("build"),
                 source: "skill-tool",
-                boundarySeq: ProjectArtifact.Revision.make(0),
                 messageID: `msg_terminal_latest_${20 + index}`,
                 callID: `call-skill-${20 + index}`,
               })
@@ -465,7 +561,6 @@ describe("ProjectArtifactSource", () => {
                 sessionID,
                 agentID: AgentV2.ID.make("review-agent"),
                 source: "subagent-launch",
-                boundarySeq: ProjectArtifact.Revision.make(0),
                 messageID: `msg_terminal_latest_${20 + index}`,
                 callID: `call-subagent-${20 + index}`,
               })

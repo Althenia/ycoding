@@ -50,14 +50,12 @@ test("centers the first rail section title in a full-width three-row background 
     expect(contentRow).toBe(titleRow + 3)
     expect([titleRow - 1, titleRow, titleRow + 1].map(hasTitleBackground)).toEqual([true, true, true])
     expect(hasTitleBackground(titleRow + 2)).toBe(false)
-    // The rail's one-column left rule sits at its outer edge, so the section band fills every
-    // column to its right, through to the terminal edge.
-    expect([filledColumns[0], filledColumns.at(-1)]).toEqual([
-      dimensions.width - railWidth(dimensions.width) + 1,
-      dimensions.width - 1,
-    ])
-    // The left rule occupies the rail's outermost column, so the band fills the remainder.
-    expect(filledColumns).toHaveLength(railWidth(dimensions.width) - 1)
+    // The rail's left rule and the scrollbox's terminal scrollbar gutter are outside the section
+    // viewport. The three-row band must fill every column between those fixed boundaries.
+    const viewportStart = dimensions.width - railWidth(dimensions.width) + 1
+    const viewportEnd = dimensions.width - 2
+    expect([filledColumns[0], filledColumns.at(-1)]).toEqual([viewportStart, viewportEnd])
+    expect(filledColumns).toHaveLength(viewportEnd - viewportStart + 1)
   } finally {
     await app.dispose()
   }
@@ -116,6 +114,9 @@ test("keeps subagent and shell footer counts as independent segments", async () 
           { state: "completed" },
           { state: "cancelled" },
         ],
+        // The footer reads the durable page summary, so the fixture must supply it.
+        summary: { total: 4, active: 2, running: 1, waiting: 1 },
+        cursor: {},
       })
     return undefined
   })

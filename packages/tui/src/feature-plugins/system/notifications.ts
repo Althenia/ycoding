@@ -103,7 +103,7 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
               ? "Question needs input"
               : episode.kind === "guardrail"
                 ? "Guardrail approval needed"
-              : "Permission needs input"
+                : "Permission needs input"
         const sound: TuiAttentionSoundName =
           episode.kind === "permission" || episode.kind === "guardrail" ? "permission" : "question"
         return {
@@ -173,7 +173,6 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         if (status === "completed") return { message: "Session done", sound: { name: "done", when: "always" } }
         if (status === "stopped") return { message: "Goal stopped", sound: { name: "error", when: "always" } }
         if (status === "exhausted") return { message: "Goal exhausted", sound: { name: "error", when: "always" } }
-        if (status === "active") return { message: "Goal is still active", sound: { name: "error", when: "always" } }
         return { message: "Goal state missing", sound: { name: "error", when: "always" } }
       }
 
@@ -197,17 +196,16 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         episode.controller = undefined
         episode.state = "terminal"
         if (!session || !initial || !final) return
+        if (session.parentID || final.goal?.status === "active") return
         const output =
-          session.parentID
-            ? { message: "Session done", sound: { name: "subagent_done" as const, when: "always" as const } }
-            : initial.goal !== undefined
+          initial.goal?.status === "active"
             ? goalNotification(final)
             : { message: "Session done", sound: { name: "done" as const, when: "always" as const } }
         send(
           {
             title: session.title,
             message: output.message,
-            notification: session.parentID ? false : { when: "blurred" },
+            notification: { when: "blurred" },
             sound: output.sound,
           },
           () => terminals.get(episode.sessionID) === episode && episode.state === "terminal",

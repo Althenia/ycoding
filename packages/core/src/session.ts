@@ -1131,7 +1131,6 @@ const layer = Layer.effect(
               sessionID: input.sessionID,
               agentID: session.agent,
               source: "command",
-              boundarySeq: ProjectArtifact.Revision.make(0),
               messageID: admitted.id,
             })
             .pipe(

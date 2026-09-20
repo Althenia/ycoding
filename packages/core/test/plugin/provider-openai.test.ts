@@ -2,7 +2,9 @@ import { AISDK } from "@ycoding-ai/core/aisdk"
 import { Money } from "@ycoding-ai/schema/money"
 import { describe, expect } from "bun:test"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
-import { Effect } from "effect"
+import { Deferred, Effect } from "effect"
+import { TestClock } from "effect/testing"
+import { HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
@@ -16,12 +18,17 @@ import { PluginTestLayer } from "./fixture"
 
 const it = testEffect(PluginTestLayer)
 
-const addPlugin = Effect.fn(function* () {
+const addPlugin = Effect.fn(function* (
+  http = HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ models: [] })))),
+) {
   const plugin = yield* PluginV2.Service
   const aisdk = yield* AISDK.Service
   const host = yield* PluginHost.make(plugin)
   const integrations = yield* Integration.Service
-  yield* OpenAIPlugin.effect(host).pipe(Effect.provideService(Integration.Service, integrations))
+  yield* OpenAIPlugin.effect(host).pipe(
+    Effect.provideService(Integration.Service, integrations),
+    Effect.provideService(HttpClient.HttpClient, http),
+  )
 })
 
 function required<T>(value: T | undefined): T {
@@ -43,6 +50,126 @@ function fakeSelectorSdk(calls: string[]) {
 }
 
 describe("OpenAIPlugin", () => {
+  it.effect("adds account-advertised Daybreak model entries despite malformed sibling metadata without changing ordinary models", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      yield* catalog.transform((draft) => {
+        draft.provider.update(ProviderV2.ID.openai, (provider) => {
+          provider.package = ProviderV2.aisdk("@ai-sdk/openai")
+        })
+        for (const id of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"])
+          draft.model.update(ProviderV2.ID.openai, ModelV2.ID.make(id), (model) => {
+            model.name = id
+            model.limit = { context: 100_000, output: 10_000 }
+          })
+      })
+      yield* credentials.create({
+        integrationID: Integration.ID.make("openai"),
+        value: Credential.OAuth.make({
+          type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 60_000,
+          metadata: { accountID: "fixture-account" },
+        }),
+      })
+      const requests: string[] = []
+      const http = HttpClient.make((request) => Effect.sync(() => {
+        requests.push(request.url)
+        expect(request.headers.authorization).toBe("Bearer fixture-access")
+        expect(request.headers["chatgpt-account-id"]).toBe("fixture-account")
+        return HttpClientResponse.fromWeb(request, Response.json({ models: [
+          { slug: "gpt-5.6-luna", available_access_programs: { cyber: ["standard", "daybreak_blue", "future"] } },
+          { slug: "gpt-5.6-terra", available_access_programs: {} },
+          { slug: "gpt-5.6-sol", available_access_programs: { cyber: ["daybreak_blue", "daybreak_red"] } },
+          { slug: "gpt-6-astra", available_access_programs: { cyber: [] } },
+          { slug: "gpt-5.4-mini", available_access_programs: null },
+        ] }))
+      }))
+      yield* addPlugin(http)
+      yield* TestClock.adjust("500 millis")
+      const normal = required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna")))
+      const daybreak = yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))
+      expect(requests).toHaveLength(1)
+      expect(daybreak).toMatchObject({
+        name: "gpt-5.6-luna · Daybreak Blue", modelID: "gpt-5.6-luna", enabled: true,
+        body: { access_programs: { cyber: "daybreak_blue" } }, limit: normal.limit,
+      })
+      expect(normal.body?.access_programs).toBeUndefined()
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-sol-daybreak-red"))).toBeDefined()
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6-astra-daybreak-blue"))).toBeUndefined()
+      expect(requests[0]).toStartWith("https://chatgpt.com/backend-api/codex/models")
+      const integrations = yield* Integration.Service
+      const api = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value: Credential.Key.make({ type: "key", key: "fixture-key" }) })
+      yield* integrations.connection.activate(api.id)
+      yield* TestClock.adjust("500 millis")
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).enabled).toBe(true)
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not block ordinary startup or apply late Daybreak discovery to another account", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      const integrations = yield* Integration.Service
+      yield* catalog.transform((draft) => {
+        draft.model.update(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"), () => {})
+      })
+      yield* credentials.create({
+        integrationID: Integration.ID.make("openai"),
+        value: Credential.OAuth.make({
+          type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 600_000,
+          metadata: { accountID: "fixture-account" },
+        }),
+      })
+      const response = yield* Deferred.make<Response>()
+      yield* addPlugin(HttpClient.make((request) => Deferred.await(response).pipe(
+        Effect.map((value) => HttpClientResponse.fromWeb(request, value)),
+      )))
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).enabled).toBe(true)
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
+      const api = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value: Credential.Key.make({ type: "key", key: "fixture-key" }) })
+      yield* integrations.connection.activate(api.id)
+      yield* TestClock.adjust("500 millis")
+      yield* Deferred.succeed(response, Response.json({ models: [
+        { slug: "gpt-5.6-luna", available_access_programs: { cyber: ["daybreak_blue"] } },
+      ] }))
+      yield* TestClock.adjust("500 millis")
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
+    }),
+  )
+
+  for (const scenario of [
+    { name: "missing metadata", status: 200, body: { models: [{ slug: "gpt-5.6-luna" }] } },
+    { name: "unknown programs", status: 200, body: { models: [{ slug: "gpt-5.6-luna", available_access_programs: { cyber: ["future"] } }] } },
+    { name: "denied discovery", status: 403, body: { error: "denied" } },
+    { name: "malformed discovery", status: 200, body: { models: [{ slug: "gpt-5.6-luna", available_access_programs: { cyber: true } }] } },
+  ]) it.effect(`keeps ordinary models without Daybreak entries for ${scenario.name}`, () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const credentials = yield* Credential.Service
+      yield* catalog.transform((draft) => {
+        draft.model.update(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"), () => {})
+      })
+      yield* credentials.create({
+        integrationID: Integration.ID.make("openai"),
+        value: Credential.OAuth.make({
+          type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"),
+          access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 600_000,
+          metadata: { accountID: "fixture-account" },
+        }),
+      })
+      yield* addPlugin(HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(
+        request, Response.json(scenario.body, { status: scenario.status }),
+      ))))
+      yield* TestClock.adjust("500 millis")
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).enabled).toBe(true)
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
+    }),
+  )
+
   it.effect("registers browser and headless ChatGPT OAuth methods", () =>
     Effect.gen(function* () {
       yield* addPlugin()

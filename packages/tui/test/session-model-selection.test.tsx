@@ -126,6 +126,7 @@ const route: FetchHandler = async (url, request) => {
 }
 
 async function renderPicker(input: {
+  catalog?: typeof models
   route?: Route
   order?: readonly PreferenceModel[]
   /** Home has no Session, so the picker omits the Session API target. */
@@ -146,7 +147,10 @@ async function renderPicker(input: {
   )
 
   const events = createEventStream()
-  const transport = createFetch(route, events)
+  const transport = createFetch((url, request) => {
+    if (input.catalog && url.pathname === "/api/model") return json({ location, data: input.catalog })
+    return route(url, request)
+  }, events)
   let current: PreferenceModel | undefined
   let currentVariant: string | undefined
   let currentAgent: string | undefined
@@ -255,6 +259,29 @@ async function waitFor(predicate: () => boolean, label: string, attempts = 200) 
   }
   throw new Error(`timed out waiting for ${label}`)
 }
+
+test("renders Daybreak as a separate model and switches using its catalog identity", async () => {
+  switches.length = 0
+  switchGate = undefined
+  switchResponse = () => new Response(null, { status: 204 })
+  const normal = model({ id: "gpt-5.6-luna", providerID: "openai", name: "GPT-5.6 Luna", context: 1_050_000 })
+  const screen = await renderPicker({
+    stateDir: "daybreak",
+    order: [{ providerID: "openai", modelID: "gpt-5.6-luna-daybreak-blue" }],
+    catalog: [...models, normal, { ...normal, id: "gpt-5.6-luna-daybreak-blue", name: "GPT-5.6 Luna · Daybreak Blue" }],
+  })
+  try {
+    await screen.app.waitForFrame((frame) => frame.includes("GPT-5.6 Luna · Daybreak Blue"))
+    const rows = screen.app.captureCharFrame().split("\n").filter((row) => row.includes("GPT-5.6 Luna"))
+    expect(rows).toHaveLength(2)
+    expect(rows.some((row) => !row.includes("Daybreak"))).toBe(true)
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.current()?.modelID === "gpt-5.6-luna-daybreak-blue", "the Daybreak preference")
+    expect(switches).toEqual([{ sessionID, model: { providerID: "openai", id: "gpt-5.6-luna-daybreak-blue" } }])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("the picker awaits the durable switch before committing the local preference", async () => {
   switches.length = 0

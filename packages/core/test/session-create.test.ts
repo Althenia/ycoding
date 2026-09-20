@@ -3,6 +3,7 @@ import path from "path"
 import { DateTime, Effect, Layer, Stream } from "effect"
 import { Money } from "@ycoding-ai/schema/money"
 import { AgentV2 } from "@ycoding-ai/core/agent"
+import { Catalog } from "@ycoding-ai/core/catalog"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -10,6 +11,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Location } from "@ycoding-ai/core/location"
+import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProjectV2 } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
@@ -38,7 +40,14 @@ const projects = Layer.succeed(
 )
 const it = testEffect(
   AppNodeBuilder.build(
-    LayerNode.group([Database.node, EventV2.node, SessionProjector.node, SessionStore.node, SessionV2.node]),
+    LayerNode.group([
+      Database.node,
+      EventV2.node,
+      SessionProjector.node,
+      SessionStore.node,
+      SessionV2.node,
+      LocationServiceMap.node,
+    ]),
     [
       [ProjectV2.node, projects],
       [SessionExecution.node, SessionExecution.noopLayer],
@@ -700,26 +709,39 @@ describe("SessionV2.create", () => {
   )
 
   it.effect("switches the selected model through the durable Session event", () =>
-    Effect.gen(function* () {
-      const session = yield* SessionV2.Service
-      const created = yield* session.create({
-        location: Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }),
-      })
-      const model = ModelV2.Ref.make({
-        id: ModelV2.ID.make("sonnet"),
-        providerID: ProviderV2.ID.anthropic,
-        variant: ModelV2.VariantID.make("high"),
-      })
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        const session = yield* SessionV2.Service
+        const created = yield* session.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+        })
+        const model = ModelV2.Ref.make({
+          id: ModelV2.ID.make("sonnet"),
+          providerID: ProviderV2.ID.anthropic,
+          variant: ModelV2.VariantID.make("high"),
+        })
+        yield* Catalog.Service.use((catalog) =>
+          catalog.transform((editor) => {
+            editor.provider.update(model.providerID, (provider) => {
+              provider.package = ProviderV2.aisdk("@ai-sdk/anthropic")
+            })
+            editor.model.update(model.providerID, model.id, (entry) => {
+              entry.limit = { context: 128_000, output: 16_384 }
+              entry.variants = [{ id: ModelV2.VariantID.make("high") }]
+            })
+          }),
+        ).pipe(Effect.provide(LocationServiceMap.Service.get(created.location)))
 
-      expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
+        expect(yield* session.switchModel({ sessionID: created.id, model })).toEqual({ status: "switched" })
 
-      expect(yield* session.get(created.id)).toMatchObject({ model })
-      const events = Array.from(
-        yield* logEvents(session, created.id, true).pipe(Stream.drop(1), Stream.take(1), Stream.runCollect),
-      )
-      expect(events).toMatchObject([{ type: "session.model.selected" }])
-      expect(events[0]?.data).toEqual({ sessionID: created.id, model })
-    }),
+        expect(yield* session.get(created.id)).toMatchObject({ model })
+        const events = Array.from(
+          yield* logEvents(session, created.id, true).pipe(Stream.drop(1), Stream.take(1), Stream.runCollect),
+        )
+        expect(events).toMatchObject([{ type: "session.model.selected" }])
+        expect(events[0]?.data).toEqual({ sessionID: created.id, model })
+      }),
+    ),
   )
 
   it.effect("ignores a model switch when the selected model is unchanged", () =>

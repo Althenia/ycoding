@@ -27,6 +27,7 @@ import { Policy } from "./policy"
 import { LocationServiceMap } from "./location-service-map"
 import { MCP } from "./mcp/index"
 import { Memory } from "./memory"
+import { NtfyAttention } from "./ntfy/attention"
 import { PermissionV2 } from "./permission"
 import { PluginV2 } from "./plugin"
 import { PluginSupervisor } from "./plugin/supervisor"
@@ -92,6 +93,7 @@ const locationServiceNodes = [
   MCP.node,
   Memory.node,
   PermissionV2.node,
+  NtfyAttention.deliveryNode,
   SessionGuardrail.node,
   BrowserAdmission.node,
   IsolatedBrowserExecutor.node,
@@ -142,7 +144,7 @@ export function buildLocationServiceMap(
   // different RcMap keys. The RcMap caches by the raw key before the build
   // callback runs, so canonicalize at the map boundary to the key-present shape.
   const canonical = (ref: Location.Ref) => Location.Ref.make({ directory: ref.directory, workspaceID: ref.workspaceID })
-  return Layer.effect(
+  const map = Layer.effect(
     LocationServiceMap.Service,
     Effect.map(
       LayerMap.make(
@@ -177,6 +179,7 @@ export function buildLocationServiceMap(
       }),
     ),
   )
+  return Layer.merge(map, NtfyAttention.lifecycleLayer.pipe(Layer.provide(map)))
 }
 
 // This is temporary for backwards compatibility

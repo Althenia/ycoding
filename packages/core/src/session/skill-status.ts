@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect"
+import { McpSkill } from "@ycoding-ai/schema/mcp-skill"
 import { Conflict, Info, State } from "@ycoding-ai/schema/session-skill-status"
 import { SkillV2 } from "../skill"
 import { SkillTool } from "../tool/skill"
@@ -101,4 +102,28 @@ export function list(
   })
 }
 
-export const SessionSkillStatus = { Conflict, Info, State, list }
+export type MCPActivation = {
+  readonly status: Info
+  readonly entry: McpSkill.Entry
+}
+
+/** Returns the held MCP entry from the durable tool message that established the active skill. */
+export function mcpActivation(messages: ReadonlyArray<SessionMessage.Info>, id: SkillV2.ID): MCPActivation | undefined {
+  const status = list(messages, []).find((candidate) => candidate.id === id && candidate.state === "active")
+  if (!status || status.activatedBy !== "tool") return undefined
+  const message = messages.find(
+    (candidate): candidate is SessionMessage.Assistant =>
+      candidate.type === "assistant" && candidate.id === status.activationMessageID,
+  )
+  if (!message) return undefined
+  for (const content of message.content.toReversed()) {
+    if (content.type !== "tool" || content.name !== SkillTool.name || content.state.status !== "completed") continue
+    const input = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Input)(content.state.input))
+    const output = Option.getOrUndefined(Schema.decodeUnknownOption(SkillTool.Output)(content.state.structured))
+    if (input?.id !== id || output?.alreadyActive || !output?.entry) continue
+    return { status, entry: output.entry }
+  }
+  return undefined
+}
+
+export const SessionSkillStatus = { Conflict, Info, State, list, mcpActivation }

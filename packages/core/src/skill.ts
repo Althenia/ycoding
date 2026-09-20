@@ -9,6 +9,8 @@ import { AgentV2 } from "./agent"
 import { ConfigMarkdown } from "./config/markdown"
 import { EventV2 } from "./event"
 import { FSUtil } from "./fs-util"
+import { MCP } from "./mcp"
+import { MCPSkills } from "./mcp/skills"
 import { PermissionV2 } from "./permission"
 import { AbsolutePath } from "./schema"
 import { SkillDiscovery } from "./skill/discovery"
@@ -37,7 +39,7 @@ export type Conflicts = Skill.Conflicts
 
 export const Event = Skill.Event
 
-export const available = (skills: ReadonlyArray<Info>, agent: AgentV2.Info) =>
+export const available = <A extends { readonly id: ID }>(skills: ReadonlyArray<A>, agent: AgentV2.Info) =>
   skills.filter((skill) => PermissionV2.evaluate("skill", skill.id, agent.permissions).effect !== "deny")
 
 const Frontmatter = Schema.Struct({
@@ -85,6 +87,29 @@ export type Data = {
   sources: Types.DeepMutable<Source>[]
 }
 
+/**
+ * Metadata-only view of one MCP-served skill, the projection the model-facing surface consumes.
+ * It carries the origin pair as the ID, so identity is never the bare URI or the bare name.
+ */
+export type MCPSkillInfo = {
+  readonly id: ID
+  readonly server: string
+  readonly uri: string
+  readonly name: Name
+  readonly description: string
+  readonly entry: MCPSkills.Entry
+}
+
+/**
+ * Collision-safe skill identity for an MCP-served skill. The extension defines a skill's identity as
+ * the pair of the host's server label and the `SKILL.md` URI. The canonical encoding is reversible
+ * and length-unambiguous, so delimiter characters in either half cannot collide.
+ */
+export const mcpSkillID = (server: string, uri: string) => ID.make(MCPSkills.id(server, uri))
+
+/** Recovers the origin pair from an ID produced by `mcpSkillID`, or undefined for a local skill. */
+export const mcpSkillOrigin = (id: string) => MCPSkills.origin(id)
+
 export type Draft = {
   source: (source: Source) => void
   list: () => readonly Source[]
@@ -93,6 +118,12 @@ export type Draft = {
 export interface Interface extends State.Transformable<Draft> {
   readonly sources: () => Effect.Effect<Source[]>
   readonly list: () => Effect.Effect<Info[]>
+  /**
+   * Metadata-only projection of every connected MCP server's skill entries. This reads the extension's
+   * listings and never retrieves a skill file, so it is safe at startup and on instruction reload.
+   * Entries the host must not load are already dropped by the MCP layer.
+   */
+  readonly mcp: () => Effect.Effect<MCPSkillInfo[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Skill") {}
@@ -103,6 +134,7 @@ const layer = Layer.effect(
     const discovery = yield* SkillDiscovery.Service
     const fs = yield* FSUtil.Service
     const events = yield* EventV2.Service
+    const mcp = yield* MCP.Service
 
     const state = State.create<Data, Draft>({
       name: "skill",
@@ -212,6 +244,17 @@ const layer = Layer.effect(
         return state.get().sources
       }),
       list,
+      mcp: Effect.fn("SkillV2.mcp")(function* () {
+        const entries = yield* mcp.skillCatalog()
+        return entries.map((entry) => ({
+          id: mcpSkillID(entry.server, entry.uri),
+          server: entry.server,
+          uri: entry.uri,
+          name: Name.make(entry.frontmatter.name),
+          description: entry.frontmatter.description,
+          entry,
+        }))
+      }),
     })
   }),
 )
@@ -219,5 +262,5 @@ const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [SkillDiscovery.node, FSUtil.node, EventV2.node],
+  deps: [SkillDiscovery.node, FSUtil.node, EventV2.node, MCP.node],
 })

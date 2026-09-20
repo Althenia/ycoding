@@ -7,13 +7,15 @@ import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { Location } from "@ycoding-ai/core/location"
 import { Effect } from "effect"
 import { SkillPlugin } from "@ycoding-ai/core/plugin/skill"
+import { MCP } from "@ycoding-ai/core/mcp/index"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SkillV2 } from "@ycoding-ai/core/skill"
+import { emptyMcpLayer } from "../fixture/mcp"
 import { location } from "../fixture/location"
 import { testEffect } from "../lib/effect"
 import { host } from "./host"
 
-const it = testEffect(AppNodeBuilder.build(SkillV2.node))
+const it = testEffect(AppNodeBuilder.build(SkillV2.node, [[MCP.node, emptyMcpLayer]]))
 
 describe("SkillPlugin.Plugin", () => {
   it.effect("registers built-in skills", () =>

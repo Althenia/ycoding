@@ -46,7 +46,12 @@ for (const viewport of viewports) {
 
     try {
       expect(app.captureCharFrame()).toContain("! 1 conflict · ⌃x i")
-      const separator = app.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("·"))
+      // The attention header summary also carries "·" in warning ink, so select the conflict-row
+      // separator (the last one) and assert it keeps the shared separator token.
+      const separator = app.captureSpans().lines
+        .flatMap((line) => line.spans)
+        .filter((span) => span.text.includes("·"))
+        .at(-1)
       expect(separator?.fg.toInts()).toEqual(app.separator().toInts())
     } finally {
       app.renderer.destroy()

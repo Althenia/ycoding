@@ -205,7 +205,8 @@ describe("Config", () => {
       const digest = ConfigCompaction.admissionDigest(resolved)
 
       expect(digest).toBe(ConfigCompaction.admissionDigest(ConfigCompaction.resolve([])))
-      expect(digest).toBe(ConfigCompaction.admissionDigest(resolved, 3))
+      expect(digest).toBe(ConfigCompaction.admissionDigest(resolved, 4))
+      expect(digest).not.toBe(ConfigCompaction.admissionDigest(resolved, 3))
       expect(digest).not.toBe(ConfigCompaction.admissionDigest(resolved, 2))
       expect(digest).not.toBe(ConfigCompaction.admissionDigest(resolved, 1))
       expect(digest).not.toBe(

@@ -8,10 +8,12 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
 import { FSUtil } from "@ycoding-ai/core/fs-util"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
+import { MCP } from "@ycoding-ai/core/mcp/index"
 import { SkillV2 } from "@ycoding-ai/core/skill"
 import { SkillDiscovery } from "@ycoding-ai/core/skill/discovery"
 import { FileSystem } from "@ycoding-ai/schema/filesystem"
 import { Instruction } from "@ycoding-ai/schema/instruction"
+import { emptyMcpLayer } from "./fixture/mcp"
 import { tmpdir } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 
@@ -27,7 +29,10 @@ const discovery = Layer.succeed(
   }),
 )
 const it = testEffect(
-  AppNodeBuilder.build(LayerNode.group([SkillV2.node, AgentV2.node, EventV2.node]), [[SkillDiscovery.node, discovery]]),
+  AppNodeBuilder.build(LayerNode.group([SkillV2.node, AgentV2.node, EventV2.node]), [
+    [SkillDiscovery.node, discovery],
+    [MCP.node, emptyMcpLayer],
+  ]),
 )
 
 function write(directory: string, name: string, description: string) {

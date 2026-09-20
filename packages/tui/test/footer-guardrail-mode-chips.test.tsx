@@ -9,7 +9,7 @@ import { ThemeProvider } from "../src/context/theme"
 import { TestTuiContexts } from "./fixture/tui-environment"
 import { createTuiResolvedConfig } from "./fixture/tui-runtime"
 
-test("derives the goal chip from the current mode instead of retained goal state", () => {
+test("derives the goal chip from the active goal status and labels YOLO by level", () => {
   const active = modeChips({
     autonomy: { mode: "normal", yolo: false, goal: { text: "ship", status: "active", iteration: 3, noProgress: 3, maxNoProgress: 5 },
     },
@@ -23,10 +23,11 @@ test("derives the goal chip from the current mode instead of retained goal state
     { key: "yolo", label: "YOLO off", tone: "off" },
   ])
 
+  // A retained active goal keeps the goal chip on; `yolo: true` decodes to level 2.
   const retained = { text: "ship", status: "active" as const, iteration: 3, noProgress: 3, maxNoProgress: 5 }
   expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained } })).toEqual([
-    { key: "goal", label: "goal off", tone: "off" },
-    { key: "yolo", label: "YOLO", tone: "danger" },
+    { key: "goal", label: "goal", tone: "on" },
+    { key: "yolo", label: "YOLO 2", tone: "danger" },
   ])
   expect(modeChips({ autonomy: { mode: "normal", yolo: true, goal: retained }, guardrailPending: true })[0]).toEqual({
     key: "goal",
@@ -80,7 +81,7 @@ test("renders the idle, goal, YOLO, and guardrail footer states at 80 columns", 
     if (!guardrailChip) throw new Error("expected the guardrail-blocked goal chip")
     expect(guardrailChip.fg.toInts()).toEqual(RGBA.fromHex("#0F1115").toInts())
     expect(guardrailChip.bg.toInts()).toEqual(RGBA.fromHex("#F0BE62").toInts())
-    expect(modeChips({ autonomy: { mode: "normal", yolo: true } })[1]).toMatchObject({ label: "YOLO", tone: "danger" })
+    expect(modeChips({ autonomy: { mode: "normal", yolo: true } })[1]).toMatchObject({ label: "YOLO 2", tone: "danger" })
   } finally {
     app.renderer.destroy()
   }
@@ -105,13 +106,15 @@ test("clearing a pending guardrail restores the prior YOLO footer state", async 
   app.renderer.start()
   await app.waitForFrame((frame) => frame.includes("guardrail blocked"))
   setGuardrailPending(false)
-  await app.waitForFrame((frame) => frame.includes("goal off") && !frame.includes("blocked"))
+  await app.waitForFrame((frame) => frame.includes("goal") && !frame.includes("blocked"))
 
   try {
     const frame = app.captureCharFrame()
-    expect(frame).toContain("goal off")
+    // The active goal keeps its own chip; only the guardrail warning clears.
+    expect(frame).toContain("goal")
+    expect(frame).not.toContain("goal off")
     expect(frame).not.toContain("blocked")
-    expect(frame).toContain("YOLO")
+    expect(frame).toContain("YOLO 2")
   } finally {
     app.renderer.destroy()
   }

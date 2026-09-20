@@ -3,6 +3,7 @@ export * as ProjectArtifactStandardSourceRegistry from "./source-registry"
 export { StandardSourceRegistry, make, registryNode } from "./source-registry"
 
 import path from "path"
+import { and, eq, sql } from "drizzle-orm"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Project } from "@ycoding-ai/schema/project"
@@ -17,6 +18,8 @@ import { Location } from "../location"
 import { ProjectArtifactStore } from "../project-artifact"
 import { ProjectArtifactAccounting } from "./accounting"
 import { EventV2 } from "../event"
+import { EventTable } from "../event/sql"
+import { Database } from "../database/database"
 import { SessionEvent } from "../session/event"
 import { SessionStore } from "../session/store"
 import { SessionAutonomy } from "../session/autonomy"
@@ -46,12 +49,22 @@ export interface Interface {
     readonly id: string
     readonly sessionID: Session.ID
     readonly agentID?: Agent.ID
-    readonly source: ProjectArtifact.ActivationSource
-    readonly boundarySeq: ProjectArtifact.Revision
-    readonly messageID?: string
-    readonly callID?: string
-    readonly activatedAt?: ProjectArtifact.TimestampMillis
-  }) => Effect.Effect<void, Error>
+  } & (
+    | {
+        readonly source: "agent-selected"
+        readonly boundarySeq: ProjectArtifact.Revision
+        readonly activatedAt: ProjectArtifact.TimestampMillis
+        readonly messageID?: never
+        readonly callID?: never
+      }
+    | {
+        readonly source: "command" | "skill-tool" | "subagent-launch"
+        readonly messageID: string
+        readonly callID?: string
+        readonly boundarySeq?: never
+        readonly activatedAt?: never
+      }
+  )) => Effect.Effect<void, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/ProjectArtifactSource") {}
@@ -71,6 +84,7 @@ const layer = Layer.effect(
     const store = yield* ProjectArtifactStore.Service
     const sessions = yield* SessionStore.Service
     const events = yield* EventV2.Service
+    const db = (yield* Database.Service).db
     const autonomy = yield* SessionAutonomy.Service
     const scope = yield* Scope.Scope
     const key = JSON.stringify({ directory: location.directory, workspaceID: location.workspaceID })
@@ -368,36 +382,57 @@ const layer = Layer.effect(
       Effect.succeed(
         Service.of({
           refresh,
-          provenance: (kind, id) => Effect.sync(() => active.get(candidateKey(kind, ProjectArtifact.ID.make(id)))),
+          provenance: (kind, id) => Effect.sync(() => active.get(candidateKey(kind, id))),
           activate: Effect.fn("ProjectArtifactSource.activate")(function* (input) {
-            const provenance = yield* Effect.sync(() => active.get(candidateKey(input.kind, ProjectArtifact.ID.make(input.id))))
+            const provenance = yield* Effect.sync(() => active.get(candidateKey(input.kind, input.id)))
             if (!provenance) return
-            const message = input.messageID
-              ? (yield* sessions.context(input.sessionID)).find((message) => message.id === input.messageID)
-              : undefined
+            const invocation =
+              input.source === "agent-selected"
+                ? { seq: input.boundarySeq, created: input.activatedAt }
+                : yield* db
+                    .select({ seq: EventTable.seq, created: EventTable.created })
+                    .from(EventTable)
+                    .where(
+                      and(
+                        eq(EventTable.aggregate_id, input.sessionID),
+                        input.source === "command"
+                          ? and(
+                              eq(EventTable.type, EventV2.versionedType(
+                                SessionEvent.InputAdmitted.type, SessionEvent.InputAdmitted.durable.version,
+                              )),
+                              sql`json_extract(${EventTable.data}, '$.inputID') = ${input.messageID}`,
+                            )
+                          : and(
+                              eq(EventTable.type, EventV2.versionedType(
+                                SessionEvent.Tool.Called.type, SessionEvent.Tool.Called.durable.version,
+                              )),
+                              sql`json_extract(${EventTable.data}, '$.assistantMessageID') = ${input.messageID}`,
+                              sql`json_extract(${EventTable.data}, '$.callID') = ${input.callID ?? null}`,
+                            ),
+                      ),
+                    )
+                    .get()
+                    .pipe(Effect.orDie)
+            if (!invocation) return yield* Effect.fail(new Error("Managed activation requires a durable invocation"))
             const activation = ProjectArtifact.Activation.make({
-                  id: ProjectArtifact.ActivationID.make(
-                    `paa_${Hash.sha256([input.sessionID, provenance.versionID, input.source, input.boundarySeq, input.messageID, input.callID].join("\0")).slice(0, 32)}`,
-                  ),
-                  artifact: {
-                    scopeID: provenance.scopeID,
-                    kind: provenance.kind,
-                    id: provenance.id,
-                    versionID: provenance.versionID,
-                  },
-                  projectID: location.project.id,
-                  sessionID: input.sessionID,
-                  agentID: input.agentID,
-                  source: input.source,
-                  messageID: input.messageID,
-                  callID: input.callID,
-                  boundarySeq: input.boundarySeq,
-                  activatedAt:
-                    input.activatedAt ??
-                    ProjectArtifact.TimestampMillis.make(
-                      message ? DateTime.toEpochMillis(message.time.created) : Date.now(),
-                    ),
-                })
+              id: ProjectArtifact.ActivationID.make(
+                `paa_${Hash.sha256([input.sessionID, provenance.versionID, input.source, invocation.seq, input.messageID, input.callID].join("\0")).slice(0, 32)}`,
+              ),
+              artifact: {
+                scopeID: provenance.scopeID,
+                kind: provenance.kind,
+                id: provenance.id,
+                versionID: provenance.versionID,
+              },
+              projectID: location.project.id,
+              sessionID: input.sessionID,
+              agentID: input.agentID,
+              source: input.source,
+              messageID: input.messageID,
+              callID: input.callID,
+              boundarySeq: ProjectArtifact.Revision.make(invocation.seq),
+              activatedAt: ProjectArtifact.TimestampMillis.make(invocation.created),
+            })
             yield* accounting.activate(activation)
             const current = managedActivations.get(input.sessionID) ?? new Map()
             current.set(activation.id, activation)
@@ -421,6 +456,7 @@ export const node = makeLocationNode({
     ProjectArtifactStore.node,
     ProjectArtifactAccounting.node,
     EventV2.node,
+    Database.node,
     SessionStore.node,
     SessionAutonomy.node,
     registryNode,
@@ -443,7 +479,7 @@ type Candidate = {
   readonly version: VersionIndex
 }
 
-function candidateKey(kind: ProjectArtifact.Kind, id: ProjectArtifact.ID) {
+function candidateKey(kind: ProjectArtifact.Kind, id: string) {
   return `${kind}:${id}`
 }
 
@@ -467,23 +503,28 @@ function standardSources(input: {
 }) {
   return Effect.gen(function* () {
     const sources = [
-      ...(yield* input.skills.list()).map((skill) => ({ kind: "skill" as const, id: ProjectArtifact.ID.make(skill.id), path: skill.location })),
+      ...(yield* input.skills.list()).map((skill) => ({ kind: "skill" as const, id: skill.id, path: skill.location })),
       ...(yield* input.commands.list()).flatMap((command) =>
         (command.locations?.length ? command.locations : [undefined]).map((location) => ({
           kind: "command" as const,
-          id: ProjectArtifact.ID.make(command.name),
+          id: command.name,
           path: location,
         })),
       ),
       ...(yield* input.agents.list()).flatMap((agent) =>
         (agent.locations?.length ? agent.locations : [undefined]).map((location) => ({
           kind: "agent" as const,
-          id: ProjectArtifact.ID.make(agent.id),
+          id: agent.id,
           path: location,
         })),
       ),
     ]
-    return yield* Effect.forEach(sources, (source) => readStandardSource({ ...source, location: input.location }))
+    return yield* Effect.forEach(
+      sources.flatMap((source) =>
+        Schema.is(ProjectArtifact.ID)(source.id) ? [{ ...source, id: source.id }] : [],
+      ),
+      (source) => readStandardSource({ ...source, location: input.location }),
+    )
   })
 }
 

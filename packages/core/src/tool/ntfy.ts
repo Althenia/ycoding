@@ -3,8 +3,9 @@ export * as NtfyTool from "./ntfy"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { Effect, Schema } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { HttpClient } from "effect/unstable/http"
 import { Config } from "../config"
+import { NtfyAttention } from "../ntfy/attention"
 import { PermissionV2 } from "../permission"
 import { Tool } from "./tool"
 
@@ -40,8 +41,9 @@ export const Plugin = {
                 const settings = Config.latest(yield* config.entries(), "ntfy")
                 if (settings?.enabled !== true)
                   return yield* Effect.fail(new ToolFailure({ message: "Ntfy notifications are disabled." }))
-                const topic = settings.topic?.trim()
-                if (!topic) return yield* Effect.fail(new ToolFailure({ message: "Ntfy topic is not configured." }))
+                const configured = NtfyAttention.topic(settings)
+                if (!configured)
+                  return yield* Effect.fail(new ToolFailure({ message: "Ntfy topic is not configured." }))
 
                 yield* permission
                   .assert({
@@ -54,15 +56,7 @@ export const Plugin = {
                     source: { type: "tool", messageID: context.messageID, callID: context.callID },
                   })
                   .pipe(
-                    Effect.andThen(
-                      http
-                        .execute(
-                          HttpClientRequest.post(`https://ntfy.sh/${encodeURIComponent(topic)}`).pipe(
-                            HttpClientRequest.bodyText(input.message, "text/plain"),
-                          ),
-                        )
-                        .pipe(Effect.flatMap(HttpClientResponse.filterStatusOk)),
-                    ),
+                    Effect.andThen(NtfyAttention.post(http, configured, input.message)),
                     Effect.mapError(() => new ToolFailure({ message: "Unable to deliver attention message." })),
                   )
                 return { delivered: true }

@@ -110,7 +110,9 @@ describe("NtfyTool", () => {
       expect(definition?.description).toContain(
         "Use the existing goal system and tool state visible to the agent; ntfy does not read or duplicate Session autonomy state.",
       )
-      expect(Schema.decodeUnknownSync(NtfyTool.Input)({ message: "Need approval" })).toEqual({ message: "Need approval" })
+      expect(Schema.decodeUnknownSync(NtfyTool.Input)({ message: "Need approval" })).toEqual({
+        message: "Need approval",
+      })
       expect(() => Schema.decodeUnknownSync(NtfyTool.Input)({ message: "" })).toThrow()
     }),
   )
@@ -151,7 +153,10 @@ describe("NtfyTool", () => {
       const registry = yield* ToolRegistry.Service
       const message = "Approval needed for release"
 
-      expect(yield* executeTool(registry, call(message))).toEqual({ type: "text", value: "Attention message delivered." })
+      expect(yield* executeTool(registry, call(message))).toEqual({
+        type: "text",
+        value: "Attention message delivered.",
+      })
       expect(requests).toEqual([
         expect.objectContaining({
           url: "https://ntfy.sh/project%20updates%2Furgent",

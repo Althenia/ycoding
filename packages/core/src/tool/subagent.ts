@@ -16,7 +16,6 @@ import { ModelV2 } from "../model"
 import { SessionOrchestration } from "../session/orchestration"
 import { SessionRunnerModel } from "../session/runner/model"
 import { ProjectArtifactSource } from "../project-artifact/source"
-import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { Tool } from "./tool"
 
 export const name = "subagent"
@@ -214,7 +213,6 @@ export const Plugin = {
                     sessionID: context.sessionID,
                     agentID: AgentV2.ID.make(input.agent),
                     source: "subagent-launch",
-                    boundarySeq: ProjectArtifact.Revision.make(0),
                     messageID: context.messageID,
                     callID: context.callID,
                   })

@@ -29,6 +29,7 @@ import { Location } from "../location";
 import { LocationMutation } from "../location-mutation";
 import { ModelsDev } from "../models-dev";
 import { Memory } from "../memory";
+import { MCP } from "../mcp";
 import { Npm } from "../npm";
 import { PermissionV2 } from "../permission";
 import { ProviderUsageV2 } from "../provider-usage";
@@ -99,6 +100,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
   const locationMutation = yield* LocationMutation.Service;
   const models = yield* ModelsDev.Service;
   const memory = yield* Memory.Service;
+  const mcp = yield* MCP.Service;
   const npm = yield* Npm.Service;
   const permission = yield* PermissionV2.Service;
   const providerUsage = yield* ProviderUsageV2.Service;
@@ -140,6 +142,7 @@ const services = Effect.fn("PluginInternal.services")(function* () {
     Context.make(LocationMutation.Service, locationMutation),
     Context.make(ModelsDev.Service, models),
     Context.make(Memory.Service, memory),
+    Context.make(MCP.Service, mcp),
     Context.make(Npm.Service, npm),
     Context.make(PermissionV2.Service, permission),
     Context.make(ProviderUsageV2.Service, providerUsage),

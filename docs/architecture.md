@@ -79,6 +79,8 @@ Owns:
 - database schema, migrations, event history, and projections;
 - process-global and location-scoped runtime services.
 
+Core's ntfy attention observer is process-global so it can receive lifecycle events before a Session's Location services are warm. For each Session it resolves the Location-scoped configuration, permission, and HTTP delivery services; the observer owns no cross-Location delivery authority. Global MCP forms remain local TUI desktop/sound attention and do not enter remote ntfy delivery.
+
 Core remains independent of any specific UI.
 
 `Memory.Service` derives repository identity from the canonical Git common directory so linked worktrees share one collection, reads current configuration lazily, and owns concept validation, bounded retrieval, compare-and-swap writes, and derived files. Shared knowledge uses a separate collection under the same configured base. The built-in `memory` tool applies permissions and Session file-mutation guardrails before calling that service. It imports no UI package and exposes no separate HTTP group or hosted application. See [workspace memory](./memory.md).

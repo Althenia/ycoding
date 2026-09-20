@@ -219,3 +219,122 @@ describe("SessionSummaryToon", () => {
     expect(result).toBeInstanceOf(SessionSummaryToon.ProseError)
   })
 })
+
+describe("SessionSummaryToon.retainRequiredTexts", () => {
+  const empty: SessionSummaryToon.Memory = {
+    version: 2,
+    through_sequence: 1,
+    objective: "objective",
+    in_progress: [],
+    pending: [],
+    blocked: [],
+    decision: [],
+    skill: [],
+    requirements: [],
+    acceptance_criteria: [],
+    current_state: "state",
+    facts: [],
+    preferences: [],
+    constraints: [],
+    completed: [],
+    unresolved: [],
+    important_identifiers: [],
+    continuation: "continue",
+  }
+  const authority = (yolo: number, status: string) =>
+    `Authoritative current Session state (JSON):\n{"todos":[{"content":"ship it","status":"${status}","priority":"high"}],"autonomy":{"mode":"normal","yolo":${yolo}}}`
+  const supersedes = (existing: string, incoming: string) =>
+    existing.startsWith("Authoritative current Session state (JSON):") &&
+    incoming.startsWith("Authoritative current Session state (JSON):")
+
+  const texts = (memory: SessionSummaryToon.Memory) =>
+    [
+      memory.objective,
+      ...memory.requirements,
+      ...memory.acceptance_criteria,
+      ...memory.in_progress,
+      memory.current_state,
+      memory.continuation,
+      ...memory.facts.map((fact) => fact.text),
+      ...memory.decision.map((decision) => decision.text),
+      ...memory.preferences,
+      ...memory.constraints,
+      ...memory.completed,
+      ...memory.pending,
+      ...memory.blocked,
+      ...memory.skill,
+      ...memory.unresolved,
+      ...memory.important_identifiers,
+    ].filter((text) => text.startsWith("Authoritative current Session state"))
+
+  test("supersedes a refreshed authoritative value that routes into a categorized field", () => {
+    const stale = authority(0, "pending")
+    const fresh = authority(1, "completed")
+    const seeded = SessionSummaryToon.retainRequiredTexts(empty, [stale], supersedes)
+    expect(texts(seeded)).toEqual([stale])
+
+    const refreshed = SessionSummaryToon.retainRequiredTexts(seeded, [fresh], supersedes)
+
+    expect(texts(refreshed)).toEqual([fresh])
+  })
+
+  test("supersedes an earlier authoritative value when the incoming text is already present", () => {
+    const stale = authority(0, "pending")
+    const fresh = authority(1, "completed")
+    const seeded: SessionSummaryToon.Memory = {
+      ...empty,
+      in_progress: [fresh],
+      pending: [stale],
+    }
+
+    const refreshed = SessionSummaryToon.retainRequiredTexts(seeded, [fresh], supersedes)
+
+    expect(texts(refreshed)).toEqual([fresh])
+  })
+
+  test("preserves ordinary facts and only matches the authoritative prefix", () => {
+    const stale = authority(0, "pending")
+    const fresh = authority(1, "completed")
+    const seeded: SessionSummaryToon.Memory = {
+      ...empty,
+      facts: [
+        { text: "user note: Authoritative current Session state (JSON): appeared in logs", confidence: "confirmed" },
+        { text: "ordinary user fact", confidence: "confirmed" },
+        { text: stale, confidence: "confirmed" },
+      ],
+    }
+
+    const refreshed = SessionSummaryToon.retainRequiredTexts(seeded, [fresh], supersedes)
+
+    expect(refreshed.facts.map((fact) => fact.text)).toEqual([
+      "user note: Authoritative current Session state (JSON): appeared in logs",
+      "ordinary user fact",
+    ])
+    expect(texts(refreshed)).toEqual([fresh])
+  })
+
+  test("supersedes authority in every scalar while preserving ordinary scalar text", () => {
+    const stale = authority(0, "pending")
+    const fresh = authority(1, "completed")
+    for (const scalar of ["objective", "current_state", "continuation"] as const) {
+      const refreshed = SessionSummaryToon.retainRequiredTexts({ ...empty, [scalar]: stale }, [fresh], supersedes)
+
+      expect(refreshed[scalar]).toBe("")
+      expect(refreshed.objective).toBe(scalar === "objective" ? "" : empty.objective)
+      expect(refreshed.current_state).toBe(scalar === "current_state" ? "" : empty.current_state)
+      expect(refreshed.continuation).toBe(scalar === "continuation" ? "" : empty.continuation)
+      expect(texts(refreshed)).toEqual([fresh])
+    }
+  })
+
+  test("retains every incoming text when no supersede predicate is supplied", () => {
+    const seeded: SessionSummaryToon.Memory = {
+      ...empty,
+      facts: [{ text: "older fact", confidence: "confirmed" }],
+    }
+
+    const refreshed = SessionSummaryToon.retainRequiredTexts(seeded, ["newer fact"])
+
+    expect(refreshed.facts.map((fact) => fact.text)).toEqual(["older fact", "newer fact"])
+  })
+})

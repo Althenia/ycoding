@@ -4,6 +4,8 @@ import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer } from "effect"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
+import { Location } from "@ycoding-ai/core/location"
+import { MCP } from "@ycoding-ai/core/mcp/index"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { PluginRuntime } from "@ycoding-ai/core/plugin/runtime"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -14,6 +16,7 @@ import { SkillTool } from "@ycoding-ai/core/tool/skill"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { tmpdir } from "./fixture/tmpdir"
+import { testLocationLayer } from "./fixture/mcp"
 import { Image } from "@ycoding-ai/core/image"
 import { it } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
@@ -29,6 +32,7 @@ const skillToolNode = makeLocationNode({
     ToolRegistry.toolsNode,
     FSUtil.node,
     SkillV2.node,
+    MCP.node,
     PermissionV2.node,
     PluginRuntime.node,
     ProjectArtifactSource.node,
@@ -88,7 +92,10 @@ describe("SkillTool", () => {
             PermissionV2.Service.of({
               evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
               assert: (input) =>
-                Effect.sync(() => assertions.push(input)).pipe(Effect.asVoid, Effect.andThen(Effect.suspend(() => authorize(input)))),
+                Effect.sync(() => assertions.push(input)).pipe(
+                  Effect.asVoid,
+                  Effect.andThen(Effect.suspend(() => authorize(input))),
+                ),
               ask: () => Effect.die("unused"),
               reply: () => Effect.die("unused"),
               get: () => Effect.die("unused"),
@@ -103,6 +110,7 @@ describe("SkillTool", () => {
               reload: () => Effect.die("unused"),
               sources: () => Effect.die("unused"),
               list: () => Effect.succeed(current),
+              mcp: () => Effect.succeed([]),
             }),
           )
           const source = Layer.mock(ProjectArtifactSource.Service, {
@@ -177,6 +185,8 @@ describe("SkillTool", () => {
             [
               [PermissionV2.node, permission],
               [SkillV2.node, skills],
+              [MCP.node, Layer.mock(MCP.Service, {})],
+              [Location.node, testLocationLayer],
               [PluginRuntime.node, runtime],
               [ProjectArtifactSource.node, source],
               [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],

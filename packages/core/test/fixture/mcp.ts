@@ -20,6 +20,9 @@ export const emptyMcpLayer = Layer.succeed(
     prompt: () => Effect.succeed(undefined),
     resourceCatalog: () => Effect.succeed(MCP.ResourceCatalog.make({ resources: [], templates: [] })),
     readResource: () => Effect.succeed(undefined),
+    skillCatalog: () => Effect.succeed([]),
+    getSkill: () => Effect.die("unused mcp.getSkill"),
+    readSkillResource: () => Effect.die("unused mcp.readSkillResource"),
   }),
 )
 

@@ -2,10 +2,10 @@ import { describe, expect } from "bun:test";
 import { LLM, Message, Model, SystemPart, ToolDefinition } from "@ycoding-ai/ai";
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy";
 import type { OpenAIResponsesBody } from "@ycoding-ai/ai/protocols/openai-responses";
-import { LLMClient } from "@ycoding-ai/ai/route";
-import { DateTime, Effect } from "effect";
+import { LLMClient, RequestExecutor, WebSocketExecutor } from "@ycoding-ai/ai/route";
+import { DateTime, Effect, Stream } from "effect";
 import { Money } from "@ycoding-ai/schema/money";
-import { Headers } from "effect/unstable/http";
+import { Headers, HttpClientResponse } from "effect/unstable/http";
 import { Credential } from "@ycoding-ai/core/credential";
 import { Integration } from "@ycoding-ai/core/integration";
 import { ModelV2 } from "@ycoding-ai/core/model";
@@ -627,6 +627,64 @@ describe("SessionRunnerModel", () => {
         expect(resolved.route.defaults.http?.body).toEqual({});
       }),
   );
+
+  for (const program of ["daybreak_blue", "daybreak_red"] as const) for (const transport of ["http", "websocket"] as const) {
+    it.effect(`routes a ${program} catalog entry over ${transport} with explicit access selection`, () =>
+      Effect.gen(function* () {
+        const resolved = yield* SessionRunnerModel.fromCatalogModel(
+          model(ProviderV2.aisdk("@ai-sdk/openai"), {
+            providerID: "openai",
+            id: `gpt-5.6-luna-${program.replaceAll("_", "-")}`,
+            modelID: "gpt-5.6-luna",
+            settings: { transport },
+            body: { access_programs: { cyber: program } },
+          }),
+          Credential.OAuth.make({
+            type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"),
+            access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 600_000,
+            metadata: { accountID: "fixture-account" },
+          }),
+        );
+        expect(resolved.route.id).toBe(transport === "http" ? "openai-codex-responses" : "openai-codex-websocket-responses");
+        const requests: unknown[] = [];
+        const completed = JSON.stringify({ type: "response.completed", response: { id: "resp_fixture", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } } });
+        yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+          Effect.provide(LLMClient.configured()),
+          Effect.provideService(RequestExecutor.Service, {
+            execute: (request) => Effect.sync(() => {
+              expect(transport).toBe("http");
+              expect(request.url).toBe("https://chatgpt.com/backend-api/codex/responses");
+              if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON byte body");
+              const text = new TextDecoder().decode(request.body.body);
+              requests.push(JSON.parse(text));
+              expect(text).not.toContain("fixture-access");
+              expect(text).not.toContain("fixture-account");
+              return HttpClientResponse.fromWeb(request, new Response(
+                `data: ${completed}\n\n`,
+                { headers: { "content-type": "text/event-stream" } },
+              ));
+            }),
+          }),
+          Effect.provideService(WebSocketExecutor.Service, {
+            open: (request) => Effect.sync(() => {
+              expect(transport).toBe("websocket");
+              expect(request.url).toBe("wss://chatgpt.com/backend-api/codex/responses");
+              return {
+                sendText: (text) => Effect.sync(() => {
+                  requests.push(JSON.parse(text));
+                  expect(text).not.toContain("fixture-access");
+                  expect(text).not.toContain("fixture-account");
+                }),
+                messages: Stream.make(completed),
+                close: Effect.void,
+              };
+            }),
+          }),
+        );
+        expect(requests).toEqual([expect.objectContaining({ model: "gpt-5.6-luna", access_programs: { cyber: program } })]);
+      }),
+    );
+  }
 
   it.effect("routes ChatGPT OAuth credentials to the codex HTTP backend by default", () =>
     Effect.gen(function* () {
