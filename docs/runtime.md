@@ -628,6 +628,10 @@ TUI-visible state must rehydrate from durable or canonical API state after proce
 
 ## Native desktop client
 
+Ambient office movement is available only to idle actors without pending human
+attention. Actors waiting on a provider retry or blocked on work retain their
+work placement; cosmetic activity never changes runtime state.
+
 The Godot client under `apps/office` is a **presentation surface** with no
 execution authority. It owns no runtime state; it reads the same HTTP/SSE
 contract as the TUI and performs no persistence of its own.

@@ -10,6 +10,7 @@ func run(t) -> void:
 	test_queue_is_bounded(t)
 	test_stale_actions_expire(t)
 	test_ambient_carries_no_speech_and_is_preemptible(t)
+	test_ambient_is_withheld_from_an_actor_still_on_shift(t)
 	test_an_empty_ambient_plan_does_not_imply_clear_the_notice(t)
 	test_queue_coalesces_per_actor(t)
 	test_queue_refuses_an_action_with_no_actor(t)
@@ -88,6 +89,35 @@ func test_ambient_carries_no_speech_and_is_preemptible(t) -> void:
 	actor.set_work(WorkState.Kind.IDLE)
 	actor.attention_required = true
 	t.check_equal(director.plan_ambient(actor, 1), {}, "attention cancels ambient")
+
+
+## An actor still on shift is never offered ambient life.
+##
+## `is_running()` answers "is the model executing", and it is FALSE for WAITING (a
+## provider retry) and BLOCKED (a failed tool or assignment). Those two are still
+## work in hand: `Presence.is_working` keeps their seat, and the world's own station
+## for them is the desk. Treating them as available sent a retrying or failed agent
+## off to the focus chair or the play room, so the floor showed an agent wandering
+## while its status said it was blocked. Only an actor with nothing in hand - IDLE -
+## is available.
+func test_ambient_is_withheld_from_an_actor_still_on_shift(t) -> void:
+	var director := OfficeDirector.new()
+	for state in [WorkState.Kind.WAITING, WorkState.Kind.BLOCKED]:
+		var actor := _actor()
+		actor.set_work(state)
+		t.check(
+			director.plan_ambient(actor, 1).is_empty(),
+			"%s holds its seat rather than taking ambient life" % WorkState.label(state)
+		)
+
+	# The positive case has to survive the same change: an IDLE actor is the one
+	# state that has nothing in hand, so it is still offered ambient life.
+	var idle := _actor()
+	t.check_equal(
+		str(director.plan_ambient(idle, 1).get("action", "")),
+		OfficeDirector.ACTION_AMBIENT,
+		"an idle actor is still offered ambient life"
+	)
 
 
 ## The ambient tick must leave an attention notice alone.

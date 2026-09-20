@@ -113,8 +113,17 @@ static func is_current(action: Dictionary, actor: ActorPresentation) -> bool:
 
 ## Ambient behavior is cosmetic, preemptible, and costs no model calls. It never
 ## carries conversational text.
+##
+## Only an IDLE actor is available. `is_running()` answers "is the model executing"
+## and is FALSE for WAITING (a provider retry) and BLOCKED (a failed tool or
+## assignment), so testing it here offered ambient life to an actor that still had
+## work in hand: `Presence.is_working` keeps its seat, and the world's own station
+## for it is the desk. A retrying or failed agent then walked off to the focus chair
+## or the play room while its status said it was blocked. Attention is checked
+## separately because a blocked-on-a-human actor is not necessarily non-IDLE on the
+## wire.
 func plan_ambient(actor: ActorPresentation, tick: int) -> Dictionary:
-	if actor == null or actor.is_running() or actor.attention_required:
+	if actor == null or actor.work_state != WorkState.Kind.IDLE or actor.attention_required:
 		return {}
 	# Every option must have a real destination, or the ambient action is a
 	# no-op. "read" goes to the focus chair, "stretch" to the play room, and
