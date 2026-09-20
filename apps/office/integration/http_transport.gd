@@ -305,10 +305,25 @@ func _headers(has_body: bool, is_stream: bool) -> PackedStringArray:
 	if has_body:
 		headers.append("Content-Type: application/json")
 	if not _directory.is_empty():
-		headers.append("x-ycoding-directory: %s" % _directory)
+		headers.append("x-ycoding-directory: %s" % encode(_directory))
 	if not _workspace_id.is_empty():
 		headers.append("x-ycoding-workspace: %s" % _workspace_id)
 	return headers
+
+
+## The location header's own encoding.
+##
+## The service reads this header and runs `decodeURIComponent` on it
+## (packages/server/src/location.ts:34), so the value must be URI-ENCODED. Sending the raw
+## path corrupted every folder whose name contains a percent sign - the server decoded an
+## escape this client never wrote - and made a folder whose name contains non-ASCII
+## characters fail outright with HTTP 500, because a raw non-ASCII byte in a header is not
+## a valid header value.
+##
+## Pure and static so the rule is asserted directly: a stub transport never sees the
+## headers Godot actually puts on the wire, so a test through a double could not catch this.
+static func encode(directory: String) -> String:
+	return directory.uri_encode()
 
 
 func _basic_credentials() -> String:

@@ -10,6 +10,44 @@
 extends RefCounted
 
 
+## R5-07. The location header must be URI-ENCODED.
+##
+## The service reads `x-ycoding-directory` and runs `decodeURIComponent` on it
+## (packages/server/src/location.ts:34). Sending the raw path therefore CORRUPTED every
+## folder whose name contains a percent sign - the server decoded an escape this client
+## never wrote, so `/tmp/100%-folder` arrived as `/tmp/100-folder` - and made a folder whose
+## name contains non-ASCII characters fail with HTTP 500, because a raw non-ASCII byte is not
+## a valid header value. Both were reproduced against the running service before this rule
+## existed.
+##
+## Asserted on the encoder directly, because a stub transport never sees the headers Godot
+## puts on the wire: a test through a double would have reported a clean pass throughout.
+func test_the_location_header_is_uri_encoded(t) -> void:
+	for path in [
+		"/tmp/an ordinary folder",
+		"/tmp/a spaced folder",
+		"/tmp/ünïcodé—folder",
+		"/tmp/100%-folder",
+		"/tmp/plus+and&amp folder",
+	]:
+		var encoded := HttpTransport.encode(path)
+		t.check(
+			encoded.to_utf8_buffer().size() == encoded.length(),
+			"the encoded location is pure ASCII: '%s'" % path
+		)
+		# The service's own decode must give the path back exactly. That round trip is the
+		# contract, and it is what the raw value failed.
+		t.check_equal(
+			encoded.uri_decode(), path,
+			"the server's decode recovers the path exactly: '%s'" % path
+		)
+	# A percent sign must survive as a LITERAL, which is the case that was silently
+	# corrupted rather than refused.
+	t.check_equal(
+		HttpTransport.encode("/tmp/100%-folder"), "%2Ftmp%2F100%25-folder",
+		"a percent sign is encoded rather than passed through"
+	)
+
 func run(t) -> void:
 	test_unconfigured_transport_fails_cleanly(t)
 	test_relative_base_url_rejected(t)
@@ -18,6 +56,7 @@ func run(t) -> void:
 	test_cancel_unknown_id_is_harmless(t)
 	test_cancel_all_clears_everything(t)
 	test_poll_is_bounded_when_idle(t)
+	test_the_location_header_is_uri_encoded(t)
 
 
 func test_unconfigured_transport_fails_cleanly(t) -> void:
