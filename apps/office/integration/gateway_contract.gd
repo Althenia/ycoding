@@ -62,7 +62,7 @@ static func permission_reply(session_id: String, request_id: String) -> String:
 	return "/api/session/%s/permission/%s/reply" % [session_id, request_id]
 
 static func guardrail_reply(session_id: String, request_id: String) -> String:
-	return "/api/session/%s/guardrail/%s/reply" % [session_id, request_id]
+	return "/api/session/%s/guardrail/request/%s/reply" % [session_id, request_id]
 
 
 ## Durable session log. Read it as an SSE stream, not as a JSON request.

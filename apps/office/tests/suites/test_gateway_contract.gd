@@ -8,6 +8,7 @@ extends RefCounted
 
 func run(t) -> void:
 	test_builds_session_routes(t)
+	test_builds_attention_routes(t)
 	test_log_is_a_stream_query(t)
 	test_snapshot_is_not_enveloped(t)
 	test_stream_framing_constants(t)
@@ -22,6 +23,27 @@ func test_builds_session_routes(t) -> void:
 	t.check(Gateway.prompt("ses_1") == "/api/session/ses_1/prompt", "prompt route")
 	t.check(Gateway.interrupt("ses_1") == "/api/session/ses_1/interrupt", "interrupt route")
 	t.check(Gateway.subagents("ses_1") == "/api/session/ses_1/subagent", "subagent route")
+
+## Human attention. Each reply path must match the protocol's literal route, or a
+## desktop approval is POSTed to a path no live route serves. The guardrail route
+## carries an extra `request` segment between the session and the request id.
+func test_builds_attention_routes(t) -> void:
+	t.check(
+		Gateway.question_reply("ses_1", "req_1") == "/api/session/ses_1/question/req_1/reply",
+		"question reply route"
+	)
+	t.check(
+		Gateway.question_reject("ses_1", "req_1") == "/api/session/ses_1/question/req_1/reject",
+		"question reject route"
+	)
+	t.check(
+		Gateway.permission_reply("ses_1", "req_1") == "/api/session/ses_1/permission/req_1/reply",
+		"permission reply route"
+	)
+	t.check(
+		Gateway.guardrail_reply("ses_1", "req_1") == "/api/session/ses_1/guardrail/request/req_1/reply",
+		"guardrail reply route"
+	)
 
 ## The log route takes an exclusive `after` cursor and a literal boolean
 ## `follow`, and it is consumed as SSE rather than as a JSON request.
