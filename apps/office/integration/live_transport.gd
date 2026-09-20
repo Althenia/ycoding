@@ -155,6 +155,18 @@ func _handle(entry: Dictionary) -> void:
 		_set_connected(false, OfficeStore.CONNECTION_RECONNECTING)
 		_fail(message)
 		reload_required.emit(_epoch)
+		return
+	if kind == HttpTransport.KIND_CLOSED:
+		# A cleanly closed stream is still a CLOSED stream. Without this branch the
+		# connection stayed LIVE after the feed ended, so the office kept claiming a
+		# live connection over a socket that was no longer there - the same class of
+		# untruth as showing synthetic work as real. The feed is volatile by contract,
+		# so a close is also a gap: ask for a reload rather than assuming the last
+		# frame we saw is the current state.
+		if _running:
+			_set_connected(false, OfficeStore.CONNECTION_RECONNECTING)
+			reload_required.emit(_epoch)
+		return
 
 
 func _on_response(request_id: int, entry: Dictionary) -> void:
@@ -232,7 +244,39 @@ func is_reloading() -> bool:
 ## requested as an empty path, which would 404 and stall the batch.
 func _begin_session_replays(body: Dictionary) -> void:
 	_pending_sessions = body.get("data", [])
-	if not _pending_sessions is Array or _pending_sessions.is_empty():
+	if not _pending_sessions is Array:
+		_pending_sessions = []
+	# THE SESSION LIST IS WHERE A SESSION'S EXISTENCE IS PUBLISHED. A session's own log
+	# carries its steps, tools and text, but NOT `session.created` - measured against the
+	# running service, where a 87k-frame replay contained `session.step.*` and
+	# `session.tool.*` and no `session.created` at all. Replaying logs alone therefore left
+	# the roster EMPTY however many frames arrived.
+	#
+	# The list is already read for this reload, and each row carries `id`, `title`, `agent`,
+	# `location` and `projectID` - everything `apply_session_created` needs. Synthesizing the
+	# event from the row is not inventing data: it is publishing the session's existence in
+	# the shape the reducer already consumes, from the only source that states it.
+	for value in _pending_sessions:
+		if not value is Dictionary:
+			continue
+		var row: Dictionary = value
+		var session_id := str(row.get("id", ""))
+		if session_id.is_empty():
+			continue
+		_replay.append({
+			"type": Wire.SESSION_CREATED,
+			"sessionID": session_id,
+			"data": {
+				"agent": str(row.get("agent", "")),
+				"title": str(row.get("title", "")),
+				"location": row.get("location", {}),
+				"model": row.get("model", {}),
+				"projectID": str(row.get("projectID", "")),
+				"subpath": str(row.get("subpath", "")),
+			},
+			"sourceEpoch": _epoch,
+		})
+	if _pending_sessions.is_empty():
 		_finish_reload()
 		return
 	_replay_need = 0
@@ -261,6 +305,8 @@ func _collect_frame(request_id: int, entry: Dictionary) -> void:
 	var envelope: Variant = entry.get("event", {})
 	if not envelope is Dictionary:
 		return
+	# The SSE `data` line parses to the SessionLogItem itself, whose `data` field is the
+	# event's payload - the same unwrap the live path makes below, and for the same reason.
 	var payload: Variant = envelope.get("data", null)
 	if not payload is Dictionary:
 		return

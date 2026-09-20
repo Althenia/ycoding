@@ -632,6 +632,10 @@ Ambient office movement is available only to idle actors without pending human
 attention. Actors waiting on a provider retry or blocked on work retain their
 work placement; cosmetic activity never changes runtime state.
 
+The desktop reload seeds its roster from the service's session list before
+replaying each session log. A closed live event feed changes the connection state
+to reconnecting and requests a reload; a close received while stopped does not.
+
 The Godot client under `apps/office` is a **presentation surface** with no
 execution authority. It owns no runtime state; it reads the same HTTP/SSE
 contract as the TUI and performs no persistence of its own.

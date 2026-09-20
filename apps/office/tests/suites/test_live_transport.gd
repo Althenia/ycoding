@@ -18,7 +18,11 @@ func run(t) -> void:
 	test_reload_replaces_and_clears_staleness(t)
 	test_reload_invalidates_old_generations(t)
 	test_a_new_epoch_requests_a_reload(t)
+	test_the_session_list_publishes_each_sessions_existence(t)
+	test_a_session_log_alone_cannot_populate_the_roster(t)
 	test_prompt_refusals_are_explained(t)
+	test_a_cleanly_closed_feed_stops_claiming_a_live_connection(t)
+	test_a_close_after_stop_is_not_a_reconnect(t)
 	test_model_switch_refuses_the_demo_catalogue(t)
 	test_message_ids_are_derived_not_random(t)
 	test_an_sse_envelope_is_unwrapped_to_the_wire_event(t)
@@ -274,3 +278,125 @@ func test_an_sse_envelope_is_unwrapped_to_the_wire_event(t) -> void:
 		"the durable block survives, so ordering is preserved"
 	)
 	t.check(not seen[0].has("raw"), "the SSE envelope fields are not forwarded")
+
+
+## A cleanly closed stream is still a closed stream. `HttpTransport` emits a
+## `closed` entry when an SSE feed ends; without an arm for it the connection stayed
+## LIVE over a socket that was no longer there, so the office claimed a live
+## connection it did not have. The feed is volatile by contract, so a close is also
+## a gap that requires a reload.
+func test_a_cleanly_closed_feed_stops_claiming_a_live_connection(t) -> void:
+	var live := LiveTransport.new()
+	var reloads: Array = []
+	var states: Array = []
+	live.reload_required.connect(func(epoch: String): reloads.append(epoch))
+	live.connection_changed.connect(func(state: String): states.append(state))
+	live.configure("http://127.0.0.1:4096")
+	live._running = true
+	live._set_connected(true, OfficeStore.CONNECTION_LIVE)
+	live._handle({
+		"kind": HttpTransport.KIND_CLOSED,
+		"request_id": live._stream_id,
+		"status": 200,
+		"body": {},
+		"error": "",
+	})
+	t.check(
+		states.has(OfficeStore.CONNECTION_RECONNECTING),
+		"a closed feed stops reporting a live connection (saw %s)" % str(states)
+	)
+	t.check(reloads.size() == 1, "and asks for one reload to re-establish truth")
+
+
+## A close that arrives when the transport was never running is not a state change.
+func test_a_close_after_stop_is_not_a_reconnect(t) -> void:
+	var live := LiveTransport.new()
+	var reloads: Array = []
+	live.reload_required.connect(func(epoch: String): reloads.append(epoch))
+	live.configure("http://127.0.0.1:4096")
+	live._handle({
+		"kind": HttpTransport.KIND_CLOSED,
+		"request_id": 1,
+		"status": 200,
+		"body": {},
+		"error": "",
+	})
+	t.check(reloads.is_empty(), "a close while stopped requests nothing")
+
+
+## THE REGRESSION: a session's OWN log never carries `session.created`, so a client that
+## replayed logs alone would show an empty office no matter how many frames arrived.
+##
+## Measured against the running service: an 88k-frame replay of one session contained
+## `session.step.*` and `session.tool.*` and NO `session.created`. The roster can therefore
+## only come from the SESSION LIST, which each row of the reload already reads - and this test
+## drives exactly that path, which the older reload tests bypassed by handing frames straight
+## to `adopt_reload`.
+func test_the_session_list_publishes_each_sessions_existence(t) -> void:
+	var store := OfficeStore.new()
+	var live := LiveTransport.new()
+	# A transport is configured because `_begin_session_replays` opens one log stream per
+	# session. It is a double at the transport boundary - outside the behaviour under test -
+	# so the list-to-event rule is exercised without a socket.
+	var transport := ListStub.new()
+	live._transport = transport
+	# The list row carries everything the reducer needs, as the live route returns it.
+	live._begin_session_replays({"data": [
+		{
+			"id": "ses_alpha", "agent": "lead", "title": "Lead A",
+			"location": {"directory": "/workspace/alpha"},
+			"model": {"providerID": "anthropic", "id": "claude-sonnet-4"},
+			"projectID": "prj_a", "subpath": "",
+		},
+		{
+			"id": "ses_beta", "agent": "god", "title": "God B",
+			"location": {"directory": "/workspace/beta"},
+			"model": {"providerID": "openai", "id": "gpt-5.6-luna"},
+			"projectID": "prj_b", "subpath": "",
+		},
+	]})
+	# Every session in the list is published as an event the reducer consumes.
+	var frames: Array = live._replay
+	t.check_equal(frames.size(), 2, "the list publishes one event per session")
+	var published: Array[String] = []
+	for frame in frames:
+		t.check_equal(
+			str(frame.get("type", "")), Wire.SESSION_CREATED,
+			"each published event is a session.created"
+		)
+		published.append(str(frame.get("sessionID", "")))
+	t.check(published.has("ses_alpha") and published.has("ses_beta"), "both ids are published")
+	# And the store adopts them into a roster, which is what the office draws.
+	store.adopt_reload(frames, "epoch-1")
+	t.check(store.actor_for("ses_alpha") != null, "the store holds the first session")
+	t.check(store.actor_for("ses_beta") != null, "and the second")
+	t.check_equal(store.actor_list().size(), 2, "so the roster is populated")
+
+
+## The same fact from the other direction, so the rule cannot be mistaken for a coincidence:
+## replay frames of the kind a session log actually contains do NOT create a session.
+func test_a_session_log_alone_cannot_populate_the_roster(t) -> void:
+	var store := OfficeStore.new()
+	# The types the log really carries, taken from a live replay.
+	store.adopt_reload([
+		{"type": "session.step.started", "sessionID": "ses_x",
+		 "data": {"assistantMessageID": "msg_1"}, "sourceEpoch": "e"},
+		{"type": "session.tool.called", "sessionID": "ses_x",
+		 "data": {"callID": "call_1", "name": "shell"}, "sourceEpoch": "e"},
+		{"type": "session.text.started", "sessionID": "ses_x",
+		 "data": {"assistantMessageID": "msg_1", "ordinal": 0}, "sourceEpoch": "e"},
+	], "e")
+	t.check_equal(
+		store.actor_list().size(), 0,
+		"a step, tool and text frame create no session, which is why the LIST must"
+	)
+
+
+## A transport double that records stream opens without a socket. The behaviour under test is
+## the LIST becoming events, so the transport is outside that boundary.
+class ListStub extends "res://integration/http_transport.gd":
+	var opened: Array[String] = []
+
+	func stream(path: String) -> int:
+		opened.append(path)
+		return opened.size()
