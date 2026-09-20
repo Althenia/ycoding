@@ -13,6 +13,8 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 
 YCoding is terminal-first—the TUI is the primary surface.
 
+The Cloudflare deployment under [`infra/cloudflare`](./infra/cloudflare) is a remote-ingress smoke slice, not a hosted agent runtime. Its development hostname supports only a fixed ping/pong relay; the agent, repository, filesystem, shell, tools, and model execution remain in the local `ycoding` process. Production session transport awaits authenticated user, device, ownership, and Session authorization plus the application protocol.
+
 ## Install
 
 **macOS (Apple Silicon or Intel) and Linux (x64)** — requires `curl`, `tar`, and `shasum` or `sha256sum`:

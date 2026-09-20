@@ -16,11 +16,16 @@
     "brand:generate": "bun run --cwd packages/simulation brand:generate",
     "check:ycoding-workspace": "bun script/ycoding-workspace.ts",
     "check:ycoding-brand": "bun script/ycoding-residuals.ts",
+    "check:cloudflare": "bun run test:cloudflare && bun run typecheck:cloudflare && bun run build:cloudflare",
+    "generate:cloudflare-types": "wrangler types infra/cloudflare/worker-configuration.d.ts --config infra/cloudflare/wrangler.jsonc",
+    "test:cloudflare": "cd infra/cloudflare && bun test test/*.test.ts",
+    "typecheck:cloudflare": "wrangler types infra/cloudflare/worker-configuration.d.ts --config infra/cloudflare/wrangler.jsonc --check && tsgo --noEmit -p infra/cloudflare/tsconfig.json",
+    "build:cloudflare": "wrangler deploy --dry-run --config infra/cloudflare/wrangler.jsonc",
     "rebrand:ycoding": "bun script/ycoding-rebrand.ts --write",
     "lint": "oxlint",
     "lint:effect-patterns": "ast-grep scan -c script/ast-grep/sgconfig.yml packages/core/src packages/server/src packages/protocol/src packages/cli/src",
     "test:lint-rules": "ast-grep test -c script/ast-grep/sgconfig.yml",
-    "typecheck": "bun turbo typecheck --concurrency=3 --filter='./packages/*'",
+    "typecheck": "bun turbo typecheck --concurrency=3 --filter='./packages/*' && bun run typecheck:cloudflare",
     "typecheck:profile": "bun script/profile-typecheck.ts",
     "typecheck:profile:packages": "bun script/profile-typecheck-packages.ts",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
@@ -110,7 +115,8 @@
     "oxlint-tsgolint": "0.21.0",
     "prettier": "3.6.2",
     "semver": "^7.6.0",
-    "turbo": "2.10.2"
+    "turbo": "2.10.2",
+    "wrangler": "4.133.0"
   },
   "dependencies": {
     "@ycoding-ai/plugin": "workspace:*",

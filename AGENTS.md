@@ -201,6 +201,7 @@ const table = sqliteTable("session", {
 - Unit tests verify requests, responses, branching, ordering, processing, and state transitions with mocked external boundaries while running the implementation under test. Real browsers, listening servers, and packaged executables belong to explicitly named integration/E2E suites and commands, not unit-test commands. Preserve both kinds of evidence; never describe a mixed package-wide suite as unit-only.
 - Browser service/tool and dialog unit checks run with `bun run test:unit:browser`; real Core/Server/TUI browser checks run separately with `bun run test:integration:browser` on macOS arm64 with installed Chrome 152. The latter fails when its required environment is unavailable. Schema/Protocol/Client contract suites remain separate affected-package checks.
 - Run affected package typechecks. Run root `bun run typecheck`, `bun run lint`, and `bun run lint:effect-patterns` when the change crosses their scope.
+- Run `bun run check:cloudflare` after changing `infra/cloudflare`, its generated Worker types, Wrangler configuration, or Cloudflare validation scripts. Regenerate `infra/cloudflare/worker-configuration.d.ts` only with `bun run generate:cloudflare-types`.
 - TUI-visible changes require a TUI render, component, integration, or smoke test that proves the actual displayed behavior.
 - Before claiming completion, inspect `git diff`, run the relevant tests, and report exact commands and outcomes.
 

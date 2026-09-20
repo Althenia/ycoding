@@ -29,7 +29,7 @@ The terminal application is the primary product and release surface.
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
-The supported surface is the terminal application. There is no Electron, browser-application, console, website, or hosted-application runtime.
+The supported surface is the terminal application. There is no Electron, browser-application, console, website, or hosted-application runtime. The current Cloudflare ingress is a ping/pong smoke surface and owns no repository, shell, tool, model, or Session execution authority.
 
 ### 2. Current runtime architecture
 
@@ -88,6 +88,12 @@ OpenCode Zen and OpenCode Go remain named as such only because they are external
 The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. The release workflow builds and smoke-tests native artifacts before publishing; a manual workflow run prepares artifacts without publishing a release. Each release ships its per-version notes at `docs/releases/v<version>.md`, which is also attached to the GitHub release.
 
 GitHub Pages publishes maintained YCoding documentation, the generated configuration JSON Schema, an example `ycoding.jsonc`, and the shell installer. The site is static documentation, not a separate application package. GitHub Pages must be enabled with GitHub Actions as its source before the public links become available.
+
+### 9. Remote ingress boundary
+
+Remote access preserves the local runtime as the only execution authority. The Cloudflare Worker and its per-device Durable Object terminate the smoke HTTPS/WebSocket connections and coordinate an outbound local-agent connection with smoke clients. D1 is bound only for the health probe; it retains no application metadata, streamed model output, reasoning, token, or tool events.
+
+The current relay is a development smoke protocol limited to `ping` and `pong` on the workers.dev hostname. The production custom domain exposes health only until the authorization invariant—authenticated user, authenticated device, user ownership of that device, and Session authorization—and the application protocol are implemented.
 
 ## Compatibility policy
 

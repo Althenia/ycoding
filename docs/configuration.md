@@ -1046,8 +1046,11 @@ Stable operator-facing variables:
 | `YCODING_DISABLE_FFF`            | Disable the FFF filesystem backend.                        |
 | `YCODING_WEBSEARCH_PROVIDER`     | Select web-search provider.                                |
 | `YCODING_TERMINAL`               | Override terminal identity used by shell and PTY behavior. |
+| `YCODING_REMOTE_SMOKE_URL`       | Development-only outbound ping/pong relay WebSocket URL.   |
 
 Build, packaging, test, and internal diagnostic variables are not stable end-user configuration. Examples include `YCODING_VERSION`, `YCODING_CHANNEL`, native-library paths, Drive simulation variables, and the internal managed-service startup-error file.
+
+`YCODING_REMOTE_SMOKE_URL` must use `wss:` except that `ws:` is accepted for `localhost` and `127.0.0.1` Wrangler development. It enables only heartbeat and relay verification; it is not a production remote-access credential or Session transport. Do not place credentials in this URL.
 
 ## Reload behavior
 

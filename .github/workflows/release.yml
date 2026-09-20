@@ -76,6 +76,11 @@ jobs:
           bun run typecheck
           bun run lint:effect-patterns
 
+      - name: Verify Cloudflare Worker
+        run: |
+          bun run test:cloudflare
+          bun run build:cloudflare
+
       - name: Verify CLI suites
         working-directory: packages/cli
         run: bun test --timeout 30000

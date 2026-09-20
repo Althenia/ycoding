@@ -26,6 +26,8 @@ The active package set is explicit and enforced by `script/ycoding-workspace.ts`
 
 Desktop, browser, console, website, statistics, hosted-application, and legacy SDK packages are outside the product boundary and must not be restored accidentally.
 
+`infra/cloudflare/` is deployment infrastructure outside the Bun workspace. It owns the edge health check and the development-only Durable Object relay smoke path. It is not a browser application or execution package and imports no Core or Server implementation.
+
 ## Dependency direction
 
 ```text
@@ -136,6 +138,12 @@ The TUI keeps bounded read models. It does not own canonical Session state.
 - `packages/simulation`: deterministic runtime and provider simulation.
 - `packages/script`: shared build and release helpers.
 
+### Remote ingress infrastructure
+
+`infra/cloudflare` owns the `ycoding-cloud` Worker configuration, D1 binding, and SQLite-backed `DeviceRelay` declaration. A relay instance is addressed by `userId:deviceId`; the smoke implementation fixes those identifiers and serializes per-WebSocket role and connection metadata so hibernation never depends on ordinary JavaScript memory.
+
+The local outbound WebSocket client is process-owned in `packages/cli`. It is transport-only and opt-in for the smoke protocol. Core remains the owner of durable Sessions, Location-scoped execution, tools, filesystem access, and model calls; the TUI remains a client and never owns the remote connection's agent Session.
+
 ## Runtime flow
 
 ```text
@@ -154,6 +162,8 @@ terminal input
   -> bounded TUI read model
   -> terminal render
 ```
+
+The optional development relay adds an outbound edge after local process startup. It does not replace any step in this runtime flow and carries no Session, prompt, tool, shell, or model payload in the smoke milestone.
 
 Prompt admission and provider execution are separate. A prompt is admitted durably before the process-local coordinator wakes execution. One Session is serialized locally; different Sessions may run concurrently.
 

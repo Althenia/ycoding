@@ -11,6 +11,7 @@ import path from "node:path"
 import { Effect, FileSystem, Option, Redacted, Schedule, Schema } from "effect"
 import { HttpServer } from "effect/unstable/http"
 import { Env } from "./env"
+import { CloudflareRemoteTransport } from "./remote-transport"
 import { DatabaseRecovery } from "./services/database-recovery"
 import { ServiceConfig } from "./services/service-config"
 
@@ -145,6 +146,7 @@ const processEffect = Effect.fnUntraced(function* (options: Options) {
         }),
       )
       if (server === undefined) return
+      yield* startRemoteSmoke().pipe(Effect.forkScoped)
       const url = HttpServer.formatAddress(server.address)
       console.log(options.mode === "stdio" ? JSON.stringify({ url }) : `server listening on ${url}`)
       if (options.mode === "default" && !environmentPassword) console.log(`server password ${password}`)
@@ -240,3 +242,16 @@ function waitForStdinClose() {
     })
   })
 }
+
+const startRemoteSmoke = Effect.fnUntraced(function* () {
+  const url = process.env.YCODING_REMOTE_SMOKE_URL
+  if (!url) return
+  const transport = yield* Effect.acquireRelease(
+    Effect.sync(() => new CloudflareRemoteTransport({ url })),
+    (current) => Effect.promise(() => current.disconnect()),
+  )
+  yield* Effect.promise(() => transport.connect()).pipe(
+    Effect.catch(() => Effect.logWarning("development remote smoke transport could not connect")),
+  )
+  return yield* Effect.never
+})

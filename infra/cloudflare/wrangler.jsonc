@@ -1,0 +1,34 @@
+{
+  "name": "ycoding-cloud",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-20",
+  "workers_dev": true,
+  "preview_urls": false,
+  "routes": [
+    {
+      "pattern": "ycoding.althenia.app",
+      "custom_domain": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ycoding-prod-db",
+      "database_id": "3384fc56-42d6-40a1-af04-5a75bd391132"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DEVICE_RELAY",
+        "class_name": "DeviceRelay"
+      }
+    ]
+  },
+  "exports": {
+    "DeviceRelay": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  }
+}

@@ -70,6 +70,12 @@ jobs:
         env:
           YCODING_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+      - name: Verify Cloudflare Worker
+        if: runner.os == 'Linux'
+        run: |
+          bun run test:cloudflare
+          bun run build:cloudflare
+
       - name: Verify compiled service lifecycle
         if: always()
         timeout-minutes: 10

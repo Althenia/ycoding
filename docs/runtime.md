@@ -43,6 +43,16 @@ The idempotent `managed-attachments-v1` application migration scans `session.inp
 
 A drain discovers the session's Location when execution starts. There is no clustered execution ownership yet. Public event replay ownership is separate from local execution ownership.
 
+### Remote relay smoke transport
+
+When `YCODING_REMOTE_SMOKE_URL` is set, the local process starts a best-effort outbound WebSocket transport without delaying local server startup. The transport sends heartbeat pings, answers pings with pongs, reconnects with bounded exponential backoff after the active socket closes unless the process is disconnecting, and disconnects with the process scope. Omitting the variable creates no remote connection.
+
+This transport is restricted to the development smoke protocol. It sends no Session history, prompts, model output, reasoning, token stream, tool calls, shell data, filesystem data, or local service credential. The Cloudflare `DeviceRelay` uses hibernatable WebSockets and serialized connection attachments; D1 is bound only for the health probe and has no application schema in this milestone.
+
+Anonymous WebSocket upgrades are accepted only on `ycoding-cloud.lostq901.workers.dev` and local Wrangler hosts. `ycoding.althenia.app` does not accept the smoke WebSocket endpoints. Production relay traffic requires authenticated user and device identities, verified device ownership, Session authorization, and an application protocol before it may carry agent data.
+
+All anonymous smoke connections share the fixed `test-user:test-device` relay identity. A new agent connection replaces the current smoke agent, and connected smoke clients share its ping/pong path. This public collision is limited to the smoke protocol and is not a production identity or isolation model.
+
 ### Steps and provider attempts
 
 Native HTTP/SSE framing ignores `retry:` reconnect hints without closing or replaying the active response. It preserves subsequent content, completion, usage, and read errors across byte boundaries and mixed LF/CRLF line endings. Empty SSE data and `[DONE]` markers are not provider completion; a stream that never supplies the protocol's terminal settlement still fails rather than synthesizing success.
