@@ -28,6 +28,16 @@ function sessionInfo(id: string, table: { updated: number; title?: string; direc
   } as unknown as SessionInfo
 }
 
+function formInfo(id: string, sessionID: string) {
+  return {
+    id,
+    sessionID,
+    title: "Approval",
+    metadata: { kind: "question" },
+    fields: [{ key: "approved", type: "boolean", title: "Approve?", required: true }],
+  }
+}
+
 type Call = { readonly method: string; readonly args: readonly unknown[] }
 
 function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
@@ -88,7 +98,7 @@ const readOperations = [
   "session.permission.list",
   "session.guardrail.status",
   "session.guardrail.request.list",
-  "session.question.list",
+  "session.form.list",
   "session.fileChange.list",
 ] as const
 
@@ -165,7 +175,9 @@ describe("operation mapping", () => {
         interrupt: async () => undefined,
         permissionReply: async () => undefined,
         guardrailReply: async () => undefined,
-        questionReply: async () => undefined,
+        formList: async () => [formInfo("frm_1", "ses_1"), formInfo("frm_2", "ses_1")],
+        formReply: async () => undefined,
+        formCancel: async () => undefined,
         autonomySet: async () => ({ mode: "yolo" }),
         guardrailRequestList: async () => [{ id: "grq_1", sessionID: "ses_1", rootSessionID: "ses_1" }],
       },
@@ -221,15 +233,23 @@ describe("operation mapping", () => {
     expect(calls.at(-1)).toEqual({ method: "guardrailReply", args: ["ses_1", { directory: "/work" }, "grq_1", "once"] })
 
     await executeRemoteOperation({
-      request: request("session.question.reply", { requestID: "que_1", answers: [["yes"], []] }),
+      request: request("session.form.reply", { formID: "frm_1", answer: { choice: ["yes"], approved: true } }),
       sessions: registry,
       subscriptions,
       local,
     })
     expect(calls.at(-1)).toEqual({
-      method: "questionReply",
-      args: ["ses_1", { directory: "/work" }, "que_1", [["yes"], []]],
+      method: "formReply",
+      args: ["ses_1", { directory: "/work" }, "frm_1", { choice: ["yes"], approved: true }],
     })
+
+    await executeRemoteOperation({
+      request: request("session.form.cancel", { formID: "frm_2" }),
+      sessions: registry,
+      subscriptions,
+      local,
+    })
+    expect(calls.at(-1)).toEqual({ method: "formCancel", args: ["ses_1", { directory: "/work" }, "frm_2"] })
 
     await executeRemoteOperation({
       request: request("session.autonomy.set", { yolo: 3, maxNoProgress: 2 }),
@@ -273,7 +293,7 @@ describe("operation mapping", () => {
         permissionList: async () => [{ id: "per_1", sessionID: "ses_1" }],
         guardrailStatus: async () => ({ profile: "standard" }),
         guardrailRequestList: async () => [],
-        questionList: async () => [],
+        formList: async () => [formInfo("frm_1", "ses_1")],
         fileChangeList: async () => [{ path: "a.ts" }],
       },
     })
@@ -284,7 +304,7 @@ describe("operation mapping", () => {
     expect(valueOf(await executeRemoteOperation({ request: request("session.autonomy.get"), sessions: registry, subscriptions, local }))).toEqual({ data: { mode: "normal" } })
     expect(valueOf(await executeRemoteOperation({ request: request("session.permission.list"), sessions: registry, subscriptions, local }))).toEqual({ data: [{ id: "per_1", sessionID: "ses_1" }] })
     expect(valueOf(await executeRemoteOperation({ request: request("session.guardrail.status"), sessions: registry, subscriptions, local }))).toEqual({ data: { profile: "standard" } })
-    expect(valueOf(await executeRemoteOperation({ request: request("session.question.list"), sessions: registry, subscriptions, local }))).toEqual({ data: [] })
+    expect(valueOf(await executeRemoteOperation({ request: request("session.form.list", {}), sessions: registry, subscriptions, local }))).toEqual([formInfo("frm_1", "ses_1")])
     expect(valueOf(await executeRemoteOperation({ request: request("session.fileChange.list"), sessions: registry, subscriptions, local }))).toEqual({ data: [{ path: "a.ts" }] })
     expect(calls.filter((call) => call.method === "log").at(-1)).toEqual({ method: "log", args: ["ses_1", { directory: "/work" }, 4] })
 
@@ -393,11 +413,52 @@ function readMethod(operation: (typeof readOperations)[number]) {
     "session.permission.list": "permissionList",
     "session.guardrail.status": "guardrailStatus",
     "session.guardrail.request.list": "guardrailRequestList",
-    "session.question.list": "questionList",
+    "session.form.list": "formList",
     "session.fileChange.list": "fileChangeList",
   }
   return method[operation]
 }
+
+describe("native Form ownership", () => {
+  test("replies to and cancels only pending forms owned by the addressed Session", async () => {
+    const pending = [
+      formInfo("frm_owned", "ses_1"),
+      formInfo("frm_cross", "ses_other"),
+      formInfo("frm_global", "global"),
+    ]
+    const { local, registry, subscriptions, calls } = await harness({
+      results: {
+        formList: async () => pending,
+        formReply: async () => undefined,
+        formCancel: async () => undefined,
+      },
+    })
+
+    const replied = await executeRemoteOperation({
+      request: request("session.form.reply", { formID: "frm_owned", answer: { approved: true } }),
+      sessions: registry,
+      subscriptions,
+      local,
+    })
+    expect(valueOf(replied)).toBeNull()
+    expect(calls.at(-1)).toEqual({
+      method: "formReply",
+      args: ["ses_1", { directory: "/work" }, "frm_owned", { approved: true }],
+    })
+
+    for (const formID of ["frm_cross", "frm_global", "frm_unknown"]) {
+      const before = calls.filter((call) => call.method === "formReply" || call.method === "formCancel").length
+      const refused = await executeRemoteOperation({
+        request: request("session.form.cancel", { formID }),
+        sessions: registry,
+        subscriptions,
+        local,
+      })
+      expect(errorOf(refused).code).toBe("invalid_message")
+      expect(calls.filter((call) => call.method === "formReply" || call.method === "formCancel")).toHaveLength(before)
+    }
+  })
+})
 
 describe("family-wide guardrail reviews", () => {
   test("keeps reviews for every backend Session and preserves explicit replies", async () => {
@@ -618,7 +679,8 @@ describe("strict validation and error mapping", () => {
       [request("session.log", { after: -1 }), "invalid_message"],
       [request("session.permission.reply", { requestID: "grq_1", reply: "once" }), "invalid_message"],
       [request("session.permission.reply", { requestID: "per_1", reply: "maybe" }), "invalid_message"],
-      [request("session.question.reply", { requestID: "que_1", answers: "yes" }), "invalid_message"],
+      [request("session.form.reply", { formID: "frm_1", answer: { invalid: { nested: true } } }), "invalid_message"],
+      [request("session.form.cancel", { formID: "bad" }), "invalid_message"],
       [request("session.autonomy.set", { yolo: 9 }), "invalid_message"],
       [request("session.autonomy.set", {}), "invalid_message"],
       [request("session.goal.set", { goal: "" }), "invalid_message"],

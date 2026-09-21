@@ -296,8 +296,8 @@ export function queueRowView(request: PendingRequestView): QueueRowView {
   return {
     id: request.id,
     icon: "chat",
-    kind: "Question",
-    title: request.questions[0]?.header ?? "Question",
+    kind: request.form.metadata?.kind === "question" ? "Question" : "Form",
+    title: request.form.title,
     detail: "waits for your answer",
   }
 }

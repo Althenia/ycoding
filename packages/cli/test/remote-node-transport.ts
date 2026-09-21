@@ -34,7 +34,7 @@ const address = server.address()
 if (address === null || typeof address === "string") throw new Error("the fixture server did not bind a TCP port")
 
 const transport = new CloudflareRemoteTransport({
-  url: `ws://127.0.0.1:${address.port}/ws/v2/agent`,
+  url: `ws://127.0.0.1:${address.port}/ws/v3/agent`,
   headers: { authorization: "Bearer node-device-token" },
   heartbeatIntervalMs: 10_000,
 })

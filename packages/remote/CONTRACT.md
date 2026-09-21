@@ -26,8 +26,8 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/devices/token` | challenge signature | none (native agent) | Issue access + refresh credentials |
 | `POST` | `/api/devices/refresh` | refresh credential | none (native agent) | Rotate credentials |
 | `POST` | `/api/devices/:deviceID/revoke` | browser session | same-origin required | Revoke a device, its credentials, and its live sockets |
-| `GET` | `/ws/v2/client` | browser session cookie | same-origin required | Browser/phone relay connection |
-| `GET` | `/ws/v2/agent` | device access token | not required | Local agent relay connection |
+| `GET` | `/ws/v3/client` | browser session cookie | same-origin required | Browser/phone relay connection |
+| `GET` | `/ws/v3/agent` | device access token | not required | Local agent relay connection |
 | `GET` | `/health` | none | not required | Database liveness probe |
 
 There is no unauthenticated relay path and no legacy/smoke compatibility route.
@@ -73,12 +73,12 @@ JavaScript cannot set it):
   `POST /api/devices/:deviceID/revoke`) require a present, exactly matching
   `Origin` (`https://<host>` for `https`, `http://<host>` on localhost
   development) and additionally reject `Sec-Fetch-Site: cross-site`.
-- Browser WebSocket upgrade `/ws/v2/client` requires the same exact same-origin
+- Browser WebSocket upgrade `/ws/v3/client` requires the same exact same-origin
   `Origin`; a missing `Origin` is rejected.
 - `/api/auth/google/start` and `/api/auth/google/callback` are navigations and
   require no `Origin`; they are protected by the one-use transaction cookie,
   `state`, PKCE, and the ID token binding.
-- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v2/agent`)
+- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v3/agent`)
   carry no browser cookie and never require an `Origin`; they are rate limited.
 
 `GET /api/*` responses are `Cache-Control: no-store`. No `GET` route writes
@@ -183,15 +183,15 @@ trusting the connection's upgrade state.
 
 ### 3.1 Connections
 
-- `GET /ws/v2/client?device=<deviceID>` requires a valid browser session cookie, a
+- `GET /ws/v3/client?device=<deviceID>` requires a valid browser session cookie, a
   present same-origin `Origin`, and a device the owner owns and has not revoked. It
   connects to the Durable Object named `<ownerID>:<deviceID>`.
-- `GET /ws/v2/agent` requires `Authorization: Bearer <accessToken>`. The token must be
+- `GET /ws/v3/agent` requires `Authorization: Bearer <accessToken>`. The token must be
   an unexpired, unrevoked `access` credential whose device is not revoked. The same
   `<ownerID>:<deviceID>` Durable Object is used.
 - The worker strips every inbound `x-ycoding-*` header and re-derives trusted relay
   headers itself. Browser-supplied internal headers are never honored.
-- `/ws/v2/client` never accepts a bearer token, and `/ws/v2/agent` never accepts the
+- `/ws/v3/client` never accepts a bearer token, and `/ws/v3/agent` never accepts the
   browser cookie, so one role cannot impersonate the other.
 - One agent connection is authoritative per device. A newer agent connection closes
   the previous one with `1012`.
@@ -312,8 +312,9 @@ corresponding route.
 | `session.guardrail.status` | yes | `v2.session.guardrail.status` | `GET /api/session/:sessionID/guardrail` | — |
 | `session.guardrail.request.list` | yes | `v2.session.guardrail.request.list` | `GET /api/session/:sessionID/guardrail/request` | — |
 | `session.guardrail.reply` | yes | `v2.session.guardrail.request.reply` | `POST /api/session/:sessionID/guardrail/request/:requestID/reply` | `requestID`, `reply` |
-| `session.question.list` | yes | `v2.session.question.list` | `GET /api/session/:sessionID/question` | — |
-| `session.question.reply` | yes | `v2.session.question.reply` | `POST /api/session/:sessionID/question/:requestID/reply` | `requestID`, `answers` |
+| `session.form.list` | yes | `v2.session.form.list` | `GET /api/session/:sessionID/form` | — |
+| `session.form.reply` | yes | `v2.session.form.reply` | `POST /api/session/:sessionID/form/:formID/reply` | `formID`, `answer` |
+| `session.form.cancel` | yes | `v2.session.form.cancel` | `POST /api/session/:sessionID/form/:formID/cancel` | `formID` |
 | `session.fileChange.list` | yes | `v2.session.file-change.list` | `GET /api/session/:sessionID/file-change` | — |
 | `session.autonomy.get` | yes | `v2.session.autonomy.get` | `GET /api/session/:sessionID/autonomy` | — |
 | `session.autonomy.set` | yes | `v2.session.autonomy.set` | `PUT /api/session/:sessionID/autonomy` | `yolo`, `maxNoProgress?` |
@@ -327,7 +328,7 @@ field renaming, and no second schema. A `204 NoContent` response becomes
 Required reconnect reads — `session.snapshot` (the Protocol `SessionProjection`
 value), `session.active` (running state for the initial view and after
 reconnect), `session.permission.list`, `session.guardrail.status`,
-`session.guardrail.request.list`, `session.question.list`,
+`session.guardrail.request.list`, `session.form.list`,
 `session.fileChange.list`, and `session.autonomy.get` — exist so the browser can
 rebuild running state, pending approvals, and autonomy state after a reconnect
 instead of relying on ephemeral events.
@@ -338,9 +339,10 @@ owner is the authorization boundary. The wire name for captured file changes is
 `session.fileChange.list`; the Protocol endpoint identifier is
 `v2.session.file-change.list` (`GET /api/session/:sessionID/file-change`).
 
-`session.permission.reply`, `session.guardrail.reply`, and `session.question.reply`
-map a `requestID` path parameter, which is why the reply operations carry
-`requestID` in `input`.
+`session.permission.reply` and `session.guardrail.reply` map a `requestID` path
+parameter. `session.form.reply` and `session.form.cancel` map a `formID` path
+parameter. The corresponding identifier is therefore explicit in each mutation's
+`input`.
 
 ### 3.5 Idempotency and indeterminate outcomes
 
@@ -503,4 +505,4 @@ Verification limits, stated so they are not mistaken for covered behaviour:
 - No arbitrary proxy: the operation allowlist is closed, and the relay does not
   accept a URL, path, or method from a client.
 - No transcript, event, or delta persistence anywhere in D1.
-- No browser credentials on `/ws/v2/agent` and no device credentials on `/ws/v2/client`.
+- No browser credentials on `/ws/v3/agent` and no device credentials on `/ws/v3/client`.

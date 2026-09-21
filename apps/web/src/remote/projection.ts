@@ -6,6 +6,8 @@
  * guessed. Nothing here invents content the agent did not send.
  */
 
+import type { Form } from "../../../../packages/schema/src/form"
+
 /** `packages/schema` `Model.Ref`: an object, never a plain string. */
 export type ModelRefView = {
   readonly id: string
@@ -150,13 +152,10 @@ export type RemoteMessageView =
       readonly created: number
     }
 
-export type QuestionPromptView = {
-  readonly header: string
-  readonly question: string
-  readonly options: readonly { readonly label: string; readonly description: string }[]
-  readonly multiple: boolean
-  readonly custom: boolean
-}
+export type FormFieldView = Form.Field
+export type FormWhenView = Form.When
+export type FormAnswerView = Form.Answer
+export type FormView = Omit<Form.Info, "id" | "fields"> & { readonly id: string; readonly fields: readonly FormFieldView[] }
 
 export type PendingRequestView =
   | {
@@ -178,9 +177,9 @@ export type PendingRequestView =
       readonly askedAt: number
     }
   | {
-      readonly kind: "question"
+      readonly kind: "form"
       readonly id: string
-      readonly questions: readonly QuestionPromptView[]
+      readonly form: FormView
       readonly askedAt: number
     }
 
@@ -725,16 +724,14 @@ export function applySessionEvent(view: SessionView, payload: unknown, now: numb
         }),
         updatedAt: now,
       }
-    case "question.v2.asked":
-      return pushRequest(view, {
-        kind: "question",
-        id: stringField(data.id) ?? "question",
-        questions: readQuestions(data.questions),
-        askedAt: now,
-      })
-    case "question.v2.replied":
-    case "question.v2.rejected":
-      return removeRequest(view, stringField(data.requestID))
+    case "form.created": {
+      const form = readForms([data.form])[0]
+      if (form === undefined || form.sessionID !== view.id) return view
+      return pushRequest(view, { kind: "form", id: form.id, form, askedAt: now })
+    }
+    case "form.replied":
+    case "form.cancelled":
+      return data.sessionID === view.id ? removeRequest(view, stringField(data.id)) : view
     default:
       return bump(view)
   }
@@ -793,30 +790,63 @@ export function readToolContent(content: unknown): readonly ToolContentBlock[] {
   })
 }
 
-export function readQuestions(value: unknown): readonly QuestionPromptView[] {
+/** Reads the browser-safe structural projection of `Form.Info` without importing runtime code. */
+export function readForms(value: unknown): readonly FormView[] {
   if (!Array.isArray(value)) return []
-  return value.flatMap((item) => {
+  return value.flatMap((item): readonly FormView[] => {
     if (!isRecord(item)) return []
-    const question = stringField(item.question)
-    if (question === undefined) return []
-    const options = Array.isArray(item.options)
-      ? item.options.flatMap((option) =>
-          isRecord(option) && stringField(option.label) !== undefined
-            ? [{ label: stringField(option.label) ?? "", description: stringField(option.description) ?? "" }]
-            : [],
-        )
-      : []
-    return [
-      {
-        header: stringField(item.header) ?? "Question",
-        question,
-        options,
-        multiple: item.multiple === true,
-        custom: item.custom !== false,
-      },
-    ]
+    const id = stringField(item.id)
+    const sessionID = stringField(item.sessionID)
+    const title = stringField(item.title)
+    if (id === undefined || sessionID === undefined || title === undefined || !Array.isArray(item.fields)) return []
+    const fields = item.fields.flatMap(readFormField)
+    return fields.length === 0 || fields.length !== item.fields.length ? [] : [{ id, sessionID, title, ...(recordField(item.metadata) === undefined ? {} : { metadata: recordField(item.metadata) }), fields }]
   })
 }
+
+function readFormField(value: unknown): readonly FormFieldView[] {
+  if (!isRecord(value)) return []
+  const key = stringField(value.key)
+  const type = stringField(value.type)
+  if (key === undefined || type === undefined) return []
+  const when = readFormWhen(value.when)
+  if (value.when !== undefined && (!Array.isArray(value.when) || when.length !== value.when.length)) return []
+  const common = { key, ...(stringField(value.title) === undefined ? {} : { title: stringField(value.title) }), ...(stringField(value.description) === undefined ? {} : { description: stringField(value.description) }), ...(typeof value.required === "boolean" ? { required: value.required } : {}), ...(value.when === undefined ? {} : { when }) }
+  if (type === "external") {
+    const url = stringField(value.url)
+    return url === undefined ? [] : [{ key, type, url, ...(stringField(value.title) === undefined ? {} : { title: stringField(value.title) }), ...(stringField(value.description) === undefined ? {} : { description: stringField(value.description) }) }]
+  }
+  if (type === "string") {
+    const options = readFormOptions(value.options)
+    if (value.options !== undefined && (!Array.isArray(value.options) || options.length !== value.options.length)) return []
+    return [{ ...common, type,
+      ...(value.options === undefined ? {} : { options }),
+      ...(typeof value.custom === "boolean" ? { custom: value.custom } : {}),
+      ...(typeof value.default === "string" ? { default: value.default } : {}),
+      ...(typeof value.placeholder === "string" ? { placeholder: value.placeholder } : {}),
+      ...(typeof value.pattern === "string" ? { pattern: value.pattern } : {}),
+      ...(typeof value.minLength === "number" ? { minLength: value.minLength } : {}),
+      ...(typeof value.maxLength === "number" ? { maxLength: value.maxLength } : {}),
+      ...(value.format === "email" || value.format === "uri" || value.format === "date" || value.format === "date-time" ? { format: value.format } : {}),
+    }]
+  }
+  if (type === "multiselect") {
+    const options = readFormOptions(value.options)
+    if (!Array.isArray(value.options) || options.length !== value.options.length) return []
+    return [{ ...common, type, options,
+      ...(typeof value.custom === "boolean" ? { custom: value.custom } : {}),
+      ...(Array.isArray(value.default) ? { default: stringList(value.default) } : {}),
+      ...(typeof value.minItems === "number" ? { minItems: value.minItems } : {}),
+      ...(typeof value.maxItems === "number" ? { maxItems: value.maxItems } : {}),
+    }]
+  }
+  if (type === "number" || type === "integer") return [{ ...common, type, ...(typeof value.minimum === "number" ? { minimum: value.minimum } : {}), ...(typeof value.maximum === "number" ? { maximum: value.maximum } : {}), ...(typeof value.default === "number" ? { default: value.default } : {}) }]
+  if (type === "boolean") return [{ ...common, type, ...(typeof value.default === "boolean" ? { default: value.default } : {}) }]
+  return []
+}
+
+function readFormOptions(value: unknown) { return Array.isArray(value) ? value.flatMap((option) => isRecord(option) && stringField(option.value) !== undefined && stringField(option.label) !== undefined ? [{ value: stringField(option.value) ?? "", label: stringField(option.label) ?? "", ...(stringField(option.description) === undefined ? {} : { description: stringField(option.description) }) }] : []) : [] }
+function readFormWhen(value: unknown): readonly FormWhenView[] { return Array.isArray(value) ? value.flatMap((when) => isRecord(when) && stringField(when.key) !== undefined && (when.op === "eq" || when.op === "neq") && (typeof when.value === "string" || typeof when.value === "number" || typeof when.value === "boolean") ? [{ key: stringField(when.key) ?? "", op: when.op, value: when.value }] : []) : [] }
 
 export function readError(
   value: unknown,
@@ -1373,13 +1403,8 @@ export function readGuardrailRequests(payload: unknown, now: number): readonly P
   })
 }
 
-export function readQuestionRequests(payload: unknown, now: number): readonly PendingRequestView[] {
-  return readDataList(payload).flatMap((item) => {
-    if (!isRecord(item)) return []
-    const id = stringField(item.id)
-    if (id === undefined) return []
-    return [{ kind: "question" as const, id, questions: readQuestions(item.questions), askedAt: now }]
-  })
+export function readFormRequests(payload: unknown, now: number): readonly Extract<PendingRequestView, { kind: "form" }>[] {
+  return readForms(payload).map((form) => ({ kind: "form", id: form.id, form, askedAt: now }))
 }
 
 /** Reads `GET /api/session/:sessionID/file-change`: `{ data: FileChange.Info[] }`. */

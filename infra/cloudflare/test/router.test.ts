@@ -689,7 +689,7 @@ describe("router: websocket upgrades", () => {
 
   test("rejects missing, old, and unknown WebSocket protocol routes before upgrade", async () => {
     const h = await harness()
-    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v3/client", "/ws/v3/agent"])
+    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v4/client", "/ws/v4/agent"])
       expect((await h.router(new Request(`${origin}${path}`, { headers: { upgrade: "websocket" } }))).status).toBe(404)
     expect(h.relayCalls).toEqual([])
   })

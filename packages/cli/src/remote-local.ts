@@ -1,6 +1,14 @@
 export * as RemoteLocal from "./remote-local"
 
-import { ClientError, YCoding, type SessionInfo, type SessionMessageInfo, type YCodingClient } from "@ycoding-ai/client/promise"
+import {
+  ClientError,
+  YCoding,
+  type FormAnswer,
+  type FormInfo,
+  type SessionInfo,
+  type SessionMessageInfo,
+  type YCodingClient,
+} from "@ycoding-ai/client/promise"
 import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { RemoteLimits } from "@ycoding-ai/remote"
 
@@ -59,7 +67,7 @@ export type LocalServer = {
   readonly permissionList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly guardrailStatus: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly guardrailRequestList: (sessionID: string, location: LocalLocation) => Promise<unknown>
-  readonly questionList: (sessionID: string, location: LocalLocation) => Promise<unknown>
+  readonly formList: (sessionID: string, location: LocalLocation) => Promise<readonly FormInfo[]>
   readonly fileChangeList: (sessionID: string, location: LocalLocation) => Promise<unknown>
   /** Reads one shell's info at the bound Location; the caller proves Session ownership from its metadata. */
   readonly shellGet: (shellID: string, location: LocalLocation) => Promise<unknown>
@@ -84,12 +92,13 @@ export type LocalServer = {
     requestID: string,
     reply: string,
   ) => Promise<void>
-  readonly questionReply: (
+  readonly formReply: (
     sessionID: string,
     location: LocalLocation,
-    requestID: string,
-    answers: readonly (readonly string[])[],
+    formID: string,
+    answer: FormAnswer,
   ) => Promise<void>
+  readonly formCancel: (sessionID: string, location: LocalLocation, formID: string) => Promise<void>
   readonly autonomySet: (sessionID: string, location: LocalLocation, payload: LocalAutonomy) => Promise<unknown>
   /** Starts the shared event stream and resolves with an idempotent stop function. */
   readonly events: (stream: LocalEventStream) => Promise<() => Promise<void>>
@@ -145,8 +154,7 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
       call(() => client.guardrail.status({ sessionID }, request(location, timeoutMs))),
     guardrailRequestList: (sessionID, location) =>
       call(() => client.guardrail.request.list({ sessionID }, request(location, timeoutMs))),
-    questionList: (sessionID, location) =>
-      call(() => client.question.list({ sessionID }, request(location, timeoutMs))),
+    formList: (sessionID, location) => call(() => client.form.list({ sessionID }, request(location, timeoutMs))),
     fileChangeList: (sessionID, location) =>
       call(() => client.session["file-change"].list({ sessionID }, request(location, timeoutMs))),
     shellGet: (shellID, location) =>
@@ -213,12 +221,13 @@ export function createLocalServer(endpoint: Endpoint, options: LocalServerOption
           request(location, timeoutMs),
         )
       }),
-    questionReply: (sessionID, location, requestID, answers) =>
+    formReply: (sessionID, location, formID, answer) =>
       call(async () => {
-        await client.question.reply(
-          { sessionID, requestID, answers } as Parameters<YCodingClient["question"]["reply"]>[0],
-          request(location, timeoutMs),
-        )
+        await client.form.reply({ sessionID, formID, answer }, request(location, timeoutMs))
+      }),
+    formCancel: (sessionID, location, formID) =>
+      call(async () => {
+        await client.form.cancel({ sessionID, formID }, request(location, timeoutMs))
       }),
     autonomySet: (sessionID, location, payload) =>
       call(() =>

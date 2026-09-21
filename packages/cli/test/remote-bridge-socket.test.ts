@@ -36,7 +36,7 @@ test("writes single-encoded envelope frames through the default relay connection
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, socketServer) {
-      if (new URL(request.url).pathname !== "/ws/v2/agent") return new Response(null, { status: 404 })
+      if (new URL(request.url).pathname !== "/ws/v3/agent") return new Response(null, { status: 404 })
       headers.push(request.headers.get("authorization"))
       return socketServer.upgrade(request) ? undefined : new Response(null, { status: 400 })
     },

@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.1",
+    date: "2026-09-22",
+    title: "Answer native forms remotely",
+    tags: ["Fixed", "Changed"],
+    changes: [
+      { tag: "Fixed", text: "Show and answer the questions created by the local agent in the remote workspace." },
+      { tag: "Fixed", text: "Render typed forms with defaults, conditional fields, multiple selections, external-step acknowledgement, and cancellation." },
+      { tag: "Fixed", text: "Keep form replies scoped to their owning Session and track live creation and settlement in the request queue and notifications." },
+      { tag: "Changed", text: "Upgrade the local connector and reload the remote workspace for the coordinated protocol update. Existing sign-ins and device enrollments remain valid." },
+    ],
+  },
+  {
     version: "0.6.0",
     date: "2026-09-21",
     title: "Remote access to every Session",

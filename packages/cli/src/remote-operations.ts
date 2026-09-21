@@ -1,6 +1,6 @@
 export * as RemoteOperations from "./remote-operations"
 
-import type { SessionInfo } from "@ycoding-ai/client/promise"
+import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
 import {
   RemoteLimits,
   isSessionID,
@@ -260,8 +260,8 @@ async function run(input: OperationInput) {
       const listing = await input.local.guardrailRequestList(sessionID, location)
       return { data: asReviewList(listing) }
     }
-    case "question.list":
-      return { data: await input.local.questionList(sessionID, location) }
+    case "form.list":
+      return await input.local.formList(sessionID, location)
     case "fileChange.list":
       return { data: await input.local.fileChangeList(sessionID, location) }
     case "shell.output": {
@@ -303,8 +303,13 @@ async function run(input: OperationInput) {
       await requireOwnedReview(input, sessionID, location, validated.requestID)
       await input.local.guardrailReply(sessionID, location, validated.requestID, validated.reply)
       return null
-    case "question.reply":
-      await input.local.questionReply(sessionID, location, validated.requestID, validated.answers)
+    case "form.reply":
+      await requireOwnedForm(input, sessionID, location, validated.formID)
+      await input.local.formReply(sessionID, location, validated.formID, validated.answer)
+      return null
+    case "form.cancel":
+      await requireOwnedForm(input, sessionID, location, validated.formID)
+      await input.local.formCancel(sessionID, location, validated.formID)
       return null
     case "autonomy.set":
       return { data: await input.local.autonomySet(sessionID, location, validated.payload) }
@@ -333,7 +338,7 @@ type Validated =
   | { readonly kind: "permission.list" }
   | { readonly kind: "guardrail.status" }
   | { readonly kind: "guardrail.request.list" }
-  | { readonly kind: "question.list" }
+  | { readonly kind: "form.list" }
   | { readonly kind: "fileChange.list" }
   | { readonly kind: "shell.output"; readonly shellID: string; readonly cursor?: number; readonly limit: number }
   | { readonly kind: "log"; readonly after?: number }
@@ -343,7 +348,8 @@ type Validated =
   | { readonly kind: "interrupt" }
   | { readonly kind: "permission.reply"; readonly requestID: string; readonly reply: Reply; readonly message?: string }
   | { readonly kind: "guardrail.reply"; readonly requestID: string; readonly reply: Reply }
-  | { readonly kind: "question.reply"; readonly requestID: string; readonly answers: readonly (readonly string[])[] }
+  | { readonly kind: "form.reply"; readonly formID: string; readonly answer: FormAnswer }
+  | { readonly kind: "form.cancel"; readonly formID: string }
   | { readonly kind: "autonomy.set"; readonly payload: LocalAutonomy }
   | { readonly kind: "goal.set"; readonly payload: LocalAutonomy }
   | { readonly kind: "goal.stop" }
@@ -356,7 +362,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.permission.list": "permission.list",
   "session.guardrail.status": "guardrail.status",
   "session.guardrail.request.list": "guardrail.request.list",
-  "session.question.list": "question.list",
+  "session.form.list": "form.list",
   "session.fileChange.list": "fileChange.list",
   "session.subscribe": "subscribe",
   "session.unsubscribe": "unsubscribe",
@@ -404,8 +410,10 @@ function validate(request: RemoteRequest): Validated {
       }
     case "session.guardrail.reply":
       return { kind: "guardrail.reply", requestID: requestIDOf(fields.requestID, "grq_"), reply: reply(fields.reply) }
-    case "session.question.reply":
-      return { kind: "question.reply", requestID: requestIDOf(fields.requestID, "que_"), answers: answers(fields.answers) }
+    case "session.form.reply":
+      return { kind: "form.reply", formID: formID(fields.formID), answer: formAnswer(fields.answer) }
+    case "session.form.cancel":
+      return { kind: "form.cancel", formID: formID(fields.formID) }
     case "session.autonomy.set":
       return { kind: "autonomy.set", payload: yoloPayload(fields) }
     case "session.goal.set":
@@ -462,6 +470,17 @@ async function requireOwnedReview(
   )
   if (review === undefined)
     throw new OperationError("invalid_message", "That guardrail review is no longer pending; reload before replying")
+}
+
+async function requireOwnedForm(
+  input: OperationInput,
+  sessionID: string,
+  location: LocalLocation,
+  formID: string,
+) {
+  const forms = await input.local.formList(sessionID, location)
+  if (!forms.some((form) => form.id === formID && form.sessionID === sessionID))
+    throw new OperationError("invalid_message", "That form is not pending for the authorized Session")
 }
 
 function scopedOperation(operation: RemoteOperation) {
@@ -562,7 +581,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.permission.list": [],
   "session.guardrail.status": [],
   "session.guardrail.request.list": [],
-  "session.question.list": [],
+  "session.form.list": [],
   "session.fileChange.list": [],
   "session.shell.output": ["shellID", "cursor", "limit"],
   "session.subscribe": [],
@@ -571,7 +590,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.interrupt": [],
   "session.permission.reply": ["requestID", "reply", "message"],
   "session.guardrail.reply": ["requestID", "reply"],
-  "session.question.reply": ["requestID", "answers"],
+  "session.form.reply": ["formID", "answer"],
+  "session.form.cancel": ["formID"],
   "session.autonomy.set": ["yolo", "maxNoProgress"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
@@ -590,7 +610,8 @@ const mutations: ReadonlySet<string> = new Set([
   "session.interrupt",
   "session.permission.reply",
   "session.guardrail.reply",
-  "session.question.reply",
+  "session.form.reply",
+  "session.form.cancel",
   "session.autonomy.set",
   "session.goal.set",
   "session.goal.stop",
@@ -603,7 +624,8 @@ function isMutation(request: RemoteRequest) {
 const reviewReplies: ReadonlySet<string> = new Set([
   "session.permission.reply",
   "session.guardrail.reply",
-  "session.question.reply",
+  "session.form.reply",
+  "session.form.cancel",
 ])
 
 function localError(cause: LocalFailure, request: RemoteRequest): readonly [RemoteErrorCode, string] {
@@ -653,14 +675,28 @@ function delivery(value: unknown) {
   return literal(value, ["steer", "queue"] as const, "delivery")
 }
 
-function answers(value: unknown) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 64)
-    throw new OperationError("invalid_message", 'The "answers" field must be an array of answer lists')
-  return value.map((answer) => {
-    if (!Array.isArray(answer) || answer.length > 64)
-      throw new OperationError("invalid_message", 'The "answers" field must be an array of answer lists')
-    return answer.map((label) => requireString(label, "answers", 1_024, { allowEmpty: true }))
-  })
+function formID(value: unknown) {
+  const id = requireString(value, "formID", RemoteLimits.maxRequestIDChars)
+  if (!/^frm_[A-Za-z0-9_-]+$/.test(id)) throw new OperationError("invalid_message", 'The "formID" field is invalid')
+  return id
+}
+
+function formAnswer(value: unknown): FormAnswer {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new OperationError("invalid_message", 'The "answer" field must be a Form.Answer object')
+  const result: FormAnswer = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+      result[key] = entry
+      continue
+    }
+    if (Array.isArray(entry) && entry.every((item) => typeof item === "string")) {
+      result[key] = entry
+      continue
+    }
+    throw new OperationError("invalid_message", 'The "answer" field must contain only Form.Value values')
+  }
+  return result
 }
 
 function fileAttachments(value: unknown) {

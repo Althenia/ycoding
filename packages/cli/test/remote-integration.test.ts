@@ -107,6 +107,21 @@ function errorOf(frame: RemoteResponse | undefined) {
   return frame.error
 }
 
+async function createForm(server: IsolatedServer, directory: string, sessionID: string, formID: string) {
+  const response = await server.request(`/api/session/${encodeURIComponent(sessionID)}/form`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-ycoding-directory": encodeURIComponent(directory) },
+    body: JSON.stringify({
+      id: formID,
+      title: "Approve the remote action",
+      metadata: { kind: "question" },
+      fields: [{ key: "approved", type: "boolean", title: "Approve?", required: true }],
+    }),
+  })
+  expect(response.status, await response.clone().text()).toBe(200)
+  return ((await response.json()) as { data: { id: string; sessionID: string } }).data
+}
+
 /** Create one real shell at the shared Location, owned by the supplied Session. */
 async function createShell(
   server: IsolatedServer,
@@ -414,8 +429,23 @@ test("bridges authorized session operations against an isolated server", async (
     expect(permissions).toEqual({ data: [] })
     expect(Object.keys(permissions)).toEqual(["data"])
 
-    relay.deliver(request("questions_1", "session.question.list", sessionID))
-    expect(valueOf(await answer(relay, "questions_1"))).toEqual({ data: [] })
+    const replyForm = await createForm(server, directory, sessionID, "frm_remote_reply")
+    const cancelForm = await createForm(server, directory, sessionID, "frm_remote_cancel")
+    const crossSessionForm = await createForm(server, directory, hiddenSessionID, "frm_remote_cross")
+    relay.deliver(request("forms_1", "session.form.list", sessionID, {}))
+    const forms = valueOf(await answer(relay, "forms_1")) as readonly { id: string; sessionID: string }[]
+    expect(Array.isArray(forms)).toBe(true)
+    expect(forms.map((form) => form.id).sort()).toEqual([cancelForm.id, replyForm.id])
+    expect(forms.every((form) => form.sessionID === sessionID)).toBe(true)
+
+    relay.deliver(request("form_reply_1", "session.form.reply", sessionID, { formID: replyForm.id, answer: { approved: true } }))
+    expect(valueOf(await answer(relay, "form_reply_1"))).toBeNull()
+    relay.deliver(request("form_cancel_1", "session.form.cancel", sessionID, { formID: cancelForm.id }))
+    expect(valueOf(await answer(relay, "form_cancel_1"))).toBeNull()
+    relay.deliver(request("form_cross_1", "session.form.cancel", sessionID, { formID: crossSessionForm.id }))
+    expect(errorOf(await answer(relay, "form_cross_1")).code).toBe("invalid_message")
+    relay.deliver(request("forms_2", "session.form.list", sessionID, {}))
+    expect(valueOf(await answer(relay, "forms_2"))).toEqual([])
 
     // Running status is process-wide and includes every backend Session.
     await server.request(`/api/session/${hiddenSessionID}/prompt`, {
@@ -461,8 +491,8 @@ test("bridges authorized session operations against an isolated server", async (
     expect(errorOf(await answer(relay, "review_reply_1")).code).toBe("invalid_message")
     relay.deliver(request("permission_reply_1", "session.permission.reply", sessionID, { requestID: "per_missing", reply: "once" }))
     expect(errorOf(await answer(relay, "permission_reply_1")).code).toBe("invalid_message")
-    relay.deliver(request("question_reply_1", "session.question.reply", sessionID, { requestID: "que_missing", answers: [["yes"]] }))
-    expect(errorOf(await answer(relay, "question_reply_1")).code).toBe("invalid_message")
+    relay.deliver(request("form_reply_missing", "session.form.reply", sessionID, { formID: "frm_missing", answer: {} }))
+    expect(errorOf(await answer(relay, "form_reply_missing")).code).toBe("invalid_message")
 
     // Live local events reach the relay only for subscribed Sessions.
     relay.deliver(request("subscribe_1", "session.subscribe", sessionID))

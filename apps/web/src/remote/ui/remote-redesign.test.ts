@@ -231,11 +231,11 @@ describe("waiting request row", () => {
     expect(row.detail).toBe("Recursive deletion needs a human decision")
   })
 
-  test("summarises a question", () => {
+  test("summarises a question form", () => {
     const row = queueRowView({
-      kind: "question",
-      id: "que_1",
-      questions: [{ header: "Scope", question: "Reload what?", options: [], multiple: false, custom: false }],
+      kind: "form",
+      id: "frm_1",
+      form: { id: "frm_1", sessionID: "ses_a", title: "Scope", metadata: { kind: "question" }, fields: [{ key: "q0", type: "string", title: "Reload what?" }] },
       askedAt: 0,
     } satisfies PendingRequestView)
     expect(row.icon).toBe("chat")
@@ -253,10 +253,10 @@ describe("waiting for a decision", () => {
     resources: ["bun test *"],
     askedAt: 0,
   }
-  const question: PendingRequestView = {
-    kind: "question",
-    id: "que_1",
-    questions: [{ header: "Scope", question: "Reload what?", options: [], multiple: false, custom: false }],
+  const form: PendingRequestView = {
+    kind: "form",
+    id: "frm_1",
+    form: { id: "frm_1", sessionID: "ses_a", title: "Scope", metadata: { kind: "question" }, fields: [{ key: "q0", type: "string", title: "Reload what?" }] },
     askedAt: 0,
   }
 
@@ -264,8 +264,8 @@ describe("waiting for a decision", () => {
     expect(awaitsApproval(view({ requests: [permission] }), "ses_a")).toBe(true)
   })
 
-  test("does not count a question as an approval decision", () => {
-    expect(awaitsApproval(view({ requests: [question] }), "ses_a")).toBe(false)
+  test("does not count a form as an approval decision", () => {
+    expect(awaitsApproval(view({ requests: [form] }), "ses_a")).toBe(false)
   })
 
   test("reports nothing for a session this client has not loaded", () => {

@@ -289,7 +289,7 @@ export const usePages: readonly DocPage[] = [
               ["Session list", "Show all sessions on the connected backend, including running and archived state. New sessions appear while the device remains connected."],
               ["Conversation", "Load the canonical conversation for a session and stream new output as it arrives."],
               ["Composer", "Send a prompt with an explicit delivery mode, and interrupt the active step."],
-              ["Requests", "Answer permission, guardrail, and question requests. Hard guardrail reviews accept only one-time approval or rejection."],
+              ["Requests", "Answer permission, guardrail, question, and form requests. Forms support typed fields, defaults, conditional fields, and cancellation. External steps require your acknowledgement. Hard guardrail reviews accept only one-time approval or rejection."],
               ["Autonomy", "Read and change the session's autonomy state, including setting or stopping a goal."],
               ["Alerts", "Show an in-app notice for each enabled category, and a desktop alert when this browser is permitted."],
             ],

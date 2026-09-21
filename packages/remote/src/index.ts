@@ -8,10 +8,10 @@
  *
  * Two WebSocket surfaces use one envelope vocabulary:
  *
- * - Browser: `GET /ws/v2/client?device=<deviceID>` authenticated by the browser
+ * - Browser: `GET /ws/v3/client?device=<deviceID>` authenticated by the browser
  *   session cookie, then device selection. Client frames are `request` and `ping`
  *   (plus the `pong` heartbeat reply).
- * - Local agent: `GET /ws/v2/agent` authenticated by `Authorization: Bearer <access
+ * - Local agent: `GET /ws/v3/agent` authenticated by `Authorization: Bearer <access
  *   token>` from the device challenge flow. Agent frames are `response`, `event`,
  *   `sessions`, and `ping`/`pong`.
  *
@@ -25,7 +25,7 @@
  */
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
-export const RemoteProtocolVersion = 2
+export const RemoteProtocolVersion = 3
 
 /** Versioned WebSocket routes derived from the envelope revision. */
 export const RemoteWebSocketPath = {
@@ -50,8 +50,9 @@ export const remoteOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
-  "session.question.list",
-  "session.question.reply",
+  "session.form.list",
+  "session.form.reply",
+  "session.form.cancel",
   "session.fileChange.list",
   "session.shell.output",
   "session.autonomy.get",
@@ -75,8 +76,9 @@ export const remoteSessionOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
-  "session.question.list",
-  "session.question.reply",
+  "session.form.list",
+  "session.form.reply",
+  "session.form.cancel",
   "session.fileChange.list",
   "session.shell.output",
   "session.autonomy.get",

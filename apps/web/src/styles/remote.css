@@ -764,7 +764,8 @@
   margin-top: var(--yc-space-2);
 }
 
-.question__custom input {
+.question__custom input,
+.question__custom textarea {
   min-block-size: var(--yc-control-h);
   padding: 0 var(--yc-space-3);
   border: var(--yc-border-width) solid var(--yc-border-strong);

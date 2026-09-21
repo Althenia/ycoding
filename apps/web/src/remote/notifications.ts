@@ -44,7 +44,7 @@ export function notificationCategory(payload: unknown): NotificationCategory | u
     case "session.step.failed":
       return "error"
     case "permission.v2.asked":
-    case "question.v2.asked":
+    case "form.created":
       return "approval-requested"
     case "guardrail.asked":
       return "guardrail-blocked"

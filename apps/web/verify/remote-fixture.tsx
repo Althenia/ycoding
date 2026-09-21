@@ -48,6 +48,12 @@ const accountMode = accountParams.get("account") ?? "ok"
 const accountDelayMs = Number(accountParams.get("accountDelay") ?? 0)
 /** `?connection=offline` selects a signed-in device whose open relay has no local agent. */
 const connectionMode = accountParams.get("connection") ?? "open"
+/** `?form=all` adds every native field kind for browser verification. */
+const formMode = accountParams.get("form") ?? "question"
+/** Delays native Form settlement so the browser can observe disabled duplicate controls. */
+const formDelayMs = Number(accountParams.get("formDelay") ?? 0)
+/** `?formOutcome=unknown` leaves the native Form mutation unresolved without replay. */
+const formOutcome = accountParams.get("formOutcome")
 const deviceMode = accountParams.get("devices")
 const emptyBackend = accountParams.get("sessions") === "empty"
 if (deviceMode === "none") devices = []
@@ -293,19 +299,58 @@ const guardrail = {
   standard: true,
   hardReview: true,
 }
-const question = {
-  id: "que_fixture",
+const form = {
+  id: "frm_fixture",
   sessionID,
-  questions: [
+  title: "Questions",
+  metadata: { kind: "question" },
+  fields: [
     {
-      header: "Scope",
-      question: "Which sessions should the workspace reload after reconnect?",
+      key: "q0",
+      type: "string",
+      title: "Scope",
+      description: "Which sessions should the workspace reload after reconnect?",
       options: [
-        { label: "Active only", description: "Reload just the session you are watching" },
-        { label: "All advertised", description: "Reload every session in the advertisement" },
+        { value: "Active only", label: "Active only", description: "Reload just the session you are watching" },
+        { value: "All advertised", label: "All advertised", description: "Reload every session in the advertisement" },
       ],
-      multiple: false,
+      custom: true,
     },
+  ],
+}
+const allForm = {
+  id: "frm_all_fixture",
+  sessionID,
+  title: "Native Form field coverage",
+  metadata: { kind: "form" },
+  fields: [
+    {
+      key: "choice",
+      type: "string",
+      title: "String choice",
+      required: true,
+      options: [{ value: "show", label: "Show follow-up" }, { value: "hide", label: "Hide follow-up" }],
+      custom: true,
+    },
+    { key: "tags", type: "multiselect", title: "Tags", required: true, options: [{ value: "alpha", label: "Alpha" }, { value: "beta", label: "Beta" }], custom: true, default: ["alpha"], minItems: 1, maxItems: 3 },
+    { key: "amount", type: "number", title: "Amount", required: true, minimum: 0, maximum: 10 },
+    { key: "count", type: "integer", title: "Count", required: true, minimum: 2, maximum: 5, default: 3 },
+    { key: "confirm", type: "boolean", title: "Confirm", default: false },
+    { key: "followup", type: "string", title: "Chained follow-up", required: true, when: [{ key: "choice", op: "eq", value: "show" }, { key: "confirm", op: "eq", value: true }] },
+    { key: "downstream", type: "string", title: "Transitive follow-up", required: true, when: [{ key: "followup", op: "eq", value: "continue" }] },
+    { key: "external", type: "external", title: "External step", url: "https://example.com/forms-fixture" },
+    { key: "unsafe", type: "external", title: "Unsafe step", url: "javascript:alert(1)" },
+  ],
+}
+
+const constraintsForm = {
+  id: "frm_constraints",
+  sessionID,
+  title: "Native constraint semantics",
+  fields: [
+    { key: "pattern", type: "string", pattern: "a", default: "ba", required: true },
+    { key: "integer", type: "integer", minimum: 0.5, default: 1, required: true },
+    { key: "email", type: "string", format: "email", default: "δοκιμή@example.com", required: true },
   ],
 }
 
@@ -313,6 +358,7 @@ type Fixture = {
   readonly store: RemoteStore
   readonly drop: () => void
   readonly stream: () => void
+  readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
 }
 
 function createFixtureStore(): Fixture {
@@ -320,9 +366,10 @@ function createFixtureStore(): Fixture {
   let open = true
   let streamed = false
   let liveReads = 0
+  const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   /** Requests this synthetic agent has already answered; a later list read omits them. */
   const answered = new Set<string>()
-  const unreplied = (request: { readonly id: string }) => (answered.has(request.id) ? [] : [request])
+  const unreplied = <T extends { readonly id: string }>(requests: readonly T[]) => requests.filter((request) => !answered.has(request.id))
 
   /**
    * One page per request from the fixture device, with absolute byte cursors. The live
@@ -395,16 +442,24 @@ function createFixtureStore(): Fixture {
         },
       }
     }
-    if (operation === "session.permission.list") return { status: "ok", value: { data: unreplied(permission) } }
-    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: unreplied(guardrail) } }
-    if (operation === "session.question.list") return { status: "ok", value: { data: unreplied(question) } }
+    if (operation === "session.permission.list") return { status: "ok", value: { data: unreplied([permission]) } }
+    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: unreplied([guardrail]) } }
+    if (operation === "session.form.list") return { status: "ok", value: formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form]) }
     if (
       operation === "session.permission.reply" ||
       operation === "session.guardrail.reply" ||
-      operation === "session.question.reply"
+      operation === "session.form.reply" ||
+      operation === "session.form.cancel"
     ) {
       const requestID = typeof input?.requestID === "string" ? input.requestID : undefined
+      const formID = typeof input?.formID === "string" ? input.formID : undefined
       if (requestID !== undefined) answered.add(requestID)
+      if (formID !== undefined) {
+        formRequests.push({ operation, input })
+      }
+      if (formID !== undefined && formOutcome === "unknown") return { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown Form outcome" } }
+      if (formID !== undefined) answered.add(formID)
+      if (formID !== undefined && formDelayMs > 0) return new Promise((resolve) => setTimeout(() => resolve({ status: "ok", value: null }), formDelayMs))
       return { status: "ok", value: null }
     }
     if (operation === "session.prompt") return { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
@@ -474,7 +529,7 @@ function createFixtureStore(): Fixture {
     }
   }
 
-  return { store, drop, stream }
+  return { store, drop, stream, formRequests: () => formRequests }
 }
 
 const fixture = createFixtureStore()
@@ -580,11 +635,31 @@ function remoteShellOutputReport() {
   })
 }
 
+/** Browser-only readout of the synthetic native Form transport and rendered inputs. */
+function remoteFormReport() {
+  return {
+    requests: fixture.formRequests(),
+    forms: [...document.querySelectorAll(".request form")].map((element) => ({
+      title: element.querySelector(".request__header span")?.textContent ?? "",
+      controls: [...element.querySelectorAll("input, textarea, button")].map((control) => ({
+        type: control instanceof HTMLInputElement ? control.type : control instanceof HTMLTextAreaElement ? "textarea" : "button",
+        name: control.getAttribute("name"),
+        label: control.closest("label")?.textContent?.trim(),
+        value: control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement ? control.value : control.textContent?.trim(),
+        checked: control instanceof HTMLInputElement ? control.checked : undefined,
+        disabled: control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement || control instanceof HTMLButtonElement ? control.disabled : undefined,
+      })),
+    })),
+  }
+}
+
 ;(window as typeof window & { remoteShellOutputReport?: typeof remoteShellOutputReport }).remoteShellOutputReport =
   remoteShellOutputReport
 
 ;(window as typeof window & { remoteOverflowReport?: typeof remoteOverflowReport }).remoteOverflowReport =
   remoteOverflowReport
+
+;(window as typeof window & { remoteFormReport?: typeof remoteFormReport }).remoteFormReport = remoteFormReport
 
 const fixtureView = new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`

@@ -261,7 +261,9 @@ describe("remote bridge", () => {
     const stream = streams[0].stream
     stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
     stream.onEvent({ type: "session.created", data: { sessionID: "ses_3" } })
-    stream.onEvent({ type: "form.created", data: { form: { sessionID: "ses_1" } } })
+    stream.onEvent({ type: "form.created", data: { sessionID: "ses_other", form: { id: "frm_1", sessionID: "ses_1" } } })
+    stream.onEvent({ type: "form.replied", data: { id: "frm_1", sessionID: "ses_1", answer: { approved: true } } })
+    stream.onEvent({ type: "form.cancelled", data: { id: "frm_2", sessionID: "ses_1" } })
     stream.onEvent({ type: "server.connected", data: {} })
     stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
     await Bun.sleep(5)
@@ -269,7 +271,21 @@ describe("remote bridge", () => {
     const events = sentFrames(connection).filter((frame) => frame.type === "event")
     expect(events).toEqual([
       { type: "event", sessionID: "ses_1", event: { type: "session.created", data: { sessionID: "ses_1" } } },
-      { type: "event", sessionID: "ses_1", event: { type: "form.created", data: { form: { sessionID: "ses_1" } } } },
+      {
+        type: "event",
+        sessionID: "ses_1",
+        event: { type: "form.created", data: { sessionID: "ses_other", form: { id: "frm_1", sessionID: "ses_1" } } },
+      },
+      {
+        type: "event",
+        sessionID: "ses_1",
+        event: { type: "form.replied", data: { id: "frm_1", sessionID: "ses_1", answer: { approved: true } } },
+      },
+      {
+        type: "event",
+        sessionID: "ses_1",
+        event: { type: "form.cancelled", data: { id: "frm_2", sessionID: "ses_1" } },
+      },
       { type: "event", sessionID: "ses_1", event: { type: "session.created", data: { sessionID: "ses_1" } } },
     ])
 

@@ -250,7 +250,7 @@ describe("remote transport integration", () => {
   })
 
   test("refuses work while the socket is not open", async () => {
-    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/v2/client", resetDelayMs: 10 })
+    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/v3/client", resetDelayMs: 10 })
     expect(await transport.request("session.list")).toEqual({ status: "unavailable", reason: "not-connected" })
     transport.close()
   })

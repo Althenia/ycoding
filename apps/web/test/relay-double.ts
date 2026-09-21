@@ -40,7 +40,7 @@ export type RelayDoubleOptions = {
   readonly autonomy?: unknown
   readonly permissions?: readonly unknown[]
   readonly guardrailRequests?: readonly unknown[]
-  readonly questions?: readonly unknown[]
+  readonly forms?: readonly unknown[]
 }
 
 export type RelayDouble = {
@@ -130,8 +130,8 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       if (request.operation === "session.guardrail.request.list") {
         return { ok: true, value: { data: options.guardrailRequests ?? [] } }
       }
-      if (request.operation === "session.question.list") {
-        return { ok: true, value: { data: options.questions ?? [] } }
+      if (request.operation === "session.form.list") {
+        return { ok: true, value: options.forms ?? [] }
       }
       if (request.operation === "session.fileChange.list") {
         return { ok: true, value: { data: [] } }

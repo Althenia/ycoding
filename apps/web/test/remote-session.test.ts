@@ -20,7 +20,7 @@ async function harness(options: {
   autonomy?: unknown
   permissions?: readonly unknown[]
   guardrailRequests?: readonly unknown[]
-  questions?: readonly unknown[]
+  forms?: readonly unknown[]
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     handler: options.handler,
@@ -29,7 +29,7 @@ async function harness(options: {
     autonomy: options.autonomy,
     permissions: options.permissions,
     guardrailRequests: options.guardrailRequests,
-    questions: options.questions,
+    forms: options.forms,
     advertisedSessions: ["ses_a", "ses_b"],
   })
   const timers: (() => void)[] = []
@@ -1363,7 +1363,7 @@ describe("remote store integration", () => {
     }
   })
 
-  test("replies to permission, guardrail, and question requests with protocol payloads", async () => {
+  test("replies to permission, guardrail, and native form requests with protocol payloads", async () => {
     const test = await harness()
     try {
       await test.store.load()
@@ -1377,25 +1377,117 @@ describe("remote store integration", () => {
       })
       test.relay.pushEvent("ses_a", {
         id: "evt_q",
-        type: "question.v2.asked",
-        data: { id: "que_1", questions: [{ header: "S", question: "Which?", options: [{ label: "a", description: "A" }] }] },
+        type: "form.created",
+        data: {
+          form: {
+            id: "frm_1",
+            sessionID: "ses_a",
+            title: "Question",
+            metadata: { kind: "question" },
+            fields: [{ key: "q0", type: "string", title: "Which?", options: [{ value: "a", label: "A" }], custom: true }],
+          },
+        },
       })
       await test.flush()
-      expect(test.store.state().view?.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "question"])
+      expect(test.store.state().view?.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "form"])
 
       await test.store.replyPermission("per_1", "once")
       await test.store.replyGuardrail("grq_1", "reject")
-      await test.store.replyQuestion("que_1", [["a"]])
+      await test.store.replyForm("frm_1", { q0: "a" })
       await waitFor(() => test.relay.requests.filter((request) => request.operation.endsWith(".reply")).length === 3)
       const replies = test.relay.requests.filter((request) => request.operation.endsWith(".reply"))
       expect(replies.map((request) => request.operation)).toEqual([
         "session.permission.reply",
         "session.guardrail.reply",
-        "session.question.reply",
+        "session.form.reply",
       ])
       expect(replies[0]?.input).toEqual({ requestID: "per_1", reply: "once" })
       expect(replies[1]?.input).toEqual({ requestID: "grq_1", reply: "reject" })
-      expect(replies[2]?.input).toEqual({ requestID: "que_1", answers: [["a"]] })
+      expect(replies[2]?.input).toEqual({ formID: "frm_1", answer: { q0: "a" } })
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("hydrates native forms, applies live settlement, and cancels with the form payload", async () => {
+    const form = {
+      id: "frm_seed",
+      sessionID: "ses_a",
+      title: "Question",
+      metadata: { kind: "question" },
+      fields: [{ key: "q0", type: "string", title: "Which module?", options: [{ value: "core", label: "Core" }], custom: true }],
+    }
+    const test = await harness({ forms: [form] })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.requests).toMatchObject([{ kind: "form", id: "frm_seed", form }])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_live", type: "form.created", data: { form: { ...form, id: "frm_live" } } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_seed", "frm_live"])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_replied", type: "form.replied", data: { id: "frm_live", sessionID: "ses_a", answer: { q0: "core" } } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_seed"])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_cancelled_created", type: "form.created", data: { form: { ...form, id: "frm_cancelled" } } })
+      test.relay.pushEvent("ses_a", { id: "evt_form_cancelled", type: "form.cancelled", data: { id: "frm_cancelled", sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_seed"])
+
+      await test.store.cancelForm("frm_seed")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.form.cancel"))
+      expect(test.relay.requests.find((request) => request.operation === "session.form.cancel")?.input).toEqual({ formID: "frm_seed" })
+      expect(test.store.state().view?.requests).toHaveLength(0)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("refuses foreign forms and does not let a stale form reply alter a newly selected session", async () => {
+    const form = (id: string, sessionID: string) => ({
+      id,
+      sessionID,
+      title: "Question",
+      metadata: { kind: "question" },
+      fields: [{ key: "q0", type: "string", title: "Which module?", options: [{ value: "core", label: "Core" }] }],
+    })
+    let releaseReply: (() => void) | undefined
+    const replyGate = new Promise<void>((resolve) => {
+      releaseReply = resolve
+    })
+    const test = await harness({
+      forms: [form("frm_a", "ses_a"), form("frm_b", "ses_b")],
+      handler: async (request) => {
+        if (request.operation !== "session.form.reply") return "default" as const
+        await replyGate
+        return "default" as const
+      },
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_a"])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_foreign", type: "form.created", data: { form: form("frm_foreign", "ses_b") } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_a"])
+
+      const reply = test.store.replyForm("frm_a", { q0: "core" })
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.form.reply"))
+      await test.store.selectSession("ses_b")
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_b"])
+      if (releaseReply === undefined) throw new Error("Reply gate was not initialized")
+      releaseReply()
+      await reply
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_b"])
+
+      await test.store.replyForm("frm_foreign", { q0: "core" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.form.reply")).toHaveLength(1)
+      expect(test.store.state().notice).toContain("another session")
     } finally {
       await test.stop()
     }
@@ -1535,7 +1627,15 @@ describe("remote store integration", () => {
         { id: "grq_mine", sessionID: "ses_a", rootSessionID: "ses_a", action: "rm -rf build", resources: ["build"], reason: "Deletion", hardReview: false },
         { id: "grq_child", sessionID: "ses_child", rootSessionID: "ses_a", action: "rm -rf dist", resources: ["dist"], reason: "Deletion", hardReview: true },
       ],
-      questions: [{ id: "que_1", sessionID: "ses_a", questions: [{ header: "S", question: "Which?", options: [{ label: "a", description: "A" }] }] }],
+      forms: [
+        {
+          id: "frm_1",
+          sessionID: "ses_a",
+          title: "Question",
+          metadata: { kind: "question" },
+          fields: [{ key: "q0", type: "string", title: "Which?", options: [{ value: "a", label: "A" }], custom: true }],
+        },
+      ],
     })
     try {
       await test.store.load()
@@ -1543,7 +1643,7 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       const view = test.store.state().view
       expect(view?.autonomy).toMatchObject({ mode: "goal", yolo: 2, goal: { iteration: 4 } })
-      expect(view?.requests.map((request) => request.id)).toEqual(["per_1", "grq_mine", "grq_child", "que_1"])
+      expect(view?.requests.map((request) => request.id)).toEqual(["per_1", "grq_mine", "grq_child", "frm_1"])
       const foreign = view?.requests.find((request) => request.id === "grq_child")
       expect(foreign && canReplyToRequest(foreign, "ses_a")).toBe(false)
       const mine = view?.requests.find((request) => request.id === "grq_mine")

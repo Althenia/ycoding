@@ -49,8 +49,8 @@ describe("relay URL resolution", () => {
       await expect(provide(root)(relayURL({ flag: "https://relay.example/ws/agent" }))).rejects.toThrow(/without a path/)
       expect(await provide(root)(relayURL({ flag: "https://relay.example/" }))).toBe("https://relay.example")
       expect(await provide(root)(relayURL({ flag: "http://127.0.0.1:8787" }))).toBe("http://127.0.0.1:8787")
-      expect(agentURL("https://relay.example")).toBe("wss://relay.example/ws/v2/agent")
-      expect(agentURL("http://127.0.0.1:8787")).toBe("ws://127.0.0.1:8787/ws/v2/agent")
+      expect(agentURL("https://relay.example")).toBe("wss://relay.example/ws/v3/agent")
+      expect(agentURL("http://127.0.0.1:8787")).toBe("ws://127.0.0.1:8787/ws/v3/agent")
       expect(assertEnrolledRelay({ requested: "https://relay.example", enrolled: "https://relay.example/" })).toBe(
         "https://relay.example",
       )

@@ -11,7 +11,7 @@ import {
   readFileChangeEvent,
   readFileChangeList,
   readMessageList,
-  readQuestions,
+  readForms,
   readShellOutputPage,
   readSnapshotParts,
   shellOutputFetchFor,
@@ -93,7 +93,35 @@ describe("user input lifecycle", () => {
 })
 
 describe("requests", () => {
-  test("tracks permission, guardrail, and question asks and their replies", () => {
+  test("reads native question-tool Form.Info fields", () => {
+    expect(
+      readForms([
+        {
+          id: "frm_question",
+          sessionID: "ses_a",
+          title: "Question",
+          metadata: { kind: "question" },
+          fields: [
+            { key: "q0", type: "string", title: "Which module?", required: true, options: [{ value: "core", label: "Core" }] },
+            { key: "followup", type: "boolean", title: "Continue?", when: [{ key: "q0", op: "eq", value: "core" }] },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "frm_question",
+        sessionID: "ses_a",
+        title: "Question",
+        metadata: { kind: "question" },
+        fields: [
+          { key: "q0", type: "string", title: "Which module?", required: true, options: [{ value: "core", label: "Core" }] },
+          { key: "followup", type: "boolean", title: "Continue?", when: [{ key: "q0", op: "eq", value: "core" }] },
+        ],
+      },
+    ])
+  })
+
+  test("tracks permission, guardrail, and native form asks and their replies", () => {
     let view = createSessionView("ses_a")
     view = apply(view, "permission.v2.asked", { id: "per_1", action: "edit", resources: ["src/**"] })
     view = apply(view, "guardrail.asked", {
@@ -103,24 +131,22 @@ describe("requests", () => {
       reason: "Deletion needs review",
       hardReview: true,
     })
-    view = apply(view, "question.v2.asked", {
-      id: "que_1",
-      questions: [
-        {
-          header: "Scope",
-          question: "Which module?",
-          options: [{ label: "core", description: "Core package" }],
-          multiple: false,
-        },
-      ],
+    view = apply(view, "form.created", {
+      form: {
+        id: "frm_1",
+        sessionID: "ses_a",
+        title: "Question",
+        metadata: { kind: "question" },
+        fields: [{ key: "q0", type: "string", title: "Which module?", options: [{ value: "core", label: "Core" }] }],
+      },
     })
-    expect(view.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "question"])
+    expect(view.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "form"])
     const guardrail = view.requests.find((request) => request.kind === "guardrail")
     expect(guardrail).toMatchObject({ hardReview: true, reason: "Deletion needs review" })
 
     view = apply(view, "permission.v2.replied", { requestID: "per_1", reply: "once" })
     view = apply(view, "guardrail.replied", { requestID: "grq_1", reply: "reject" })
-    view = apply(view, "question.v2.replied", { requestID: "que_1", answers: [["core"]] })
+    view = apply(view, "form.replied", { id: "frm_1", sessionID: "ses_a", answer: { q0: "core" } })
     expect(view.requests).toHaveLength(0)
     expect(view.activity.some((item) => item.kind === "approval")).toBe(true)
   })
@@ -240,13 +266,13 @@ describe("snapshot readers", () => {
     expect(readAutonomy(null)).toBeUndefined()
   })
 
-  test("reads question prompts and drops malformed ones", () => {
+  test("drops malformed Form.Info values", () => {
     expect(
-      readQuestions([
-        { header: "H", question: "Q?", options: [{ label: "a", description: "A" }, { nope: true }], multiple: true },
-        { header: "missing question" },
+      readForms([
+        { id: "frm_bad_option", sessionID: "ses_a", title: "Question", fields: [{ key: "q0", type: "string", options: [{ value: "a", label: "A" }, { nope: true }] }] },
+        { id: "frm_bad_fields", sessionID: "ses_a", title: "Missing fields" },
       ]),
-    ).toEqual([{ header: "H", question: "Q?", options: [{ label: "a", description: "A" }], multiple: true, custom: true }])
+    ).toEqual([])
   })
 })
 

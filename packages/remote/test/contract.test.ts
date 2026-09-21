@@ -259,8 +259,9 @@ describe("remote operations", () => {
       "session.guardrail.status",
       "session.guardrail.request.list",
       "session.guardrail.reply",
-      "session.question.list",
-      "session.question.reply",
+      "session.form.list",
+      "session.form.reply",
+      "session.form.cancel",
       "session.fileChange.list",
       "session.shell.output",
       "session.autonomy.get",
@@ -273,8 +274,9 @@ describe("remote operations", () => {
     expect(requireSession("session.active")).toBe(false)
     expect(requireSession("session.prompt")).toBe(true)
     expect(requireSession("session.goal.stop")).toBe(true)
-    expect(RemoteProtocolVersion).toBe(2)
-    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v2/client", agent: "/ws/v2/agent" })
+    expect(RemoteProtocolVersion).toBe(3)
+    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v3/client", agent: "/ws/v3/agent" })
+    expect(parseClientMessage('{"type":"request","id":"r","operation":"session.question.list","sessionID":"ses_1"}').ok).toBe(false)
   })
 
   test("admits every reconnect read operation and requires a session for it", () => {
@@ -292,7 +294,7 @@ describe("remote operations", () => {
       "session.permission.list",
       "session.guardrail.status",
       "session.guardrail.request.list",
-      "session.question.list",
+      "session.form.list",
       "session.fileChange.list",
       "session.shell.output",
       "session.autonomy.get",

@@ -24,7 +24,7 @@ import {
   sealedPartKeys,
   readGuardrailRequests,
   readPermissionRequests,
-  readQuestionRequests,
+  readFormRequests,
   readSessionInfoList,
   readSnapshot,
   replaceFileChanges,
@@ -62,7 +62,7 @@ export type SessionInfoView = {
 
 export type PendingMutation = {
   readonly id: string
-  readonly kind: "prompt" | "interrupt" | "permission" | "guardrail" | "question" | "autonomy" | "goal"
+  readonly kind: "prompt" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
   readonly detail?: string
@@ -121,7 +121,8 @@ export type RemoteStore = {
   readonly interrupt: () => Promise<void>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
-  readonly replyQuestion: (id: string, answers: readonly (readonly string[])[]) => Promise<void>
+  readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
+  readonly cancelForm: (formID: string) => Promise<void>
   readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<void>
   readonly setGoal: (text: string) => Promise<void>
   readonly stopGoal: () => Promise<void>
@@ -435,11 +436,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const pending = { sessionID, live: [] as FileChangeView[] }
     fileChangeRead = pending
     try {
-      const [autonomy, permissions, guardrails, questions, changes] = await Promise.all([
+      const [autonomy, permissions, guardrails, forms, changes] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
         active.request("session.permission.list", { sessionID }),
         active.request("session.guardrail.request.list", { sessionID }),
-        active.request("session.question.list", { sessionID }),
+        active.request("session.form.list", { sessionID }),
         active.request("session.fileChange.list", { sessionID }),
       ])
       if (token !== selectionToken || state.activeSessionID !== sessionID) return
@@ -448,7 +449,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const requests = [
         ...(permissions.status === "ok" ? readPermissionRequests(permissions.value, now()) : []),
         ...(guardrails.status === "ok" ? readGuardrailRequests(guardrails.value, now()) : []),
-        ...(questions.status === "ok" ? readQuestionRequests(questions.value, now()) : []),
+        ...(forms.status === "ok" ? readFormRequests(forms.value, now()).filter((request) => request.form.sessionID === sessionID) : []),
       ]
       const withRequests = replaceRequests(view, requests)
       // The ledger read is authoritative except for records that arrived while it was
@@ -457,7 +458,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         changes.status === "ok"
           ? replaceFileChanges(withRequests, mergeFileChanges(readFileChangeList(changes.value), pending.live))
           : withRequests
-      const failure = [autonomy, permissions, guardrails, questions, changes].find(
+      const failure = [autonomy, permissions, guardrails, forms, changes].find(
         (outcome) => outcome.status !== "ok",
       )
       setState({
@@ -952,22 +953,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       )
       settleRequest(id, outcome)
     },
-    replyQuestion: async (id, answers) => {
+    replyForm: async (formID, answer) => {
       const sessionID = state.activeSessionID
-      if (sessionID === undefined) return
+      if (sessionID === undefined || !ownsPendingForm(formID, sessionID)) return
+      const token = selectionToken
       const outcome = await request(
         {
-          id: `question_${id}_${now()}`,
-          kind: "question",
+          id: `form_${formID}_${now()}`,
+          kind: "form",
           label: "Answer",
           state: "sending",
           sessionID,
-          operation: "session.question.reply",
-          input: { requestID: id, answers: answers.map((answer) => [...answer]) },
+          operation: "session.form.reply",
+          input: { formID, answer },
         },
         { sessionID },
       )
-      settleRequest(id, outcome)
+      if (token === selectionToken && state.activeSessionID === sessionID) settleRequest(formID, outcome)
+    },
+    cancelForm: async (formID) => {
+      const sessionID = state.activeSessionID
+      if (sessionID === undefined || !ownsPendingForm(formID, sessionID)) return
+      const token = selectionToken
+      const outcome = await request({ id: `form_cancel_${formID}_${now()}`, kind: "form", label: "Cancel form", state: "sending", sessionID, operation: "session.form.cancel", input: { formID } }, { sessionID })
+      if (token === selectionToken && state.activeSessionID === sessionID) settleRequest(formID, outcome)
     },
     setYolo: async (level) => {
       const sessionID = state.activeSessionID
@@ -1041,6 +1050,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * event; removing locally keeps the row from accepting a second answer while
    * that event is in flight.
    */
+  const ownsPendingForm = (formID: string, sessionID: string) => {
+    if (state.view?.id === sessionID && state.view.requests.some((request) => request.kind === "form" && request.id === formID && request.form.sessionID === sessionID)) return true
+    setState({ notice: "This form is no longer pending or belongs to another session." })
+    return false
+  }
+
   const settleRequest = (requestID: string, outcome: RemoteRequestOutcome) => {
     if (outcome.status !== "ok") return
     const view = state.view

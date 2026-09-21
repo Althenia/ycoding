@@ -15,9 +15,9 @@
  * (fixed text, plus a hold mode used for the interrupt proof). Provider identity,
  * quotas, retries, and real vendor payloads are not exercised. The exact-id
  * admission proof deliberately admits with `resume: false` so admission semantics
- * are isolated from execution; the execution proof runs a real SessionRunner step.
- * Approval round-trips are not driven here (they need a provider-emitted tool
- * call). No deployment, no real credentials, no network beyond 127.0.0.1.
+ * are isolated from execution; the execution proof runs real SessionRunner steps,
+ * including provider-emitted shell and question tool calls. No deployment, no real
+ * credentials, no network beyond 127.0.0.1.
  *
  * Usage: bun infra/cloudflare/test/integration/real-flow.ts
  */
@@ -31,7 +31,7 @@ import { join } from "node:path"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
 import { RemoteAgent } from "../../../../packages/cli/src/remote-bridge"
-import { RemoteWebSocketPath } from "../../../../packages/remote/src/index"
+import { RemoteLimits, RemoteWebSocketPath } from "../../../../packages/remote/src/index"
 import {
   enroll,
   generateDeviceKey,
@@ -40,7 +40,7 @@ import {
 } from "../../../../packages/cli/src/remote-credentials"
 import { createRemoteHttp } from "../../../../apps/web/src/remote/http"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
-import { createRemoteTransport } from "../../../../apps/web/src/remote/transport"
+import { createRemoteTransport, type RemoteTransportStatus } from "../../../../apps/web/src/remote/transport"
 import { base64UrlEncode } from "../../src/auth/crypto"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../../packages/ai/test/lib/openai-chunks"
 import { Global } from "../../../../packages/core/src/global"
@@ -83,7 +83,10 @@ try {
   let providerMode: "instant" | "hold" = "instant"
   let releaseStream: (() => void) | undefined
   // One scripted tool call per prompt, then plain text for the follow-up turn.
-  let providerTurn: { readonly tool?: { readonly id: string; readonly command: string }; readonly text: string } = {
+  let providerTurn: {
+    readonly tool?: { readonly id: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
+    readonly text: string
+  } = {
     text: providerText,
   }
   const providerShellCalls: { readonly id: string; readonly command: string }[] = []
@@ -100,9 +103,10 @@ try {
       const frames = turn.tool === undefined
         ? [deltaChunk({ role: "assistant" }), deltaChunk({ content: turn.text }), finishChunk("stop")]
         : (() => {
-            providerShellCalls.push(turn.tool)
+            if (turn.tool.name === "shell" && typeof turn.tool.input.command === "string")
+              providerShellCalls.push({ id: turn.tool.id, command: turn.tool.input.command })
             return [
-              toolCallChunk(turn.tool.id, "shell", JSON.stringify({ command: turn.tool.command })),
+              toolCallChunk(turn.tool.id, turn.tool.name, JSON.stringify(turn.tool.input)),
               finishChunk("tool_calls"),
             ]
           })()
@@ -317,6 +321,7 @@ try {
   const http = createRemoteHttp({ baseURL: workerOrigin, fetch: browserFetch })
   const events: unknown[] = []
   const clientSockets: WebSocket[] = []
+  const browserStatuses: RemoteTransportStatus[] = []
   const store = createRemoteStore({
     http,
     createTransport: (deviceID, handlers) =>
@@ -324,6 +329,10 @@ try {
         url: `${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`,
         handlers: {
           ...handlers,
+          onStatus: (status) => {
+            browserStatuses.push(status)
+            handlers.onStatus?.(status)
+          },
           onEvent: (eventSessionID, event) => {
             events.push({ sessionID: eventSessionID, event })
             handlers.onEvent?.(eventSessionID, event)
@@ -438,7 +447,7 @@ try {
     "the browser never loaded the backend Session inventory",
   )
   expect(
-    store.state().advertised.length === 3,
+    [sessionID, hiddenSessionID, guardSessionID].every((id) => store.state().advertised.includes(id)),
     `Session inventory was incomplete: ${store.state().advertised.join(",")}`,
   )
 
@@ -466,9 +475,13 @@ try {
   /* ------------------------------------------- protocol-level client (same cookie) */
 
   let probeInvalidated = false
+  const probeStatuses: RemoteTransportStatus[] = []
   const probe = createRemoteTransport({
     url: `${socketOrigin}${RemoteWebSocketPath.client}?device=${enrolled.deviceID}`,
-    handlers: { onSessions: () => (probeInvalidated = true) },
+    handlers: {
+      onSessions: () => (probeInvalidated = true),
+      onStatus: (status) => probeStatuses.push(status),
+    },
     createSocket: (url) => new WebSocket(url, { headers: { cookie, origin: workerOrigin } }),
   })
   disposals.push(async () => probe.close(1000, "flow complete"))
@@ -562,6 +575,56 @@ try {
   )
   checks.push("one real SessionRunner prompt executed against the local provider stand-in and persisted")
 
+  /* ---------------- provider question tool -> native Form -> remote browser reply */
+
+  const questionFinalText = "Stand-in reply after the native Form answer."
+  providerFollowUpText = questionFinalText
+  providerTurn = {
+    tool: {
+      id: "call_flow_question",
+      name: "question",
+      input: {
+        questions: [
+          {
+            question: "Proceed with the remote flow?",
+            header: "Proceed",
+            options: [{ label: "Yes", description: "Continue the composed flow" }],
+          },
+        ],
+      },
+    },
+    text: "",
+  }
+  await store.sendPrompt({ text: "Ask the composed-flow question", delivery: "steer" })
+  const pendingForm = await waitFor(
+    () => {
+      const request = store.state().view?.requests.find((entry) => entry.kind === "form")
+      return request?.kind === "form" && request.form.metadata?.kind === "question" ? request.form : undefined
+    },
+    30_000,
+    "the provider-emitted question tool never became a native pending Form in the remote store",
+  )
+  expect(pendingForm.sessionID === sessionID, "the pending Form was not owned by the selected Session")
+  await store.selectSession(sessionID)
+  expect(
+    store.state().view?.requests.some((entry) => entry.kind === "form" && entry.id === pendingForm.id),
+    "reloading the selected Session lost its pending native Form",
+  )
+  await store.replyForm(pendingForm.id, { q0: "Yes" })
+  await waitFor(
+    async () => {
+      const read = await probeRequest("session.messages", { sessionID })
+      return read.status === "ok" && JSON.stringify(read.value).includes(questionFinalText) ? true : undefined
+    },
+    30_000,
+    "the SessionRunner did not continue to final text after the remote Form reply",
+  )
+  expect(
+    store.state().view?.requests.some((entry) => entry.id === pendingForm.id) === false,
+    "the settled native Form remained pending in the remote store",
+  )
+  checks.push("provider question tool created a native Form, remote store replied, and SessionRunner reached final text")
+
   /* ---------------------------------------------- streamed event to the client */
 
   const rename = await server.request(`/api/session/${sessionID}/rename`, {
@@ -644,7 +707,7 @@ try {
 
   const raiseApproval = async (command: string, label: string, followUp: string) => {
     providerFollowUpText = followUp
-    providerTurn = { tool: { id: `call_flow_${label}`, command }, text: "" }
+    providerTurn = { tool: { id: `call_flow_${label}`, name: "shell", input: { command } }, text: "" }
     const prompted = await probeRequest("session.prompt", {
       sessionID,
       input: { id: `msg_approval_${label}`, text: `run ${command}` },
@@ -744,14 +807,29 @@ try {
 
   /* --------------------- guardrail reviews: ordinary and hard, via the relay */
 
+  // The composed flow deliberately performs more than one connection's request
+  // budget across independent scenarios. Start the guardrail phase in a fresh
+  // rate window instead of treating the relay's policy close as a transport retry.
+  await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
+
   const guardrailReviewFor = async (command: string, label: string) => {
     providerFollowUpText = `Stand-in reply after guardrail ${label}.`
-    providerTurn = { tool: { id: `call_guard_${label}`, command }, text: "" }
+    providerTurn = { tool: { id: `call_guard_${label}`, name: "shell", input: { command } }, text: "" }
     const prompted = await probeRequest("session.prompt", {
       sessionID: guardSessionID,
       input: { id: `msg_guard_${label}`, text: `run ${command}` },
     })
-    expect(prompted.status === "ok", `guardrail prompt (${label}) failed: ${JSON.stringify(prompted)}`)
+    expect(
+      prompted.status === "ok",
+      `guardrail prompt (${label}) failed: ${JSON.stringify({
+        prompted,
+        agent: agent?.currentState,
+        agentDiagnostics: diagnostics.slice(-4),
+        browserStatuses: browserStatuses.slice(-6),
+        probeStatuses: probeStatuses.slice(-6),
+        largestEventChars: Math.max(0, ...events.map((event) => JSON.stringify(event).length)),
+      })}`,
+    )
     const deadline = Date.now() + 30_000
     for (;;) {
       const listed = await probeRequest("session.guardrail.request.list", { sessionID: guardSessionID })
