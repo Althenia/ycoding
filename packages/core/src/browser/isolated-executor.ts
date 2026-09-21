@@ -12,7 +12,11 @@ import { connect, type Client, type Event } from "./isolated-cdp"
 import { capturePage } from "./isolated-capture"
 import { makeLocationNode } from "../effect/app-node"
 
-const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+const INSTALLED_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+const CHROME =
+  process.env.NODE_ENV === "test"
+    ? (process.env.YCODING_TEST_ISOLATED_BROWSER_CHROME ?? INSTALLED_CHROME)
+    : INSTALLED_CHROME
 const SUPPORTED_MAJOR = 152
 const STARTUP_TIMEOUT_MS = 15_000
 const CLOSE_TIMEOUT_MS = 5_000
@@ -137,7 +141,7 @@ async function launchChrome(
       "--metrics-recording-only",
       "about:blank",
     ],
-    { stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
+    { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"] },
   )
   const readable = child.stdio[4]
   const writable = child.stdio[3]
@@ -750,7 +754,7 @@ function withTimeout<A>(promise: Promise<A>, ms: number) {
 }
 
 function onceExit(child: ReturnType<typeof spawn>) {
-  if (child.exitCode !== null) return Promise.resolve()
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
   return new Promise<void>((resolve) => child.once("exit", () => resolve()))
 }
 
@@ -760,10 +764,26 @@ function waitForExit(child: ReturnType<typeof spawn>, ms: number) {
 
 async function terminate(child: ReturnType<typeof spawn>) {
   await waitForExit(child, TERMINATE_TIMEOUT_MS)
-  if (child.exitCode === null) child.kill("SIGTERM")
+  signalProcessGroup(child, "SIGTERM")
   await waitForExit(child, TERMINATE_TIMEOUT_MS)
-  if (child.exitCode === null) child.kill("SIGKILL")
+  signalProcessGroup(child, "SIGKILL")
   await waitForExit(child, KILL_TIMEOUT_MS)
+}
+
+function signalProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Signals) {
+  if (child.pid === undefined) {
+    child.kill(signal)
+    return
+  }
+  try {
+    process.kill(-child.pid, signal)
+  } catch (cause) {
+    if (!isProcessMissing(cause)) throw cause
+  }
+}
+
+function isProcessMissing(cause: unknown) {
+  return cause instanceof globalThis.Error && "code" in cause && cause.code === "ESRCH"
 }
 
 async function cleanup(root: string) {

@@ -124,6 +124,8 @@ Production-path tests now cover:
 
 From the repository root, `bun run test:unit:browser` runs the mocked Core boundaries and TUI component checks. `bun run test:integration:browser` separately runs the real Core, Server, and TUI browser suites and requires the supported host and Chrome installation.
 
+Under `NODE_ENV=test` only, `YCODING_TEST_ISOLATED_BROWSER_CHROME` can select an existing Chrome executable for targeted reproduction. The major-version and startup capability checks still apply. This test seam does not establish canonical installed-Chrome or packaged-runtime acceptance; production uses the standard installed application path.
+
 Real-browser execution is verified only on macOS arm64 with Chrome 152. Missing/incompatible installations are represented by unavailable executor fixtures; other host environments have not been runtime-validated. Tests do not inspect or interact with personal Chrome profiles. Both Bun and Node SEA candidates passed the explicit checks below after the final runtime change; future runtime changes require a fresh build and rerun.
 
 On macOS arm64 with Chrome 152 installed, run the isolated-browser smoke harness against each freshly built candidate. From `packages/cli`:

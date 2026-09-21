@@ -434,7 +434,9 @@ describe("real isolated Chrome executor", () => {
     try {
       const browser = (await ownedProcesses(root)).find((line) => !line.includes(" --type="))
       if (!browser) throw new Error("Missing owned Chrome browser process")
-      process.kill(processID(browser), "SIGSTOP")
+      const browserID = processID(browser)
+      expect(new Set((await ownedProcesses(root)).map(processGroupID))).toEqual(new Set([browserID]))
+      process.kill(browserID, "SIGSTOP")
       const shutdownAt = performance.now()
       await Effect.runPromise(runtime.close)
       expect(performance.now() - shutdownAt).toBeLessThan(8_000)
@@ -595,7 +597,7 @@ async function requireNewRoot(before: ReadonlyArray<string>) {
 }
 
 async function ownedProcesses(root: string) {
-  const processList = Bun.spawn(["ps", "-axo", "pid=,command="], { stdout: "pipe", stderr: "pipe" })
+  const processList = Bun.spawn(["ps", "-axo", "pid=,pgid=,command="], { stdout: "pipe", stderr: "pipe" })
   const output = await new Response(processList.stdout).text()
   if ((await processList.exited) !== 0) throw new Error("Failed to inspect owned Chrome processes")
   return output.split("\n").filter((line) => line.includes(root))
@@ -604,6 +606,12 @@ async function ownedProcesses(root: string) {
 function processID(line: string) {
   const value = Number(line.trim().split(/\s+/, 1)[0])
   if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid owned Chrome process ID")
+  return value
+}
+
+function processGroupID(line: string) {
+  const value = Number(line.trim().split(/\s+/, 2)[1])
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("Invalid owned Chrome process group ID")
   return value
 }
 
