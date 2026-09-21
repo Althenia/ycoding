@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YCoding is offline</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --text: #0b0f14;
+        --muted: #667085;
+        --border: #e4e8e6;
+        --green: #0b8b50;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0b1115;
+          --text: #f4f7f6;
+          --muted: #99a2ad;
+          --border: #263039;
+          --green: #27d17f;
+        }
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+        padding: 24px;
+      }
+      main {
+        max-width: 34rem;
+      }
+      h1 {
+        font-size: 1.6rem;
+        margin: 0 0 12px;
+      }
+      p {
+        color: var(--muted);
+        margin: 0 0 12px;
+      }
+      ul {
+        margin: 0 0 20px;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+      a {
+        color: var(--green);
+        font-weight: 600;
+      }
+      .rule {
+        border-top: 1px solid var(--border);
+        margin: 20px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>You are offline</h1>
+      <p>
+        The YCoding documentation shell could not be loaded from this device. Nothing was queued and nothing was sent
+        while the connection was unavailable.
+      </p>
+      <ul>
+        <li>Reconnect and reload to continue reading the documentation.</li>
+        <li>Remote sessions always require a live connection to your own machine.</li>
+      </ul>
+      <div class="rule"></div>
+      <p><a href="/docs">Documentation</a> · <a href="/">Home</a></p>
+    </main>
+  </body>
+</html>

@@ -1,8 +1,9 @@
-export interface RemoteTransport<Event = unknown> {
+export interface RemoteTransport {
   readonly connect: () => Promise<void>
-  readonly send: (event: Event) => Promise<void>
-  readonly onMessage: (handler: (event: Event) => void) => void
-  readonly disconnect: () => Promise<void>
+  /** Sends one already-serialized envelope frame; the transport never re-encodes it. */
+  readonly send: (frame: string) => Promise<void>
+  readonly onMessage: (handler: (event: unknown) => void) => void
+  readonly disconnect: (code?: number, reason?: string) => Promise<void>
 }
 
 type SocketEvent = { readonly data?: unknown; readonly code?: number }
@@ -20,16 +21,27 @@ export interface RemoteSocket {
   readonly close: (code?: number, reason?: string) => void
 }
 
+export type RemoteSocketOptions = { readonly headers?: Record<string, string> }
+
+export type RemoteSocketFactory = (url: string, options: RemoteSocketOptions) => RemoteSocket
+
 type Options = {
   readonly url: string
-  readonly createSocket?: (url: string) => RemoteSocket
+  /** Upgrade headers, such as the device bearer credential for `/ws/agent`. */
+  readonly headers?: Record<string, string>
+  readonly createSocket?: RemoteSocketFactory
   readonly heartbeatIntervalMs?: number
   readonly reconnectInitialDelayMs?: number
   readonly reconnectMaxDelayMs?: number
+  /** Called on every successful (re)open, before any frame is sent. */
+  readonly onOpen?: () => void
+  /** Called when an established connection drops and a reconnect is scheduled. */
+  readonly onClose?: (info: { readonly code?: number }) => void
 }
 
 export class CloudflareRemoteTransport implements RemoteTransport {
   private readonly handlers = new Set<(event: unknown) => void>()
+  private factory?: RemoteSocketFactory
   private socket?: RemoteSocket
   private reconnectTimer?: ReturnType<typeof setTimeout>
   private heartbeatTimer?: ReturnType<typeof setInterval>
@@ -43,28 +55,39 @@ export class CloudflareRemoteTransport implements RemoteTransport {
     requireWebSocketURL(options.url)
   }
 
-  connect() {
-    if (!this.stopped && this.socket?.readyState === OPEN) return Promise.resolve()
+  async connect(): Promise<void> {
+    if (!this.stopped && this.socket?.readyState === OPEN) return
     this.stopped = false
     const connected = new Promise<void>((resolve, reject) => {
       this.resolveInitial = resolve
       this.rejectInitial = reject
     })
-    this.open()
+    const provided = this.options.createSocket ?? this.factory
+    try {
+      // A provided factory keeps socket construction synchronous; the runtime
+      // default is resolved once, before the first open.
+      if (provided !== undefined) this.open(provided)
+      else this.open((this.factory = await resolveSocketFactory()))
+    } catch (error) {
+      this.stopped = true
+      this.rejectInitial?.(error instanceof Error ? error : new Error("Remote transport could not open"))
+      this.resolveInitial = undefined
+      this.rejectInitial = undefined
+    }
     return connected
   }
 
-  async send(event: unknown) {
+  async send(frame: string) {
     const socket = this.socket
     if (socket?.readyState !== OPEN) throw new Error("Remote transport is not connected")
-    socket.send(JSON.stringify(event))
+    socket.send(frame)
   }
 
   onMessage(handler: (event: unknown) => void) {
     this.handlers.add(handler)
   }
 
-  async disconnect() {
+  async disconnect(code = 1000, reason = "YCoding stopped") {
     this.stopped = true
     this.clearTimers()
     this.rejectInitial?.(new Error("Remote transport disconnected before opening"))
@@ -72,14 +95,13 @@ export class CloudflareRemoteTransport implements RemoteTransport {
     this.rejectInitial = undefined
     const socket = this.socket
     this.socket = undefined
-    if (socket && socket.readyState !== CLOSED && socket.readyState !== CLOSING)
-      socket.close(1000, "YCoding stopped")
+    if (socket && socket.readyState !== CLOSED && socket.readyState !== CLOSING) socket.close(code, reason)
   }
 
-  private open() {
+  private open(factory: RemoteSocketFactory) {
     if (this.stopped || this.socket?.readyState === OPEN || this.socket?.readyState === CONNECTING)
       return
-    const socket = (this.options.createSocket ?? defaultSocket)(this.options.url)
+    const socket = factory(this.options.url, { headers: this.options.headers })
     this.socket = socket
     const opened = () => {
       if (this.socket !== socket || this.stopped) return
@@ -89,6 +111,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       this.resolveInitial?.()
       this.resolveInitial = undefined
       this.rejectInitial = undefined
+      this.options.onOpen?.()
     }
     const message = (event: SocketEvent) => {
       if (this.socket !== socket || typeof event.data !== "string") return
@@ -105,7 +128,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       }
       for (const handler of this.handlers) handler(parsed)
     }
-    const closed = () => {
+    const closed = (event: SocketEvent) => {
       socket.removeEventListener("open", opened)
       socket.removeEventListener("message", message)
       socket.removeEventListener("close", closed)
@@ -113,6 +136,7 @@ export class CloudflareRemoteTransport implements RemoteTransport {
       if (this.socket !== socket) return
       this.socket = undefined
       this.clearHeartbeat()
+      this.options.onClose?.({ code: event.code })
       this.scheduleReconnect()
     }
     const errored = () => socket.close(1011, "Remote transport error")
@@ -129,7 +153,8 @@ export class CloudflareRemoteTransport implements RemoteTransport {
     const delay = Math.min(initial * 2 ** this.reconnectAttempt++, maximum)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined
-      this.open()
+      const factory = this.options.createSocket ?? this.factory
+      if (factory !== undefined) this.open(factory)
     }, delay)
   }
 
@@ -159,8 +184,20 @@ export class CloudflareRemoteTransport implements RemoteTransport {
   }
 }
 
-function defaultSocket(url: string): RemoteSocket {
-  const socket = new globalThis.WebSocket(url)
+/**
+ * Bun's `WebSocket` accepts `{ headers }` as its second argument; Node's DOM
+ * `WebSocket` does not, so Node uses the `ws` dependency the CLI already ships.
+ */
+async function resolveSocketFactory(): Promise<RemoteSocketFactory> {
+  if (supportsUpgradeHeaders()) return bunSocketFactory
+  return await wsSocketFactory()
+}
+
+function bunSocketFactory(url: string, options: RemoteSocketOptions): RemoteSocket {
+  const socket = new globalThis.WebSocket(
+    url,
+    options.headers === undefined ? undefined : ({ headers: options.headers } as unknown as string[]),
+  )
   const listeners = new Map<SocketListener, EventListener>()
   return {
     get readyState() {
@@ -181,6 +218,57 @@ function defaultSocket(url: string): RemoteSocket {
     send: (value) => socket.send(value),
     close: (code, reason) => socket.close(code, reason),
   }
+}
+
+function supportsUpgradeHeaders() {
+  return typeof process !== "undefined" && process.versions?.bun !== undefined
+}
+
+let cachedWsFactory: RemoteSocketFactory | undefined
+
+async function wsSocketFactory(): Promise<RemoteSocketFactory> {
+  if (cachedWsFactory !== undefined) return cachedWsFactory
+  const { WebSocket } = await import("ws")
+  cachedWsFactory = (url, options) => new NodeRemoteSocket(new WebSocket(url, { headers: options.headers }))
+  return cachedWsFactory
+}
+
+/** Adapter from the `ws` event API onto the socket surface this transport uses. */
+class NodeRemoteSocket implements RemoteSocket {
+  private readonly handlers = new Map<SocketListener, (...args: unknown[]) => void>()
+
+  constructor(private readonly socket: import("ws").NodeWebSocket) {}
+
+  get readyState() {
+    return this.socket.readyState
+  }
+
+  addEventListener(type: string, listener: SocketListener) {
+    const handler = (...args: unknown[]) => listener(nodeSocketEvent(type, args))
+    this.handlers.set(listener, handler)
+    this.socket.on(type, handler)
+  }
+
+  removeEventListener(type: string, listener: SocketListener) {
+    const handler = this.handlers.get(listener)
+    if (handler === undefined) return
+    this.handlers.delete(listener)
+    this.socket.off(type, handler)
+  }
+
+  send(value: string) {
+    this.socket.send(value)
+  }
+
+  close(code?: number, reason?: string) {
+    this.socket.close(code, reason)
+  }
+}
+
+function nodeSocketEvent(type: string, args: readonly unknown[]): SocketEvent {
+  if (type === "message") return { data: typeof args[0] === "string" ? args[0] : String(args[0]) }
+  if (type === "close") return { code: typeof args[0] === "number" ? args[0] : undefined }
+  return {}
 }
 
 function requireWebSocketURL(value: string) {

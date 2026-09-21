@@ -1,5 +1,6 @@
 import { Argument, Flag } from "effect/unstable/cli"
 import { Spec } from "../framework/spec"
+import { RemoteCommand } from "./remote"
 import { RunCommand, ServerParams } from "./run"
 import { UpdateCommand } from "./update"
 
@@ -151,6 +152,7 @@ export const Commands = Spec.make(typeof YCODING_CLI_NAME === "string" ? YCODING
     }),
     RunCommand,
     UpdateCommand,
+    RemoteCommand,
     Spec.make("service", {
       description: "Manage the background server",
       commands: [

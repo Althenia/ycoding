@@ -1,0 +1,378 @@
+/**
+ * Public marketing surfaces: shell, landing hero, features, trust, install, and
+ * footer. Composition steps here are derived from the minimum usable width of the
+ * tracks they hold, never from a viewport ratio.
+ */
+
+.marketing {
+  display: block;
+}
+
+.site-footer {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
+  padding-block: var(--yc-space-10);
+}
+
+/* --- hero --------------------------------------------------------------- */
+
+.hero {
+  padding-block: var(--yc-space-10) var(--yc-space-12);
+}
+
+/* Two columns appear only where both halves can hold their minimum: the copy needs
+   480px and the terminal plate needs 480px, so 480 + 480 + a 48px gap = 1008 inside
+   the content box. At 1024 the gutter is 32px, so the content box is 960 and the two
+   tracks cannot both hold their minimum; at 1280 it is 1200 and they can. */
+.hero__grid {
+  display: grid;
+  gap: var(--yc-space-8);
+  align-items: center;
+}
+
+@media (min-width: 1280px) {
+  .hero__grid {
+    grid-template-columns: minmax(480px, 1fr) minmax(480px, 1fr);
+    gap: var(--yc-space-12);
+  }
+}
+
+.hero__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-4);
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-green-soft);
+  color: var(--yc-green-strong);
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-bold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
+.hero__times {
+  opacity: 0.6;
+}
+
+.hero__headline {
+  font-size: var(--yc-size-display);
+  line-height: var(--yc-leading-display);
+  font-weight: var(--yc-weight-bold);
+  letter-spacing: var(--yc-tracking-tight);
+  max-inline-size: 16ch;
+  margin-block: var(--yc-space-5) var(--yc-space-4);
+}
+
+.hero__support {
+  font-size: var(--yc-size-lg);
+  line-height: var(--yc-leading-lg);
+  color: var(--yc-text-muted);
+  max-inline-size: 44ch;
+}
+
+.hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-3);
+  margin-block-start: var(--yc-space-6);
+}
+
+.hero__footnote {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-subtle);
+  margin-block-start: var(--yc-space-4);
+  max-inline-size: var(--yc-measure-narrow);
+}
+
+.terminal-plate {
+  border-radius: var(--yc-radius-xl);
+  background: var(--yc-terminal-bg);
+  color: var(--yc-terminal-fg);
+  box-shadow: var(--yc-shadow-lg);
+  overflow: hidden;
+}
+
+.terminal-plate__bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: var(--yc-space-3) var(--yc-space-4);
+  border-block-end: var(--yc-border-width) solid rgba(255, 255, 255, 0.08);
+}
+
+.terminal-plate__dot {
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.terminal-plate__title {
+  margin-inline-start: var(--yc-space-2);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-terminal-dim);
+}
+
+.terminal-plate__body {
+  padding: var(--yc-space-4);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  line-height: 24px;
+  display: grid;
+  gap: 2px;
+}
+
+.terminal-plate__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-3);
+}
+
+.terminal-plate__key {
+  color: var(--yc-terminal-accent);
+}
+
+.terminal-plate__note {
+  color: var(--yc-terminal-dim);
+}
+
+.terminal-plate__step {
+  color: var(--yc-terminal-fg);
+}
+
+.callout-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-3);
+  padding: var(--yc-space-3) var(--yc-space-4);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface);
+  border: var(--yc-border-width) solid var(--yc-border);
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+  margin-block-start: var(--yc-space-4);
+}
+
+.callout-bar__body {
+  display: grid;
+  gap: 2px;
+  min-inline-size: 0;
+  flex: 1 1 22ch;
+}
+
+.callout-bar__body strong {
+  color: var(--yc-text);
+}
+
+.callout-bar__action {
+  display: inline-flex;
+  margin-inline-start: auto;
+}
+
+/* --- features ----------------------------------------------------------- */
+
+.features__grid {
+  display: grid;
+  gap: var(--yc-space-5);
+  grid-template-columns: 1fr;
+  margin-block-start: var(--yc-space-6);
+}
+
+/* Never six columns: at 173px a card holds six words per line, so three is the
+   maximum that keeps a readable measure in every card. */
+@media (min-width: 640px) {
+  .features__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .features__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.feature {
+  display: grid;
+  gap: var(--yc-space-2);
+  align-content: start;
+}
+
+.feature__icon {
+  inline-size: 40px;
+  block-size: 40px;
+  display: grid;
+  place-content: center;
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border);
+  color: var(--yc-green-strong);
+}
+
+.feature__title {
+  font-size: var(--yc-size-md);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.feature__text {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+/* --- trust -------------------------------------------------------------- */
+
+.trust__grid {
+  display: grid;
+  gap: var(--yc-space-4);
+  margin-block-start: var(--yc-space-6);
+}
+
+@media (min-width: 768px) {
+  .trust__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.trust__item {
+  display: grid;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-5);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface);
+}
+
+.trust__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+/* --- install ------------------------------------------------------------ */
+
+.install {
+  display: grid;
+  gap: var(--yc-space-6);
+  min-inline-size: 0;
+}
+
+/* A wide command would otherwise blow out the grid track instead of scrolling. */
+.install > * {
+  min-inline-size: 0;
+}
+
+.install__platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+  margin-block-start: var(--yc-space-4);
+}
+
+.install__commands {
+  display: grid;
+  gap: var(--yc-space-4);
+  min-inline-size: 0;
+}
+
+.install__link {
+  margin-block-start: var(--yc-space-3);
+}
+
+@media (min-width: 1024px) {
+  .install {
+    grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+/* --- footer ------------------------------------------------------------- */
+
+.footer__grid {
+  display: grid;
+  gap: var(--yc-space-8);
+}
+
+@media (min-width: 640px) {
+  .footer__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .footer__grid {
+    grid-template-columns: 2fr repeat(3, minmax(0, 1fr));
+  }
+}
+
+.footer__brand {
+  display: grid;
+  gap: var(--yc-space-3);
+  align-content: start;
+}
+
+.footer__title {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+  margin-block-end: var(--yc-space-3);
+}
+
+.footer__links {
+  display: grid;
+}
+
+/* Every footer link keeps a 44px row so the tap target holds at the smallest width. */
+.footer__links a {
+  color: var(--yc-text-muted);
+  text-decoration: none;
+  font-size: var(--yc-size-sm);
+  min-block-size: var(--yc-control-h);
+  display: inline-flex;
+  align-items: center;
+}
+
+.footer__links a:hover {
+  color: var(--yc-text);
+}
+
+.footer__note {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-subtle);
+  max-inline-size: var(--yc-measure-narrow);
+}
+
+.footer__legal {
+  margin-block-start: var(--yc-space-10);
+  padding-block-start: var(--yc-space-5);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--yc-space-3);
+}
+
+/* --- not found ---------------------------------------------------------- */
+
+.not-found {
+  max-inline-size: var(--yc-measure-narrow);
+  margin-inline: auto;
+  padding: var(--yc-space-16) var(--yc-gutter);
+  text-align: center;
+}
+
+.not-found__eyebrow {
+  font-family: var(--yc-font-mono);
+  color: var(--yc-text-muted);
+  letter-spacing: 0.2em;
+}
+
+.not-found__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-3);
+  justify-content: center;
+  margin-block-start: var(--yc-space-6);
+}

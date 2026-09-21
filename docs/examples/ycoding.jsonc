@@ -1,4 +1,4 @@
 {
-  "$schema": "https://althenia.github.io/ycoding/ycoding.schema.json",
+  "$schema": "https://ycoding.althenia.app/ycoding.schema.json",
   "model": "openrouter/openai/gpt-5#high",
 }

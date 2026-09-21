@@ -76,6 +76,23 @@ jobs:
           bun run typecheck
           bun run lint:effect-patterns
 
+      - name: Verify web application and relay
+        run: |
+          bun run test:web
+          bun run test:remote
+
+      # The Worker serves the built web application, so the web build must precede
+      # the Cloudflare build check.
+      - name: Build web application
+        run: bun run build:web
+
+      - name: Verify built web integration
+        run: bun run test:integration:web
+
+      - name: Verify local remote integration
+        timeout-minutes: 20
+        run: bun run test:integration:remote
+
       - name: Verify Cloudflare Worker
         run: |
           bun run test:cloudflare
@@ -93,8 +110,8 @@ jobs:
         working-directory: packages/core
         run: bun test test/session-execution.test.ts test/session-autonomy.test.ts
 
-      - name: Verify installer and documentation
-        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/pages.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts"
+      - name: Verify installer and web assets
+        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts" "$GITHUB_WORKSPACE/script/build-web-assets.test.ts" "$GITHUB_WORKSPACE/script/release.test.ts"
 
   build:
     name: build ${{ matrix.target }}
@@ -242,146 +259,9 @@ jobs:
           chmod +x dist/isolated-browser/ycoding
           bun run --cwd packages/cli script/isolated-browser-smoke.ts --binary="$GITHUB_WORKSPACE/dist/isolated-browser/ycoding"
 
-  office:
-    name: office ${{ matrix.target }}
-    needs: verify-source
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: darwin-universal
-            runner: macos-26
-            editor: Godot_v4.7.2-stable_macos.universal.zip
-            editor_sha512: 38aa16e5bba2083941fc5b3e54be0089bd4cc35e32415f5b9fd9a8a6a7b9818255d44532ea8ef94b5aef56c4b407c2d634fa4f657e4ebe681ebbf59b7bac69ca
-          - target: linux-x64
-            runner: ubuntu-24.04
-            editor: Godot_v4.7.2-stable_linux.x86_64.zip
-            editor_sha512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
-          # Godot cross-exports Windows from any host, so the Windows client needs no
-          # Windows runner.
-          - target: windows-x64
-            runner: ubuntu-24.04
-            editor: Godot_v4.7.2-stable_linux.x86_64.zip
-            editor_sha512: 9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
-    defaults:
-      run:
-        shell: bash
-    env:
-      GODOT_VERSION: 4.7.2
-      GODOT_RELEASE_BASE: https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable
-      # Checksums published by Godot in SHA512-SUMS.txt for this release. The engine
-      # and its templates execute with the runner's authority, so they are verified
-      # against the publisher's own sums rather than a locally recorded hash.
-      GODOT_TEMPLATES_SHA512: ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          persist-credentials: false
-
-      - name: Resolve release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#v}"
-          else
-            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
-
-      - name: Cache export templates
-        id: templates-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ runner.temp }}/godot-templates
-          key: godot-templates-${{ env.GODOT_VERSION }}-stable-${{ runner.os }}
-
-      - name: Install Godot and export templates
-        run: |
-          set -euo pipefail
-          downloads="$RUNNER_TEMP/godot-download"
-          editor_dir="$RUNNER_TEMP/godot-editor"
-          templates_dir="$RUNNER_TEMP/godot-templates/$GODOT_VERSION.stable"
-          mkdir -p "$downloads" "$editor_dir"
-
-          verify() {
-            if command -v sha512sum >/dev/null 2>&1; then
-              (cd "$downloads" && sha512sum -c "$1")
-            else
-              (cd "$downloads" && shasum -a 512 -c "$1")
-            fi
-          }
-
-          curl --proto '=https' --proto-redir '=https' -fsSL -o "$downloads/${{ matrix.editor }}" "$GODOT_RELEASE_BASE/${{ matrix.editor }}"
-          printf '%s  %s\n' "${{ matrix.editor_sha512 }}" "${{ matrix.editor }}" >"$downloads/editor.sums"
-          verify editor.sums
-          unzip -q -o "$downloads/${{ matrix.editor }}" -d "$editor_dir"
-
-          templates_archive="Godot_v$GODOT_VERSION-stable_export_templates.tpz"
-          if [ ! -d "$templates_dir" ]; then
-            curl --proto '=https' --proto-redir '=https' -fsSL -o "$downloads/$templates_archive" "$GODOT_RELEASE_BASE/$templates_archive"
-            printf '%s  %s\n' "$GODOT_TEMPLATES_SHA512" "$templates_archive" >"$downloads/templates.sums"
-            verify templates.sums
-            mkdir -p "$RUNNER_TEMP/godot-templates"
-            unzip -q -o "$downloads/$templates_archive" -d "$RUNNER_TEMP/godot-templates"
-            mv "$RUNNER_TEMP/godot-templates/templates" "$templates_dir"
-          fi
-
-          # The engine resolves templates under its per-user data directory.
-          case "$RUNNER_OS" in
-            macOS) system_templates="$HOME/Library/Application Support/Godot/export_templates" ;;
-            *) system_templates="$HOME/.local/share/godot/export_templates" ;;
-          esac
-          mkdir -p "$system_templates"
-          rm -rf "$system_templates/$GODOT_VERSION.stable"
-          cp -R "$templates_dir" "$system_templates/$GODOT_VERSION.stable"
-
-          case "$RUNNER_OS" in
-            macOS) godot_bin="$editor_dir/Godot.app/Contents/MacOS/Godot" ;;
-            *)
-              godot_bin="$(find "$editor_dir" -maxdepth 1 -type f -name 'Godot_*' | head -n 1)"
-              [ -n "$godot_bin" ] || { echo "No Godot executable in the downloaded editor archive" >&2; exit 1; }
-              chmod +x "$godot_bin"
-              ;;
-          esac
-          echo "GODOT_BIN=$godot_bin" >>"$GITHUB_ENV"
-          "$godot_bin" --version
-
-      - name: Build the desktop client
-        run: |
-          set -euo pipefail
-          apps/office/tools/build-release.sh --version "$RELEASE_VERSION" --target "${{ matrix.target }}" --outdir dist/office/release
-
-      # The installer mounts the macOS disk image with ditto and hdiutil, which only
-      # exist on macOS, so that path is skipped on the Linux runner that also runs
-      # this suite. Running it here covers it on the platform that uses it. These
-      # tests need no repository dependencies, so Bun alone is enough.
-      - name: Setup Bun
-        if: matrix.target == 'darwin-universal'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version-file: package.json
-
-      - name: Verify the installer mounts the disk image
-        if: matrix.target == 'darwin-universal'
-        run: cd /tmp && bun test "$GITHUB_WORKSPACE/script/install.test.ts"
-
-      - name: Upload the desktop client archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: office-${{ matrix.target }}
-          path: dist/office/release/
-          if-no-files-found: error
-          retention-days: 7
-
   package:
     name: package release assets
-    needs: [build, isolated-browser-acceptance, office]
+    needs: [build, isolated-browser-acceptance]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -409,12 +289,6 @@ jobs:
           path: unpacked
           pattern: ycoding-*
 
-      - name: Download desktop client archives
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          path: office-unpacked
-          pattern: office-*
-
       - name: Create release archives and checksums
         run: |
           set -euo pipefail
@@ -435,10 +309,9 @@ jobs:
           tar -tzvf "release/ycoding-$version-linux-x64.tar.gz" | grep '^-rwx' >/dev/null
           tar -tzf "release/ycoding-$version-darwin-arm64.tar.gz" | grep -x 'ycoding-computer-helper' >/dev/null
           tar -tzf "release/ycoding-$version-darwin-x64.tar.gz" | grep -x 'ycoding-computer-helper' >/dev/null
-          find office-unpacked -type f \( -name 'ycoding-office-*.tar.gz' -o -name 'ycoding-office-*.zip' -o -name 'ycoding-office-*.dmg' \) -exec mv {} release/ \;
-          # One checksum file covers every asset in the release, so the installer
-          # verifies the desktop client with the same rule as the terminal executable.
-          (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip "ycoding-office-$version-"*.tar.gz "ycoding-office-$version-"*.zip "ycoding-office-$version-"*.dmg > "ycoding-$version-checksums.txt")
+          # One checksum file covers every released archive, so the installer
+          # verifies each download with the same rule.
+          (cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")
 
       - name: Upload prepared release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

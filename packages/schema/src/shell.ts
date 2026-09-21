@@ -69,14 +69,19 @@ export const CreateInput = Schema.Struct({
 export interface CreateInput extends Schema.Schema.Type<typeof CreateInput> {}
 
 export const OutputInput = Schema.Struct({
+  // Absolute byte offset to read from. A cursor at or past the captured size clamps to it.
   cursor: optional(NonNegativeInt),
+  // Byte budget for one read. A page may read up to three bytes past it to complete a
+  // character that straddles the budget, and zero reads nothing without advancing.
   limit: optional(NonNegativeInt),
 })
 export interface OutputInput extends Schema.Schema.Type<typeof OutputInput> {}
 
 export const Output = Schema.Struct({
   output: Schema.String,
-  // Absolute cursor after this page. Equals `size` once fully caught up.
+  // Absolute cursor after this page. Equals `size` once fully caught up; while a command
+  // runs, a trailing incomplete character is held back, so a page can return no output
+  // without advancing.
   cursor: NonNegativeInt,
   // Total bytes captured so far. A consumer has more to page while `cursor < size`.
   size: NonNegativeInt,

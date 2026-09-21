@@ -1159,6 +1159,8 @@ const layer = Layer.effect(
                 command: input.command,
                 cwd: session.location.directory,
                 timeout: 0,
+                // Records the owning Session so a scoped reader can prove ownership before paging output.
+                metadata: { sessionID: input.sessionID },
               })
               const info = yield* shell.create(prepared).pipe(Effect.onError(() => reservation.release))
               return { info, warnings: prepared.warnings, reservation }

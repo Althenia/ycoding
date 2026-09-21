@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import { BUN_BINARY, platformBinary } from "../src/binary"
 import { verifyPackagedComputerHelper } from "./computer-helper"
@@ -18,7 +20,7 @@ const helpText = help.stdout.toString()
 const helpError = help.stderr.toString()
 if (help.exitCode !== 0) throw new Error(`TUI help failed (${help.exitCode}): ${helpError || helpText}`)
 if (!helpText.includes("YCoding TUI")) throw new Error("TUI help is missing the product description")
-for (const command of ["run", "update"]) {
+for (const command of ["run", "update", "remote"]) {
   if (!new RegExp(`^  ${command}(?:\\s|$)`, "m").test(helpText))
     throw new Error(`TUI help is missing command: ${command}`)
 }
@@ -29,6 +31,7 @@ for (const command of ["api", "auth", "debug", "mcp", "mini", "service"]) {
 for (const expected of [
   { command: "run", text: "Run YCoding with a message", flag: "--model" },
   { command: "update", text: "Update ycoding to a release", flag: "--version" },
+  { command: "remote", text: "Control this machine's YCoding agent", flag: "enroll" },
 ]) {
   const result = Bun.spawnSync([binary, expected.command, "--help"], { stdout: "pipe", stderr: "pipe" })
   const text = result.stdout.toString()
@@ -36,6 +39,34 @@ for (const expected of [
     throw new Error(`${expected.command} help failed (${result.exitCode}): ${result.stderr.toString() || text}`)
   if (!text.includes(expected.text) || !text.includes(expected.flag))
     throw new Error(`${expected.command} help is missing its description or ${expected.flag}`)
+}
+
+const remoteHome = await mkdtemp(path.join(os.tmpdir(), "ycoding-tui-smoke-"))
+try {
+  const result = Bun.spawnSync([binary, "remote", "status"], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      ...process.env,
+      HOME: remoteHome,
+      YCODING_TEST_HOME: remoteHome,
+      XDG_CACHE_HOME: path.join(remoteHome, "cache"),
+      XDG_CONFIG_HOME: path.join(remoteHome, "config"),
+      XDG_DATA_HOME: path.join(remoteHome, "data"),
+      XDG_STATE_HOME: path.join(remoteHome, "state"),
+      YCODING_DB: undefined,
+      YCODING_PASSWORD: undefined,
+      YCODING_CONFIG_DIR: undefined,
+      YCODING_CONFIG: undefined,
+      YCODING_REMOTE_URL: undefined,
+    },
+  })
+  const text = result.stdout.toString()
+  if (result.exitCode !== 0)
+    throw new Error(`remote status failed (${result.exitCode}): ${result.stderr.toString() || text}`)
+  if (!text.includes("Not enrolled")) throw new Error("remote status did not dispatch the remote handler")
+} finally {
+  await rm(remoteHome, { recursive: true, force: true })
 }
 
 const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {

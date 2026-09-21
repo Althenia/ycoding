@@ -74,6 +74,7 @@ describe("CLI frontend import boundaries", () => {
       "httpapi-codegen",
       "plugin",
       "protocol",
+      "remote",
       "schema",
       "script",
       "server",
@@ -97,7 +98,14 @@ describe("CLI frontend import boundaries", () => {
           file !== "packages/cli/src/commands/handlers/run.ts" &&
           file !== "packages/cli/src/commands/handlers/run-shared.ts" &&
           file !== "packages/cli/src/commands/handlers/update.ts" &&
-          file !== "packages/cli/src/commands/handlers/serve-shared.ts",
+          file !== "packages/cli/src/commands/handlers/serve-shared.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/enroll.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/connect.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/status.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/sessions.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/allow.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/deny.ts" &&
+          file !== "packages/cli/src/commands/handlers/remote/shared.ts",
       ),
     ).toEqual([])
   }, coldBundleTimeout)

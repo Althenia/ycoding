@@ -45,6 +45,8 @@ Durable events call the invocation identifier `callID`; `Tool.Context.toolCallID
 
 Shells created by the built-in shell tool expose that identity as `Shell.Info.toolCallID`. A client holding a tool-call ID resolves the corresponding `Shell.ID` from `GET /api/shell` and pages output through `GET /api/shell/:id/output`; shells created outside a Session tool invocation omit the field.
 
+`GET /api/shell/:id/output` returns one page of the captured combined output at an absolute byte cursor. A page ends on a character boundary, reading at most three bytes past the requested `limit` to complete a character that straddles the budget, so paging never splits a character the command wrote. A trailing byte sequence that is an incomplete but valid character prefix is held back while the command runs: the page reports the completed prefix, or nothing at the returned cursor, without advancing. Once the capture settles, those bytes decode as the replacement characters standard UTF-8 decoding produces, so paging from cursor `0` to `cursor == size` reproduces exactly the bytes the command wrote, for valid and malformed captures alike. A zero `limit` reads nothing and leaves the cursor unchanged, and a cursor at or past `size` clamps to `size`.
+
 Decoded tool input is passed separately to `execute`. Raw provider input and domain services do not belong in the invocation context.
 
 Effect interruption is the cancellation mechanism. Tools may translate expected typed failures into `ToolFailure`, but must not translate interruption or defects into model-visible failures.

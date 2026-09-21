@@ -1,0 +1,229 @@
+/**
+ * YCoding design tokens.
+ *
+ * The executable form of `.aphrodite/redesign-audit/specs/tokens.toon`: names are
+ * the interface, and every value below is the one the contrast, layout, and motion
+ * checks were measured against.
+ *
+ * Two layers, deliberately kept apart:
+ *
+ * - invariant — a physical or perceptual constant that must not move with viewport
+ *   width: control height, hit area, type size, line height, header rows, radius,
+ *   border width, motion duration.
+ * - compositional — a function of the space a track must hold: gutter step, content
+ *   max-width, rail widths. Both gutter and display type are absolute steps at a
+ *   declared breakpoint, never a ratio of the viewport.
+ *
+ * Breakpoints are mirrored here as one `@media` set. CSS custom properties cannot
+ * drive media queries, so no other stylesheet declares a width literal of its own.
+ * The steps are: 360, 480, 640, 768, 1024, 1280, 1600.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* brand — the green accent stays the only accent */
+  --yc-green: #27d17f;
+  --yc-green-strong: #0a7b47;
+  --yc-green-soft: rgba(39, 209, 127, 0.12);
+  --yc-primary-bg: #0b8550;
+  --yc-primary-fg: #ffffff;
+  --yc-yellow: #f4bd3d;
+  --yc-yellow-strong: #946200;
+  --yc-yellow-soft: rgba(244, 189, 61, 0.16);
+  --yc-danger: #c53a3a;
+  --yc-danger-soft: rgba(197, 58, 58, 0.1);
+  --yc-focus: #0b8b50;
+
+  /* surfaces */
+  --yc-bg: #ffffff;
+  --yc-surface: #f7f9f8;
+  /* Third surface step so hover and inset rows stop reusing --yc-surface. */
+  --yc-surface-sunken: #eff3f1;
+  --yc-surface-raised: #ffffff;
+  --yc-text: #0b0f14;
+  --yc-text-muted: #5c6672;
+  /* Tertiary ink is held to AA on the darkest surface it lands on
+     (--yc-surface-sunken), which is the binding background. */
+  --yc-text-subtle: #646d78;
+  --yc-border: #e4e8e6;
+  /* Control boundary and dashed empty-state border: raised until an active control
+     boundary reaches 3:1 on every surface it draws on. */
+  --yc-border-strong: #78847e;
+
+  /* the ink used on the terminal plates, identical in both themes */
+  --yc-terminal-bg: #0c1413;
+  --yc-terminal-fg: #d8e6de;
+  --yc-terminal-dim: #8fa79b;
+  --yc-terminal-accent: #5fe3a1;
+
+  /* type scale — fixed sizes, fixed line heights */
+  --yc-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --yc-font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Geist Mono", Menlo, monospace;
+
+  --yc-size-2xs: 12px;
+  --yc-leading-2xs: 16px;
+  --yc-size-xs: 13px;
+  --yc-leading-xs: 20px;
+  --yc-size-sm: 14px;
+  --yc-leading-sm: 22px;
+  --yc-size-md: 16px;
+  --yc-leading-md: 26px;
+  --yc-size-lg: 18px;
+  --yc-leading-lg: 28px;
+  --yc-size-xl: 20px;
+  --yc-leading-xl: 30px;
+  --yc-size-2xl: 24px;
+  --yc-leading-2xl: 32px;
+  --yc-size-3xl: 30px;
+  --yc-leading-3xl: 38px;
+  --yc-size-4xl: 36px;
+  --yc-leading-4xl: 42px;
+  /* The only fluid size: it wraps across two lines below 1024 and one line above,
+     so the step is derived from the headline's measured wrap point. */
+  --yc-size-display: 40px;
+  --yc-leading-display: 44px;
+  --yc-weight-regular: 400;
+  --yc-weight-medium: 500;
+  --yc-weight-semibold: 600;
+  --yc-weight-bold: 700;
+  --yc-tracking-tight: -0.02em;
+  --yc-tracking-wide: 0.06em;
+
+  /* measure — the reading limit for every prose block */
+  --yc-measure: 68ch;
+  --yc-measure-narrow: 54ch;
+
+  /* spacing — 4px base */
+  --yc-space-1: 4px;
+  --yc-space-2: 8px;
+  --yc-space-3: 12px;
+  --yc-space-4: 16px;
+  --yc-space-5: 20px;
+  --yc-space-6: 24px;
+  --yc-space-8: 32px;
+  --yc-space-10: 40px;
+  --yc-space-12: 48px;
+  --yc-space-16: 64px;
+  --yc-space-20: 80px;
+
+  --yc-radius-sm: 6px;
+  --yc-radius-md: 10px;
+  --yc-radius-lg: 14px;
+  --yc-radius-xl: 20px;
+  --yc-radius-pill: 999px;
+
+  --yc-shadow-sm: 0 1px 2px rgba(11, 15, 20, 0.06);
+  --yc-shadow-md: 0 8px 24px rgba(11, 15, 20, 0.08);
+  --yc-shadow-lg: 0 20px 48px rgba(11, 15, 20, 0.16);
+
+  /* control geometry — invariant across viewports; dense only for a fine pointer */
+  --yc-control-h: 44px;
+  --yc-control-h-dense: 36px;
+  --yc-hit-min: 44px;
+  --yc-control-pad-x: 16px;
+  --yc-focus-ring: 0 0 0 2px var(--yc-bg), 0 0 0 4px var(--yc-focus);
+  --yc-border-width: 1px;
+
+  /* layout metrics — a header is one or two declared rows, never a row that
+     compresses the controls inside it */
+  --yc-header-h: 60px;
+  --yc-header-session-h: 44px;
+  --yc-status-strip-h: 36px;
+  --yc-bottom-nav-h: 56px;
+  --yc-content-max: 1200px;
+  --yc-rail-w: 288px;
+  --yc-activity-w: 344px;
+  --yc-docs-nav-w: 248px;
+  --yc-docs-toc-w: 200px;
+  --yc-device-max: 180px;
+  --yc-gutter: 16px;
+
+  /* motion */
+  --yc-dur-instant: 80ms;
+  --yc-dur-quick: 140ms;
+  --yc-dur-base: 220ms;
+  --yc-dur-slow: 320ms;
+  --yc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --yc-ease-entrance: cubic-bezier(0, 0, 0.2, 1);
+  --yc-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* stacking */
+  --yc-z-header: 30;
+  --yc-z-nav: 20;
+  --yc-z-scrim: 90;
+  --yc-z-overlay: 100;
+  --yc-z-toast: 110;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --yc-green: #27d17f;
+  --yc-green-strong: #4ee29b;
+  --yc-green-soft: rgba(39, 209, 127, 0.16);
+  /* The bright green stays the primary surface; the label is dark because white on
+     it reaches only 1.65:1. */
+  --yc-primary-bg: #4ee29b;
+  --yc-primary-fg: #04150c;
+  --yc-yellow-strong: #f7d37c;
+  --yc-yellow-soft: rgba(244, 189, 61, 0.14);
+  --yc-danger: #ef6f6f;
+  --yc-danger-soft: rgba(239, 111, 111, 0.14);
+  --yc-focus: #4ee29b;
+
+  --yc-bg: #0b1115;
+  --yc-surface: #11181d;
+  --yc-surface-sunken: #0e151a;
+  --yc-surface-raised: #151e24;
+  --yc-text: #f4f7f6;
+  --yc-text-muted: #99a2ad;
+  --yc-text-subtle: #7d8792;
+  --yc-border: #263039;
+  --yc-border-strong: #718278;
+
+  --yc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --yc-shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --yc-shadow-lg: 0 24px 56px rgba(0, 0, 0, 0.55);
+}
+
+/* Gutter steps: the smallest margin that keeps a 44px control inside the thumb arc
+   on a phone, capped once the content max-width constrains the page. */
+@media (min-width: 480px) {
+  :root {
+    --yc-gutter: 20px;
+  }
+}
+
+@media (min-width: 640px) {
+  :root {
+    --yc-gutter: 24px;
+  }
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --yc-gutter: 32px;
+    --yc-size-display: 56px;
+    --yc-leading-display: 60px;
+  }
+}
+
+@media (min-width: 1280px) {
+  :root {
+    --yc-gutter: 40px;
+  }
+}
+
+@media (min-width: 1600px) {
+  :root {
+    --yc-gutter: 48px;
+  }
+}
+
+/* A coarse pointer is the signal for a bigger hit target, not a narrow viewport. */
+@media (pointer: coarse) {
+  :root {
+    --yc-control-h-dense: 44px;
+  }
+}

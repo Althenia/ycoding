@@ -1,0 +1,1195 @@
+/**
+ * Remote workspace: application frame, header rows, session rail, transcript, tool
+ * and shell cards, request cards, activity and approvals queue, composer, compact
+ * navigation, and settings.
+ *
+ * Every class here is the interface the remote components author against. Geometry
+ * that must not move with state — the status strip, the bar row, the session row, the
+ * composer — keeps a reserved height so a state change cannot move the working area.
+ */
+
+/* --- app frame ----------------------------------------------------------
+   The workspace is an application shell, not a document: the header, the status
+   strip, and the composer keep their rows and only the middle region scrolls. The
+   shell column is the viewport width, so the widest item's max-content cannot widen
+   the shell past it and push a control off the inline edge. */
+
+.app {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  block-size: 100dvh;
+  overflow: hidden;
+}
+
+.app > .workspace {
+  min-block-size: 0;
+}
+
+/* The bar row keeps its height at every width. */
+.app > .app-header {
+  min-block-size: var(--yc-header-h);
+}
+
+/* --- remote header ------------------------------------------------------ */
+
+.remote-device {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  flex: none;
+}
+
+.remote-device .field {
+  flex: 0 0 auto;
+}
+
+/* The device control is sized by the label it shows, not by what the row has left:
+   the row yields to the select instead of the select clipping its own option. */
+.remote-device .select {
+  inline-size: auto;
+  min-inline-size: min-content;
+  max-inline-size: var(--yc-device-max);
+}
+
+.remote-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.remote-connection-label {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .remote-connection-label {
+    display: inline;
+  }
+}
+
+.remote-header__theme,
+.remote-header__settings {
+  display: none;
+}
+
+@media (min-width: 480px) {
+  .remote-header__theme {
+    display: inline-flex;
+  }
+}
+
+@media (min-width: 768px) {
+  .remote-header__settings {
+    display: inline-flex;
+  }
+}
+
+/* The selected session keeps its own declared row under the bar from 768, so the
+   title and its state chips never compete with the device select for one line. The
+   title track can shrink because a real session name is arbitrary; the chip track
+   wraps inside itself and grows the row instead of clipping a label. */
+.remote-title {
+  display: none;
+  min-inline-size: 0;
+}
+
+.remote-title__text {
+  font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-sm);
+  font-weight: var(--yc-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote-title__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-1);
+}
+
+@media (min-width: 768px) {
+  .remote-title {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--yc-space-3);
+    row-gap: var(--yc-space-2);
+    min-block-size: var(--yc-header-session-h);
+    padding-inline: var(--yc-gutter);
+  }
+
+  .remote-title__chips {
+    justify-content: flex-end;
+  }
+}
+
+/* Below 768 the session title and its chips live in the page head instead. */
+.compact-head {
+  display: grid;
+}
+
+@media (min-width: 768px) {
+  .compact-head {
+    display: none;
+  }
+}
+
+/* --- workspace tracks --------------------------------------------------- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr;
+  min-block-size: 0;
+}
+
+.workspace__rail,
+.workspace__activity {
+  display: none;
+}
+
+.workspace__rail {
+  border-inline-end: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
+  min-block-size: 0;
+}
+
+.workspace__main {
+  min-inline-size: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-block-size: 0;
+}
+
+.workspace__scroll {
+  overflow-y: auto;
+  padding: var(--yc-space-5) var(--yc-gutter) var(--yc-space-8);
+  min-inline-size: 0;
+  min-block-size: 0;
+}
+
+.workspace__activity {
+  border-inline-start: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface-sunken);
+  min-block-size: 0;
+}
+
+/* The rail returns at 768: a 288px rail plus a 480px working column. */
+@media (min-width: 768px) {
+  .workspace {
+    grid-template-columns: var(--yc-rail-w) minmax(0, 1fr);
+  }
+
+  .workspace__rail {
+    display: block;
+  }
+}
+
+/* The activity column returns at 1280: rail 288 + a 480px working column + 344.
+   Between 768 and 1279 activity is a slide-over opened from the header control, and
+   below 768 it is a sheet. */
+@media (min-width: 1280px) {
+  .workspace {
+    grid-template-columns: var(--yc-rail-w) minmax(480px, 1fr) var(--yc-activity-w);
+  }
+
+  .workspace__activity {
+    display: block;
+  }
+}
+
+.page-head {
+  display: grid;
+  gap: var(--yc-space-1);
+  padding: var(--yc-space-6) var(--yc-gutter) var(--yc-space-4);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.page-head__title {
+  font-size: var(--yc-size-2xl);
+  line-height: var(--yc-leading-2xl);
+  letter-spacing: var(--yc-tracking-tight);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.page-head__support {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+  max-inline-size: var(--yc-measure);
+}
+
+.page-head__action {
+  margin-block-start: var(--yc-space-3);
+}
+
+@media (min-width: 640px) {
+  .page-head {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  .page-head__action {
+    margin-block-start: 0;
+  }
+}
+
+/* --- session list ------------------------------------------------------- */
+
+.session-list {
+  display: grid;
+  gap: 2px;
+}
+
+/* No trailing status column: at the 288px rail a trailing chip left the session
+   title about 60px, so the state chips sit on the meta line instead. */
+.session-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--yc-space-3);
+  inline-size: 100%;
+  min-block-size: 64px;
+  padding: var(--yc-space-3);
+  border: var(--yc-border-width) solid transparent;
+  border-radius: var(--yc-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.session-row:hover {
+  background: var(--yc-surface-sunken);
+}
+
+.session-row--active {
+  background: var(--yc-green-soft);
+  border-color: color-mix(in srgb, var(--yc-green-strong) 35%, transparent);
+}
+
+.session-row__mark {
+  inline-size: 28px;
+  block-size: 28px;
+  display: grid;
+  place-content: center;
+  border-radius: var(--yc-radius-sm);
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border);
+  color: var(--yc-text-muted);
+}
+
+.session-row--active .session-row__mark {
+  color: var(--yc-green-strong);
+  border-color: color-mix(in srgb, var(--yc-green-strong) 35%, transparent);
+}
+
+.session-row__body {
+  min-inline-size: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.session-row__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+}
+
+.session-row__meta > * + *::before {
+  content: "·";
+  margin-inline-end: var(--yc-space-2);
+  color: var(--yc-border-strong);
+}
+
+.session-row__status {
+  flex: none;
+}
+
+.session-row__meta .chip {
+  min-block-size: 20px;
+  padding-inline: 6px;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-3) var(--yc-space-4) 0;
+}
+
+/* --- transcript --------------------------------------------------------- */
+
+.transcript {
+  display: grid;
+  gap: var(--yc-space-4);
+  max-inline-size: var(--yc-measure);
+  min-inline-size: 0;
+}
+
+.message {
+  display: grid;
+  gap: var(--yc-space-2);
+  min-inline-size: 0;
+}
+
+.message__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+}
+
+.message__text {
+  font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message--user {
+  padding: var(--yc-space-3) var(--yc-space-4);
+  background: var(--yc-surface);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+}
+
+/* A queued or pending input keeps its state marker inline with the message. */
+.message__hint {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+}
+
+.message__error {
+  color: var(--yc-danger);
+  font-size: var(--yc-size-2xs);
+  overflow-wrap: anywhere;
+}
+
+.message__system {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-subtle);
+  border-inline-start: 2px solid var(--yc-border-strong);
+  padding-inline-start: var(--yc-space-3);
+  overflow-wrap: anywhere;
+}
+
+.notice {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+  background: var(--yc-surface-sunken);
+  border-radius: var(--yc-radius-sm);
+  padding: var(--yc-space-2) var(--yc-space-3);
+}
+
+.reasoning {
+  border-inline-start: 2px solid var(--yc-border-strong);
+  padding-inline-start: var(--yc-space-3);
+}
+
+.reasoning summary {
+  min-block-size: var(--yc-control-h);
+  display: flex;
+  align-items: center;
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+  cursor: pointer;
+}
+
+.reasoning p {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* --- tool and shell cards ----------------------------------------------- */
+
+.tool {
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+  overflow: hidden;
+  min-inline-size: 0;
+}
+
+.tool__header {
+  display: flex;
+}
+
+.tool__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  flex: 1;
+  min-inline-size: 0;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-2);
+  background: none;
+  border: 0;
+  text-align: start;
+  cursor: pointer;
+  border-radius: var(--yc-radius-sm);
+}
+
+.tool__name {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool__status {
+  margin-inline-start: auto;
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+  white-space: nowrap;
+}
+
+.tool__body {
+  display: grid;
+  gap: var(--yc-space-2);
+  padding: 0 var(--yc-space-3) var(--yc-space-3);
+}
+
+.tool__note {
+  padding: 0 var(--yc-space-3) var(--yc-space-2);
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-xs);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool__error {
+  margin: 0;
+  padding: var(--yc-space-2) var(--yc-space-3) var(--yc-space-3);
+  color: var(--yc-danger);
+  font-size: var(--yc-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.tool--failed {
+  border-color: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
+}
+
+.shell {
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  overflow: hidden;
+  min-inline-size: 0;
+}
+
+.shell__header {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  min-block-size: 40px;
+  padding-inline: var(--yc-space-3);
+  background: var(--yc-surface-sunken);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+}
+
+/* The command is inline code, so it wraps and stays readable; only bounded output
+   keeps preformatted content with its own horizontal scroll. */
+.shell__header code {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.shell__status {
+  margin-inline-start: auto;
+  font-family: var(--yc-font-sans);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+  white-space: nowrap;
+}
+
+.shell__out {
+  max-block-size: 200px;
+  border-radius: 0;
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.shell__output {
+  display: grid;
+  gap: var(--yc-space-2);
+  justify-items: start;
+  min-inline-size: 0;
+}
+
+.shell__output .output {
+  inline-size: 100%;
+}
+
+.shell__pending {
+  margin: 0;
+  padding: var(--yc-space-2) 0;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-xs);
+  overflow-wrap: anywhere;
+}
+
+.shell__more {
+  min-block-size: var(--yc-control-h-dense);
+  font-size: var(--yc-size-2xs);
+}
+
+.shell__streaming {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 var(--yc-space-3) var(--yc-space-2);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-green-strong);
+}
+
+/* --- request cards ------------------------------------------------------
+   The cards in one thread keep one declared gap: two cards that touch read as a
+   single card. */
+
+.requests {
+  display: grid;
+  gap: var(--yc-space-6);
+}
+
+.request {
+  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface-raised);
+  overflow: hidden;
+}
+
+.request__header {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-3);
+  background: var(--yc-yellow-soft);
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.request--guardrail .request__header {
+  color: var(--yc-yellow-strong);
+}
+
+.request--permission .request__header {
+  color: var(--yc-text-muted);
+}
+
+.request__body {
+  padding: var(--yc-space-3) var(--yc-space-3) 0;
+  margin: 0;
+  font-size: var(--yc-size-sm);
+  overflow-wrap: anywhere;
+}
+
+.request__body code {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  background: var(--yc-surface-sunken);
+  padding: 2px 6px;
+  border-radius: var(--yc-radius-sm);
+}
+
+.request__note {
+  padding: var(--yc-space-1) var(--yc-space-3) 0;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  margin: 0;
+}
+
+.request__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-3);
+}
+
+/* A hard review is a human decision at every autonomy level. */
+.request--hard {
+  border-color: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
+  background: color-mix(in srgb, var(--yc-danger-soft) 40%, var(--yc-surface-raised));
+}
+
+.request--hard .request__header {
+  background: var(--yc-danger-soft);
+  color: var(--yc-danger);
+}
+
+.fieldset {
+  border: 0;
+  padding: var(--yc-space-2) var(--yc-space-3) 0;
+  margin: 0;
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.fieldset legend {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+  padding: 0;
+}
+
+.fieldset p {
+  font-size: var(--yc-size-sm);
+}
+
+.question {
+  border: 0;
+  margin: 0;
+  padding: var(--yc-space-2) var(--yc-space-3) 0;
+}
+
+.question legend {
+  font-weight: var(--yc-weight-semibold);
+  font-size: var(--yc-size-xs);
+}
+
+.question__option {
+  display: flex;
+  gap: var(--yc-space-2);
+  align-items: flex-start;
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-1) 0;
+}
+
+.question__custom {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yc-space-1);
+  margin-top: var(--yc-space-2);
+}
+
+.question__custom input {
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-bg);
+  color: var(--yc-text);
+  font: inherit;
+}
+
+/* --- activity and queue ------------------------------------------------- */
+
+.activity {
+  display: grid;
+  gap: 2px;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--yc-space-3);
+  align-items: start;
+  padding: var(--yc-space-2) var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+}
+
+.activity-row__icon {
+  color: var(--yc-text-muted);
+  margin-block-start: 2px;
+}
+
+.activity-row__body {
+  display: grid;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.activity-row__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.activity-row__detail {
+  color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+}
+
+.activity-row__status {
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  text-transform: capitalize;
+}
+
+/* An approval is a decision waiting for a human, so it is separated from a report. */
+.activity-row--approval {
+  background: var(--yc-yellow-soft);
+}
+
+.activity-row--approval .activity-row__status {
+  color: var(--yc-yellow-strong);
+}
+
+.activity-row--approval .activity-row__icon {
+  color: var(--yc-yellow-strong);
+}
+
+.queue {
+  display: grid;
+  gap: var(--yc-space-3);
+}
+
+.queue__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--yc-space-2);
+}
+
+.queue__count {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+}
+
+.queue-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--yc-space-3);
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-2) var(--yc-space-3);
+  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
+  border-radius: var(--yc-radius-md);
+  background: color-mix(in srgb, var(--yc-yellow-soft) 50%, var(--yc-surface-raised));
+  font-size: var(--yc-size-xs);
+}
+
+.queue-row__icon {
+  color: var(--yc-yellow-strong);
+}
+
+.queue-row__body {
+  display: grid;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.queue-row__title {
+  font-weight: var(--yc-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.queue-row__detail {
+  color: var(--yc-text-muted);
+}
+
+/* --- composer ----------------------------------------------------------- */
+
+.composer {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-bg);
+  padding: var(--yc-space-3) var(--yc-gutter);
+  padding-block-end: max(var(--yc-space-3), env(safe-area-inset-bottom));
+}
+
+.composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--yc-space-2);
+}
+
+/* The compact stack: below 480 the field takes its own row and the controls sit
+   under it, because a usable text field plus two 44px controls does not fit one line. */
+@media (max-width: 479px) {
+  .composer__row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .composer__controls {
+    justify-content: space-between;
+  }
+}
+
+.composer__field {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.composer__input {
+  inline-size: 100%;
+  min-block-size: 52px;
+  max-block-size: 180px;
+  resize: vertical;
+}
+
+.composer__controls {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+}
+
+.composer__delivery {
+  flex: none;
+}
+
+.composer__delivery .select {
+  inline-size: auto;
+}
+
+.composer__note {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-subtle);
+  margin-block-start: var(--yc-space-2);
+}
+
+.mutation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-3);
+  margin-block-end: var(--yc-space-2);
+  border-radius: var(--yc-radius-sm);
+  border: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+}
+
+.mutation--unknown {
+  border-color: color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+}
+
+.mutation--failed {
+  border-color: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
+  background: var(--yc-danger-soft);
+  color: var(--yc-danger);
+}
+
+.mutation__label {
+  font-weight: var(--yc-weight-semibold);
+}
+
+.mutation__detail {
+  color: inherit;
+}
+
+/* --- compact navigation ------------------------------------------------- */
+
+.bottom-nav {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  background: color-mix(in srgb, var(--yc-bg) 92%, transparent);
+  backdrop-filter: blur(12px);
+  padding-block-end: env(safe-area-inset-bottom);
+}
+
+.bottom-nav__item {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-height: var(--yc-bottom-nav-h);
+  padding-block: 8px;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  text-decoration: none;
+}
+
+.bottom-nav__item--active {
+  color: var(--yc-green-strong);
+}
+
+.bottom-nav__item--active svg {
+  stroke-width: 2;
+}
+
+@media (min-width: 768px) {
+  .bottom-nav {
+    display: none;
+  }
+}
+
+/* --- settings ----------------------------------------------------------- */
+
+.settings {
+  display: grid;
+  gap: var(--yc-space-8);
+  max-inline-size: 880px;
+}
+
+.settings__section {
+  display: grid;
+  gap: var(--yc-space-4);
+  padding-block-end: var(--yc-space-8);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.settings__section:last-child {
+  border-block-end: 0;
+  padding-block-end: 0;
+}
+
+.settings__head {
+  display: grid;
+  gap: 2px;
+}
+
+.settings__category {
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-green-strong);
+}
+
+.settings__hint {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+  max-inline-size: var(--yc-measure);
+}
+
+.settings__detail {
+  display: block;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-regular);
+}
+
+.settings__status {
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-xs);
+}
+
+.settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-3);
+  margin-block-start: var(--yc-space-4);
+}
+
+.settings__actions--goal {
+  align-items: flex-end;
+}
+
+.settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--yc-space-1);
+  font-size: var(--yc-size-xs);
+}
+
+.settings__field--grow {
+  flex: 1 1 240px;
+}
+
+.settings__list {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--yc-space-1) var(--yc-space-4);
+  font-size: var(--yc-size-sm);
+}
+
+.settings__list dt {
+  color: var(--yc-text-muted);
+}
+
+.settings__table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--yc-size-sm);
+}
+
+.settings__table th,
+.settings__table td {
+  text-align: start;
+  padding: var(--yc-space-2);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  vertical-align: middle;
+}
+
+.settings__table td {
+  text-align: center;
+  inline-size: 72px;
+}
+
+/* Definition rows stack below 1024 and become label and value columns above it,
+   where a 200px label plus a 240px value plus padding fits. */
+.defs {
+  display: grid;
+  gap: 0;
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  overflow: hidden;
+  background: var(--yc-surface-raised);
+}
+
+.defs__row {
+  display: grid;
+  gap: 4px;
+  padding: var(--yc-space-4);
+}
+
+.defs__row + .defs__row {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+@media (min-width: 1024px) {
+  .defs__row {
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: var(--yc-space-4);
+    align-items: baseline;
+  }
+}
+
+.defs__key {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+  color: var(--yc-text-muted);
+}
+
+.defs__value {
+  font-size: var(--yc-size-sm);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2);
+  min-inline-size: 0;
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-3);
+  padding: var(--yc-space-4);
+}
+
+.device + .device {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.device__body {
+  display: grid;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.device__name {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.device__meta {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device__action {
+  margin-inline-start: auto;
+}
+
+.list {
+  display: grid;
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  overflow: hidden;
+  background: var(--yc-surface-raised);
+}
+
+.list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-3);
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-3) var(--yc-space-4);
+}
+
+.list__row + .list__row {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.list__label {
+  font-size: var(--yc-size-sm);
+}
+
+.list__control {
+  margin-inline-start: auto;
+}
+
+/* Enrollment is a one-use code or command the reader copies, not transcribes. */
+.enrollment {
+  display: grid;
+  gap: var(--yc-space-2);
+  justify-items: start;
+  padding: var(--yc-space-4);
+  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-yellow-soft);
+}
+
+.enrollment__title {
+  font-weight: var(--yc-weight-semibold);
+}
+
+.enrollment__code {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-lg);
+  letter-spacing: 0.08em;
+  padding: var(--yc-space-3);
+  border-radius: var(--yc-radius-sm);
+  background: var(--yc-bg);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.enrollment__code--command {
+  font-size: var(--yc-size-sm);
+  letter-spacing: normal;
+}
+
+.device-list {
+  display: grid;
+}
+
+.device-list__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--yc-space-1) var(--yc-space-3);
+  align-items: center;
+  padding: var(--yc-space-4);
+}
+
+.device-list__item + .device-list__item {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.device-list__name {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.device-list__meta {
+  grid-column: 1;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+}

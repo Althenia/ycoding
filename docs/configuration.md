@@ -11,7 +11,7 @@ This document is the canonical configuration reference for the current YCoding r
 | Control agent authority                   | [Permissions](#permissions), [agents](#agents), [guardrails](#guardrail-configuration-and-custom-files).                                 |
 | Extend repository behavior                | [Commands](#commands), [skills and instructions](#skills-and-ambient-instructions), [plugins](#plugins-and-hooks), [MCP](#mcp).          |
 | Manage context and knowledge              | [Compaction](#compaction-and-experimental-settings), [workspace memory](#workspace-memory), [provider efficiency](#provider-efficiency). |
-| Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [managed service](#managed-service-configuration).          |
+| Adjust presentation and service operation | [CLI/TUI](#cli-tui-configuration), [managed service](#managed-service-configuration).                                                    |
 
 Runtime settings belong in `ycoding.json` or `ycoding.jsonc`; terminal preferences belong in `cli.json`. These surfaces do not substitute for each other.
 
@@ -114,13 +114,13 @@ Example:
 
 Missing environment variables become an empty string. A missing file reference invalidates that configuration document.
 
-The configuration JSON Schema is generated from the runtime-owned `Config.Info` Schema during the GitHub Pages build. Its public endpoint is [`https://althenia.github.io/ycoding/ycoding.schema.json`](https://althenia.github.io/ycoding/ycoding.schema.json). Configure GitHub Pages with GitHub Actions as its source and run the repository Pages workflow before using the endpoint.
+The configuration JSON Schema is generated from the runtime-owned `Config.Info` Schema during the public web build. Its public endpoint is [`https://ycoding.althenia.app/ycoding.schema.json`](https://ycoding.althenia.app/ycoding.schema.json). Publish the built web assets before using the endpoint.
 
 After deployment, use the endpoint in `ycoding.jsonc` for editor validation:
 
 ```jsonc
 {
-  "$schema": "https://althenia.github.io/ycoding/ycoding.schema.json",
+  "$schema": "https://ycoding.althenia.app/ycoding.schema.json",
 }
 ```
 
@@ -128,13 +128,43 @@ Use the generated YCoding schema endpoint rather than a different product's sche
 
 ## Terminal installation and commands
 
-After GitHub Pages and a native release are published, `curl -fsSL https://althenia.github.io/ycoding/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
+After the public site and a native release are published, `curl -fsSL https://ycoding.althenia.app/install.sh | sh` installs a checksum-verified release executable in `~/.local/bin`. Installation does not require a separate Bun runtime. The installer checks the shell configuration and adds the binary directory to PATH only when needed; unsupported shells receive manual PATH guidance.
 
 `ycoding` opens the interactive terminal interface. `ycoding --model <provider/model> "prompt"` executes a direct non-interactive run instead. `ycoding run --help` lists the explicit run command's options. These paths share the existing durable Session execution and permission handling.
 
 `ycoding update` checks GitHub Releases and replaces an installed release only after verifying its archive checksum and exact contents. On macOS, releases from 0.2.0 onward must contain both `ycoding` and `ycoding-computer-helper`; self-update preserves the installed pair and restores it if either replacement fails. Explicit rollback to a published pre-0.2.0 macOS version accepts its historical single-file archive and leaves any sibling helper unchanged. Linux remains single-file. Self-update supports macOS arm64/x64 and Linux x64, matching the shell installer. Development builds must be rebuilt locally; Windows users must exit YCoding and replace the executable from the release ZIP manually.
 
 The background update check resolves the newest release from the same GitHub Releases source and installs it with that release installer; it never consults the npm registry. It runs only after the background service is running or attached, because the release install replaces the executable that service spawns from. The `autoupdate` policy still governs it: `false` disables the check, and major releases are never installed automatically.
+
+### Remote access
+
+`ycoding remote` shares explicitly chosen local Sessions with the YCoding web client through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for the agent's advertisement, authorization, reconnection, and frame-bounding contract.
+
+The standalone terminal artifact and the full CLI expose the same remote subcommands and handlers. Remote access does not require a separate full-CLI installation.
+
+| Command                                                                                 | Purpose                                                                                              |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]`   | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv. |
+| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`            | Run the foreground relay agent for the shared Sessions until Ctrl-C.                                 |
+| `ycoding remote status`                                                                 | Show the enrolled device, credential validity, the local server address, and the shared Sessions.    |
+| `ycoding remote sessions`                                                               | List the Sessions shared with the relay.                                                             |
+| `ycoding remote allow <sessionID> [--directory <dir>] [--server <url> \| --standalone]` | Share one local Session at its verified Location.                                                    |
+| `ycoding remote deny <sessionID>`                                                       | Stop sharing one Session; a running connection drops it within a moment.                             |
+
+`ycoding remote enroll` requires a relay origin, and `--replace` is required before an existing device identity can be overwritten. `ycoding remote connect` requires an enrolled device and reports when no Session is shared. It refuses to bridge a local server over a LAN or public-network endpoint.
+
+Local state lives outside any repository checkout:
+
+| File                 | Location                                                                            | Contents                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `remote.json`        | Global configuration directory: `$XDG_CONFIG_HOME/ycoding`, or `YCODING_CONFIG_DIR` | The relay origin and the shared-Session allowlist: Session ID, directory, optional workspace ID, and title.                  |
+| `remote-device.json` | Global state directory: `$XDG_STATE_HOME/ycoding`                                   | The device identity: device ID, name, relay origin, P-256 public key, P-256 private key, and the rotated refresh credential. |
+
+Both files are written through a temporary file and renamed into place with mode `0600`, and a symbolic link at either path is refused instead of followed. The device private key never leaves the machine, and credentials travel only in request bodies and the WebSocket upgrade header, never in a URL, a flag, or an environment variable. A malformed file fails explicitly and is left in place for the operator. Credential requests never follow redirects, and a rejected, revoked, or expired device credential is terminal: the device must be enrolled again.
+
+Relay sign-in is restricted by a server-only allowlist. `GOOGLE_ALLOWED_EMAILS` holds comma-, whitespace-, or newline-separated Google addresses matched exactly after trimming and lowercasing, with no wildcards or domain suffixes, and it is never returned through an API, a redirect, a log, or the browser bundle. Admission requires a configured entry, a Google-verified email, and an exact match; a missing or empty list denies every Google sign-in. The relay deployment also supplies `GOOGLE_CLIENT_ID` and the `GOOGLE_CLIENT_SECRET` secret.
+
+Provisioning is an operator action in `infra/cloudflare`. `wrangler.jsonc` selects the Durable Object and D1 bindings, the static-assets binding for the built web client, and the custom domain; the Google secrets are set with `wrangler secret put`.
 
 ## Rejected configuration keys
 
@@ -514,7 +544,7 @@ Permissions are evaluated in order. Each rule has:
   "resource": "src/**",
   "effect": "allow"
 }
-````
+```
 
 `effect` is `allow`, `deny`, or `ask`.
 
@@ -1046,11 +1076,11 @@ Stable operator-facing variables:
 | `YCODING_DISABLE_FFF`            | Disable the FFF filesystem backend.                        |
 | `YCODING_WEBSEARCH_PROVIDER`     | Select web-search provider.                                |
 | `YCODING_TERMINAL`               | Override terminal identity used by shell and PTY behavior. |
-| `YCODING_REMOTE_SMOKE_URL`       | Development-only outbound ping/pong relay WebSocket URL.   |
+| `YCODING_REMOTE_URL`             | Relay origin used by the `ycoding remote` commands.        |
 
 Build, packaging, test, and internal diagnostic variables are not stable end-user configuration. Examples include `YCODING_VERSION`, `YCODING_CHANNEL`, native-library paths, Drive simulation variables, and the internal managed-service startup-error file.
 
-`YCODING_REMOTE_SMOKE_URL` must use `wss:` except that `ws:` is accepted for `localhost` and `127.0.0.1` Wrangler development. It enables only heartbeat and relay verification; it is not a production remote-access credential or Session transport. Do not place credentials in this URL.
+`YCODING_REMOTE_URL` is a relay origin: HTTPS only, except that plain HTTP is accepted for `localhost`, `127.0.0.1`, and `[::1]` development. It must not carry credentials, a query, a fragment, or a path. A `--relay` flag takes precedence over the environment, which takes precedence over the origin stored by `ycoding remote enroll`. Device credentials are bound to the enrolled origin, so an override that changes the origin is refused before any credential is sent.
 
 ## Reload behavior
 

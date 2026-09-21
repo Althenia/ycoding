@@ -70,6 +70,27 @@ jobs:
         env:
           YCODING_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
+      - name: Verify web application and relay
+        if: runner.os == 'Linux'
+        run: |
+          bun run test:web
+          bun run test:remote
+
+      # The Worker serves the built web application, so the web build must precede
+      # the Cloudflare build check.
+      - name: Build web application
+        if: runner.os == 'Linux'
+        run: bun run build:web
+
+      - name: Verify built web integration
+        if: runner.os == 'Linux'
+        run: bun run test:integration:web
+
+      - name: Verify local remote integration
+        if: runner.os == 'Linux'
+        timeout-minutes: 20
+        run: bun run test:integration:remote
+
       - name: Verify Cloudflare Worker
         if: runner.os == 'Linux'
         run: |

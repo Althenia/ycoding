@@ -30,6 +30,7 @@ A plan, deleted package, or stale generated file does not override current code.
 | [`tui-redesign-backlog.md`](./tui-redesign-backlog.md)                   | Proposed post-rebuild design baseline, blocked-contract, diagnostics, provider-reproduction, and scoring backlog.                            |
 | [`provider-efficiency.md`](./provider-efficiency.md)                     | Provider request amplification, prompt-cache capability matrix, OpenAI continuation, diagnostics, privacy, and reproducible benchmarks.      |
 | [`configuration.md`](./configuration.md)                                 | Canonical runtime, CLI/TUI, service, provider, MCP, permission, and environment configuration.                                               |
+| [`remote-deployment.md`](./remote-deployment.md)                         | Operator deployment inputs, logging surfaces and privacy limits, and D1 backup, migration, and recovery for the remote relay.                |
 | [`repository-resources.md`](./repository-resources.md)                   | `.ycoding` agents, commands, skills, plugins, hooks, tools, themes, instructions, and discovery rules.                                       |
 | [`guardrails-and-provider-usage.md`](./guardrails-and-provider-usage.md) | Operator configuration for agent permissions, custom guardrail sources, caps, replies, transient approval reuse, and provider quota sources. |
 | [`ycoding-migration.md`](./ycoding-migration.md)                         | Canonical YCoding identifiers and external-provider exceptions.                                                                              |
@@ -41,24 +42,20 @@ A plan, deleted package, or stale generated file does not override current code.
 
 Use `docs` for maintained product, contributor, and operator behavior. Use `specs/v2` for detailed cross-module contracts and accepted architectural decisions that are difficult to recover from one source file.
 
-The static GitHub Pages site is generated from maintained documents in this directory; it is not a second documentation source or application package. The Pages workflow publishes the site to `https://althenia.github.io/ycoding/` after repository Pages settings are enabled. Build locally with `bun script/build-pages.ts`; output is restricted to `dist/pages`. The build generates `ycoding.schema.json` from the runtime configuration Schema and includes `script/install.sh`.
+The public site at `https://ycoding.althenia.app` contains curated user documentation maintained in `apps/web`, not an automatic publication of this engineering documentation directory. Public content must exclude internal architecture, infrastructure topology, implementation plans, and private configuration. Build it with `bun run build:web`; Vite writes `apps/web/dist` including the generated `sitemap.xml`, then `script/build-web-assets.ts` adds the maintained installer, the runtime-generated configuration JSON Schema, and the public configuration example.
 
 Temporary implementation plans belong under an explicitly temporary planning directory and must not be cited as current behavior.
 
 ### Local documentation preview
 
-The generated navigation groups maintained guides into Start, Concepts, Components, Configuration, Runtime, and Capabilities. Proposed backlog documents remain source-only. Each guide has an on-page heading index; configuration schema, example, and installer downloads use the same site base.
-
-Build and mount the output at `/ycoding/`, matching deployment:
+Build and preview the public site at its root path:
 
 ```sh
-bun script/build-pages.ts
-preview=$(mktemp -d)
-ln -s "$PWD/dist/pages" "$preview/ycoding"
-python3 -m http.server 4174 --bind 127.0.0.1 --directory "$preview"
+bun run build:web
+bun run --cwd apps/web preview --host 127.0.0.1 --port 4174
 ```
 
-Open `http://127.0.0.1:4174/ycoding/`. Stop the preview with Ctrl-C. Use another free port if needed; do not replace a pre-existing server. Previewing does not publish the site.
+Open `http://127.0.0.1:4174/`. Stop the preview with Ctrl-C. Use another free port if needed; do not replace a pre-existing server. Vite preview verifies static public assets; it does not supply authentication or a remote relay. Previewing does not publish the site.
 
 ## Required updates
 

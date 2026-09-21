@@ -24,6 +24,21 @@
         "wrangler": "4.133.0",
       },
     },
+    "apps/web": {
+      "name": "@ycoding-ai/web",
+      "version": "0.0.0",
+      "dependencies": {
+        "@ycoding-ai/remote": "workspace:*",
+        "solid-js": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+        "vite": "catalog:",
+        "vite-plugin-solid": "catalog:",
+      },
+    },
     "packages/ai": {
       "name": "@ycoding-ai/ai",
       "version": "1.17.20",
@@ -59,6 +74,7 @@
         "@ycoding-ai/client": "workspace:*",
         "@ycoding-ai/core": "workspace:*",
         "@ycoding-ai/plugin": "workspace:*",
+        "@ycoding-ai/remote": "workspace:*",
         "@ycoding-ai/schema": "workspace:*",
         "@ycoding-ai/server": "workspace:*",
         "@ycoding-ai/tui": "workspace:*",
@@ -331,6 +347,10 @@
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",
       },
+    },
+    "packages/remote": {
+      "name": "@ycoding-ai/remote",
+      "version": "0.0.0",
     },
     "packages/schema": {
       "name": "@ycoding-ai/schema",
@@ -1552,6 +1572,8 @@
 
     "@ycoding-ai/protocol": ["@ycoding-ai/protocol@workspace:packages/protocol"],
 
+    "@ycoding-ai/remote": ["@ycoding-ai/remote@workspace:packages/remote"],
+
     "@ycoding-ai/schema": ["@ycoding-ai/schema@workspace:packages/schema"],
 
     "@ycoding-ai/script": ["@ycoding-ai/script@workspace:packages/script"],
@@ -1563,6 +1585,8 @@
     "@ycoding-ai/tui": ["@ycoding-ai/tui@workspace:packages/tui"],
 
     "@ycoding-ai/ui": ["@ycoding-ai/ui@workspace:packages/ui"],
+
+    "@ycoding-ai/web": ["@ycoding-ai/web@workspace:apps/web"],
 
     "abbrev": ["abbrev@4.0.0", "", {}, "sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA=="],
 

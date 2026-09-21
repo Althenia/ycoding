@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-theme-preference="system">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Remote workspace fixture — YCoding</title>
+    <meta name="robots" content="noindex" />
+    <script>
+      ;(() => {
+        try {
+          const stored = localStorage.getItem("ycoding.theme")
+          const preference = stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
+          const dark =
+            preference === "dark" ||
+            (preference === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.dataset.theme = dark ? "dark" : "light"
+          document.documentElement.dataset.themePreference = preference
+        } catch {
+          document.documentElement.dataset.theme = "light"
+          document.documentElement.dataset.themePreference = "system"
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/verify/remote-fixture.tsx"></script>
+  </body>
+</html>

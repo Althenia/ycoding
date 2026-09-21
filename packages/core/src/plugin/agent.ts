@@ -133,7 +133,7 @@ const PROMPT_SUMMARY = `Write a pull-request-style summary of this conversation.
 - If the conversation ends with an unanswered question or imperative request to the user, preserve it verbatim.`
 
 // ── Standardized YCoding project prompt (empirical, shared by primary + subagent) ──
-const YCODING_PROJECT_PROMPT = `YCoding is the terminal-first V2 runtime (Schema → Core/Protocol → Server, durable SessionV2 events, Location-scoped runner) with an approved native Godot desktop client under apps/office/.
+const YCODING_PROJECT_PROMPT = `YCoding is the terminal-first V2 runtime (Schema → Core/Protocol → Server, durable SessionV2 events, Location-scoped runner).
 
 Follow the user's prompt or inquiry strictly. Do not perform work the user did not request or introduce ideas the user did not ask for. Do not state details without concrete evidence.
 

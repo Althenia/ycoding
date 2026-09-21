@@ -1,0 +1,25 @@
+/* Styles for the verification-only fixture shell. Never part of a production build. */
+.fixture {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.fixture__banner {
+  margin: 0;
+  padding: var(--yc-space-2) var(--yc-space-4);
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+  border-bottom: 1px solid var(--yc-yellow);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.fixture__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-4);
+  border-bottom: 1px solid var(--yc-border);
+  background: var(--yc-surface);
+}

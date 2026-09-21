@@ -596,6 +596,30 @@ describe("SessionV2.create", () => {
     ),
   )
 
+  it.live("records the owning Session on the started shell info", () =>
+    withTmp((directory) =>
+      Effect.gen(function* () {
+        const session = yield* SessionV2.Service
+        const created = yield* session.create({
+          location: Location.Ref.make({ directory: AbsolutePath.make(directory) }),
+        })
+
+        yield* session.shell({ sessionID: created.id, command: "echo owned" })
+
+        const started = Array.from(yield* Stream.runCollect(logEvents(session, created.id))).filter(
+          (event) => event.type === "session.shell.started",
+        )
+        expect(started).toHaveLength(1)
+        expect(started).toMatchObject([
+          {
+            type: "session.shell.started",
+            data: { sessionID: created.id, shell: { metadata: { sessionID: created.id } } },
+          },
+        ])
+      }),
+    ),
+  )
+
   it.live("rejects catastrophic direct shell commands before process creation", () =>
     withTmp((directory) =>
       Effect.gen(function* () {

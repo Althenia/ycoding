@@ -17,16 +17,18 @@ The active package set is explicit and enforced by `script/ycoding-workspace.ts`
 - `httpapi-codegen`
 - `plugin`
 - `protocol`
+- `remote`
 - `schema`
 - `script`
 - `server`
 - `simulation`
 - `tui`
 - `ui`
+- `apps/web` (`@ycoding-ai/web`)
 
-Desktop, browser, console, website, statistics, hosted-application, and legacy SDK packages are outside the product boundary and must not be restored accidentally.
+The terminal application and the SolidJS browser client share one local execution runtime. Console, statistics, hosted-agent execution, and legacy SDK packages are outside the product boundary.
 
-`infra/cloudflare/` is deployment infrastructure outside the Bun workspace. It owns the edge health check and the development-only Durable Object relay smoke path. It is not a browser application or execution package and imports no Core or Server implementation.
+`infra/cloudflare/` is deployment infrastructure outside the Bun workspace. It owns edge authentication, device metadata, and the relay transport. It imports no Core or Server implementation and has no model, shell, repository, or tool execution authority.
 
 ## Dependency direction
 
@@ -50,8 +52,18 @@ Rules:
 - CLI owns the executable, local-service discovery, build, packaging, and TUI startup.
 - TUI owns presentation and interaction, never canonical durable state.
 - UI provides reusable theme and presentation primitives used by the TUI.
+- Remote owns the closed relay envelopes and device-authentication request shapes shared by the CLI, browser, and edge relay. It does not redefine local Session semantics.
+- Web owns the responsive browser presentation and curated public content. It must not import Core or Server implementation code.
 
-Client and TUI code must not import Core or Server implementation modules to mutate durable state.
+Client, TUI, and Web code must not import Core or Server implementation modules to mutate durable state.
+
+### Remote presentation boundary
+
+The local CLI connects outbound to the relay and maps a fixed set of operations onto the existing authenticated local service. A local user selects which Sessions to share. A browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header to this bridge.
+
+The edge authenticates browser users and enrolled devices separately, checks ownership and the advertised Session set, and routes bounded frames. D1 owns authentication and device metadata, not conversation history or streamed tool/model output. Durable Session facts remain in the local runtime.
+
+The public build includes only curated `apps/web` content and the installer/configuration downloads exported by `script/build-web-assets.ts`. The engineering `docs` directory is not a public-site input.
 
 ## Package ownership
 

@@ -11,16 +11,16 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 - **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
 - **On-demand knowledge:** save and search linked workspace Markdown with an [offline graph and reader](./docs/memory.md), without automatic transcript extraction or recall.
 
-YCoding is terminal-first—the TUI is the primary surface.
+YCoding is terminal-first—the TUI is the primary surface. The [remote web client](https://ycoding.althenia.app/remote/) provides browser and mobile control of explicitly shared local sessions.
 
-The Cloudflare deployment under [`infra/cloudflare`](./infra/cloudflare) is a remote-ingress smoke slice, not a hosted agent runtime. Its development hostname supports only a fixed ping/pong relay; the agent, repository, filesystem, shell, tools, and model execution remain in the local `ycoding` process. Production session transport awaits authenticated user, device, ownership, and Session authorization plus the application protocol.
+The agent, repository, filesystem, shell, tools, and model execution remain in the local `ycoding` process. The remote relay authenticates users and enrolled devices and checks device ownership and Session access; it is not a hosted agent runtime. The [public site](https://ycoding.althenia.app/) contains user documentation and the changelog.
 
 ## Install
 
 **macOS (Apple Silicon or Intel) and Linux (x64)** — requires `curl`, `tar`, and `shasum` or `sha256sum`:
 
 ```sh
-curl -fsSL https://althenia.github.io/ycoding/install.sh | sh
+curl -fsSL https://ycoding.althenia.app/install.sh | sh
 ```
 
 The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Follow its PATH instructions, then open a new terminal and run:
@@ -76,6 +76,16 @@ bun run smoke:runtime
 ```
 
 For targeted tests and repository checks, see [contributing guidance](./AGENTS.md). The [documentation index](./docs/README.md) links to architecture, configuration, and runtime details.
+
+Build the SolidJS/Vite public site and remote client:
+
+```sh
+bun run build:web
+bun run test:web
+bun run test:remote
+```
+
+The web build writes `apps/web/dist` and includes the maintained installer and generated configuration Schema. Deployment requires configured sign-in credentials and the reviewed authentication-metadata migration; building does not deploy anything.
 
 ## License
 

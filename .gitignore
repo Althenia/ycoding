@@ -5,6 +5,8 @@ node_modules
 .wrangler/
 .env
 .env.local
+.dev.vars
+.dev.vars.*
 .idea
 .vscode
 .codex
@@ -48,10 +50,7 @@ service-*.json
 
 .aphrodite
 output/
+.playwright-cli/
 
-# Native Godot desktop client (apps/office)
-.godot/
-godot-export/
-*.translation
 __pycache__/
 *.pyc

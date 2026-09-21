@@ -1,6 +1,6 @@
 # Product direction
 
-YCoding is a standalone coding agent. The terminal application is the primary supported surface. This document specifies maintained product scope; it is not a roadmap and does not promise unimplemented features.
+YCoding is a standalone coding agent. The terminal application is the primary supported surface; the responsive remote web client controls the same local runtime. This document specifies maintained product scope; it is not a roadmap and does not promise unimplemented features.
 
 ## Product identity
 
@@ -29,7 +29,7 @@ The terminal application is the primary product and release surface.
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
-The supported surface is the terminal application. There is no Electron, browser-application, console, website, or hosted-application runtime. The current Cloudflare ingress is a ping/pong smoke surface and owns no repository, shell, tool, model, or Session execution authority.
+Supported presentation surfaces are the terminal application and the SolidJS remote web client. The public site and remote client share `ycoding.althenia.app`. The browser and relay own no repository, shell, tool, model, or Session execution authority. There is no hosted-agent runtime, Electron shell, or native office client in the current product.
 
 ### 2. Current runtime architecture
 
@@ -87,13 +87,15 @@ OpenCode Zen and OpenCode Go remain named as such only because they are external
 
 The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. The release workflow builds and smoke-tests native artifacts before publishing; a manual workflow run prepares artifacts without publishing a release. Each release ships its per-version notes at `docs/releases/v<version>.md`, which is also attached to the GitHub release.
 
-GitHub Pages publishes maintained YCoding documentation, the generated configuration JSON Schema, an example `ycoding.jsonc`, and the shell installer. The site is static documentation, not a separate application package. GitHub Pages must be enabled with GitHub Actions as its source before the public links become available.
+The public web build publishes a landing page, curated user documentation, a changelog, the generated configuration JSON Schema, an example `ycoding.jsonc`, and the shell installer. Public content contains usage, configuration, and troubleshooting guidance, not engineering architecture, internal infrastructure, database schemas, or implementation plans.
 
 ### 9. Remote ingress boundary
 
-Remote access preserves the local runtime as the only execution authority. The Cloudflare Worker and its per-device Durable Object terminate the smoke HTTPS/WebSocket connections and coordinate an outbound local-agent connection with smoke clients. D1 is bound only for the health probe; it retains no application metadata, streamed model output, reasoning, token, or tool events.
+Remote access preserves the local runtime as the only execution authority. The Cloudflare Worker and its per-device Durable Object coordinate an outbound local-agent connection with authenticated browser clients. D1 stores authentication and device metadata, never conversation history, model reasoning, streamed output, or tool events.
 
-The current relay is a development smoke protocol limited to `ping` and `pong` on the workers.dev hostname. The production custom domain exposes health only until the authorization invariant—authenticated user, authenticated device, user ownership of that device, and Session authorization—and the application protocol are implemented.
+Remote control requires an authenticated user, an authenticated enrolled device, ownership of that device, and an explicitly shared local Session. The operation set is closed; clients cannot proxy arbitrary local requests. Uncertain mutation outcomes must not trigger automatic replay. Reconnection preserves Session identity and reconciles against the existing local durable history.
+
+The responsive layout reflows at desktop, tablet, and mobile breakpoints. Light and dark themes, keyboard-accessible approvals, bounded tool/terminal output, and an accessible composer are required on each surface. Offline mode never queues remote mutations.
 
 ## Compatibility policy
 

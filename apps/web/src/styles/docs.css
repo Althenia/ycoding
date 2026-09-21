@@ -1,0 +1,578 @@
+/**
+ * Public documentation and changelog surfaces: the bar, the shell tracks, the
+ * article body, the search overlay, release rows, and the filter rail.
+ *
+ * The rail arithmetic is why the tracks return where they do: the navigation rail
+ * needs 248px and the article needs 640px, so 248 + 640 = 888 fits from 1024 and not
+ * from 768.
+ */
+
+/* --- bar ---------------------------------------------------------------- */
+
+.docs-bar {
+  background: var(--yc-surface);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.docs-bar__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-3);
+  min-block-size: var(--yc-control-h);
+  padding-block: var(--yc-space-2);
+}
+
+.docs-bar__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.docs-bar__crumbs {
+  padding-block-end: var(--yc-space-2);
+}
+
+/* Below 1024 the documentation navigation is a sheet, so the bar carries the trigger. */
+.docs-bar__nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  font-size: var(--yc-size-sm);
+  cursor: pointer;
+}
+
+@media (max-width: 1023px) {
+  .docs-bar__title {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .docs-bar__nav-toggle {
+    display: none;
+  }
+
+  .docs-bar__crumbs {
+    display: none;
+  }
+}
+
+.docs-search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  margin-inline-start: auto;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-sm);
+  cursor: pointer;
+}
+
+.docs-search-trigger kbd {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-sm);
+  padding: 1px 5px;
+}
+
+/* --- shell -------------------------------------------------------------- */
+
+.docs-shell {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.docs-shell__nav {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .docs-shell {
+    grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr);
+  }
+
+  .docs-shell__nav {
+    display: block;
+    border-inline-end: var(--yc-border-width) solid var(--yc-border);
+    padding: var(--yc-space-5) var(--yc-space-4);
+  }
+}
+
+/* The on-this-page rail returns at 1280, where the rail, a 640px article, and a
+   200px rail all fit. Below that the article keeps the whole working column. */
+.docs-shell__toc {
+  display: none;
+}
+
+@media (min-width: 1280px) {
+  .docs-shell {
+    grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr) var(--yc-docs-toc-w);
+  }
+
+  .docs-shell__toc {
+    display: block;
+  }
+}
+
+/* --- navigation rail ---------------------------------------------------- */
+
+.docs-nav {
+  display: grid;
+  gap: var(--yc-space-5);
+  align-content: start;
+}
+
+.docs-nav__group {
+  display: grid;
+  gap: 2px;
+}
+
+.docs-nav__title {
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-text-muted);
+  padding-inline: var(--yc-space-3);
+}
+
+.docs-nav__link {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  border-radius: var(--yc-radius-sm);
+  color: var(--yc-text-muted);
+  text-decoration: none;
+  font-size: var(--yc-size-sm);
+}
+
+.docs-nav__link:hover {
+  background: var(--yc-surface-sunken);
+  color: var(--yc-text);
+}
+
+.docs-nav__link--active {
+  color: var(--yc-green-strong);
+  background: var(--yc-green-soft);
+  font-weight: var(--yc-weight-medium);
+}
+
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-subtle);
+}
+
+/* Every breadcrumb is a real target: a 26px inline link is below the thumb target. */
+.breadcrumbs a {
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--yc-hit-min);
+}
+
+/* Above 1024 the breadcrumbs belong to the article, not to the bar. */
+.breadcrumbs--article {
+  display: none;
+}
+
+@media (min-width: 1024px) {
+  .breadcrumbs--article {
+    display: flex;
+  }
+}
+
+/* --- article ------------------------------------------------------------ */
+
+.docs-article {
+  padding: var(--yc-space-6) var(--yc-gutter) var(--yc-space-16);
+  min-inline-size: 0;
+}
+
+/* Long inline values wrap inside the column instead of widening the document. */
+.docs-article p,
+.docs-article li {
+  overflow-wrap: anywhere;
+}
+
+.docs-article__lede {
+  font-size: var(--yc-size-lg);
+  color: var(--yc-text-muted);
+  max-inline-size: var(--yc-measure);
+  margin-block: var(--yc-space-3) var(--yc-space-6);
+}
+
+.doc-section {
+  display: grid;
+  gap: var(--yc-space-4);
+  padding-block: var(--yc-space-8);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.doc-section h2 {
+  scroll-margin-top: calc(var(--yc-header-h) + var(--yc-space-4));
+}
+
+.steps {
+  display: grid;
+  gap: var(--yc-space-4);
+  counter-reset: step;
+}
+
+.steps__item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: var(--yc-space-3);
+}
+
+.steps__item::before {
+  counter-increment: step;
+  content: counter(step);
+  inline-size: 28px;
+  block-size: 28px;
+  display: grid;
+  place-content: center;
+  border-radius: 50%;
+  background: var(--yc-green-soft);
+  color: var(--yc-green-strong);
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.steps__text {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+.steps__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.callout {
+  display: grid;
+  gap: var(--yc-space-1);
+  padding: var(--yc-space-4);
+  border-inline-start: 3px solid var(--yc-green-strong);
+  background: var(--yc-surface);
+  border-radius: var(--yc-radius-md);
+}
+
+.callout--warning {
+  border-inline-start-color: var(--yc-yellow-strong);
+  background: var(--yc-yellow-soft);
+}
+
+.callout__title {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.callout p {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+.card-grid {
+  display: grid;
+  gap: var(--yc-space-4);
+}
+
+@media (min-width: 640px) {
+  .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.card__link {
+  display: grid;
+  gap: var(--yc-space-1);
+  text-decoration: none;
+  color: inherit;
+}
+
+.card__link:hover .card__title {
+  color: var(--yc-green-strong);
+}
+
+.card__text {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+.related {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.related a {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--yc-hit-min);
+  color: var(--yc-green-strong);
+}
+
+.doc-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  font-size: var(--yc-size-sm);
+}
+
+.doc-table th,
+.doc-table td {
+  text-align: start;
+  padding: var(--yc-space-3);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  vertical-align: top;
+}
+
+.doc-table th {
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-text-muted);
+}
+
+.doc-table td:first-child {
+  font-weight: var(--yc-weight-semibold);
+  white-space: nowrap;
+}
+
+.docs-toc {
+  display: grid;
+  gap: var(--yc-space-2);
+  align-content: start;
+  padding: var(--yc-space-6) var(--yc-space-4);
+}
+
+.docs-toc__title {
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-text-muted);
+}
+
+.docs-toc__list {
+  display: grid;
+  gap: 2px;
+}
+
+.docs-toc__list a {
+  display: flex;
+  align-items: center;
+  min-block-size: var(--yc-hit-min);
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+  text-decoration: none;
+}
+
+.docs-toc__list a:hover {
+  color: var(--yc-text);
+}
+
+/* --- search ------------------------------------------------------------- */
+
+.search__results {
+  display: grid;
+  gap: 2px;
+}
+
+.search__result {
+  display: grid;
+  gap: 2px;
+  inline-size: 100%;
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-3);
+  border-radius: var(--yc-radius-md);
+  text-decoration: none;
+  color: inherit;
+  background: transparent;
+  border: var(--yc-border-width) solid transparent;
+  text-align: start;
+  cursor: pointer;
+}
+
+.search__result:hover {
+  background: var(--yc-surface-sunken);
+}
+
+.search__result--active {
+  background: var(--yc-green-soft);
+  border-color: color-mix(in srgb, var(--yc-green-strong) 35%, transparent);
+}
+
+.search__result-title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.search__result-text {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+}
+
+.search__empty {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+/* --- changelog ---------------------------------------------------------- */
+
+.releases {
+  display: grid;
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+/* A release row is separated by a hairline instead of a nested card. */
+.release {
+  display: grid;
+  gap: var(--yc-space-3);
+  padding-block: var(--yc-space-8);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+@media (min-width: 768px) {
+  .release {
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: var(--yc-space-6);
+  }
+}
+
+.release__meta {
+  display: grid;
+  gap: var(--yc-space-2);
+  align-content: start;
+  justify-items: start;
+}
+
+.release__version {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-md);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.release__date {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+}
+
+.release__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-1);
+}
+
+.docs-footnote {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-4);
+  padding-block: var(--yc-space-8);
+}
+
+.release__changes {
+  display: grid;
+  gap: var(--yc-space-4);
+}
+
+.release__change {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.release__change h3 {
+  font-size: var(--yc-size-md);
+}
+
+.release__change ul {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.release__change li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--yc-space-2);
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+/* The filter rail is a sheet below 1024 and the inline rail above it. */
+.filters {
+  display: grid;
+  gap: var(--yc-space-5);
+  align-content: start;
+}
+
+.filters__group {
+  display: grid;
+  gap: 2px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.filters__group legend {
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-text-muted);
+  padding: 0 0 var(--yc-space-2) var(--yc-space-3);
+}
+
+.filters__option {
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  border: var(--yc-border-width) solid transparent;
+  border-radius: var(--yc-radius-sm);
+  background: transparent;
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-sm);
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.filters__option:hover {
+  background: var(--yc-surface-sunken);
+  color: var(--yc-text);
+}
+
+.filters__option--active {
+  color: var(--yc-green-strong);
+  background: var(--yc-green-soft);
+  font-weight: var(--yc-weight-semibold);
+}
+
+/* Settings renders the same three-option control horizontally. */
+.filters--inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--yc-space-2);
+}
+
+.filters--inline .filters__option {
+  inline-size: auto;
+  border-radius: var(--yc-radius-pill);
+  border-color: var(--yc-border-strong);
+  background: var(--yc-surface-raised);
+}

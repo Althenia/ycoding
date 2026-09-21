@@ -10,6 +10,25 @@
       "custom_domain": true
     }
   ],
+  "assets": {
+    "directory": "../../apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api",
+      "/api/*",
+      "/ws",
+      "/ws/*",
+      "/health",
+      "/remote",
+      "/remote/*",
+      "/docs",
+      "/docs/*",
+      "/changelog",
+      "/changelog/*",
+      "/"
+    ]
+  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -17,6 +36,9 @@
       "database_id": "3384fc56-42d6-40a1-af04-5a75bd391132"
     }
   ],
+  "triggers": {
+    "crons": ["17 * * * *"]
+  },
   "durable_objects": {
     "bindings": [
       {

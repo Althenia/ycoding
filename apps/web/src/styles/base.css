@@ -1,0 +1,1207 @@
+/**
+ * Shared foundation: base elements, layout primitives, buttons, chips, form
+ * controls, surfaces, product chrome, overlays, notices, and motion.
+ *
+ * Composition lives in the surface stylesheets; this file holds only what every
+ * surface shares, so a change here reaches the marketing site, the documentation,
+ * the changelog, and the remote workspace at once.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--yc-bg);
+  color: var(--yc-text);
+  font-family: var(--yc-font-sans);
+  font-size: var(--yc-size-md);
+  line-height: var(--yc-leading-md);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+figure,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+h1 {
+  font-size: var(--yc-size-4xl);
+  line-height: var(--yc-leading-4xl);
+  font-weight: var(--yc-weight-bold);
+  letter-spacing: var(--yc-tracking-tight);
+}
+
+h2 {
+  font-size: var(--yc-size-2xl);
+  line-height: var(--yc-leading-2xl);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-tight);
+}
+
+h3 {
+  font-size: var(--yc-size-xl);
+  line-height: var(--yc-leading-xl);
+  font-weight: var(--yc-weight-semibold);
+}
+
+h4 {
+  font-size: var(--yc-size-lg);
+  line-height: var(--yc-leading-lg);
+  font-weight: var(--yc-weight-semibold);
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--yc-font-mono);
+}
+
+:focus-visible {
+  outline: 2px solid var(--yc-focus);
+  outline-offset: 2px;
+  border-radius: var(--yc-radius-sm);
+}
+
+::selection {
+  background: var(--yc-green-soft);
+  color: var(--yc-text);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 50%;
+  translate: -50% -120%;
+  z-index: var(--yc-z-toast);
+  padding: var(--yc-space-2) var(--yc-space-4);
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  font-size: var(--yc-size-sm);
+  text-decoration: none;
+}
+
+.skip-link:focus-visible {
+  translate: -50% 8px;
+}
+
+/* --- layout ------------------------------------------------------------- */
+
+.container {
+  inline-size: 100%;
+  max-inline-size: calc(var(--yc-content-max) + var(--yc-gutter) * 2);
+  margin-inline: auto;
+  padding-inline: var(--yc-gutter);
+}
+
+.stack > * + * {
+  margin-block-start: var(--yc-space-4);
+}
+
+.prose {
+  max-inline-size: var(--yc-measure);
+  color: var(--yc-text-muted);
+}
+
+.prose strong {
+  color: var(--yc-text);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.section {
+  padding-block: var(--yc-space-12);
+}
+
+.section + .section {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+#main:focus {
+  outline: none;
+}
+
+/* --- buttons ------------------------------------------------------------ */
+
+.button {
+  --button-bg: var(--yc-surface-raised);
+  --button-fg: var(--yc-text);
+  --button-border: var(--yc-border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yc-space-2);
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-control-pad-x);
+  background: var(--button-bg);
+  color: var(--button-fg);
+  border: var(--yc-border-width) solid var(--button-border);
+  border-radius: var(--yc-radius-md);
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+  line-height: 1;
+  /* A wrapped label would squeeze a two-control row instead of growing it. */
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--yc-dur-quick) var(--yc-ease-standard),
+    border-color var(--yc-dur-quick) var(--yc-ease-standard),
+    translate var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.button:hover {
+  background: color-mix(in srgb, var(--button-bg) 92%, var(--yc-text) 8%);
+}
+
+.button:active {
+  translate: 0 1px;
+}
+
+.button[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  translate: none;
+}
+
+.button--primary {
+  --button-bg: var(--yc-primary-bg);
+  --button-fg: var(--yc-primary-fg);
+  --button-border: var(--yc-primary-bg);
+  /* Declared directly as well as through the variant variables: the pinned
+     contrast checks read the resolved pair from this rule. */
+  background: var(--yc-primary-bg);
+  color: var(--yc-primary-fg);
+}
+
+.button--primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--yc-primary-bg) 92%, var(--yc-text) 8%);
+  color: var(--yc-primary-fg);
+}
+
+.button--secondary {
+  --button-bg: var(--yc-surface-raised);
+  --button-fg: var(--yc-text);
+  --button-border: var(--yc-border-strong);
+}
+
+.button--ghost {
+  --button-bg: transparent;
+  --button-fg: var(--yc-text-muted);
+  --button-border: transparent;
+}
+
+.button--ghost:hover {
+  --button-fg: var(--yc-text);
+  background: var(--yc-surface-sunken);
+}
+
+.button--danger {
+  --button-bg: var(--yc-surface-raised);
+  --button-fg: var(--yc-danger);
+  --button-border: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
+}
+
+.button--large {
+  min-block-size: 52px;
+  padding-inline: 22px;
+  font-size: var(--yc-size-md);
+}
+
+/* Dense is a pointer decision, never a width decision. */
+.button--small {
+  min-block-size: var(--yc-control-h-dense);
+  padding-inline: var(--yc-space-3);
+}
+
+.button--icon {
+  inline-size: var(--yc-control-h);
+  padding: 0;
+}
+
+.button--block {
+  inline-size: 100%;
+}
+
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yc-space-1);
+  /* A link that lays out as a box is a control, so it carries a 44px target rather
+     than claiming the inline-text exception. */
+  min-block-size: var(--yc-hit-min);
+  color: var(--yc-green-strong);
+  font-weight: var(--yc-weight-semibold);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* --- chips, tags, status ------------------------------------------------ */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 26px;
+  padding: 0 10px;
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-surface-raised);
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-medium);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.chip--success {
+  border-color: color-mix(in srgb, var(--yc-green-strong) 40%, transparent);
+  background: var(--yc-green-soft);
+  color: var(--yc-green-strong);
+}
+
+.chip--attention {
+  border-color: color-mix(in srgb, var(--yc-yellow-strong) 40%, transparent);
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+}
+
+.chip--danger {
+  border-color: color-mix(in srgb, var(--yc-danger) 40%, transparent);
+  background: var(--yc-danger-soft);
+  color: var(--yc-danger);
+}
+
+.status-dot {
+  display: inline-block;
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 50%;
+  background: var(--yc-text-subtle);
+  flex: none;
+}
+
+.status-dot--online {
+  background: var(--yc-green-strong);
+}
+
+.status-dot--pending {
+  background: var(--yc-yellow-strong);
+}
+
+.status-dot--offline {
+  background: var(--yc-text-subtle);
+}
+
+.status-dot--attention {
+  background: var(--yc-danger);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 24px;
+  padding: 0 8px;
+  border-radius: var(--yc-radius-sm);
+  font-size: var(--yc-size-2xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
+.tag--added {
+  background: var(--yc-green-soft);
+  color: var(--yc-green-strong);
+}
+
+.tag--changed {
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+}
+
+.tag--fixed {
+  background: var(--yc-surface-sunken);
+  color: var(--yc-text-muted);
+}
+
+/* --- form controls ------------------------------------------------------ */
+
+.field {
+  display: grid;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+  color: var(--yc-text-muted);
+}
+
+.field__hint {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-subtle);
+}
+
+.field__error {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-danger);
+}
+
+.input,
+.select,
+.textarea {
+  inline-size: 100%;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  background: var(--yc-surface-raised);
+  color: var(--yc-text);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  font-size: var(--yc-size-sm);
+  transition: border-color var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.textarea {
+  padding: var(--yc-space-3);
+  min-block-size: 88px;
+  line-height: var(--yc-leading-sm);
+  resize: vertical;
+}
+
+.select {
+  appearance: none;
+  padding-inline-end: var(--yc-space-8);
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 18px) 19px, calc(100% - 13px) 19px;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--yc-text-subtle);
+}
+
+.input:hover,
+.select:hover,
+.textarea:hover {
+  border-color: var(--yc-text-subtle);
+}
+
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+  outline: none;
+  border-color: var(--yc-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--yc-focus) 24%, transparent);
+}
+
+.input[aria-invalid="true"],
+.textarea[aria-invalid="true"] {
+  border-color: var(--yc-danger);
+}
+
+.input[disabled],
+.select[disabled],
+.textarea[disabled] {
+  background: var(--yc-surface-sunken);
+  color: var(--yc-text-subtle);
+  cursor: not-allowed;
+}
+
+/* Native checkbox and radio, styled once. The whole label row is the target so the
+   hit area reaches 44px without inflating the glyph. */
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--yc-space-3);
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-2) var(--yc-space-3);
+  border: var(--yc-border-width) solid transparent;
+  border-radius: var(--yc-radius-md);
+  font-size: var(--yc-size-sm);
+  cursor: pointer;
+}
+
+.check:hover {
+  background: var(--yc-surface-sunken);
+}
+
+.check:has(input:focus-visible) {
+  border-color: var(--yc-focus);
+}
+
+.check input {
+  appearance: none;
+  flex: none;
+  inline-size: 18px;
+  block-size: 18px;
+  margin-block-start: 2px;
+  border: 1.5px solid var(--yc-border-strong);
+  border-radius: 4px;
+  background: var(--yc-surface-raised);
+  display: grid;
+  place-content: center;
+}
+
+.check input[type="radio"] {
+  border-radius: 50%;
+}
+
+.check input::after {
+  content: "";
+  inline-size: 10px;
+  block-size: 10px;
+  scale: 0;
+  background: var(--yc-primary-bg);
+  border-radius: 2px;
+}
+
+.check input[type="radio"]::after {
+  border-radius: 50%;
+  inline-size: 8px;
+  block-size: 8px;
+}
+
+.check input:checked {
+  border-color: var(--yc-primary-bg);
+}
+
+.check input:checked::after {
+  scale: 1;
+}
+
+.check__body {
+  display: grid;
+  gap: 2px;
+}
+
+.check__title {
+  font-weight: var(--yc-weight-semibold);
+}
+
+.check__text {
+  color: var(--yc-text-muted);
+}
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--yc-space-3);
+  min-block-size: var(--yc-hit-min);
+  cursor: pointer;
+  font-size: var(--yc-size-sm);
+}
+
+.switch input {
+  appearance: none;
+  inline-size: 40px;
+  block-size: 24px;
+  padding: 2px;
+  border-radius: var(--yc-radius-pill);
+  background: var(--yc-border-strong);
+  display: flex;
+  transition: background-color var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.switch input::after {
+  content: "";
+  inline-size: 20px;
+  block-size: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: translate var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.switch input:checked {
+  background: var(--yc-primary-bg);
+}
+
+.switch input:checked::after {
+  translate: 16px 0;
+}
+
+/* --- surfaces ----------------------------------------------------------- */
+
+.card {
+  background: var(--yc-surface-raised);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  padding: var(--yc-space-5);
+}
+
+.card--quiet {
+  background: var(--yc-surface);
+}
+
+.card__title {
+  font-size: var(--yc-size-md);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.card__meta {
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+}
+
+.panel {
+  display: grid;
+  gap: var(--yc-space-4);
+  align-content: start;
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-3);
+}
+
+.panel__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-text-muted);
+}
+
+.panel__note {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-subtle);
+}
+
+.empty {
+  display: grid;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-6);
+  border: var(--yc-border-width) dashed var(--yc-border-strong);
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface);
+  max-inline-size: var(--yc-measure-narrow);
+}
+
+.empty__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.empty p {
+  font-size: var(--yc-size-sm);
+  color: var(--yc-text-muted);
+}
+
+.empty--center {
+  margin-inline: auto;
+}
+
+/* A pane is the padded content box of an activity column, a rail, or an overlay
+   body. It is shared, so it lives with the other layout primitives. */
+.pane {
+  padding: var(--yc-space-4) var(--yc-space-4) var(--yc-space-6);
+  display: grid;
+  gap: var(--yc-space-3);
+  align-content: start;
+}
+
+.pane__head {
+  display: grid;
+  gap: 2px;
+}
+
+.pane__title {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-semibold);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+  color: var(--yc-text-muted);
+}
+
+.output {
+  margin: 0;
+  padding: var(--yc-space-3);
+  background: var(--yc-terminal-bg);
+  color: var(--yc-terminal-fg);
+  border-radius: var(--yc-radius-md);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  line-height: var(--yc-leading-xs);
+  overflow-x: auto;
+  max-block-size: 320px;
+  overflow-y: auto;
+}
+
+.output code {
+  white-space: pre;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.code-block {
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  overflow: hidden;
+  background: var(--yc-terminal-bg);
+}
+
+.code-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-3);
+  padding: 0 var(--yc-space-3);
+  min-block-size: var(--yc-control-h);
+  border-block-end: var(--yc-border-width) solid rgba(255, 255, 255, 0.08);
+}
+
+.code-block__label {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-terminal-dim);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
+.code-block__copy {
+  --button-fg: var(--yc-terminal-dim);
+}
+
+.code-block__copy:hover {
+  --button-fg: var(--yc-terminal-fg);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.code-block pre {
+  margin: 0;
+  padding: var(--yc-space-4);
+  overflow-x: auto;
+  color: var(--yc-terminal-fg);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+  line-height: 22px;
+}
+
+.code-block .tok-cmd {
+  color: var(--yc-terminal-accent);
+}
+
+.code-block .tok-dim {
+  color: var(--yc-terminal-dim);
+}
+
+/* --- product chrome: header and status strip ---------------------------- */
+
+.app-header {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: var(--yc-z-header);
+  min-block-size: var(--yc-header-h);
+  background: color-mix(in srgb, var(--yc-bg) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(12px);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.app-header__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-3);
+  min-block-size: var(--yc-header-h);
+}
+
+.app-header__end {
+  margin-inline-start: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  text-decoration: none;
+  color: inherit;
+  min-block-size: var(--yc-control-h);
+}
+
+.brand__mark {
+  inline-size: 28px;
+  block-size: 28px;
+  border-radius: 8px;
+  background: var(--yc-terminal-bg);
+  display: grid;
+  place-content: center;
+}
+
+.brand__mark img,
+.brand__mark svg {
+  inline-size: 28px;
+  block-size: 28px;
+}
+
+.brand__text {
+  display: grid;
+  line-height: 1.05;
+}
+
+.brand__name {
+  font-size: var(--yc-size-md);
+  font-weight: var(--yc-weight-bold);
+  letter-spacing: var(--yc-tracking-tight);
+}
+
+.brand__descriptor {
+  font-size: var(--yc-size-2xs);
+  color: var(--yc-text-muted);
+}
+
+.nav {
+  display: none;
+  gap: 2px;
+}
+
+.nav__link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--yc-control-h);
+  padding: 0 var(--yc-space-3);
+  border-radius: var(--yc-radius-md);
+  color: var(--yc-text-muted);
+  text-decoration: none;
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-medium);
+  transition: color var(--yc-dur-quick) var(--yc-ease-standard),
+    background-color var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.nav__link:hover {
+  color: var(--yc-text);
+  background: var(--yc-surface-sunken);
+}
+
+.nav__link--active {
+  color: var(--yc-green-strong);
+  background: var(--yc-green-soft);
+}
+
+@media (min-width: 768px) {
+  .nav {
+    display: flex;
+  }
+
+  .app-header__menu {
+    display: none;
+  }
+}
+
+/* The header drops controls as the row runs out of room, in the order that costs
+   the least: the theme control first (Appearance in Settings owns theme), then the
+   header call to action (the hero repeats it at the top of the same page, and the
+   navigation sheet lists it). Both thresholds are arithmetic:
+     480 — brand 108 + theme 44 + CTA 141 + menu 44 + 3 gaps 36 + 2×20 gutter = 413
+     360 — brand 108 + CTA 141 + menu 44 + 2 gaps 24 + 2×16 gutter = 349 */
+@media (max-width: 479px) {
+  .app-header__theme {
+    display: none;
+  }
+}
+
+@media (max-width: 359px) {
+  .app-header__cta {
+    display: none;
+  }
+}
+
+.status-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  min-block-size: var(--yc-status-strip-h);
+  padding-inline: var(--yc-gutter);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface);
+  font-size: var(--yc-size-xs);
+  color: var(--yc-text-muted);
+}
+
+.status-strip--attention {
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+}
+
+.status-strip--offline {
+  background: var(--yc-danger-soft);
+  color: var(--yc-danger);
+}
+
+.status-strip__body {
+  margin-inline-start: var(--yc-space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-inline-size: 0;
+}
+
+.status-strip__spacer {
+  margin-inline-start: auto;
+}
+
+.status-strip__detail {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  .status-strip__detail {
+    display: inline;
+  }
+}
+
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-4);
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+  border-block-end: var(--yc-border-width) solid var(--yc-yellow);
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+  text-align: center;
+}
+
+/* --- overlays: one primitive, three presentations ----------------------- */
+
+.overlay {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-inline-size: none;
+  max-block-size: none;
+}
+
+.overlay::backdrop {
+  background: rgba(11, 15, 20, 0.45);
+}
+
+.overlay[open] {
+  display: block;
+}
+
+.overlay__surface {
+  position: fixed;
+  background: var(--yc-surface-raised);
+  color: var(--yc-text);
+  box-shadow: var(--yc-shadow-lg);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-block-size: 0;
+}
+
+.overlay__head {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-3);
+  min-block-size: calc(var(--yc-header-h) - 4px);
+  padding-inline: var(--yc-space-4);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.overlay__title {
+  font-size: var(--yc-size-sm);
+  font-weight: var(--yc-weight-semibold);
+}
+
+.overlay__close {
+  margin-inline-start: auto;
+}
+
+.overlay__body {
+  overflow-y: auto;
+  min-block-size: 0;
+}
+
+/* sheet — compact only: rises from the block-end edge, full width, capped height */
+@media (max-width: 767px) {
+  .overlay__surface {
+    inset-inline: 0;
+    inset-block-end: 0;
+    max-block-size: 88vh;
+    border-start-start-radius: var(--yc-radius-xl);
+    border-start-end-radius: var(--yc-radius-xl);
+    padding-block-end: env(safe-area-inset-bottom);
+  }
+}
+
+/* sheet — full width, anchored to the block-end edge. The base surface already takes
+   this geometry below 768; the variant names the presentation, so a consumer that
+   declares a sheet keeps the sheet geometry at every width. */
+.overlay--sheet .overlay__surface {
+  inset-inline: 0;
+  inset-block-start: auto;
+  inset-block-end: 0;
+  translate: none;
+  inline-size: 100%;
+  max-block-size: 88vh;
+  border-start-start-radius: var(--yc-radius-xl);
+  border-start-end-radius: var(--yc-radius-xl);
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+  padding-block-end: env(safe-area-inset-bottom);
+}
+
+/* dialog — the default for a centered task above 768 */
+@media (min-width: 768px) {
+  .overlay__surface {
+    inset-block-start: 50%;
+    inset-inline-start: 50%;
+    translate: -50% -50%;
+    inline-size: min(560px, calc(100vw - 2 * var(--yc-gutter)));
+    max-block-size: min(640px, 84vh);
+    border-radius: var(--yc-radius-xl);
+  }
+
+  .overlay--slideover .overlay__surface {
+    inset-block: 0;
+    inset-inline-end: 0;
+    inset-inline-start: auto;
+    translate: none;
+    inline-size: min(420px, 90vw);
+    max-block-size: none;
+    border-start-start-radius: var(--yc-radius-xl);
+    border-end-start-radius: var(--yc-radius-xl);
+  }
+}
+
+/* --- notices ------------------------------------------------------------ */
+
+.notice-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--yc-space-3);
+  padding: var(--yc-space-3) var(--yc-space-4);
+  background: var(--yc-surface);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  font-size: var(--yc-size-xs);
+}
+
+.notice-strip--warning {
+  background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+}
+
+.notice-strip__body {
+  display: grid;
+  gap: 2px;
+}
+
+.notice-strip__title {
+  font-weight: var(--yc-weight-semibold);
+}
+
+.notice-strip__dismiss {
+  margin-inline-start: auto;
+}
+
+/* --- motion -------------------------------------------------------------
+   Every entrance animation is declared only for readers who accept motion, and no
+   base rule hides content. Removing motion therefore cannot hide content: the
+   animated end state is the only state the base layer knows. The entrance is bound
+   to `data-hydrated`, which the runtime sets after the first paint, so the
+   pre-hydration paint and a no-script render both show the final state.
+   ------------------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-hydrated="true"] .enter {
+    animation: yc-enter var(--yc-dur-base) var(--yc-ease-entrance) both;
+  }
+
+  .enter-1 {
+    animation-delay: 40ms;
+  }
+
+  .enter-2 {
+    animation-delay: 90ms;
+  }
+
+  .enter-3 {
+    animation-delay: 140ms;
+  }
+
+  .overlay[open] .overlay__surface {
+    animation: yc-sheet-in var(--yc-dur-base) var(--yc-ease-entrance) both;
+  }
+
+  .overlay[open]::backdrop {
+    animation: yc-fade-in var(--yc-dur-quick) var(--yc-ease-entrance) both;
+  }
+
+  .overlay--slideover[open] .overlay__surface {
+    animation: yc-slide-in var(--yc-dur-base) var(--yc-ease-entrance) both;
+  }
+
+  /* The live marker pulses; the streaming label always carries the state as text. */
+  .status-dot--pending,
+  .status-dot--online {
+    animation: yc-pulse 2.4s var(--yc-ease-standard) infinite;
+  }
+
+  .session-row--active {
+    animation: yc-settle var(--yc-dur-slow) var(--yc-ease-standard) both;
+  }
+}
+
+/* Content entrance moves, it never fades: `yc-enter` has no opacity step, so a
+   reader who lands mid-animation still sees every word. Only an overlay and its
+   scrim fade, because an open overlay starts a layer that did not exist before the
+   interaction. */
+@keyframes yc-enter {
+  from {
+    translate: 0 8px;
+  }
+
+  to {
+    translate: 0 0;
+  }
+}
+
+@keyframes yc-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes yc-sheet-in {
+  from {
+    translate: 0 24px;
+  }
+
+  to {
+    translate: 0 0;
+  }
+}
+
+@keyframes yc-slide-in {
+  from {
+    translate: 24px 0;
+  }
+
+  to {
+    translate: 0 0;
+  }
+}
+
+@keyframes yc-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes yc-settle {
+  from {
+    background-color: var(--yc-surface-sunken);
+  }
+
+  to {
+    background-color: var(--yc-green-soft);
+  }
+}
+
+@media (min-width: 768px) {
+  @media (prefers-reduced-motion: no-preference) {
+    .overlay--dialog[open] .overlay__surface {
+      animation-name: yc-dialog-in;
+    }
+  }
+}
+
+@keyframes yc-dialog-in {
+  from {
+    opacity: 0;
+    scale: 0.98;
+  }
+
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+/* A theme change is one frame: while `data-theme` flips, transitions are suppressed
+   so no element interpolates from the old palette. */
+.theme-switching,
+.theme-switching * {
+  transition: none !important;
+}
+
+/* Reduced motion removes movement without changing a single track.
+   The equivalent is declared on the universal selector, which is the lowest
+   specificity rule in the cascade, so each declaration is `!important`: a class
+   rule's `transition: …` shorthand would otherwise win and a visible button, input,
+   select, textarea, or switch would keep its 140ms duration. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-name: none !important;
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}

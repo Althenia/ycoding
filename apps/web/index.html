@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-theme-preference="system">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>YCoding — terminal coding agent</title>
+    <meta
+      name="description"
+      content="YCoding runs a coding agent on your own machine with durable sessions, explicit autonomy, and repository-native customization."
+    />
+    <!--
+      Pre-hydration baseline for crawlers and social previews that do not run the
+      client. src/seo/metadata.ts owns these tags at runtime and replaces them per
+      route, so keep this block matching the "/" route it resolves.
+    -->
+    <link rel="canonical" href="https://ycoding.althenia.app/" />
+    <meta name="robots" content="index,follow" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="YCoding" />
+    <meta property="og:title" content="YCoding — terminal coding agent" />
+    <meta
+      property="og:description"
+      content="YCoding runs a coding agent on your own machine with durable sessions, explicit autonomy, and repository-native customization."
+    />
+    <meta property="og:url" content="https://ycoding.althenia.app/" />
+    <meta property="og:image" content="https://ycoding.althenia.app/icons/icon-512.png" />
+    <meta property="og:image:alt" content="YCoding terminal coding agent" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="YCoding — terminal coding agent" />
+    <meta
+      name="twitter:description"
+      content="YCoding runs a coding agent on your own machine with durable sessions, explicit autonomy, and repository-native customization."
+    />
+    <meta name="twitter:image" content="https://ycoding.althenia.app/icons/icon-512.png" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b1115" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/png" href="/icons/icon-256.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-256.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      // Applies the stored theme before first paint so the shell never flashes the wrong mode.
+      // The storage key is owned by src/theme/theme.ts and guarded by src/theme/theme.test.ts.
+      ;(() => {
+        try {
+          const stored = localStorage.getItem("ycoding.theme")
+          const preference = stored === "light" || stored === "dark" || stored === "system" ? stored : "system"
+          const dark =
+            preference === "dark" ||
+            (preference === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.dataset.theme = dark ? "dark" : "light"
+          document.documentElement.dataset.themePreference = preference
+        } catch {
+          document.documentElement.dataset.theme = "light"
+          document.documentElement.dataset.themePreference = "system"
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

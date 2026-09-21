@@ -13,17 +13,18 @@ export const approvedPackageNames = new Set([
   "@ycoding-ai/httpapi-codegen",
   "@ycoding-ai/plugin",
   "@ycoding-ai/protocol",
+  "@ycoding-ai/remote",
   "@ycoding-ai/schema",
   "@ycoding-ai/script",
   "@ycoding-ai/server",
   "@ycoding-ai/simulation",
   "@ycoding-ai/tui",
   "@ycoding-ai/ui",
+  "@ycoding-ai/web",
 ])
 
 export async function discoverPackageNames(root: string): Promise<string[]> {
   const names: string[] = []
-  const packages = path.join(root, "packages")
 
   async function visit(directory: string, depth: number): Promise<void> {
     if (depth > 2) return
@@ -40,7 +41,10 @@ export async function discoverPackageNames(root: string): Promise<string[]> {
     }
   }
 
-  await visit(packages, 0)
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (entry.isDirectory() && (entry.name === "packages" || entry.name === "apps"))
+      await visit(path.join(root, entry.name), 0)
+  }
   return names.sort()
 }
 
@@ -53,7 +57,7 @@ if (import.meta.main) {
   const root = path.resolve(import.meta.dirname, "..")
   const unexpected = await checkWorkspace(root)
   if (unexpected.length) {
-    console.error("Unexpected non-TUI workspace packages:")
+    console.error("Unexpected workspace packages:")
     for (const name of unexpected) console.error(`- ${name}`)
     process.exit(1)
   }

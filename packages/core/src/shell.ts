@@ -40,6 +40,64 @@ export class MemoryLimitUnavailable extends Schema.TaggedErrorClass<MemoryLimitU
 const EXITED_LIMIT = 25
 const MEMORY_CHECK_INTERVAL_MS = 250
 const PROCESS_LIST_MAX_BYTES = 4 * 1024 * 1024
+const DEFAULT_OUTPUT_LIMIT = 65_536
+// A page may read past its byte budget only to finish a character that straddles the
+// budget, so the read window covers the longest incomplete character prefix.
+const MAX_COMPLETION_BYTES = 3
+
+/** Second-byte bounds for a lead byte. Overlong forms (E0, F0), surrogates (ED), and code
+ * points above U+10FFFF (F4) accept a narrower range than a plain continuation byte. */
+const secondByteLower = (lead: number) => (lead === 0xe0 ? 0xa0 : lead === 0xf0 ? 0x90 : 0x80)
+const secondByteUpper = (lead: number) => (lead === 0xed ? 0x9f : lead === 0xf4 ? 0x8f : 0xbf)
+
+/**
+ * End offset of the UTF-8 unit starting at `start`, following the decoder's own boundary
+ * rule: either the bytes of a complete character, or the ill-formed prefix consumed as one
+ * replacement character before decoding restarts at the offending byte. Returns `undefined`
+ * while the bytes are an incomplete but valid character prefix.
+ */
+function unitEnd(bytes: Buffer, start: number): number | undefined {
+  const lead = bytes[start]
+  if (lead <= 0x7f) return start + 1
+  const width =
+    lead >= 0xc2 && lead <= 0xdf
+      ? 2
+      : lead >= 0xe0 && lead <= 0xef
+        ? 3
+        : lead >= 0xf0 && lead <= 0xf4
+          ? 4
+          : undefined
+  if (width === undefined) return start + 1
+  for (let offset = 1; offset < width; offset += 1) {
+    if (start + offset >= bytes.length) return undefined
+    const byte = bytes[start + offset]
+    const lower = offset === 1 ? secondByteLower(lead) : 0x80
+    const upper = offset === 1 ? secondByteUpper(lead) : 0xbf
+    if (byte < lower || byte > upper) return start + offset
+  }
+  return start + width
+}
+
+/**
+ * End offset of the page read from `bytes`: the last decoder boundary within `budget`,
+ * extended by at most `MAX_COMPLETION_BYTES` so a character that straddles the budget is
+ * completed instead of split. A trailing incomplete but valid character prefix is held
+ * back - the page ends before it and the cursor does not advance - unless `flushTail`
+ * reports a settled capture, where the prefix can no longer complete and standard decoding
+ * turns it into replacement characters.
+ */
+function pageEnd(bytes: Buffer, budget: number, flushTail: boolean) {
+  let index = 0
+  while (index < bytes.length) {
+    // The budget landed on a boundary: the page is exactly the requested size.
+    if (index === budget) return index
+    const end = unitEnd(bytes, index)
+    if (end === undefined) return flushTail ? bytes.length : index
+    if (end > budget) return end
+    index = end
+  }
+  return bytes.length
+}
 
 type Info = Shell.Info
 
@@ -180,16 +238,24 @@ export const layer = (options?: ShellSelect.Options) =>
 
       const output = Effect.fn("Shell.output")(function* (id: Shell.ID, input?: Shell.OutputInput) {
         const session = yield* require(id)
-        const cursor = input?.cursor ?? 0
-        const limit = input?.limit ?? 65536
-        if (cursor >= session.size) return { output: "", cursor: session.size, size: session.size, truncated: false }
-        const start = Math.max(0, cursor)
-        const length = Math.min(limit, session.size - start)
-        const buffer = Buffer.alloc(length)
+        const cursor = Math.max(0, input?.cursor ?? 0)
+        const limit = input?.limit ?? DEFAULT_OUTPUT_LIMIT
+        // `done` resolves only after the capture file is flushed, so a settled capture's trailing
+        // incomplete character can no longer complete and decodes as replacement. Sample settlement
+        // before the size snapshot and the read: a capture that settles while the read is in flight
+        // has bytes beyond `size` that only a later read returns, so flushing this snapshot's
+        // trailing prefix would corrupt the character against that continuation.
+        const settled = yield* Deferred.isDone(session.done)
+        const size = session.size
+        if (cursor >= size) return { output: "", cursor: size, size, truncated: false }
+        // A zero budget reads nothing and leaves the cursor where it is.
+        if (limit === 0) return { output: "", cursor, size, truncated: false }
+        const window = Math.min(limit + MAX_COMPLETION_BYTES, size - cursor)
+        const buffer = Buffer.alloc(window)
         const bytesRead = yield* Effect.promise(
           () =>
             new Promise<number>((resolve) => {
-              const stream = createReadStream(session.file, { start, end: start + length - 1 })
+              const stream = createReadStream(session.file, { start: cursor, end: cursor + window - 1 })
               let offset = 0
               stream.on("data", (chunk: string | Buffer) => {
                 const bytes = Buffer.from(chunk)
@@ -200,10 +266,15 @@ export const layer = (options?: ShellSelect.Options) =>
               stream.on("error", () => resolve(0))
             }),
         )
+        const end = pageEnd(
+          buffer.subarray(0, bytesRead),
+          Math.min(limit, bytesRead),
+          settled && bytesRead >= size - cursor,
+        )
         return {
-          output: buffer.subarray(0, bytesRead).toString("utf8"),
-          cursor: start + bytesRead,
-          size: session.size,
+          output: buffer.subarray(0, end).toString("utf8"),
+          cursor: cursor + end,
+          size,
           truncated: false,
         }
       })

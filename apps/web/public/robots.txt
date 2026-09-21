@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /auth/
+Disallow: /remote
+
+Sitemap: https://ycoding.althenia.app/sitemap.xml

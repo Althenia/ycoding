@@ -6,6 +6,9 @@
 - The default branch is `main`.
 - Maintain one current runtime. Do not restore removed session, configuration, plugin, SDK, package, event, or TUI compatibility paths unless the user explicitly requests a migration design.
 - The TUI is the primary product, release, and behavior surface.
+- Maintain `apps/web` as a SolidJS/Vite presentation client and curated public site; keep execution in the local runtime. Keep Core and Server imports out of browser code.
+- Use `packages/remote` for the closed remote transport contract; enforce authenticated user/device ownership and explicit local Session sharing before forwarding controls.
+- Publish user-facing content only. Do not automatically publish engineering `docs`, internal topology, task plans, or private configuration into the web build.
 - Durable sessions, explicit autonomy, durable background subagents, session skills, project artifacts, Session-wide guardrails, provider-efficient caching, and normalized provider usage are current product contracts.
 - Historical upstream material never overrides current code, tests, Schema, Protocol, or root `docs`.
 

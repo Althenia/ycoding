@@ -32,6 +32,7 @@
     "@ycoding-ai/client": "workspace:*",
     "@ycoding-ai/core": "workspace:*",
     "@ycoding-ai/plugin": "workspace:*",
+    "@ycoding-ai/remote": "workspace:*",
     "@ycoding-ai/schema": "workspace:*",
     "@ycoding-ai/server": "workspace:*",
     "@ycoding-ai/tui": "workspace:*",

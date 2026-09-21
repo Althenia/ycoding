@@ -65,7 +65,7 @@ describe("CloudflareRemoteTransport", () => {
       url: "wss://ycoding-cloud.lostq901.workers.dev/ws/agent",
       createSocket: () => new FakeSocket(),
     })
-    expect(transport.send({ type: "ping" })).rejects.toThrow("Remote transport is not connected")
+    expect(transport.send('{"type":"ping"}')).rejects.toThrow("Remote transport is not connected")
   })
 
   test("heartbeats, answers ping, reconnects with backoff, and disconnects cleanly", async () => {
@@ -99,13 +99,83 @@ describe("CloudflareRemoteTransport", () => {
     sockets[0].close(1000)
     await waitFor(() => sockets.length === 2)
     sockets[1].open()
-    await transport.send({ type: "ready" })
+    await transport.send('{"type":"ready"}')
     expect(sockets[1].sent).toContain('{"type":"ready"}')
 
     await transport.disconnect()
     expect(sockets[1].readyState).toBe(3)
     await Bun.sleep(30)
     expect(sockets).toHaveLength(2)
+  })
+
+  test("passes connection headers to the socket factory and reports every open and unexpected close", async () => {
+    const sockets: FakeSocket[] = []
+    const factoryCalls: Array<{ url: string; headers?: Record<string, string> }> = []
+    const opens: number[] = []
+    const closes: number[] = []
+    const transport = new CloudflareRemoteTransport({
+      url: "wss://ycoding-cloud.example/ws/agent",
+      headers: { authorization: "Bearer access-token" },
+      createSocket: (url, options) => {
+        factoryCalls.push({ url, headers: options.headers })
+        const socket = new FakeSocket()
+        sockets.push(socket)
+        return socket
+      },
+      heartbeatIntervalMs: 10_000,
+      reconnectInitialDelayMs: 5,
+      onOpen: () => opens.push(sockets.length),
+      onClose: () => closes.push(sockets.length),
+    })
+
+    const connected = transport.connect()
+    sockets[0].open()
+    await connected
+    expect(factoryCalls).toEqual([
+      { url: "wss://ycoding-cloud.example/ws/agent", headers: { authorization: "Bearer access-token" } },
+    ])
+    expect(opens).toEqual([1])
+
+    sockets[0].close(1006)
+    await waitFor(() => sockets.length === 2)
+    sockets[1].open()
+    expect(opens).toEqual([1, 2])
+    expect(closes).toEqual([1])
+    expect(factoryCalls[1]).toEqual({
+      url: "wss://ycoding-cloud.example/ws/agent",
+      headers: { authorization: "Bearer access-token" },
+    })
+
+    await transport.disconnect(1009, "Remote frame exceeded the size bound")
+    expect(sockets[1].closeCode).toBe(1009)
+    expect(sockets[1].closeReason).toBe("Remote frame exceeded the size bound")
+    expect(closes).toEqual([1])
+  })
+
+  test("carries the bearer upgrade header over a real socket", async () => {
+    const seen: Array<string | null> = []
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request, socketServer) {
+        if (new URL(request.url).pathname !== "/ws/agent") return new Response(null, { status: 404 })
+        seen.push(request.headers.get("authorization"))
+        return socketServer.upgrade(request) ? undefined : new Response(null, { status: 400 })
+      },
+      websocket: { message() {} },
+    })
+    const transport = new CloudflareRemoteTransport({
+      url: `ws://127.0.0.1:${server.port}/ws/agent`,
+      headers: { authorization: "Bearer device-token" },
+      heartbeatIntervalMs: 10_000,
+    })
+    try {
+      await transport.connect()
+      expect(seen).toEqual(["Bearer device-token"])
+    } finally {
+      await transport.disconnect()
+      await server.stop(true)
+    }
   })
 
   test("closes and reconnects when a heartbeat is not acknowledged", async () => {

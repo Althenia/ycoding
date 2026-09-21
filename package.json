@@ -9,6 +9,11 @@
   "scripts": {
     "dev": "bun run --cwd packages/cli --conditions=browser src/index.ts",
     "build:tui": "bun run --cwd packages/cli build:tui --single --outdir=../../dist/tui",
+    "build:web": "bun run --cwd apps/web build && bun script/build-web-assets.ts",
+    "test:web": "bun run --cwd apps/web test",
+    "test:integration:web": "bun run --cwd apps/web test:integration",
+    "test:integration:remote": "bun infra/cloudflare/test/integration/real-flow.ts",
+    "test:remote": "bun run --cwd packages/remote test",
     "build:computer-helper": "bun run --cwd packages/cli build:computer-helper",
     "smoke:tui": "bun run --cwd packages/cli smoke:tui -- --dir=../../dist/tui",
     "smoke:runtime": "bun run --cwd packages/cli smoke:runtime -- --dir=../../dist/tui",
@@ -25,7 +30,7 @@
     "lint": "oxlint",
     "lint:effect-patterns": "ast-grep scan -c script/ast-grep/sgconfig.yml packages/core/src packages/server/src packages/protocol/src packages/cli/src",
     "test:lint-rules": "ast-grep test -c script/ast-grep/sgconfig.yml",
-    "typecheck": "bun turbo typecheck --concurrency=3 --filter='./packages/*' && bun run typecheck:cloudflare",
+    "typecheck": "bun turbo typecheck --concurrency=3 --filter='./packages/*' --filter='./apps/web' && bun run typecheck:cloudflare",
     "typecheck:profile": "bun script/profile-typecheck.ts",
     "typecheck:profile:packages": "bun script/profile-typecheck-packages.ts",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
@@ -39,6 +44,7 @@
   },
   "workspaces": {
     "packages": [
+      "apps/web",
       "packages/ai",
       "packages/cli",
       "packages/client",
@@ -50,6 +56,7 @@
       "packages/httpapi-codegen",
       "packages/plugin",
       "packages/protocol",
+      "packages/remote",
       "packages/schema",
       "packages/script",
       "packages/server",

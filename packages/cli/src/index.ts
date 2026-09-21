@@ -30,6 +30,14 @@ const handlers = Runtime.handlers(Commands, {
   run: () => import("./commands/handlers/run"),
   update: () => import("./commands/handlers/update"),
   pair: () => import("./commands/handlers/pair"),
+  remote: {
+    enroll: () => import("./commands/handlers/remote/enroll"),
+    connect: () => import("./commands/handlers/remote/connect"),
+    status: () => import("./commands/handlers/remote/status"),
+    sessions: () => import("./commands/handlers/remote/sessions"),
+    allow: () => import("./commands/handlers/remote/allow"),
+    deny: () => import("./commands/handlers/remote/deny"),
+  },
   service: {
     start: () => import("./commands/handlers/service/start"),
     restart: () => import("./commands/handlers/service/restart"),
