@@ -879,7 +879,7 @@ kbd {
 
 .status-strip--offline {
   background: var(--yc-danger-soft);
-  color: var(--yc-danger);
+  color: color-mix(in srgb, var(--yc-danger) 95%, var(--yc-text) 5%);
 }
 
 .status-strip__body {

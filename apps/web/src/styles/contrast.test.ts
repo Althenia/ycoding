@@ -61,6 +61,20 @@ describe("primary button contrast", () => {
   })
 })
 
+describe("offline status contrast", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme} theme offline status reaches AA on its translucent surface`, async () => {
+      const { base, themes } = await stylesheets()
+      const rule = declarations(base, ".status-strip--offline")
+      const foreground = resolveColor(value(rule, "color"), themes[theme])
+      for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised"]) {
+        const background = composite(resolveColor(value(rule, "background"), themes[theme]), required(themes[theme], surface))
+        expect(contrastRatio(foreground, background), `${theme} ${surface}`).toBeGreaterThanOrEqual(AA_NORMAL_TEXT)
+      }
+    })
+  }
+})
+
 describe("foreground accent contrast", () => {
   const SURFACES = ["--yc-bg", "--yc-surface", "--yc-surface-raised"] as const
 

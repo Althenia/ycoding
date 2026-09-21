@@ -97,6 +97,7 @@ Fixture limitations: the transport, account responses, devices, sessions, and tr
 - No page-level horizontal overflow at 320, 390, 768, 1024, 1280, and 1440 pixels across landing, docs, changelog, the remote workspace, settings, and the not-found route.
 - Both themes render at 390x844, 1024x1366, and 1440x900 for landing, docs, changelog, and the remote conversation and approval surfaces.
 - The stored theme preference is applied before first paint; explicit light and dark override the system preference, and `system` follows it in both directions.
+- Offline status text meets the 4.5:1 normal-text contrast threshold against its translucent background in both themes.
 - Search and drawer dialogs trap Tab, close on Escape, and return focus to the control that opened them.
 - Reduced motion removes transitions, and a 200% zoom leaves no horizontal overflow.
 - The composer stays visible and focusable while the transcript streams, and terminal output remains bounded with local scrolling.
