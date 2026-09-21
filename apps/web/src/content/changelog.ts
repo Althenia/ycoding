@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.5.1",
+    date: "2026-09-21",
+    title: "Remote workspace and reliable browser shutdown",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "A responsive web workspace for shared Sessions, prompts, streamed output, approvals, interruption, and autonomy controls." },
+      { tag: "Added", text: "Google sign-in, device enrollment, and explicit Session sharing through ycoding remote. Execution stays on the enrolled machine." },
+      { tag: "Fixed", text: "Isolated browser shutdown terminates owned renderer processes even when Chrome is suspended." },
+      { tag: "Fixed", text: "Offline status text meets normal-text contrast requirements in both themes." },
+      { tag: "Fixed", text: "Terminal-output pages preserve Unicode, and revoked sharing blocks subsequent remote Session access." },
+    ],
+  },
+  {
     version: "0.4.2",
     date: "2026-09-20",
     title: "Terminal-only product surface",
