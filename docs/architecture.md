@@ -59,9 +59,9 @@ Client, TUI, and Web code must not import Core or Server implementation modules 
 
 ### Remote presentation boundary
 
-The local CLI connects outbound to the relay and maps a fixed set of operations onto the existing authenticated local service. A local user selects which Sessions to share. A browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header to this bridge.
+The local CLI connects outbound to the relay and maps a fixed operation set onto the existing authenticated local service. An enrolled machine's authenticated owner can access every Session in that backend. The bridge derives each Location from the paginated backend inventory; a browser cannot supply an arbitrary local URL, HTTP method, filesystem path, or Location header.
 
-The edge authenticates browser users and enrolled devices separately, checks ownership and the advertised Session set, and routes bounded frames. D1 owns authentication and device metadata, not conversation history or streamed tool/model output. Durable Session facts remain in the local runtime.
+The edge authenticates browser users and enrolled devices separately, checks device/account ownership, and routes bounded frames. Each device Durable Object reports current authenticated agent presence to the owner-only device-list API; enrollment and `lastSeenAt` do not imply online status. D1 owns authentication and device metadata, not presence, conversation history, or streamed tool/model output. Durable Session facts remain in the local runtime.
 
 The public build includes only curated `apps/web` content and the installer/configuration downloads exported by `script/build-web-assets.ts`. The engineering `docs` directory is not a public-site input.
 

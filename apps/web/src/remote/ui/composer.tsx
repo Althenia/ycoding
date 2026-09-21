@@ -1,5 +1,6 @@
 import { For, Show, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
 
 /**
@@ -70,18 +71,17 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
           />
         </label>
         <div class="composer__controls">
-          <label class="field">
-            <span class="visually-hidden">Delivery</span>
-            <select
-              class="select"
-              style={{ "inline-size": "auto" }}
-              value={delivery()}
-              onChange={(event) => setDelivery(event.currentTarget.value === "queue" ? "queue" : "steer")}
-            >
-              <option value="steer">Steer now</option>
-              <option value="queue">Queue until idle</option>
-            </select>
-          </label>
+          <CustomSelect
+            class="composer__delivery"
+            label="Delivery"
+            value={delivery()}
+            placeholder="Steer now"
+            options={[
+              { value: "steer", label: "Steer now", detail: "Apply at the next safe boundary" },
+              { value: "queue", label: "Queue until idle", detail: "Wait until the Session is idle" },
+            ]}
+            onChange={(value) => setDelivery(value === "queue" ? "queue" : "steer")}
+          />
           <Show when={props.running}>
             <button
               type="button"

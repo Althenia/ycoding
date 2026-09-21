@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   RemoteLimits,
   RemoteProtocolVersion,
+  RemoteWebSocketPath,
   deviceSignaturePayload,
   parseAgentMessage,
   parseChallengeRequest,
@@ -11,6 +12,7 @@ import {
   parseEnrollRequest,
   parseChunkedValue,
   parsePublicKey,
+  parseRelayToAgentMessage,
   remoteError,
   remoteOperations,
   remoteSessionOperations,
@@ -168,29 +170,22 @@ describe("remote envelope: chunked responses", () => {
 })
 
 describe("remote envelope: event, advertisement, heartbeat", () => {
-  test("accepts session events and session advertisements", () => {
+  test("uses a bounded refresh signal instead of a capped Session inventory", () => {
+    expect(parseAgentMessage('{"type":"sessions"}')).toEqual({ ok: true, value: { type: "sessions" } })
+    expect(parseAgentMessage('{"type":"sessions","sessionIDs":["ses_a"]}').ok).toBe(false)
+  })
+
+  test("accepts session events and rejects inventory-shaped invalidations", () => {
     expect(parseAgentMessage(serializeEvent({ type: "event", sessionID: "ses_1", event: { type: "step.started" } }))).toEqual({
       ok: true,
       value: { type: "event", sessionID: "ses_1", event: { type: "step.started" } },
     })
-    expect(parseAgentMessage(serializeSessions({ type: "sessions", sessionIDs: ["ses_1", "ses_2"] }))).toEqual({
-      ok: true,
-      value: { type: "sessions", sessionIDs: ["ses_1", "ses_2"] },
-    })
+    expect(parseAgentMessage(serializeSessions({ type: "sessions" }))).toEqual({ ok: true, value: { type: "sessions" } })
     expect(parseAgentMessage('{"type":"event","event":{}}')).toMatchObject({ ok: false, error: { code: "invalid_message" } })
     expect(parseAgentMessage('{"type":"sessions","sessionIDs":["nope"]}')).toMatchObject({
       ok: false,
       error: { code: "invalid_message" },
     })
-    expect(parseAgentMessage('{"type":"sessions","sessionIDs":"ses_1"}')).toMatchObject({
-      ok: false,
-      error: { code: "invalid_message" },
-    })
-    expect(
-      parseAgentMessage(`{"type":"sessions","sessionIDs":${JSON.stringify(
-        Array.from({ length: RemoteLimits.maxAdvertisedSessions + 1 }, (_, index) => `ses_${index}`),
-      )}}`),
-    ).toMatchObject({ ok: false, error: { code: "invalid_message" } })
   })
 
   test("accepts heartbeats in both directions", () => {
@@ -200,6 +195,26 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
     expect(parseAgentMessage('{"type":"pong"}')).toEqual({ ok: true, value: { type: "pong" } })
   })
 
+  test("accepts relay subscription snapshots only on the agent control surface", () => {
+    const frame = '{"type":"subscriptions","clientID":"client-1","sessionIDs":["ses_a","ses_b"]}'
+    expect(parseRelayToAgentMessage(frame)).toEqual({
+      ok: true,
+      value: { type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_a", "ses_b"] },
+    })
+    expect(parseClientMessage(frame).ok).toBe(false)
+    expect(parseRelayToAgentMessage('{"type":"subscriptions","clientID":"client-1","sessionIDs":[]}')).toEqual({
+      ok: true,
+      value: { type: "subscriptions", clientID: "client-1", sessionIDs: [] },
+    })
+    expect(
+      parseRelayToAgentMessage(JSON.stringify({
+        type: "subscriptions",
+        clientID: "client-1",
+        sessionIDs: Array.from({ length: RemoteLimits.maxSubscriptionsPerClient + 1 }, (_, index) => `ses_${index}`),
+      })).ok,
+    ).toBe(false)
+  })
+
   test("separates agent and client roles", () => {
     const response = serializeResponse({ type: "response", id: "a", ok: true, value: null })
     expect(parseClientMessage(response)).toMatchObject({ ok: false, error: { code: "invalid_message" } })
@@ -207,7 +222,7 @@ describe("remote envelope: event, advertisement, heartbeat", () => {
       ok: false,
       error: { code: "invalid_message" },
     })
-    expect(parseClientMessage(serializeSessions({ type: "sessions", sessionIDs: [] }))).toMatchObject({
+    expect(parseClientMessage(serializeSessions({ type: "sessions" }))).toMatchObject({
       ok: false,
       error: { code: "invalid_message" },
     })
@@ -258,7 +273,8 @@ describe("remote operations", () => {
     expect(requireSession("session.active")).toBe(false)
     expect(requireSession("session.prompt")).toBe(true)
     expect(requireSession("session.goal.stop")).toBe(true)
-    expect(RemoteProtocolVersion).toBe(1)
+    expect(RemoteProtocolVersion).toBe(2)
+    expect(RemoteWebSocketPath).toEqual({ client: "/ws/v2/client", agent: "/ws/v2/agent" })
   })
 
   test("admits every reconnect read operation and requires a session for it", () => {

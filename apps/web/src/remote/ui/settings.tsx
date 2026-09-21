@@ -1,5 +1,6 @@
 import { For, Show, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
+import { CustomSelect } from "../../ui/custom-select"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import type { SessionView } from "../projection"
@@ -155,8 +156,8 @@ export function DeviceSettings(): JSX.Element {
                 <div class="device__body">
                   <span class="device__name">{device.name}</span>
                   <span class="device__meta">
-                    <span class={`status-dot status-dot--${device.status === "active" ? "online" : "offline"}`} aria-hidden="true" />
-                    {device.status === "active" ? "Enrolled" : "Revoked"}
+                    <span class={`status-dot status-dot--${device.status === "active" && device.online ? "online" : "offline"}`} aria-hidden="true" />
+                    {device.status === "revoked" ? "Revoked" : device.online ? "Enrolled · online" : "Enrolled · offline"}
                     {device.lastSeenAt === undefined ? "" : ` · last seen ${new Date(device.lastSeenAt).toLocaleString()}`}
                   </span>
                 </div>
@@ -320,17 +321,19 @@ export function AutonomySettings(): JSX.Element {
           <div class="defs__row">
             <span class="defs__key">Autonomy level</span>
             <span class="defs__value">
-              <select
-                class="select"
-                aria-label="Autonomy level"
+              <CustomSelect
+                class="autonomy-select"
+                label="Autonomy level"
                 value={String(autonomy()?.yolo ?? 0)}
-                onChange={(event) => void remote.store.setYolo(level(event.currentTarget.value))}
-              >
-                <option value="0">Standard</option>
-                <option value="1">YOLO 1 — questions</option>
-                <option value="2">YOLO 2 — questions and permissions</option>
-                <option value="3">YOLO 3 — also ordinary guardrail reviews</option>
-              </select>
+                placeholder="Standard"
+                options={[
+                  { value: "0", label: "Standard", detail: "Manual questions and approvals" },
+                  { value: "1", label: "YOLO 1", detail: "Automatically answers questions" },
+                  { value: "2", label: "YOLO 2", detail: "Answers questions and approves permissions" },
+                  { value: "3", label: "YOLO 3", detail: "Also approves ordinary guardrail reviews" },
+                ]}
+                onChange={(value) => void remote.store.setYolo(level(value))}
+              />
             </span>
           </div>
           <div class="defs__row">
@@ -393,32 +396,42 @@ export function NotificationSettings(): JSX.Element {
       title="Notifications"
       hint="Categories apply to notices in this workspace and, once this browser is permitted, to desktop alerts. Alerts cover live events only: reopening a session never replays one, and desktop alerts appear while this page is open because the workspace has no background push."
     >
-      <div class="defs">
-        <For each={NOTIFICATION_CATEGORIES}>
-          {(category) => (
-            <div class="defs__row">
-              <span class="defs__key">
-                {category.label}
-                <span class="field__hint">{category.detail}</span>
-              </span>
-              <span class="defs__value">
+      <table class="notification-table" aria-labelledby="notification-settings">
+        <thead>
+          <tr>
+            <th scope="col">Event</th>
+            <For each={NOTIFICATION_CHANNELS}>{(channel) => <th scope="col">{channel.label}</th>}</For>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={NOTIFICATION_CATEGORIES}>
+            {(category) => (
+              <tr>
+                <th scope="row">
+                  <span>{category.label}</span>
+                  <span class="field__hint">{category.detail}</span>
+                </th>
                 <For each={NOTIFICATION_CHANNELS}>
                   {(channel) => (
-                    <label class="switch">
-                      <input
-                        type="checkbox"
-                        aria-label={`${category.label} via ${channel.label}`}
-                        checked={preferences()[category.id][channel.id]}
-                        onChange={() => update(category.id, channel.id)}
-                      />
-                      <span>{channel.label}</span>
-                    </label>
+                    <td>
+                      <label class="switch">
+                        <input
+                          type="checkbox"
+                          aria-label={`${category.label} via ${channel.label}`}
+                          checked={preferences()[category.id][channel.id]}
+                          onChange={() => update(category.id, channel.id)}
+                        />
+                        <span class="visually-hidden">{channel.label}</span>
+                      </label>
+                    </td>
                   )}
                 </For>
-              </span>
-            </div>
-          )}
-        </For>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+      <div class="defs">
         <div class="defs__row">
           <span class="defs__key">Desktop alerts</span>
           <span class="defs__value">

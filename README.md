@@ -11,7 +11,7 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 - **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
 - **On-demand knowledge:** save and search linked workspace Markdown with an [offline graph and reader](./docs/memory.md), without automatic transcript extraction or recall.
 
-YCoding is terminal-first—the TUI is the primary surface. The [remote web client](https://ycoding.althenia.app/remote/) provides browser and mobile control of explicitly shared local sessions.
+YCoding is terminal-first—the TUI is the primary surface. The [remote web client](https://ycoding.althenia.app/remote/) lets the signed-in owner of a connected machine control its existing and future local Sessions from desktop, tablet, or mobile.
 
 The agent, repository, filesystem, shell, tools, and model execution remain in the local `ycoding` process. The remote relay authenticates users and enrolled devices and checks device ownership and Session access; it is not a hosted agent runtime. The [public site](https://ycoding.althenia.app/) contains user documentation and the changelog.
 

@@ -3,14 +3,14 @@ export * as RemoteBridge from "./remote-bridge"
 import {
   RemoteCloseCode,
   RemoteLimits,
-  parseClientMessage,
+  parseRelayToAgentMessage,
   serializeEvent,
   type RemoteRequest,
   serializeResponse,
   serializeSessions,
 } from "@ycoding-ai/remote"
 import { DeviceAuthorizationError } from "./remote-credentials"
-import { agentURL, type AllowlistSession } from "./remote-config"
+import { agentURL } from "./remote-config"
 import {
   createSessionRegistry,
   createSubscriptions,
@@ -23,9 +23,9 @@ import { CloudflareRemoteTransport } from "./remote-transport"
 
 // The local relay agent. It dials out to the relay over WSS and never listens,
 // never proxies a caller-supplied URL or method, and never follows a remote
-// Location: every local call is addressed from the locally opted-in allowlist.
+// Location: every local call is addressed from the backend Session inventory.
 //
-// Authorization is re-checked per request against the advertised set, and inbound
+// Authorization is re-checked per request against that inventory, and inbound
 // frames are parsed with the shared envelope parser instead of being trusted from
 // the relay. Mutations are attempted exactly once: an indeterminate outcome is
 // reported as `outcome_unknown` and is never replayed.
@@ -40,7 +40,7 @@ export type RelayConnection = {
 export type ConnectionInput = {
   readonly url: string
   readonly accessToken: string
-  /** Every successful (re)open, including reconnects: the advertisement is re-sent. */
+  /** Every successful (re)open emits a Session-list invalidation. */
   readonly onOpen: () => void
   readonly onClose: (code?: number) => void
 }
@@ -50,9 +50,6 @@ export type BridgeCredentials = { readonly accessToken: string; readonly accessE
 export type RemoteBridgeOptions = {
   /** Enrolled relay origin. Device credentials are only ever sent here. */
   readonly relayURL: string
-  readonly sessions: readonly AllowlistSession[]
-  /** Re-reads the local allowlist so a deny or allow takes effect while connected. */
-  readonly reloadSessions?: () => Promise<readonly AllowlistSession[]>
   readonly local: LocalServer
   /** Mints or rotates the device access credential. */
   readonly credentials: () => Promise<BridgeCredentials>
@@ -117,14 +114,10 @@ export class RemoteAgent {
     this.authRetryWindowMs = options.authRetryWindowMs ?? defaults.authRetryWindowMs
     this.registry = createSessionRegistry({
       local: options.local,
-      entries: options.sessions,
       now: this.now,
-      ...(options.reloadSessions === undefined ? {} : { reload: options.reloadSessions }),
       onChange: () => void this.advertise(),
-      onMoved: (sessionID, location) =>
-        this.diagnostic(`${sessionID} moved to ${location.directory}; it stays unshared until it is allowed again`),
     })
-    this.subscriptions = createSubscriptions({ onChange: () => this.syncEventStream() })
+    this.subscriptions = createSubscriptions()
   }
 
   get currentState(): BridgeState {
@@ -135,7 +128,7 @@ export class RemoteAgent {
     return this.terminalReason
   }
 
-  /** The advertisement the relay currently holds for this agent. */
+  /** Session IDs from the latest complete backend inventory refresh. */
   get advertised(): readonly string[] {
     return this.registry.ids()
   }
@@ -157,7 +150,7 @@ export class RemoteAgent {
     this.connection = undefined
   }
 
-  /** Re-advertise the current allowlisted set; the relay holds one per agent. */
+  /** Refresh backend state and notify clients to page the current Session list. */
   async republish(): Promise<void> {
     if (this.state !== "live") return
     await this.registry.refresh()
@@ -170,12 +163,16 @@ export class RemoteAgent {
     const connection = (this.options.createConnection ?? createRelayConnection)({
       url: agentURL(this.options.relayURL),
       accessToken: credentials.accessToken,
-      onOpen: () => void this.advertise(),
+      onOpen: () => {
+        this.subscriptions.clear()
+        void this.advertise()
+        this.syncEventStream()
+      },
       onClose: (code) => this.onConnectionClosed(code),
     })
     this.connection = connection
     connection.onMessage((frame) => this.onFrame(frame))
-    // The advertisement is sent from the open callback, so the bridge is live
+    // The invalidation is sent from the open callback, so the bridge is live
     // before the connection settles.
     this.state = "live"
     try {
@@ -190,9 +187,13 @@ export class RemoteAgent {
   private onFrame(frame: unknown) {
     // The transport already decoded the frame; re-encoding runs the shared parser
     // so no frame reaches the local server without contract validation.
-    const parsed = parseClientMessage(typeof frame === "string" ? frame : JSON.stringify(frame))
+    const parsed = parseRelayToAgentMessage(typeof frame === "string" ? frame : JSON.stringify(frame))
     if (!parsed.ok) {
       this.diagnostic(`ignored an inbound frame: ${parsed.error.code}`)
+      return
+    }
+    if (parsed.value.type === "subscriptions") {
+      this.subscriptions.apply(parsed.value.clientID, parsed.value.sessionIDs)
       return
     }
     if (parsed.value.type !== "request") return
@@ -200,9 +201,6 @@ export class RemoteAgent {
   }
 
   private async handleRequest(request: RemoteRequest) {
-    // Re-read the allowlist at the authorization boundary: a denied Session must
-    // be refused immediately, not after a restart.
-    await this.registry.reloadEntries()
     const frames = await executeRemoteOperation({
       request,
       sessions: this.registry,
@@ -225,11 +223,11 @@ export class RemoteAgent {
 
   private async advertise() {
     if (this.state !== "live") return
-    await this.send(serializeSessions({ type: "sessions", sessionIDs: this.registry.ids() }))
+    await this.send(serializeSessions({ type: "sessions" }))
   }
 
   private syncEventStream() {
-    const wanted = this.state === "live" && this.subscriptions.sessions().length > 0
+    const wanted = this.state === "live"
     if (wanted && this.eventStop === undefined && !this.eventStarting) void this.startEventStream()
     if (!wanted && this.eventStop !== undefined)
       void this.stopEventStream().catch((error) => this.diagnostic(`could not stop the local event stream: ${describe(error)}`))
@@ -241,18 +239,21 @@ export class RemoteAgent {
     const streamGeneration = ++this.eventStreamGeneration
     const stream: LocalEventStream = {
       onEvent: (event) => this.forwardEvent(event, streamGeneration),
-      onFailure: (error) => this.onEventStreamEnd(error),
-      onEnd: () => this.onEventStreamEnd(undefined),
+      onFailure: (error) => this.onEventStreamEnd(error, streamGeneration),
+      onEnd: () => this.onEventStreamEnd(undefined, streamGeneration),
     }
     try {
       const stop = await this.options.local.events(stream)
-      if (this.state !== "live" || this.subscriptions.sessions().length === 0) await stop()
-      else this.eventStop = stop
-      this.eventRetryAttempt = 0
+      if (this.state !== "live" || this.eventStreamGeneration !== streamGeneration) await stop()
+      else {
+        this.eventStop = stop
+        this.eventRetryAttempt = 0
+      }
     } catch (error) {
-      this.onEventStreamEnd(error)
+      this.onEventStreamEnd(error, streamGeneration)
     } finally {
       this.eventStarting = false
+      if (this.state === "live" && this.eventStop === undefined && this.retryTimer === undefined) this.scheduleEventRetry()
     }
   }
 
@@ -263,28 +264,39 @@ export class RemoteAgent {
     await stop?.()
   }
 
-  private onEventStreamEnd(error: unknown) {
+  private onEventStreamEnd(error: unknown, streamGeneration: number) {
+    if (this.eventStreamGeneration !== streamGeneration) return
     this.eventStop = undefined
     this.eventStreamGeneration++
-    if (this.state !== "live" || this.subscriptions.sessions().length === 0) return
+    if (this.state !== "live") return
     if (error !== undefined) this.diagnostic(`the local event stream ended: ${describe(error)}`)
+    this.scheduleEventRetry()
+  }
+
+  private scheduleEventRetry() {
+    if (this.retryTimer !== undefined || this.state !== "live") return
     const delay = Math.min(this.eventRetryInitialMs * 2 ** this.eventRetryAttempt++, this.eventRetryMaxMs)
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined
-      if (this.state !== "live" || this.subscriptions.sessions().length === 0) return
+      if (this.state !== "live") return
       void this.startEventStream()
     }, delay)
   }
 
   /**
    * One event frame per local event, in arrival order. Events for sessions that
-   * are not both advertised and subscribed are never forwarded, and a frame that
+   * are not subscribed are never forwarded, and a frame that
    * cannot fit the agent bound closes the connection so the client reconciles
    * instead of silently losing a projection update.
    */
   private forwardEvent(event: unknown, streamGeneration: number) {
     const connection = this.connection
     if (connection === undefined || this.state !== "live") return
+    if (isSessionInventoryEvent(event)) {
+      void this.registry.refresh().then(() => this.advertise()).catch((error) =>
+        this.diagnostic(`could not refresh remote Sessions: ${describe(error)}`),
+      )
+    }
     if (this.pendingEvents.length >= maxPendingEvents) {
       this.pendingEvents.splice(0)
       this.diagnostic("the remote event authorization queue filled; closing for client reconciliation")
@@ -313,26 +325,21 @@ export class RemoteAgent {
   private async forwardAuthorizedEvent(pending: PendingEvent) {
     const sessionID = eventSessionID(pending.event)
     if (sessionID === undefined) return
-    try {
-      await this.registry.withEventAuthorization(sessionID, async () => {
-        if (
-          this.state !== "live" ||
-          this.connection !== pending.connection ||
-          this.eventStreamGeneration !== pending.streamGeneration ||
-          !this.subscriptions.has(sessionID)
-        )
-          return
-        const frame = serializeEvent({ type: "event", sessionID, event: pending.event })
-        if (frame.length > RemoteLimits.maxAgentMessageChars) {
-          this.diagnostic(`refusing to send an oversized ${sessionID} event frame; closing for client reconciliation`)
-          await this.recycleConnection("Remote event exceeded the agent frame bound")
-          return
-        }
-        await this.send(frame, pending.connection)
-      })
-    } catch (error) {
-      this.diagnostic(`could not authorize a remote ${sessionID} event: ${describe(error)}`)
+    if (!this.subscriptions.has(sessionID)) return
+    if (
+      this.state !== "live" ||
+      this.connection !== pending.connection ||
+      this.eventStreamGeneration !== pending.streamGeneration ||
+      !this.subscriptions.has(sessionID)
+    )
+      return
+    const frame = serializeEvent({ type: "event", sessionID, event: pending.event })
+    if (frame.length > RemoteLimits.maxAgentMessageChars) {
+      this.diagnostic(`refusing to send an oversized ${sessionID} event frame; closing for client reconciliation`)
+      await this.recycleConnection("Remote event exceeded the agent frame bound")
+      return
     }
+    await this.send(frame, pending.connection)
   }
 
   private scheduleRefresh() {
@@ -346,11 +353,12 @@ export class RemoteAgent {
 
   private onConnectionClosed(code: number | undefined) {
     if (this.state !== "live") return
+    this.subscriptions.clear()
     if (code !== undefined && terminalCloseCodes.includes(code)) void this.rotateConnection()
   }
 
   /**
-   * Drop one connection and open a fresh one that re-advertises the allowlist.
+   * Drop one connection and open a fresh one that invalidates client Session lists.
    * Used when a frame cannot be represented within the agent bound, so clients
    * reconcile through snapshot and history instead of losing an update.
    */
@@ -455,6 +463,12 @@ function eventSessionID(event: unknown) {
   }
   const sessionID = Reflect.get(data, "sessionID")
   return typeof sessionID === "string" ? sessionID : undefined
+}
+
+function isSessionInventoryEvent(event: unknown) {
+  if (typeof event !== "object" || event === null) return false
+  const type = Reflect.get(event, "type")
+  return type === "session.created" || type === "session.moved" || type === "session.deleted"
 }
 
 function describe(error: unknown) {

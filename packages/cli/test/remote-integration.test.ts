@@ -1,13 +1,9 @@
-import { NodeFileSystem } from "@effect/platform-node"
-import { Global } from "@ycoding-ai/core/global"
 import { expect, test } from "bun:test"
 import { parseAgentMessage, parseChunkedValue, type RemoteResponse } from "@ycoding-ai/remote"
-import { Effect, FileSystem } from "effect"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
-import { RemoteConfig } from "../src/remote-config"
 import { createLocalServer } from "../src/remote-local"
 import { createSession, password, startServer, type IsolatedServer } from "./remote-harness"
 
@@ -279,7 +275,6 @@ test("bridges authorized session operations against an isolated server", async (
   const diagnostics: string[] = []
   const bridge = new RemoteAgent({
     relayURL: "https://relay.example",
-    sessions: [{ sessionID, directory, workspaceID: undefined, title: "Integration" }],
     local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
     credentials: async () => ({ accessToken: "integration-token", accessExpiresAt: Date.now() + 600_000 }),
     createConnection: relay.createConnection,
@@ -293,17 +288,16 @@ test("bridges authorized session operations against an isolated server", async (
     await createSession(server, hiddenSessionID, directory)
     await bridge.connect()
 
-    // The advertisement is the explicit allowlist, never every local session.
-    const advertised = await waitFor(() => {
+    const invalidation = await waitFor(() => {
       const frame = relay.sent().find((value) => value.type === "sessions")
-      return frame as { sessionIDs: readonly string[] } | undefined
+      return frame
     })
-    expect(advertised.sessionIDs).toEqual([sessionID])
+    expect(invalidation).toEqual({ type: "sessions" })
 
     // Reads return the local Protocol body verbatim.
     relay.deliver(request("list_1", "session.list"))
     const listed = valueOf(await answer(relay, "list_1")) as { data: readonly { id: string }[] }
-    expect(listed.data.map((session) => session.id)).toEqual([sessionID])
+    expect(listed.data.map((session) => session.id).sort()).toEqual([hiddenSessionID, sessionID].sort())
 
     relay.deliver(request("snapshot_1", "session.snapshot", sessionID))
     const snapshot = valueOf(await answer(relay, "snapshot_1")) as {
@@ -423,7 +417,7 @@ test("bridges authorized session operations against an isolated server", async (
     relay.deliver(request("questions_1", "session.question.list", sessionID))
     expect(valueOf(await answer(relay, "questions_1"))).toEqual({ data: [] })
 
-    // Running status is process-wide locally and must be filtered to shared sessions.
+    // Running status is process-wide and includes every backend Session.
     await server.request(`/api/session/${hiddenSessionID}/prompt`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -431,9 +425,9 @@ test("bridges authorized session operations against an isolated server", async (
     })
     relay.deliver(request("active_1", "session.active"))
     const active = valueOf(await answer(relay, "active_1")) as { data: Record<string, { type: string }> }
-    expect(Object.keys(active.data)).not.toContain(hiddenSessionID)
+    expect(Object.keys(active.data)).toContain(hiddenSessionID)
     for (const [id, status] of Object.entries(active.data)) {
-      expect(id).toBe(sessionID)
+      expect([sessionID, hiddenSessionID]).toContain(id)
       expect(status.type).toBe("running")
     }
 
@@ -454,9 +448,9 @@ test("bridges authorized session operations against an isolated server", async (
     }
     expect(log.data.filter((item) => item.type === "session.input.admitted" && item.data.inputID === messageID)).toHaveLength(1)
 
-    // A local session outside the allowlist is never addressable.
+    // Every backend Session is addressable to the authenticated device owner.
     relay.deliver(request("hidden_1", "session.messages", hiddenSessionID))
-    expect(errorOf(await answer(relay, "hidden_1")).code).toBe("session_not_allowed")
+    expect(valueOf(await answer(relay, "hidden_1"))).toMatchObject({ data: expect.any(Array) })
 
     // Idle interruption is a no-op locally and still succeeds over the relay.
     relay.deliver(request("interrupt_1", "session.interrupt", sessionID))
@@ -470,9 +464,10 @@ test("bridges authorized session operations against an isolated server", async (
     relay.deliver(request("question_reply_1", "session.question.reply", sessionID, { requestID: "que_missing", answers: [["yes"]] }))
     expect(errorOf(await answer(relay, "question_reply_1")).code).toBe("invalid_message")
 
-    // Live local events reach the relay only for subscribed, advertised sessions.
+    // Live local events reach the relay only for subscribed Sessions.
     relay.deliver(request("subscribe_1", "session.subscribe", sessionID))
     valueOf(await answer(relay, "subscribe_1"))
+    relay.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [sessionID] })
     relay.deliver(request("prompt_3", "session.prompt", sessionID, { id: "msg_remote_bridge_event", text: "event prompt" }))
     valueOf(await answer(relay, "prompt_3"))
     const forwarded = await waitFor(() => {
@@ -483,6 +478,7 @@ test("bridges authorized session operations against an isolated server", async (
 
     relay.deliver(request("unsubscribe_1", "session.unsubscribe", sessionID))
     valueOf(await answer(relay, "unsubscribe_1"))
+    relay.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [] })
   } finally {
     await bridge.close()
     await server.close()
@@ -499,10 +495,6 @@ test("pages real shell output over the relay for the owning Session only", async
   const relay = createRelay()
   const bridge = new RemoteAgent({
     relayURL: "https://relay.example",
-    sessions: [
-      { sessionID: ownerSessionID, directory, workspaceID: undefined, title: "Owner" },
-      { sessionID: otherSessionID, directory, workspaceID: undefined, title: "Other" },
-    ],
     local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
     credentials: async () => ({ accessToken: "shell-token", accessExpiresAt: Date.now() + 600_000 }),
     createConnection: relay.createConnection,
@@ -532,9 +524,9 @@ test("pages real shell output over the relay for the owning Session only", async
     // The refused frame carries an error only: no page, so no captured byte reached the relay.
     expect(otherRead !== undefined && "value" in otherRead).toBe(false)
 
-    // A Session outside the advertisement is not addressable at all.
+    // Another Session still cannot read this shell because shell ownership is exact.
     relay.deliver(request("shell_hidden", "session.shell.output", hiddenSessionID, { shellID: shell.id }))
-    expect(errorOf(await answer(relay, "shell_hidden")).code).toBe("session_not_allowed")
+    expect(errorOf(await answer(relay, "shell_hidden")).code).toBe("forbidden")
 
     // Page inputs and unknown fields are rejected before any local call.
     relay.deliver(request("shell_bad_page", "session.shell.output", ownerSessionID, { shellID: shell.id, limit: 0 }))
@@ -770,7 +762,6 @@ test("pages real Unicode shell output over the relay without corrupting split ch
   const relay = createRelay()
   const bridge = new RemoteAgent({
     relayURL: "https://relay.example",
-    sessions: [{ sessionID, directory, workspaceID: undefined, title: "Unicode" }],
     local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
     credentials: async () => ({ accessToken: "unicode-token", accessExpiresAt: Date.now() + 600_000 }),
     createConnection: relay.createConnection,
@@ -818,65 +809,3 @@ test("pages real Unicode shell output over the relay without corrupting split ch
     await rm(directory, { recursive: true, force: true })
   }
 }, 120_000)
-
-test("denies a shared session from the real configuration file while the bridge runs", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-reload-work-"))
-  const root = await mkdtemp(join(tmpdir(), "ycoding-remote-reload-home-"))
-  const sessionID = "ses_remote_reload"
-  const server = await startServer(directory)
-  const relay = createRelay()
-  const bridge = new RemoteAgent({
-    relayURL: "https://relay.example",
-    sessions: [],
-    reloadSessions: () => run(RemoteConfig.sessions()),
-    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
-    credentials: async () => ({ accessToken: "reload-token", accessExpiresAt: Date.now() + 600_000 }),
-    createConnection: relay.createConnection,
-    refreshIntervalMs: 3_600_000,
-  })
-
-  // The same effect wiring the connect handler uses, against a private global root.
-  const global = Global.layerWith({
-    data: join(root, "data"),
-    config: join(root, "config"),
-    state: join(root, "state"),
-  })
-  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem | Global.Service>) =>
-    Effect.runPromise(
-      effect.pipe(Effect.provide(global), Effect.provide(NodeFileSystem.layer)) as Effect.Effect<A, E, never>,
-    )
-
-  try {
-    await createSession(server, sessionID, directory)
-    await run(RemoteConfig.allow({ sessionID, directory, workspaceID: undefined, title: "Reload" }))
-    await bridge.connect()
-    relay.deliver(request("subscribe_reload", "session.subscribe", sessionID))
-    valueOf(await answer(relay, "subscribe_reload"))
-    expect(bridge.advertised).toEqual([sessionID])
-
-    // Deny through the real configuration file, then let the reload window pass.
-    await run(RemoteConfig.deny(sessionID))
-    await Bun.sleep(700)
-
-    relay.deliver(request("messages_reload", "session.messages", sessionID))
-    expect(errorOf(await answer(relay, "messages_reload")).code).toBe("session_not_allowed")
-    expect(bridge.advertised).toEqual([])
-    const advertised = relay.sent().filter((value) => value.type === "sessions")
-    expect(advertised.at(-1)).toEqual({ type: "sessions", sessionIDs: [] })
-
-    // A real local event for the denied session is not forwarded.
-    const before = relay.events().length
-    await server.request(`/api/session/${sessionID}/prompt`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "denied session work" }),
-    })
-    await Bun.sleep(300)
-    expect(relay.events()).toHaveLength(before)
-  } finally {
-    await bridge.close()
-    await server.close()
-    await rm(directory, { recursive: true, force: true })
-    await rm(root, { recursive: true, force: true })
-  }
-}, 60_000)

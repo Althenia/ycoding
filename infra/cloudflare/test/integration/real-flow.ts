@@ -31,12 +31,12 @@ import { join } from "node:path"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
 import { RemoteAgent } from "../../../../packages/cli/src/remote-bridge"
+import { RemoteWebSocketPath } from "../../../../packages/remote/src/index"
 import {
   enroll,
   generateDeviceKey,
   Identity,
   RemoteCredentials,
-  signChallenge,
 } from "../../../../packages/cli/src/remote-credentials"
 import { createRemoteHttp } from "../../../../apps/web/src/remote/http"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
@@ -321,7 +321,7 @@ try {
     http,
     createTransport: (deviceID, handlers) =>
       createRemoteTransport({
-        url: `${socketOrigin}/ws/client?device=${deviceID}`,
+        url: `${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`,
         handlers: {
           ...handlers,
           onEvent: (eventSessionID, event) => {
@@ -411,17 +411,11 @@ try {
     return rotated
   }
 
-  let allowlist: { sessionID: string; directory: string; title: string }[] = [
-    { sessionID, directory: workspace, title: "Shared" },
-    { sessionID: guardSessionID, directory: workspace, title: "Guardrail" },
-  ]
   agent = new RemoteAgent({
     relayURL: workerOrigin,
-    sessions: allowlist,
-    reloadSessions: async () => allowlist,
     local,
     credentials,
-    refreshIntervalMs: 500,
+    refreshIntervalMs: 3_600_000,
     onDiagnostic: (message) => diagnostics.push(message),
     onTerminal: (message) => diagnostics.push(`terminal: ${message}`),
   })
@@ -430,22 +424,22 @@ try {
   await waitFor(() => (agent?.currentState === "live" ? true : undefined), 20_000, "the agent never went live")
   checks.push("real CLI RemoteAgent connected to the relay with a signed device credential")
 
-  /* --------------------------------------------- browser device + advertisement */
+  /* ------------------------------------------ browser device + Session discovery */
 
   await store.load()
   expect(
-    store.state().devices.some((info) => info.id === enrolled.deviceID),
-    "the enrolled device is missing from the browser device list",
+    store.state().devices.some((info) => info.id === enrolled.deviceID && info.online),
+    "the connected enrolled device is not online in the browser device list",
   )
   store.connect(enrolled.deviceID)
   await waitFor(
     () => (store.state().advertised.includes(sessionID) ? true : undefined),
     20_000,
-    "the browser never received the session advertisement",
+    "the browser never loaded the backend Session inventory",
   )
   expect(
-    store.state().advertised.length === 2,
-    `advertisement leaked sessions: ${store.state().advertised.join(",")}`,
+    store.state().advertised.length === 3,
+    `Session inventory was incomplete: ${store.state().advertised.join(",")}`,
   )
 
   await waitFor(
@@ -455,17 +449,26 @@ try {
   )
   const listed = store.state().sessions.map((info) => info.id)
   expect(
-    listed.includes(sessionID) && listed.includes(guardSessionID) && !listed.includes(hiddenSessionID),
-    `session filtering failed: ${listed.join(",")}`,
+    listed.includes(sessionID) && listed.includes(guardSessionID) && listed.includes(hiddenSessionID),
+    `Session discovery failed: ${listed.join(",")}`,
   )
-  checks.push("only the opted-in sessions are advertised and listed to the browser")
+  checks.push("all backend Sessions are listed to the authenticated device owner")
+
+  const futureSessionID = "ses_real_flow_future"
+  await createSession(server, futureSessionID, workspace, { providerID, id: providerModel })
+  await waitFor(
+    () => (store.state().sessions.some((info) => info.id === futureSessionID) ? true : undefined),
+    20_000,
+    "a Session created while connected never appeared",
+  )
+  checks.push("a Session created while connected invalidated and refreshed the complete list")
 
   /* ------------------------------------------- protocol-level client (same cookie) */
 
-  let probeSessions: readonly string[] = []
+  let probeInvalidated = false
   const probe = createRemoteTransport({
-    url: `${socketOrigin}/ws/client?device=${enrolled.deviceID}`,
-    handlers: { onSessions: (ids) => (probeSessions = ids) },
+    url: `${socketOrigin}${RemoteWebSocketPath.client}?device=${enrolled.deviceID}`,
+    handlers: { onSessions: () => (probeInvalidated = true) },
     createSocket: (url) => new WebSocket(url, { headers: { cookie, origin: workerOrigin } }),
   })
   disposals.push(async () => probe.close(1000, "flow complete"))
@@ -489,10 +492,10 @@ try {
     }
   }
 
-  await waitFor(() => (probeSessions.includes(sessionID) ? true : undefined), 20_000, "probe client never advertised")
-  const denied = await probeRequest("session.get", { sessionID: hiddenSessionID })
-  expect(denied.status === "failed" && denied.error.code === "session_not_allowed", `hidden session read: ${JSON.stringify(denied)}`)
-  checks.push("relay refuses a session outside the agent allowlist")
+  await waitFor(() => (probeInvalidated ? true : undefined), 20_000, "probe client never received a Session invalidation")
+  const hidden = await probeRequest("session.get", { sessionID: hiddenSessionID })
+  expect(hidden.status === "ok", `backend Session read failed: ${JSON.stringify(hidden)}`)
+  checks.push("a backend Session needs no per-Session allow operation")
 
   await store.selectSession(sessionID)
   await waitFor(
@@ -672,7 +675,7 @@ try {
   })
   expect(
     otherSessionReply.status === "failed",
-    `a reply for an unadvertised session was accepted: ${JSON.stringify(otherSessionReply)}`,
+    `a reply through the wrong Session was accepted: ${JSON.stringify(otherSessionReply)}`,
   )
   const unknownReply = await probeRequest("session.permission.reply", {
     sessionID,
@@ -909,37 +912,7 @@ try {
   )
   checks.push("interrupt stopped the running step through the real local service")
 
-  /* ------------------------------------------------------------- deny blocks */
-
-  allowlist = []
-  const deniedAfter = await waitFor(
-    async () => {
-      const outcome = await probeRequest("session.get", { sessionID })
-      return outcome.status === "failed" ? outcome : undefined
-    },
-    20_000,
-    "a denied session was still served",
-  )
-  expect(
-    deniedAfter.error.code === "session_not_allowed" || deniedAfter.error.code === "agent_unavailable",
-    `unexpected deny error ${deniedAfter.error.code}`,
-  )
-  const eventsBeforeDeny = events.length
-  await server.request(`/api/session/${sessionID}/rename`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: "Renamed after deny" }),
-  })
-  await Bun.sleep(1_500)
-  expect(
-    !events.slice(eventsBeforeDeny).some((entry) => JSON.stringify(entry).includes("Renamed after deny")),
-    "a denied session still streamed events to the browser",
-  )
-  checks.push("removing the local allowlist entry blocked both commands and events")
-
   /* ------------------------------------------------------- logout closes client */
-
-  allowlist = [{ sessionID, directory: workspace, title: "Shared" }]
   const logout = await http.logout()
   expect(logout.ok, `logout failed: ${JSON.stringify(logout)}`)
   await waitFor(() => (probe.status().kind === "closed" ? true : undefined), 20_000, "the client socket stayed open after logout")
@@ -975,17 +948,6 @@ async function pendingIDs(server: { request: (path: string, init?: RequestInit) 
   const body: unknown = await response.json()
   if (!isRecord(body) || !Array.isArray(body.data)) return []
   return body.data.flatMap((row) => (isRecord(row) ? [String(row.id)] : []))
-}
-
-async function post(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(`POST ${new URL(url).pathname} returned ${response.status}`)
-  const payload: unknown = await response.json()
-  return isRecord(payload) ? payload : {}
 }
 
 async function sha256Hex(value: string) {

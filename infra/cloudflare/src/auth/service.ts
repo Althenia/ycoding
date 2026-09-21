@@ -282,7 +282,7 @@ export function createAuthService(store: AuthStore, options: { readonly now?: ()
       return { ok: true, value: { deviceID, userID: row.userID } }
     },
 
-    async listDevices(userID: string): Promise<readonly RemoteDeviceInfo[]> {
+    async listDevices(userID: string): Promise<readonly Omit<RemoteDeviceInfo, "online">[]> {
       const rows = await store.listDevices(userID)
       return rows.map((row) => ({
         id: row.id,

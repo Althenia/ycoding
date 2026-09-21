@@ -38,8 +38,8 @@ function ok<T>(value: T): RemoteHttpResult<T> {
 }
 
 let devices: readonly RemoteDeviceInfo[] = [
-  { id: "dev_studio", name: "Studio Mac", createdAt: 1, lastSeenAt: Date.now() - 60_000, status: "active" as const },
-  { id: "dev_laptop", name: "Laptop", createdAt: 2, status: "active" as const },
+  { id: "dev_studio", name: "Studio Mac", createdAt: 1, lastSeenAt: Date.now() - 60_000, status: "active", online: true as const },
+  { id: "dev_laptop", name: "Laptop", createdAt: 2, status: "active", online: true as const },
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
@@ -48,6 +48,11 @@ const accountMode = accountParams.get("account") ?? "ok"
 const accountDelayMs = Number(accountParams.get("accountDelay") ?? 0)
 /** `?connection=offline` selects a signed-in device whose open relay has no local agent. */
 const connectionMode = accountParams.get("connection") ?? "open"
+const deviceMode = accountParams.get("devices")
+const emptyBackend = accountParams.get("sessions") === "empty"
+if (deviceMode === "none") devices = []
+if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
+if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))
 
 const syntheticHttp: RemoteHttp = {
   me: async () => {
@@ -72,7 +77,7 @@ const syntheticHttp: RemoteHttp = {
 
 const sessions = [
   { id: sessionID, title: "Stream remote output safely", agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
-  { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280) }, archived: true },
+  { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
 ]
 
@@ -365,7 +370,7 @@ function createFixtureStore(): Fixture {
     if (connectionMode === "offline" && (operation === "session.list" || operation === "session.active")) {
       return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     }
-    if (operation === "session.list") return { status: "ok", value: { data: sessions } }
+    if (operation === "session.list") return { status: "ok", value: { data: emptyBackend ? [] : sessions } }
     if (operation === "session.active") return { status: "ok", value: { data: { [sessionID]: { type: "running" } } } }
     if (operation === "session.snapshot") {
       return {
@@ -413,7 +418,7 @@ function createFixtureStore(): Fixture {
   const transport: RemoteTransport = {
     connect: () => {
       handlers?.onStatus?.({ kind: "open" })
-      handlers?.onSessions?.([sessionID, "ses_archived", "ses_child"])
+      handlers?.onSessions?.()
     },
     close: () => {},
     status: (): RemoteTransportStatus => ({ kind: open ? "open" : "closed", code: open ? 1000 : 1006, reason: "", retryable: false }),
@@ -495,7 +500,8 @@ async function openFixtureUnavailableWorkspace(store: RemoteStore) {
  * the account surfaces: forcing a connection after a rejected or unavailable account answer
  * would paint the very state the scenario exists to disprove.
  */
-if (accountMode === "ok" && connectionMode === "offline") void openFixtureUnavailableWorkspace(fixture.store)
+if (deviceMode !== null) void fixture.store.load()
+else if (accountMode === "ok" && (connectionMode === "offline" || emptyBackend)) void openFixtureUnavailableWorkspace(fixture.store)
 else if (accountMode === "ok") void openFixtureWorkspace(fixture.store)
 else void fixture.store.load()
 

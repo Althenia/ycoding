@@ -3,7 +3,7 @@
  * through.
  *
  * It is deliberately free of Cloudflare imports so the security-relevant behavior
- * (role separation, correlation translation, allowlist enforcement, limits,
+ * (role separation, correlation translation, device ownership, limits,
  * chunk validation, disconnect and revocation semantics) is exercised directly.
  * The Durable Object adapter in `relay/durable-object.ts` supplies socket, storage,
  * and authority ports.
@@ -15,11 +15,13 @@
 import {
   RemoteCloseCode,
   RemoteLimits,
+  isSessionID,
   parseAgentMessage,
   parseClientMessage,
   serializeError,
   serializeRequest,
   serializeSessions,
+  serializeSubscriptions,
   type RemoteErrorCode,
   type RemoteOperation,
   type RemoteResponse,
@@ -44,8 +46,6 @@ export type RelayDeps = {
   readonly close: (connectionID: string, code: number, reason: string) => void
   readonly saveSubscriptions: (connectionID: string, subscriptions: readonly string[]) => void
   readonly savePending: (connectionID: string, pending: readonly { relayID: string; clientID: string }[]) => void
-  readonly loadAdvertisement: () => Promise<readonly string[]>
-  readonly saveAdvertisement: (sessionIDs: readonly string[]) => Promise<void>
   readonly authorizeClientCommand: (sessionID: string, deviceID: string) => Promise<RelayAuthority>
   readonly authorizeAgentCommand: (deviceID: string) => Promise<RelayAuthority>
   /**
@@ -110,8 +110,6 @@ export function createRelay(deps: RelayDeps) {
   const clients = new Map<string, ClientState>()
   const pending = new Map<string, PendingRequest>()
   let agent: AgentState | undefined
-  let advertisement: readonly string[] = []
-  let advertisementLoaded = false
 
   /**
    * Per-connection frame queues. A connection's frames are processed strictly in
@@ -136,12 +134,6 @@ export function createRelay(deps: RelayDeps) {
       if (frameQueues.get(connectionID) === drained) frameQueues.delete(connectionID)
     })
     return current
-  }
-
-  const loadAdvertisement = async () => {
-    if (advertisementLoaded) return
-    advertisement = await deps.loadAdvertisement()
-    advertisementLoaded = true
   }
 
   const dropPendingForConnection = (connectionID: string) => {
@@ -181,6 +173,7 @@ export function createRelay(deps: RelayDeps) {
     )
 
   const removeClient = (connectionID: string, code: number, reason: string) => {
+    sendSubscriptionSnapshot(connectionID, [])
     clients.delete(connectionID)
     failPendingForConnection(connectionID, "outcome_unknown", outcomeUnknownMessage)
     deps.close(connectionID, code, reason)
@@ -234,8 +227,18 @@ export function createRelay(deps: RelayDeps) {
     return true
   }
 
+  const sendSubscriptionSnapshot = (clientID: string, sessionIDs: readonly string[]) => {
+    if (!agent) return
+    deps.send(agent.connectionID, serializeSubscriptions({ type: "subscriptions", clientID, sessionIDs }))
+  }
+
   const relay = {
-    advertisedSessions: () => advertisement,
+    agentConnected: () => agent !== undefined,
+
+    async restore(connections: readonly RelayConnection[]) {
+      for (const connection of connections.toSorted((a, b) => Number(b.role === "agent") - Number(a.role === "agent")))
+        await relay.attach(connection)
+    },
 
     nextDeadline: () => {
       const deadlines = Array.from(clients.values()).map((client) => client.credentialExpiresAt)
@@ -244,8 +247,8 @@ export function createRelay(deps: RelayDeps) {
     },
 
     async attach(connection: RelayConnection) {
-      await loadAdvertisement()
       if (deps.now() >= connection.credentialExpiresAt) {
+        if (connection.role === "client") sendSubscriptionSnapshot(connection.connectionID, [])
         deps.close(
           connection.connectionID,
           RemoteCloseCode.unauthorized,
@@ -268,11 +271,26 @@ export function createRelay(deps: RelayDeps) {
           windowStart: deps.now(),
           windowCount: 0,
         }
+        for (const client of Array.from(clients.values())) {
+          if (deps.now() >= client.credentialExpiresAt) {
+            removeClient(client.connectionID, RemoteCloseCode.unauthorized, sessionUnauthorizedMessage)
+            continue
+          }
+          const clientAuthority = await checkClientAuthority(client)
+          if (agent?.connectionID !== connection.connectionID) return
+          if (clients.get(client.connectionID) !== client) continue
+          if (!clientAuthority.ok) {
+            removeClient(client.connectionID, closeCodeFor(clientAuthority.reason), closeReasonFor(clientAuthority.reason))
+            continue
+          }
+          sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
+        }
         return
       }
 
       const authority = await deps.authorizeClientCommand(connection.browserSessionID, connection.deviceID)
       if (!authority.ok) {
+        sendSubscriptionSnapshot(connection.connectionID, [])
         if (connection.pending.length > 0) {
           for (const entry of connection.pending)
             deps.send(connection.connectionID, serializeError(entry.clientID, "outcome_unknown", outcomeUnknownMessage))
@@ -282,18 +300,28 @@ export function createRelay(deps: RelayDeps) {
         return
       }
 
+      const subscriptions = [...new Set(connection.subscriptions)]
+      if (
+        subscriptions.length > RemoteLimits.maxSubscriptionsPerClient ||
+        subscriptions.some((sessionID) => !isSessionID(sessionID))
+      ) {
+        sendSubscriptionSnapshot(connection.connectionID, [])
+        deps.close(connection.connectionID, RemoteCloseCode.policyViolation, "Stored subscriptions exceed the limit")
+        return
+      }
       const client: ClientState = {
         connectionID: connection.connectionID,
         deviceID: connection.deviceID,
         browserSessionID: connection.browserSessionID,
         credentialExpiresAt: connection.credentialExpiresAt,
-        subscriptions: [...connection.subscriptions],
+        subscriptions,
         windowStart: deps.now(),
         windowCount: 0,
         authorityCheckedAt: deps.now(),
       }
       clients.set(client.connectionID, client)
-      deps.send(client.connectionID, serializeSessions({ type: "sessions", sessionIDs: advertisement }))
+      deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
+      sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
       if (connection.pending.length > 0) {
         for (const entry of connection.pending)
           deps.send(client.connectionID, serializeError(entry.clientID, "outcome_unknown", outcomeUnknownMessage))
@@ -308,6 +336,7 @@ export function createRelay(deps: RelayDeps) {
         return
       }
       if (clients.has(connectionID)) {
+        sendSubscriptionSnapshot(connectionID, [])
         clients.delete(connectionID)
         dropPendingForConnection(connectionID)
       }
@@ -374,18 +403,11 @@ export function createRelay(deps: RelayDeps) {
       }
       if (message.type === "pong") return
       if (message.type === "sessions") {
-        advertisement = message.sessionIDs
-        advertisementLoaded = true
-        await deps.saveAdvertisement(message.sessionIDs)
         for (const client of clients.values())
-          deps.send(client.connectionID, serializeSessions({ type: "sessions", sessionIDs: message.sessionIDs }))
+          deps.send(client.connectionID, serializeSessions({ type: "sessions" }))
         return
       }
       if (message.type === "event") {
-        if (!advertisement.includes(message.sessionID)) {
-          if (raiseViolation(connectionID)) return
-          return
-        }
         for (const client of Array.from(clients.values())) {
           if (!client.subscriptions.includes(message.sessionID)) continue
           if (deps.now() >= client.credentialExpiresAt) {
@@ -438,10 +460,6 @@ export function createRelay(deps: RelayDeps) {
     client: ClientState,
     request: { readonly id: string; readonly operation: RemoteOperation; readonly sessionID?: string; readonly input?: Readonly<Record<string, unknown>> },
   ) {
-    if (request.sessionID !== undefined && !advertisement.includes(request.sessionID)) {
-      respond(client.connectionID, request.id, "session_not_allowed", "Session is not served by the connected agent")
-      return
-    }
     if (request.operation === "session.subscribe") {
       const sessionID = request.sessionID ?? ""
       if (!client.subscriptions.includes(sessionID) && client.subscriptions.length >= RemoteLimits.maxSubscriptionsPerClient) {
@@ -538,10 +556,12 @@ export function createRelay(deps: RelayDeps) {
       if (entry.operation === "session.subscribe" && !client.subscriptions.includes(entry.sessionID)) {
         client.subscriptions = [...client.subscriptions, entry.sessionID]
         deps.saveSubscriptions(client.connectionID, client.subscriptions)
+        sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
       }
       if (entry.operation === "session.unsubscribe") {
         client.subscriptions = client.subscriptions.filter((sessionID) => sessionID !== entry.sessionID)
         deps.saveSubscriptions(client.connectionID, client.subscriptions)
+        sendSubscriptionSnapshot(client.connectionID, client.subscriptions)
       }
     }
     savePending(client)

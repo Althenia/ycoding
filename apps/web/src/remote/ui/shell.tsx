@@ -4,6 +4,7 @@ import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
 import { ThemeToggle } from "../../ui/site"
+import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
 import {
   modelLabel,
@@ -18,6 +19,7 @@ import {
   accountReadState,
   connectionBanner,
   deviceAvailabilityView,
+  sessionAvailabilityView,
   sessionStateChips,
   summarizeConnection,
   type ConnectionTone,
@@ -34,7 +36,7 @@ const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/setti
 
 export type RemoteView = (typeof views)[number]
 
-const sessionsSupport = "Every session the connected device advertises to this workspace."
+const sessionsSupport = "All sessions on the connected machine."
 const settingsSupport = "Account, devices, appearance, autonomy, and notifications for this workspace."
 
 export function RemoteShell(props: { readonly path: string }): JSX.Element {
@@ -200,12 +202,20 @@ export function sessionChips(session: SessionInfoView, view: SessionView | undef
  * issues no request, so an empty result means the filter matched nothing rather than that
  * the device advertises nothing.
  */
-export function filterSessions(sessions: readonly SessionInfoView[], query: string): readonly SessionInfoView[] {
+export type SessionFilter = "all" | "running" | "idle"
+
+export function filterSessions(
+  sessions: readonly SessionInfoView[],
+  query: string,
+  filter: SessionFilter = "all",
+): readonly SessionInfoView[] {
   const needle = query.trim().toLowerCase()
-  if (needle.length === 0) return sessions
-  return sessions.filter((session) =>
-    [session.title, session.agent ?? "", session.modelLabel ?? ""].some((value) => value.toLowerCase().includes(needle)),
-  )
+  return sessions.filter((session) => {
+    if (filter === "running" && session.running !== true) return false
+    if (filter === "idle" && (session.running === true || session.archived)) return false
+    if (needle.length === 0) return true
+    return [session.title, session.agent ?? "", session.modelLabel ?? ""].some((value) => value.toLowerCase().includes(needle))
+  })
 }
 
 export type QueueRowView = {
@@ -306,7 +316,12 @@ function RemoteHeader(props: {
   const state = () => remote.state()
   const connection = () => summarizeConnection(state().connection)
   const devices = () =>
-    deviceAvailabilityView(accountReadState({ connection: state().connection, owner: state().owner }), state().devices.length)
+    deviceAvailabilityView(
+      accountReadState({ connection: state().connection, owner: state().owner }),
+      state().devices.length,
+      { devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length },
+    )
+  const selectableDevices = () => state().devices.filter((device) => device.status === "active" && device.online)
   return (
     <header class="app-header">
       <div class="app-header__inner">
@@ -322,29 +337,23 @@ function RemoteHeader(props: {
         <Link href="/" class="brand" title="YCoding home">
           <img class="brand__mark" src="/brand/ycoding-mark.svg" alt="YCoding" width={28} height={28} />
         </Link>
+        <nav class="remote-nav" aria-label="Remote workspace">
+          <Link href="/remote/sessions" class="remote-nav__link">Sessions</Link>
+          <Link href="/remote" class="remote-nav__link">Conversation</Link>
+          <Link href="/remote/activity" class="remote-nav__link">Activity</Link>
+          <Link href="/remote/settings" class="remote-nav__link">Settings</Link>
+        </nav>
         <div class="remote-device">
-          <label class="field">
-            <span class="visually-hidden">Device</span>
-            <select
-              class="select"
-              value={state().activeDeviceID ?? ""}
-              disabled={!devices().selectable}
-              onChange={(event) => {
-                const deviceID = event.currentTarget.value
-                if (deviceID.length > 0) remote.store.connect(deviceID)
-              }}
-            >
-              <option value="">{devices().placeholder}</option>
-              <For each={state().devices}>
-                {(device) => (
-                  <option value={device.id} disabled={device.status !== "active"}>
-                    {device.name}
-                    {device.status === "active" ? "" : " (revoked)"}
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
+          <CustomSelect
+            class="remote-device__select"
+            label="Device"
+            sheetTitle="Select active device"
+            value={state().activeDeviceID}
+            placeholder={devices().placeholder}
+            disabled={!devices().selectable}
+            options={selectableDevices().map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
+            onChange={(deviceID) => remote.store.connect(deviceID)}
+          />
           <span class="remote-connection">
             <span class={`status-dot status-dot--${connection().tone}`} aria-hidden="true" />
             <span class="remote-connection-label">{connection().label}</span>
@@ -473,7 +482,7 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
     const total = state().sessions.length
     const name = deviceName()
     if (total === 0 || name === undefined) return undefined
-    return `${total} ${total === 1 ? "session" : "sessions"} advertised by ${name}.`
+    return `${total} ${total === 1 ? "session" : "sessions"} on ${name}.`
   }
   return (
     <div class="pane">
@@ -481,41 +490,41 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
         <p class="pane__title">Sessions</p>
       </div>
       <Show
-        when={state().devices.length > 0}
+        when={
+          state().activeDeviceID !== undefined &&
+          (state().connection.kind === "connected" ||
+            state().connection.kind === "connecting" ||
+            state().connection.kind === "loading")
+        }
         fallback={<DeviceEmptyState onNavigate={props.onNavigate} />}
       >
-        <Show
-          when={state().activeDeviceID !== undefined}
-          fallback={<DeviceEmptyState />}
-        >
-          <Show when={state().sessions.length > 0} fallback={<NoSessionsState />}>
-            <label class="field">
-              <span class="visually-hidden">Filter sessions</span>
-              <input
-                class="input"
-                type="search"
-                placeholder="Filter sessions"
-                value={query()}
-                onInput={(event) => setQuery(event.currentTarget.value)}
-              />
-            </label>
-            <Show
-              when={sessions().length > 0}
-              fallback={
-                <div class="empty">
-                  <p class="empty__title">No session matches that filter</p>
-                  <p>The device still advertises {advertisedCount(state().sessions.length)}; none matches “{query()}”.</p>
-                </div>
-              }
-            >
-              <div class="session-list">
-                <For each={sessions()}>
-                  {(session) => <SessionRow session={session} onNavigate={props.onNavigate} />}
-                </For>
+        <Show when={state().sessions.length > 0} fallback={<NoSessionsState />}>
+          <label class="field">
+            <span class="visually-hidden">Filter sessions</span>
+            <input
+              class="input"
+              type="search"
+              placeholder="Filter sessions"
+              value={query()}
+              onInput={(event) => setQuery(event.currentTarget.value)}
+            />
+          </label>
+          <Show
+            when={sessions().length > 0}
+            fallback={
+              <div class="empty">
+                <p class="empty__title">No session matches that filter</p>
+                <p>The machine has {advertisedCount(state().sessions.length)}; none matches “{query()}”.</p>
               </div>
-            </Show>
-            <Show when={advertised()}>{(note) => <p class="panel__note">{note()}</p>}</Show>
+            }
+          >
+            <div class="session-list">
+              <For each={sessions()}>
+                {(session) => <SessionRow session={session} onNavigate={props.onNavigate} />}
+              </For>
+            </div>
           </Show>
+          <Show when={advertised()}>{(note) => <p class="panel__note">{note()}</p>}</Show>
         </Show>
       </Show>
     </div>
@@ -571,6 +580,11 @@ function DeviceEmptyState(props: { readonly onNavigate?: () => void }): JSX.Elem
     deviceAvailabilityView(
       accountReadState({ connection: remote.state().connection, owner: remote.state().owner }),
       remote.state().devices.length,
+      {
+        devices: remote.state().devices,
+        activeDeviceID: remote.state().activeDeviceID,
+        sessionCount: remote.state().sessions.length,
+      },
     )
   return (
     <div class="empty">
@@ -586,10 +600,13 @@ function DeviceEmptyState(props: { readonly onNavigate?: () => void }): JSX.Elem
 }
 
 function NoSessionsState(): JSX.Element {
+  const remote = useRemote()
+  const state = () => remote.state()
+  const availability = () => sessionAvailabilityView(state().connection, state().sessions.length)
   return (
     <div class="empty">
-      <p class="empty__title">No sessions advertised</p>
-      <p>The connected device reports no sessions that can be controlled from here.</p>
+      <p class="empty__title">{availability()?.title ?? "No sessions"}</p>
+      <p>{availability()?.body ?? "Start YCoding in your project folder on this machine."}</p>
     </div>
   )
 }
@@ -600,6 +617,9 @@ function ConversationView(props: { readonly title: string; readonly chips: reado
   const view = () => state().view
   const requests = () => view()?.requests ?? []
   const messages = () => view()?.messages ?? []
+  const availability = () => state().activeDeviceID === undefined
+    ? undefined
+    : sessionAvailabilityView(state().connection, state().sessions.length)
   return (
     <Show
       when={state().activeSessionID !== undefined}
@@ -607,15 +627,16 @@ function ConversationView(props: { readonly title: string; readonly chips: reado
         <>
           <div class="page-head">
             <div>
-              <h1 class="page-head__title">{noSessionTitle}</h1>
+              <h1 class="page-head__title">{availability()?.title ?? noSessionTitle}</h1>
               <p class="page-head__support">
-                This workspace shows the conversation of a session running on your own machine. Nothing is simulated: without
-                a signed-in account and a connected device there is nothing to display.
+                {availability()?.body ?? "Connect a machine and select a session to view its conversation."}
               </p>
             </div>
           </div>
           <div class="pane">
-            <DeviceEmptyState />
+            <Show when={state().activeDeviceID === undefined || state().connection.kind === "offline"}>
+              <DeviceEmptyState />
+            </Show>
             <Link href="/docs/usage/remote" class="button button--secondary button--small">
               How remote access works
             </Link>
@@ -688,7 +709,8 @@ function RequestCards(props: {
 function SessionsPage(): JSX.Element {
   const remote = useRemote()
   const [query, setQuery] = createSignal("")
-  const sessions = () => filterSessions(remote.state().sessions, query())
+  const [filter, setFilter] = createSignal<SessionFilter>("all")
+  const sessions = () => filterSessions(remote.state().sessions, query(), filter())
   return (
     <div class="pane">
       <div class="page-head" style={{ padding: "0 0 var(--yc-space-4)" }}>
@@ -718,12 +740,26 @@ function SessionsPage(): JSX.Element {
           </label>
           <span class="chip">{advertisedCount(sessions().length)}</span>
         </div>
+        <div class="session-filters" role="group" aria-label="Session status">
+          <For each={["all", "running", "idle"] as const}>
+            {(value) => (
+              <button
+                type="button"
+                class={`session-filters__option${filter() === value ? " session-filters__option--active" : ""}`}
+                aria-pressed={filter() === value}
+                onClick={() => setFilter(value)}
+              >
+                {value[0]?.toUpperCase()}{value.slice(1)}
+              </button>
+            )}
+          </For>
+        </div>
         <Show
           when={sessions().length > 0}
           fallback={
             <div class="empty">
               <p class="empty__title">No session matches that filter</p>
-              <p>The device still advertises {advertisedCount(remote.state().sessions.length)}; none matches “{query()}”.</p>
+              <p>The machine has {advertisedCount(remote.state().sessions.length)}; none matches “{query()}”.</p>
             </div>
           }
         >

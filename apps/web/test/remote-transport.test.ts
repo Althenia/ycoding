@@ -6,13 +6,13 @@ import { startRelayDouble, waitFor } from "./relay-double"
 describe("remote transport integration", () => {
   test("reports the session advertisement and round-trips a request", async () => {
     const relay = await startRelayDouble({ advertisedSessions: ["ses_a"] })
-    const advertised: string[][] = []
+    let invalidations = 0
     const statuses: RemoteTransportStatus[] = []
     const transport = createRemoteTransport({
       url: relay.wsURL("dev_1"),
       handlers: {
         onStatus: (status) => statuses.push(status),
-        onSessions: (sessionIDs) => advertised.push([...sessionIDs]),
+        onSessions: () => { invalidations += 1 },
       },
       resetDelayMs: 10,
       maxDelayMs: 20,
@@ -20,8 +20,8 @@ describe("remote transport integration", () => {
     try {
       transport.connect()
       await waitFor(() => transport.status().kind === "open")
-      await waitFor(() => advertised.length > 0)
-      expect(advertised[0]).toEqual(["ses_a"])
+      await waitFor(() => invalidations > 0)
+      expect(invalidations).toBe(1)
       const response = await transport.request("session.list")
       expect(response.status).toBe("ok")
       if (response.status !== "ok") return
@@ -250,7 +250,7 @@ describe("remote transport integration", () => {
   })
 
   test("refuses work while the socket is not open", async () => {
-    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/client", resetDelayMs: 10 })
+    const transport = createRemoteTransport({ url: "ws://127.0.0.1:1/ws/v2/client", resetDelayMs: 10 })
     expect(await transport.request("session.list")).toEqual({ status: "unavailable", reason: "not-connected" })
     transport.close()
   })

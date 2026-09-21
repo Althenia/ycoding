@@ -26,8 +26,8 @@ vocabulary changes the contract for all three at once.
 | `POST` | `/api/devices/token` | challenge signature | none (native agent) | Issue access + refresh credentials |
 | `POST` | `/api/devices/refresh` | refresh credential | none (native agent) | Rotate credentials |
 | `POST` | `/api/devices/:deviceID/revoke` | browser session | same-origin required | Revoke a device, its credentials, and its live sockets |
-| `GET` | `/ws/client` | browser session cookie | same-origin required | Browser/phone relay connection |
-| `GET` | `/ws/agent` | device access token | not required | Local agent relay connection |
+| `GET` | `/ws/v2/client` | browser session cookie | same-origin required | Browser/phone relay connection |
+| `GET` | `/ws/v2/agent` | device access token | not required | Local agent relay connection |
 | `GET` | `/health` | none | not required | Database liveness probe |
 
 There is no unauthenticated relay path and no legacy/smoke compatibility route.
@@ -73,12 +73,12 @@ JavaScript cannot set it):
   `POST /api/devices/:deviceID/revoke`) require a present, exactly matching
   `Origin` (`https://<host>` for `https`, `http://<host>` on localhost
   development) and additionally reject `Sec-Fetch-Site: cross-site`.
-- Browser WebSocket upgrade `/ws/client` requires the same exact same-origin
+- Browser WebSocket upgrade `/ws/v2/client` requires the same exact same-origin
   `Origin`; a missing `Origin` is rejected.
 - `/api/auth/google/start` and `/api/auth/google/callback` are navigations and
   require no `Origin`; they are protected by the one-use transaction cookie,
   `state`, PKCE, and the ID token binding.
-- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/agent`)
+- Agent routes (`POST /api/devices/enroll|challenge|token|refresh`, `/ws/v2/agent`)
   carry no browser cookie and never require an `Origin`; they are rate limited.
 
 `GET /api/*` responses are `Cache-Control: no-store`. No `GET` route writes
@@ -173,9 +173,9 @@ always re-checked for ownership.
 
 ### 2.4 Authorization invariant
 
-Every relay command path requires: authenticated owner, authenticated device,
-device owned by that owner, device not revoked, browser session not expired or
-revoked, and the session ID present in the agent's advertisement. The relay
+Every relay command path requires an authenticated owner, an authenticated device
+owned by that account, a non-revoked device, and a live browser session. The local
+agent resolves scoped Session IDs against its backend before execution. The relay
 re-checks session expiry and device revocation from D1 on each command rather than
 trusting the connection's upgrade state.
 
@@ -183,15 +183,15 @@ trusting the connection's upgrade state.
 
 ### 3.1 Connections
 
-- `GET /ws/client?device=<deviceID>` requires a valid browser session cookie, a
+- `GET /ws/v2/client?device=<deviceID>` requires a valid browser session cookie, a
   present same-origin `Origin`, and a device the owner owns and has not revoked. It
   connects to the Durable Object named `<ownerID>:<deviceID>`.
-- `GET /ws/agent` requires `Authorization: Bearer <accessToken>`. The token must be
+- `GET /ws/v2/agent` requires `Authorization: Bearer <accessToken>`. The token must be
   an unexpired, unrevoked `access` credential whose device is not revoked. The same
   `<ownerID>:<deviceID>` Durable Object is used.
 - The worker strips every inbound `x-ycoding-*` header and re-derives trusted relay
   headers itself. Browser-supplied internal headers are never honored.
-- `/ws/client` never accepts a bearer token, and `/ws/agent` never accepts the
+- `/ws/v2/client` never accepts a bearer token, and `/ws/v2/agent` never accepts the
   browser cookie, so one role cannot impersonate the other.
 - One agent connection is authoritative per device. A newer agent connection closes
   the previous one with `1012`.
@@ -213,7 +213,8 @@ One JSON object per WebSocket frame, discriminated by `type`.
 | `request` | client → relay → agent | `{ type:"request", id, operation, sessionID?, input? }` |
 | `response` | agent → relay → client | `{ type:"response", id, ok:true, value, chunk? }` or `{ type:"response", id, ok:false, error:{ code, message } }` |
 | `event` | agent → relay → clients | `{ type:"event", sessionID, event }` |
-| `sessions` | agent → relay → clients | `{ type:"sessions", sessionIDs:[...] }` |
+| `sessions` | agent → relay → clients | `{ type:"sessions" }` |
+| `subscriptions` | relay → agent | `{ type:"subscriptions", clientID, sessionIDs:[...] }` |
 | `ping` | either direction | `{ type:"ping" }` |
 | `pong` | either direction | `{ type:"pong" }` |
 
@@ -231,12 +232,27 @@ Relay rules:
   originating client's ID. Agents therefore never see colliding IDs, and a
   response is delivered only to the client that issued the corresponding request.
   Unknown or already-settled IDs are dropped.
-- `event` frames are delivered only to clients subscribed to that `sessionID`, and
-  only when the session is in the advertisement. A frame for a non-advertised
-  session is dropped and counted; exceeding the violation budget closes the agent
-  with `1008` (never a silent drop without limit).
+- `event` frames are delivered only to clients subscribed to that `sessionID`.
+- `sessions` is a bounded invalidation, never an inventory. The client responds by
+  paging `session.list` until its cursor is exhausted.
 - The client's registered subscription is updated when a `session.subscribe` or
   `session.unsubscribe` response succeeds.
+- The relay is the only per-client subscription authority. After each successful
+  subscription settlement it sends that client's complete bounded snapshot to the
+  agent. An empty snapshot deletes the client from the agent's derived index.
+- Agent attach sends one snapshot for every live authorized browser client,
+  including clients restored from Durable Object attachments. Browser attach sends
+  its current snapshot when an agent is already present. Detach, expiry, logout,
+  and revocation send an empty snapshot before removing the client. A response that
+  arrives after detach has no pending correlation and cannot recreate interest.
+- Hibernation restoration completes before new upgrades or messages are admitted.
+  It restores the surviving agent first, then sends an empty snapshot for every
+  restored browser rejected for expiry, authorization, or invalid subscriptions.
+- The agent parses `subscriptions` only on its relay-control surface; the browser
+  parser rejects the frame. It clears the derived per-client index whenever the
+  relay connection closes or opens, then forwards an event only when the union of
+  current snapshots contains that Session. Subscribe and unsubscribe operations
+  validate backend Session access but do not mutate an independent local refcount.
 - In-flight requests per client are capped; a client disconnect drops its pending
   requests, and the client must treat those outcomes as unknown.
 
@@ -273,7 +289,7 @@ response, so the local agent chunks it. `session.log` (`v2.session.log`) remains
 the incremental/paginated read via `after`, and `session.snapshot`
 (`v2.session.snapshot`) provides messages plus a watermark in one response.
 
-### 3.4 Operations (allowlist)
+### 3.4 Operations (closed operation set)
 
 The relay rejects anything outside this list with `unknown_operation`. `input`
 field names below are the local Protocol names; the agent maps them onto the
@@ -316,10 +332,9 @@ reconnect), `session.permission.list`, `session.guardrail.status`,
 rebuild running state, pending approvals, and autonomy state after a reconnect
 instead of relying on ephemeral events.
 
-`session.list` and `session.active` responses must be filtered by the agent to the
-current advertisement: `session.list` to the advertised items, and `session.active`
-to the advertised keys of its `data` map. Neither may disclose a session the user
-did not expose to remote access. The wire name for captured file changes is
+`session.list` pages every Session in the connected backend, and `session.active`
+reports running state for that same inventory. The authenticated enrolled-device
+owner is the authorization boundary. The wire name for captured file changes is
 `session.fileChange.list`; the Protocol endpoint identifier is
 `v2.session.file-change.list` (`GET /api/session/:sessionID/file-change`).
 
@@ -341,15 +356,20 @@ Clients must never automatically replay any request that failed with
 `outcome_unknown` (`session.prompt`, `session.interrupt`, and every reply
 included); they surface the outcome as unknown and let the user decide.
 
-### 3.6 Session advertisement
+### 3.6 Session discovery and authorization
 
-The advertisement is the set of Session IDs the local user has explicitly opted
-into remote access — never every local session. The agent sends `sessions`
-immediately after connecting and whenever that set changes, and it filters its
-`session.list` response to the same set so a remote client cannot enumerate
-sessions the user did not expose. Requests for a session outside the advertisement
-fail with `session_not_allowed`. A new client connection receives the current
-advertisement as soon as it connects.
+The authenticated owner of an enrolled device may access all existing and future
+Sessions in that device's backend. The agent resolves every scoped Session ID by
+paging the backend's global list without a page-count cap, derives the current
+Location from that record, and verifies the Session there before executing the
+operation. Deleted and unknown IDs fail with `session_not_allowed`; moved Sessions
+use their new backend-derived Location. No remote field selects a folder or URL.
+
+The agent sends `{ "type": "sessions" }` after connect and on Session creation,
+movement, or deletion. The relay broadcasts that small frame without persisting an
+inventory or treating it as authorization. A connected client pages `session.list`
+using the existing cursor until exhausted and fences publication by connection and
+list generation.
 
 ### 3.7 Bounds and close codes
 
@@ -361,7 +381,7 @@ advertisement as soon as it connects.
 | In-flight requests per client | 32 |
 | Client request rate | 30 per 10 s → close `1008` |
 | Agent message rate | 500 per 10 s → close `1008` |
-| Advertised sessions | 200 |
+| Session-list page | 200 |
 | Subscriptions per client | 64 |
 | Heartbeats | `{"type":"ping"}` is answered with `{"type":"pong"}` without waking the object |
 
@@ -439,8 +459,8 @@ orchestrator (reached through a package-anchored require), key generation,
 signing, and enrollment, the remote client's store, transport, and http modules,
 and this relay under the local Wrangler dev server with real D1, the real Durable
 Object, the built assets, and a local Google OIDC stand-in. It asserts enrolled
-device connection, advertisement and list filtering to the opted-in sessions,
-refusal of an unadvertised session, one admitted row per prompt message id with
+device connection, complete backend Session discovery, backend-derived Location,
+one admitted row per prompt message id with
 exact-retry reconciliation, one real SessionRunner step executed against a local
 provider stand-in with its streamed text reaching the client and its final
 assistant content persisted canonically, a streamed durable session event,
@@ -448,8 +468,7 @@ reconnect reads with no mutation or execution replay, a real pending permission
 request answered remotely with reject and then approve (each verified by whether
 the shell command actually ran, with unauthorized replies refused and the request
 left pending), ordinary and hard guardrail reviews raised by custom rules and
-answered remotely, interrupt stopping a running step, allowlist deny blocking
-commands and events, and logout closing the client socket.
+answered remotely, interrupt stopping a running step, and logout closing the client socket.
 
 Verification limits, stated so they are not mistaken for covered behaviour:
 
@@ -457,8 +476,8 @@ Verification limits, stated so they are not mistaken for covered behaviour:
   with scripted text and tool calls. Provider identity, quotas, retries, rate
   limits, and vendor payload differences are not exercised.
 - Approval coverage is the shell tool's ordinary permission request: a remote
-  `reject` denies the tool and a remote `once` runs it, with both an unadvertised
-  session and an unknown request id shown to leave the request pending.
+  `reject` denies the tool and a remote `once` runs it, with an unknown request id
+  shown to leave the request pending.
 - Guardrail coverage uses custom configurable rules: an ordinary (`ask`) review
   resolved with `once`, and hard (`hard_review`) reviews where `once` runs the
   command and `reject` prohibits it. A hard review answered with `always` is
@@ -484,4 +503,4 @@ Verification limits, stated so they are not mistaken for covered behaviour:
 - No arbitrary proxy: the operation allowlist is closed, and the relay does not
   accept a URL, path, or method from a client.
 - No transcript, event, or delta persistence anywhere in D1.
-- No browser credentials on `/ws/agent` and no device credentials on `/ws/client`.
+- No browser credentials on `/ws/v2/agent` and no device credentials on `/ws/v2/client`.

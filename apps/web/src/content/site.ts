@@ -11,7 +11,7 @@ export const SITE = {
   productName: "YCoding",
   descriptor: "terminal coding agent",
   origin: "https://ycoding.althenia.app",
-  tagline: "Your coding agent, wherever you are.",
+  tagline: "Your coding agent. Your machine.",
   description:
     "YCoding runs a coding agent on your own machine with durable sessions, explicit autonomy, and repository-native customization.",
   repositoryURL: "https://github.com/Althenia/ycoding",
@@ -33,43 +33,29 @@ export const SITE = {
     platforms: ["macOS", "Linux", "Windows"],
   },
   hero: {
-    eyebrow: ["AI agents", "Your machine", "Anywhere"],
-    headline: "Your coding agent, wherever you are.",
-    support: [
-      "Work with AI agents on your own machine.",
-      "Same environment. Same tools. Same session history.",
-    ],
-    primaryAction: { label: "Open Remote", href: "/remote" },
-    secondaryAction: { label: "Install YCoding", href: "/docs/installation" },
-    footnote: "macOS, Linux, and Windows releases publish from the same repository as the source.",
+    headline: "Your coding agent. Your machine.",
+    support: "Work in the terminal. Continue from your browser.",
+    primaryAction: { label: "Get started", href: "/docs/getting-started" },
+    secondaryAction: { label: "Open workspace", href: "/remote" },
   },
   features: [
-    { icon: "terminal", title: "Agents", text: "Specialized agents for real work, selectable per session." },
-    { icon: "puzzle", title: "Plugins", text: "Extend the runtime with tools, hooks, and integrations." },
-    { icon: "target", title: "Goal", text: "Turn one objective into tracked, resumable work." },
-    { icon: "shield", title: "Guardrails", text: "Review high-impact actions across the session family." },
-    { icon: "bell", title: "Notifications", text: "Ask for attention when work needs a human decision." },
-    { icon: "devices", title: "Remote Access", text: "Continue the same session from another device." },
-  ],
-  trust: [
     {
-      title: "Local execution",
-      text: "The agent, shell, files, and model calls run on your machine. Nothing is hosted for you.",
+      title: "Durable Sessions",
+      text: "Long-running agent workflows persist across connection drops, device switches, and system restarts.",
     },
     {
-      title: "Durable sessions",
-      text: "History, pending input, and orchestration survive restarts and reconnects.",
+      title: "Explicit autonomy",
+      text: "Set precise guardrails and permission tiers so your agent takes only actions you explicitly authorize.",
     },
     {
-      title: "Open source",
-      text: "The runtime, terminal client, and configuration schema ship under the MIT license.",
+      title: "Tools and approvals",
+      text: "Review and approve tool calls, code modifications, and terminal executions with clear interactive inspection.",
+    },
+    {
+      title: "Remote access",
+      text: "Monitor and control Sessions from your browser while YCoding runs on your machine.",
     },
   ],
-  remoteStatus: {
-    title: "Remote access from any browser.",
-    body: "Sign in at /remote and control a session running on your own machine: sessions, approvals, guardrail reviews, autonomy, and alerts. It needs a signed-in account and an enrolled device, so without them it stays honestly empty instead of showing sample conversations.",
-    cta: { label: "Read the remote guide", href: "/docs/usage/remote" },
-  },
   footerColumns: [
     {
       title: "Product",

@@ -14,7 +14,7 @@
 
 import { spawn, type Subprocess } from "bun"
 import { readdirSync } from "node:fs"
-import { deviceSignaturePayload } from "../../../../packages/remote/src/index"
+import { RemoteWebSocketPath, deviceSignaturePayload } from "../../../../packages/remote/src/index"
 import { base64UrlEncode, sha256Hex } from "../../src/auth/crypto"
 
 const repositoryRoot = new URL("../../../../", import.meta.url).pathname
@@ -85,7 +85,7 @@ try {
   const homeBody = await home.text()
   expect(home.status === 200, `landing returned ${home.status}`)
   expect(home.headers.get("content-type")?.includes("text/html") === true, "landing is not HTML")
-  expect(homeBody.includes("<title>YCoding</title>"), "landing body is not the built SPA shell")
+  expect(homeBody.includes("<title>YCoding — terminal coding agent</title>"), "landing body is not the built SPA shell")
   expect(home.headers.get("x-content-type-options") === "nosniff", "landing is missing nosniff")
   expect(home.headers.get("x-frame-options") === "DENY", "landing is missing frame denial")
   expect(home.headers.get("referrer-policy") === "strict-origin-when-cross-origin", "landing is missing referrer policy")
@@ -120,8 +120,8 @@ try {
     apiChallengeNavigation.headers.get("content-type")?.includes("application/json") === true,
     "API navigation POST was masked by the SPA fallback",
   )
-  const agentSocket = await fetch(`${workerOrigin}/ws/agent`, { headers: { upgrade: "websocket" } })
-  expect(agentSocket.status === 401, `/ws/agent returned ${agentSocket.status}`)
+  const agentSocket = await fetch(`${workerOrigin}${RemoteWebSocketPath.agent}`, { headers: { upgrade: "websocket" } })
+  expect(agentSocket.status === 401, `${RemoteWebSocketPath.agent} returned ${agentSocket.status}`)
   expect(agentSocket.headers.get("content-type")?.includes("application/json") === true, "relay route returned HTML")
   checks.push("SPA fallback never masks API, auth, or relay routes")
 
@@ -262,16 +262,14 @@ try {
 
   /* ----------------------------------------------------------------- relay */
 
-  const agent = connect(`${socketOrigin}/ws/agent`, { authorization: `Bearer ${tokens.accessToken}` })
+  let agent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, { authorization: `Bearer ${tokens.accessToken}` })
   await agent.opened
-  agent.send({ type: "sessions", sessionIDs: ["ses_a", "ses_b"] })
+  agent.send({ type: "sessions" })
 
-  const first = connect(`${socketOrigin}/ws/client?device=${deviceID}`, { cookie: sessionCookie, origin: workerOrigin })
+  const first = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`, { cookie: sessionCookie, origin: workerOrigin })
   await first.opened
-  expect(
-    JSON.stringify(await first.next()).includes('"ses_a"'),
-    "client did not receive the session advertisement",
-  )
+  expect((await first.next()).type === "sessions", "client did not receive the Session invalidation")
+  expect((await agent.next()).type === "subscriptions", "agent did not receive the first client subscription snapshot")
 
   first.send({ type: "request", id: "1", operation: "session.list" })
   const relayedFirst = await agent.next()
@@ -280,9 +278,10 @@ try {
   agent.send({ type: "response", id: relayedFirst.id, ok: true, value: { data: ["first"] } })
   expect(JSON.stringify(await first.next()) === JSON.stringify({ type: "response", id: "1", ok: true, value: { data: ["first"] } }), "first client response mismatch")
 
-  const second = connect(`${socketOrigin}/ws/client?device=${deviceID}`, { cookie: sessionCookie, origin: workerOrigin })
+  const second = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`, { cookie: sessionCookie, origin: workerOrigin })
   await second.opened
   await second.next()
+  expect((await agent.next()).type === "subscriptions", "agent did not receive the second client subscription snapshot")
   first.send({ type: "request", id: "1", operation: "session.list" })
   second.send({ type: "request", id: "1", operation: "session.list" })
   const relayedA = await agent.next()
@@ -306,17 +305,37 @@ try {
   checks.push("chunked large responses forwarded without truncation")
 
   first.send({ type: "request", id: "3", operation: "session.get", sessionID: "ses_secret" })
-  expect(JSON.stringify(await first.next()).includes("session_not_allowed"), "unadvertised session was not refused")
-  checks.push("unadvertised session refused by the relay")
+  const backendAuthorized = await agent.next()
+  agent.send({ type: "response", id: backendAuthorized.id, ok: true, value: { data: { id: "ses_secret" } } })
+  expect((await first.next()).ok === true, "backend-authorized Session was refused by the relay")
+  checks.push("relay delegates Session authorization to the connected backend")
 
   first.send({ type: "request", id: "4", operation: "session.subscribe", sessionID: "ses_a" })
   const subscribe = await agent.next()
   agent.send({ type: "response", id: subscribe.id, ok: true, value: null })
   await first.next()
+  const synchronized = await agent.next()
+  expect(
+    synchronized.type === "subscriptions" && JSON.stringify(synchronized.sessionIDs) === '["ses_a"]',
+    "agent did not receive the settled subscription snapshot",
+  )
   agent.send({ type: "event", sessionID: "ses_a", event: { seq: 1 } })
   expect(JSON.stringify(await first.next()).includes('"seq":1'), "subscribed client did not receive the event")
   expect(second.pending() === 0, "unsubscribed client received an event")
   checks.push("events delivered only to the subscribed client")
+
+  const replacementAgent = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, {
+    authorization: `Bearer ${tokens.accessToken}`,
+  })
+  await replacementAgent.opened
+  expect((await agent.closed).code === 1012, "replaced agent did not close with service restart")
+  const retained = await replacementAgent.next()
+  expect(
+    retained.type === "subscriptions" && JSON.stringify(retained.sessionIDs) === '["ses_a"]',
+    "fresh agent did not receive retained browser subscriptions",
+  )
+  agent = replacementAgent
+  checks.push("a fresh agent received retained live browser subscription state")
 
   /* ------------------------------------------------------- revocation closes */
 
@@ -454,18 +473,18 @@ try {
 
   const third = await enrollDevice("Third Mac")
   const secondLive = await authenticateDevice(device2ID, secondDevice.pair)
-  const agentThird = connect(`${socketOrigin}/ws/agent`, { authorization: `Bearer ${third.tokens.accessToken}` })
-  const agentSecond = connect(`${socketOrigin}/ws/agent`, { authorization: `Bearer ${secondLive.accessToken}` })
+  const agentThird = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, { authorization: `Bearer ${third.tokens.accessToken}` })
+  const agentSecond = connect(`${socketOrigin}${RemoteWebSocketPath.agent}`, { authorization: `Bearer ${secondLive.accessToken}` })
   await agentThird.opened
   await agentSecond.opened
-  agentThird.send({ type: "sessions", sessionIDs: ["ses_a"] })
-  agentSecond.send({ type: "sessions", sessionIDs: ["ses_a"] })
+  agentThird.send({ type: "sessions" })
+  agentSecond.send({ type: "sessions" })
 
-  const clientThird = connect(`${socketOrigin}/ws/client?device=${third.deviceID}`, {
+  const clientThird = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${third.deviceID}`, {
     cookie: sessionCookie,
     origin: workerOrigin,
   })
-  const clientSecond = connect(`${socketOrigin}/ws/client?device=${device2ID}`, {
+  const clientSecond = connect(`${socketOrigin}${RemoteWebSocketPath.client}?device=${device2ID}`, {
     cookie: sessionCookie,
     origin: workerOrigin,
   })
@@ -473,6 +492,8 @@ try {
   await clientSecond.opened
   await clientThird.next()
   await clientSecond.next()
+  await agentThird.next()
+  await agentSecond.next()
   for (const pair of [
     { client: clientThird, agent: agentThird },
     { client: clientSecond, agent: agentSecond },

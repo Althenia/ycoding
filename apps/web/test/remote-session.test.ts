@@ -111,7 +111,7 @@ async function fakeConnectionHarness() {
     createTransport: (_deviceID, handlers) => {
       const socket: FakeSocket = {
         publish: (status) => handlers.onStatus?.(status),
-        sessions: (sessionIDs) => handlers.onSessions?.(sessionIDs),
+        sessions: (_sessionIDs) => handlers.onSessions?.(),
         event: (sessionID, event) => handlers.onEvent?.(sessionID, event),
         reconnect: () => handlers.onReconnect?.(),
         unsubscribes: [],
@@ -164,7 +164,7 @@ describe("remote store integration", () => {
       await test.store.load()
       expect(test.store.state().owner?.id).toBe("user_1")
       expect(test.store.state().devices.map((device) => device.id)).toEqual(["dev_1"])
-      waitFor(() => test.store.state().connection.kind === "connected")
+      await waitFor(() => test.store.state().connection.kind === "connected")
       await waitFor(() => test.store.state().sessions.length > 0)
       expect(test.store.state().advertised).toEqual(["ses_a", "ses_b"])
       const sessions = test.store.state().sessions
@@ -177,6 +177,98 @@ describe("remote store integration", () => {
       })
     } finally {
       await test.stop()
+    }
+  })
+
+  test("loads every backend Session page beyond the old five-page cap", async () => {
+    const count = 1_205
+    const relay = await startRelayDouble({
+      handler: (request) => {
+        if (request.operation !== "session.list") return "default"
+        const offset = typeof request.input?.cursor === "string" ? Number(request.input.cursor) : 0
+        const limit = typeof request.input?.limit === "number" ? request.input.limit : 200
+        const data = Array.from({ length: Math.min(limit, count - offset) }, (_, index) => {
+          const value = offset + index
+          return { id: `ses_${value}`, title: `Session ${value}`, time: { created: value, updated: value } }
+        })
+        const next = offset + data.length < count ? String(offset + data.length) : undefined
+        return { ok: true, value: { data, cursor: { next } } }
+      },
+    })
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: relay.httpURL }),
+      createTransport: (deviceID, handlers) =>
+        createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    })
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length === count)
+      expect(store.state().sessions[0]?.id).toBe("ses_0")
+      expect(store.state().sessions.at(-1)?.id).toBe("ses_1204")
+      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(7)
+    } finally {
+      store.dispose()
+      await relay.stop()
+    }
+  })
+
+  test("create and delete invalidations supersede in-flight multi-page Session lists", async () => {
+    const oldPage = Promise.withResolvers<void>()
+    const createdPage = Promise.withResolvers<void>()
+    let phase = "initial"
+    let settledPages = 0
+    const row = (id: string) => ({ id, title: id, time: { created: 1, updated: 1 } })
+    const relay = await startRelayDouble({
+      handler: async (request) => {
+        if (request.operation !== "session.list") return "default"
+        if (request.input?.cursor === "initial-tail") {
+          await oldPage.promise
+          return { ok: true, value: { data: [row("ses_stable")] } }
+        }
+        if (request.input?.cursor === "created-tail") {
+          await createdPage.promise
+          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")] } }
+        }
+        if (request.input?.cursor === "final-tail") return { ok: true, value: { data: [row("ses_stable")] } }
+        return { ok: true, value: {
+          data: [row(phase === "initial" ? "ses_deleted" : "ses_created")],
+          cursor: { next: `${phase === "deleted" ? "final" : phase}-tail` },
+        } }
+      },
+    })
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: relay.httpURL }),
+      createTransport: (deviceID, handlers) => {
+        const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers })
+        return { ...transport, request: async (operation, input) => {
+          const outcome = await transport.request(operation, input)
+          if (operation === "session.list") settledPages++
+          return outcome
+        } }
+      },
+    })
+    const published: string[][] = []
+    const unsubscribe = store.subscribe(() => published.push(store.state().sessions.map((session) => session.id)))
+    try {
+      await store.load()
+      await waitFor(() => relay.requests.some((request) => request.input?.cursor === "initial-tail"))
+      phase = "created"
+      relay.pushSessions([])
+      await waitFor(() => relay.requests.some((request) => request.input?.cursor === "created-tail"))
+      phase = "deleted"
+      relay.pushSessions([])
+      await waitFor(() => store.state().sessions.length === 2)
+      oldPage.resolve()
+      createdPage.resolve()
+      await waitFor(() => settledPages === 6)
+      expect(store.state().sessions.map((session) => session.id)).toEqual(["ses_created", "ses_stable"])
+      expect(published.filter((ids) => ids.length > 0).every((ids) => ids.join(",") === "ses_created,ses_stable")).toBe(true)
+    } finally {
+      oldPage.resolve()
+      createdPage.resolve()
+      unsubscribe()
+      store.dispose()
+      await relay.stop()
     }
   })
 
@@ -340,8 +432,8 @@ describe("remote store integration", () => {
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
         devices: [
-          { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active" },
-          { id: "dev_2", name: "Laptop", createdAt: 2, status: "active" },
+          { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true },
+          { id: "dev_2", name: "Laptop", createdAt: 2, status: "active", online: true },
         ],
       },
     })
@@ -366,8 +458,8 @@ describe("remote store integration", () => {
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
         devices: [
-          { id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked" },
-          { id: "dev_active", name: "Studio Mac", createdAt: 2, status: "active" },
+          { id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked", online: false },
+          { id: "dev_active", name: "Studio Mac", createdAt: 2, status: "active", online: true },
         ],
       },
     })
@@ -391,7 +483,7 @@ describe("remote store integration", () => {
       me: {
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
-        devices: [{ id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked" }],
+        devices: [{ id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked", online: false }],
       },
     })
     const store = createRemoteStore({
@@ -402,6 +494,30 @@ describe("remote store integration", () => {
       await store.load()
       expect(store.state().connection).toEqual({ kind: "no-device-enrolled" })
       expect(store.state().devices.map((device) => device.status)).toEqual(["revoked"])
+      expect(relay.connections).toBe(0)
+    } finally {
+      store.dispose()
+      await relay.stop()
+    }
+  })
+
+  test("retains an offline active device without offering a relay connection", async () => {
+    const relay = await startRelayDouble({
+      me: {
+        user: { id: "user_1" },
+        session: { expiresAt: 4_102_444_800_000 },
+        devices: [{ id: "dev_offline", name: "Sleeping Mac", createdAt: 1, status: "active", online: false }],
+      },
+    })
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: relay.httpURL }),
+      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    })
+    try {
+      await store.load()
+      expect(store.state().devices).toHaveLength(1)
+      expect(store.state().devices[0]).toMatchObject({ id: "dev_offline", online: false })
+      expect(store.state().activeDeviceID).toBeUndefined()
       expect(relay.connections).toBe(0)
     } finally {
       store.dispose()
@@ -830,7 +946,7 @@ describe("remote store integration", () => {
       test.relay.setMe({
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
-        devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "revoked" }],
+        devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "revoked", online: false }],
       })
       test.relay.dropConnections(4403, "device revoked")
       await test.runUntil(() => test.store.state().connection.kind === "no-device-enrolled")
@@ -859,7 +975,7 @@ describe("remote store integration", () => {
 
       // The replacement advertises and streams its own state.
       test.sockets[1]?.sessions(["ses_b"])
-      expect(test.store.state().advertised).toEqual(["ses_b"])
+      expect(test.store.state().advertised).toEqual([])
       test.sockets[1]?.event("ses_a", {
         id: "evt_live",
         type: "session.text.delta",
@@ -878,7 +994,7 @@ describe("remote store integration", () => {
       test.sockets[0]?.reconnect()
       await test.flush()
 
-      expect(test.store.state().advertised).toEqual(["ses_b"])
+      expect(test.store.state().advertised).toEqual([])
       expect(streamed()).toEqual(["LIVE"])
       expect(test.store.state().notice).toBeUndefined()
     } finally {

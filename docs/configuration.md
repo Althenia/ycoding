@@ -138,26 +138,24 @@ The background update check resolves the newest release from the same GitHub Rel
 
 ### Remote access
 
-`ycoding remote` shares explicitly chosen local Sessions with the YCoding web client through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for the agent's advertisement, authorization, reconnection, and frame-bounding contract.
+`ycoding remote` gives the authenticated owner of an enrolled machine access to every Session in that machine's backend through a relay deployment. The local process keeps execution authority; see [Runtime behavior](./runtime.md#remote-relay-agent) for backend-derived Location, authorization, reconnection, and frame-bounding rules.
 
 The standalone terminal artifact and the full CLI expose the same remote subcommands and handlers. Remote access does not require a separate full-CLI installation.
 
 | Command                                                                                 | Purpose                                                                                              |
 | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `ycoding remote enroll <enrollmentID> [--name <name>] [--relay <origin>] [--replace]`   | Enroll this machine with a relay. The one-use enrollment code is read from the terminal, never argv. |
-| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`            | Run the foreground relay agent for the shared Sessions until Ctrl-C.                                 |
-| `ycoding remote status`                                                                 | Show the enrolled device, credential validity, the local server address, and the shared Sessions.    |
-| `ycoding remote sessions`                                                               | List the Sessions shared with the relay.                                                             |
-| `ycoding remote allow <sessionID> [--directory <dir>] [--server <url> \| --standalone]` | Share one local Session at its verified Location.                                                    |
-| `ycoding remote deny <sessionID>`                                                       | Stop sharing one Session; a running connection drops it within a moment.                             |
+| `ycoding remote connect [--relay <origin>] [--server <url> \| --standalone]`            | Run the foreground relay agent for all backend Sessions until Ctrl-C.                                |
+| `ycoding remote status [--server <url> \| --standalone]`                               | Show enrollment, credential validity, local server address, and backend Session count.               |
+| `ycoding remote sessions [--server <url> \| --standalone]`                             | List every Session in the backend through its authoritative Location.                                |
 
-`ycoding remote enroll` requires a relay origin, and `--replace` is required before an existing device identity can be overwritten. `ycoding remote connect` requires an enrolled device and reports when no Session is shared. It refuses to bridge a local server over a LAN or public-network endpoint.
+`ycoding remote enroll` requires a relay origin, and `--replace` is required before an existing device identity can be overwritten. `ycoding remote connect` requires an enrolled device and refuses to bridge a local server over a LAN or public-network endpoint.
 
 Local state lives outside any repository checkout:
 
 | File                 | Location                                                                            | Contents                                                                                                                     |
 | -------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `remote.json`        | Global configuration directory: `$XDG_CONFIG_HOME/ycoding`, or `YCODING_CONFIG_DIR` | The relay origin and the shared-Session allowlist: Session ID, directory, optional workspace ID, and title.                  |
+| `remote.json`        | Global configuration directory: `$XDG_CONFIG_HOME/ycoding`, or `YCODING_CONFIG_DIR` | Optional relay origin. Existing Session entries are preserved but do not authorize or restrict remote access.              |
 | `remote-device.json` | Global state directory: `$XDG_STATE_HOME/ycoding`                                   | The device identity: device ID, name, relay origin, P-256 public key, P-256 private key, and the rotated refresh credential. |
 
 Both files are written through a temporary file and renamed into place with mode `0600`, and a symbolic link at either path is refused instead of followed. The device private key never leaves the machine, and credentials travel only in request bodies and the WebSocket upgrade header, never in a URL, a flag, or an environment variable. A malformed file fails explicitly and is left in place for the operator. Credential requests never follow redirects, and a rejected, revoked, or expired device credential is terminal: the device must be enrolled again.

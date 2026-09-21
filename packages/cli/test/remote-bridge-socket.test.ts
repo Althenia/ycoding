@@ -20,7 +20,11 @@ async function waitFor<Value>(check: () => Value | undefined, timeout = 10_000) 
 
 function unreachableLocal(): LocalServer {
   return new Proxy({} as LocalServer, {
-    get: () => () => Promise.reject(new Error("the local server must not be needed for this flow")),
+    get: (_target, property) => {
+      if (property === "listPage") return async () => ({ data: [] })
+      if (property === "events") return async () => async () => {}
+      return () => Promise.reject(new Error("the local server must not be needed for this flow"))
+    },
   })
 }
 
@@ -32,7 +36,7 @@ test("writes single-encoded envelope frames through the default relay connection
     hostname: "127.0.0.1",
     port: 0,
     fetch(request, socketServer) {
-      if (new URL(request.url).pathname !== "/ws/agent") return new Response(null, { status: 404 })
+      if (new URL(request.url).pathname !== "/ws/v2/agent") return new Response(null, { status: 404 })
       headers.push(request.headers.get("authorization"))
       return socketServer.upgrade(request) ? undefined : new Response(null, { status: 400 })
     },
@@ -48,8 +52,6 @@ test("writes single-encoded envelope frames through the default relay connection
 
   const bridge = new RemoteAgent({
     relayURL: `http://127.0.0.1:${server.port}`,
-    sessions: [],
-    reloadSessions: async () => [],
     local: unreachableLocal(),
     credentials: async () => ({ accessToken: "socket-token", accessExpiresAt: Date.now() + 600_000 }),
     refreshIntervalMs: 3_600_000,
@@ -62,7 +64,7 @@ test("writes single-encoded envelope frames through the default relay connection
     const parsedAdvertisement = parseAgentMessage(advertisement)
     expect(parsedAdvertisement.ok, `relay received ${advertisement}`).toBe(true)
     if (parsedAdvertisement.ok)
-      expect(parsedAdvertisement.value).toEqual({ type: "sessions", sessionIDs: [] })
+      expect(parsedAdvertisement.value).toEqual({ type: "sessions" })
 
     agent?.send(JSON.stringify({ type: "request", id: "req_1", operation: "session.list" }))
     const rawResponse = await waitFor(() => received[1])

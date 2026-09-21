@@ -1,3 +1,4 @@
+import { RemoteWebSocketPath } from "@ycoding-ai/remote"
 import { createContext, createSignal, onCleanup, useContext, type Accessor, type JSX } from "solid-js"
 import { createRemoteHttp } from "./http"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "./store"
@@ -15,7 +16,7 @@ const RemoteContext = createContext<RemoteContextValue>()
 
 function webSocketURL(deviceID: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
-  return `${protocol}//${window.location.host}/ws/client?device=${encodeURIComponent(deviceID)}`
+  return `${protocol}//${window.location.host}${RemoteWebSocketPath.client}?device=${encodeURIComponent(deviceID)}`
 }
 
 export function RemoteProvider(props: { readonly children: JSX.Element; readonly createStore?: () => RemoteStore }) {

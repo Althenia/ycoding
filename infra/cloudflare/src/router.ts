@@ -8,6 +8,7 @@
  */
 
 import {
+  RemoteWebSocketPath,
   parseBearerToken,
   parseChallengeRequest,
   parseDeviceRefreshRequest,
@@ -161,11 +162,11 @@ export function createRouter(deps: RouterDeps) {
       if (request.method !== "POST") return methodNotAllowed()
       return revokeDevice(deps, request, revoke[1] ?? "")
     }
-    if (url.pathname === "/ws/client") {
+    if (url.pathname === RemoteWebSocketPath.client) {
       if (request.method !== "GET") return methodNotAllowed()
       return connectClient(deps, request, url)
     }
-    if (url.pathname === "/ws/agent") {
+    if (url.pathname === RemoteWebSocketPath.agent) {
       if (request.method !== "GET") return methodNotAllowed()
       return connectAgent(deps, request)
     }
@@ -300,7 +301,7 @@ async function currentUser(deps: RouterDeps, request: Request): Promise<Response
   const body: MeResponse = {
     user: { id: authenticated.session.userID },
     session: { expiresAt: authenticated.session.expiresAt },
-    devices,
+    devices: await withPresence(deps, authenticated.session.userID, devices),
   }
   return jsonResponse(body)
 }
@@ -308,7 +309,8 @@ async function currentUser(deps: RouterDeps, request: Request): Promise<Response
 async function listDevices(deps: RouterDeps, request: Request): Promise<Response> {
   const authenticated = await requireSession(deps, request)
   if (!authenticated.ok) return authenticated.response
-  const body: DevicesResponse = { devices: await deps.service.listDevices(authenticated.session.userID) }
+  const devices = await deps.service.listDevices(authenticated.session.userID)
+  const body: DevicesResponse = { devices: await withPresence(deps, authenticated.session.userID, devices) }
   return jsonResponse(body)
 }
 
@@ -468,6 +470,34 @@ async function notifyRelay(
   } catch {
     // Revocation is already durable in D1; the live socket also re-checks authority
     // on its next command, so a failed push is not a correctness loss.
+  }
+}
+
+async function withPresence(
+  deps: RouterDeps,
+  ownerID: string,
+  devices: readonly Omit<DevicesResponse["devices"][number], "online">[],
+): Promise<DevicesResponse["devices"]> {
+  return Promise.all(
+    devices.map(async (device) => ({
+      ...device,
+      online: device.status === "active" && (await readPresence(deps, ownerID, device.id)),
+    })),
+  )
+}
+
+async function readPresence(deps: RouterDeps, ownerID: string, deviceID: string): Promise<boolean> {
+  try {
+    const response = await deps.relay
+      .getByName(`${ownerID}:${deviceID}`)
+      .fetch(new Request("https://relay.internal/_ycoding/presence", {
+        headers: { "x-ycoding-internal": "1" },
+      }))
+    if (!response.ok) return false
+    const value: unknown = await response.json()
+    return typeof value === "object" && value !== null && Reflect.get(value, "online") === true
+  } catch {
+    return false
   }
 }
 

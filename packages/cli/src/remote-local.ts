@@ -5,7 +5,7 @@ import { Service, type Endpoint } from "@ycoding-ai/client/effect/service"
 import { RemoteLimits } from "@ycoding-ai/remote"
 
 // The bridge's only view of the local YCoding server: the same Protocol routes
-// the TUI uses, addressed with a Location derived from the local allowlist.
+// the TUI uses, addressed with a Location derived from the backend inventory.
 // Remote input never reaches a URL, method, or Location header.
 
 export type LocalLocation = { readonly directory: string; readonly workspaceID?: string }
@@ -50,7 +50,7 @@ export type LocalServer = {
     readonly next?: string
   }>
   readonly getSession: (sessionID: string, location: LocalLocation) => Promise<SessionInfo>
-  /** Process-wide running status; the caller filters it to shared sessions. */
+  /** Process-wide running status; the caller filters it to the current inventory. */
   readonly activeSessions: () => Promise<unknown>
   readonly snapshot: (sessionID: string, location: LocalLocation) => Promise<unknown>
   readonly messages: (sessionID: string, location: LocalLocation) => Promise<readonly SessionMessageInfo[]>
@@ -292,16 +292,33 @@ function describe(cause: unknown) {
 }
 
 /** Locate a session's recorded Location from the local server without any remote input. */
-export async function findSession(local: LocalServer, sessionID: string, maxPages = 5) {
+export async function findSession(local: LocalServer, sessionID: string) {
   let cursor: string | undefined
-  for (let page = 0; page < maxPages; page++) {
-    const result = await local.listPage({ limit: 100, ...(cursor === undefined ? {} : { cursor }) })
+  for (;;) {
+    const result = await local.listPage({
+      limit: RemoteLimits.maxSessionListPage,
+      ...(cursor === undefined ? {} : { cursor }),
+    })
     const found = result.data.find((session) => session.id === sessionID)
     if (found) return found
     if (result.next === undefined || result.data.length === 0) return undefined
     cursor = result.next
   }
-  return undefined
+}
+
+/** Read the complete global backend Session inventory without a page cap. */
+export async function listSessions(local: LocalServer) {
+  const sessions: SessionInfo[] = []
+  let cursor: string | undefined
+  for (;;) {
+    const result = await local.listPage({
+      limit: RemoteLimits.maxSessionListPage,
+      ...(cursor === undefined ? {} : { cursor }),
+    })
+    sessions.push(...result.data)
+    if (result.next === undefined || result.data.length === 0) return sessions
+    cursor = result.next
+  }
 }
 
 /**

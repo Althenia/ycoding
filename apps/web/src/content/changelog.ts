@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.0",
+    date: "2026-09-21",
+    title: "Remote access to every Session",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Running ycoding remote connect grants the device owner access to all existing and future Sessions on that backend. Per-Session allow and deny commands are not supported." },
+      { tag: "Changed", text: "Upgrade connectors and refresh browser tabs for the remote protocol update. Existing enrollments and browser sign-ins remain valid." },
+      { tag: "Changed", text: "A responsive landing page and remote workspace with custom device, delivery, and autonomy menus and independent notification channels." },
+      { tag: "Fixed", text: "Discover every backend Session page and update the list as Sessions are created, moved, or deleted." },
+      { tag: "Fixed", text: "Preserve an unreachable selected machine, distinguish empty backends from missing devices, and restore live subscriptions after connector replacement." },
+      { tag: "Fixed", text: "Recover the inventory stream without a selected Session and keep status chips and keyboard-accessible menus within their containers." },
+    ],
+  },
+  {
     version: "0.5.1",
     date: "2026-09-21",
     title: "Remote workspace and reliable browser shutdown",

@@ -22,7 +22,7 @@ export type RemoteTransportStatus =
 
 export type RemoteTransportHandlers = {
   readonly onStatus?: (status: RemoteTransportStatus) => void
-  readonly onSessions?: (sessionIDs: readonly string[]) => void
+  readonly onSessions?: () => void
   readonly onEvent?: (sessionID: string, event: unknown) => void
   /** Called after a successful reconnect so read-only state can be reloaded. */
   readonly onReconnect?: () => void
@@ -183,7 +183,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     }
     if (frame.type === "pong") return
     if (frame.type === "sessions") {
-      handlers.onSessions?.(frame.sessionIDs)
+      handlers.onSessions?.()
       return
     }
     if (frame.type === "event") {

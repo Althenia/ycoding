@@ -74,7 +74,7 @@ export const helpPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "The remote workspace shows real sessions only. An empty workspace means the browser is not signed in, no device is enrolled and connected, or the device advertises no sessions.",
+            text: "The remote workspace shows real sessions only. Check whether your account is signed in, your machine is enrolled, and `ycoding remote connect` is running there. Select an online machine to see its sessions. If that backend has no sessions yet, start YCoding in your project folder on that machine. An offline device does not mean its sessions were deleted.",
           },
           {
             kind: "list",

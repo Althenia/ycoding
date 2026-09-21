@@ -54,12 +54,14 @@ async function withHome<A>(run: (root: string) => Promise<A>) {
 }
 
 describe("remote command surface", () => {
-  test("exposes enrollment, connection, and sharing commands", async () => {
+  test("exposes enrollment, connection, status, and backend session commands", async () => {
     const help = await run({}, ["remote", "--help"])
     expect(help.exitCode).toBe(0)
-    for (const command of ["enroll", "connect", "status", "sessions", "allow", "deny"]) {
+    for (const command of ["enroll", "connect", "status", "sessions"]) {
       expect(help.stdout).toContain(command)
     }
+    expect(help.stdout).not.toContain("  allow")
+    expect(help.stdout).not.toContain("  deny")
   })
 
   test("reports an unenrolled machine without failing", async () => {
@@ -90,23 +92,19 @@ describe("remote command surface", () => {
     })
   })
 
-  test("reports sessions that are not shared and rejects malformed session IDs", async () => {
+  test("reports an empty backend inventory without per-session commands", async () => {
     await withHome(async (root) => {
       const sessions = await run(isolatedEnv(root), ["remote", "sessions"])
       expect(sessions.exitCode).toBe(0)
-      expect(sessions.stdout).toContain("No sessions are shared")
+      expect(sessions.stdout).toContain("The backend has no Sessions")
 
       const deny = await run(isolatedEnv(root), ["remote", "deny", "ses_missing"])
       expect(deny.exitCode).not.toBe(0)
-      expect(deny.output).toContain("not shared")
-
-      const malformed = await run(isolatedEnv(root), ["remote", "deny", "not-a-session"])
-      expect(malformed.exitCode).not.toBe(0)
-      expect(malformed.output).toContain("not a YCoding session ID")
+      expect(deny.output).toContain('Unknown subcommand "deny"')
     })
   })
 
-  test("shares and unshares a real isolated session", async () => {
+  test("lists every real isolated backend Session without a local allow step", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-remote-commands-work-"))
     const server = await startServer(directory)
     try {
@@ -114,24 +112,10 @@ describe("remote command surface", () => {
         await createSession(server, "ses_cli_shared", directory)
         const env = isolatedEnv(root, { YCODING_PASSWORD: password })
 
-        const allow = await run(env, ["remote", "allow", "ses_cli_shared", "--server", server.base])
-        expect(allow.exitCode, allow.output).toBe(0)
-        expect(allow.stdout).toContain("Shared ses_cli_shared")
-
-        const listed = await run(env, ["remote", "sessions"])
+        const listed = await run(env, ["remote", "sessions", "--server", server.base])
+        expect(listed.exitCode, listed.output).toBe(0)
         expect(listed.stdout).toContain("ses_cli_shared")
         expect(listed.stdout).toContain(directory)
-
-        const status = await run(env, ["remote", "status"])
-        expect(status.stdout).toContain("Shared        1 session(s)")
-
-        const unknown = await run(env, ["remote", "allow", "ses_cli_absent", "--server", server.base])
-        expect(unknown.exitCode).not.toBe(0)
-        expect(unknown.output).toContain("No local session")
-
-        const deny = await run(env, ["remote", "deny", "ses_cli_shared"])
-        expect(deny.exitCode, deny.output).toBe(0)
-        expect((await run(env, ["remote", "sessions"])).stdout).toContain("No sessions are shared")
       })
     } finally {
       await server.close()

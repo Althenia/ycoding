@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionInfo } from "@ycoding-ai/client/promise"
 import { RemoteLimits, parseChunkedValue, requireSession, type RemoteRequest } from "@ycoding-ai/remote"
-import type { AllowlistSession } from "../src/remote-config"
-import { assertPrivateEndpoint, type LocalLocation, type LocalServer } from "../src/remote-local"
+import { assertPrivateEndpoint, type LocalServer } from "../src/remote-local"
 import { LocalFailure as LocalFailureClass } from "../src/remote-local"
 import {
   createSessionRegistry,
@@ -47,23 +46,18 @@ function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
   return { local, calls }
 }
 
-const entry: AllowlistSession = { sessionID: "ses_1", directory: "/work", workspaceID: undefined, title: "One" }
-const other: AllowlistSession = { sessionID: "ses_2", directory: "/work/two", workspaceID: undefined, title: "Two" }
-
 async function harness(options: {
-  entries?: readonly AllowlistSession[]
   results?: Partial<Record<keyof LocalServer, unknown>>
   sessions?: readonly SessionInfo[]
 }) {
-  const entries = options.entries ?? [entry]
   const infos = options.sessions ?? [sessionInfo("ses_1", { updated: 1 })]
   // The caller keeps the reference so a test can install a failure after setup.
   const results = options.results ?? {}
-  results.getSession ??= async () => infos[0]
+  results.listPage ??= async () => ({ data: infos })
+  results.getSession ??= async (sessionID: string) => infos.find((info) => info.id === sessionID)
   const { local, calls } = fakeLocal(results)
   const registry = createSessionRegistry({
     local,
-    entries,
     staleMs: 0,
   })
   await registry.refresh()
@@ -112,8 +106,8 @@ function errorOf(frames: readonly { ok: boolean }[]) {
   return frame.error
 }
 
-describe("allowlist authorization", () => {
-  test("refuses a session outside the advertisement without touching the local server", async () => {
+describe("backend Session authorization", () => {
+  test("refuses a session absent from the authoritative backend inventory", async () => {
     const { local, registry, subscriptions, calls } = await harness({})
     const outcome = await executeRemoteOperation({
       request: { ...request("session.messages"), sessionID: "ses_other" },
@@ -122,13 +116,12 @@ describe("allowlist authorization", () => {
       local,
     })
     expect(errorOf(outcome).code).toBe("session_not_allowed")
-    expect(calls).toEqual([])
+    expect(calls.map((call) => call.method)).toEqual(["listPage"])
   })
 
-  test("serves only advertised sessions from the local list", async () => {
+  test("serves every backend session from the global list", async () => {
     const sessions = [sessionInfo("ses_1", { updated: 2 }), sessionInfo("ses_2", { updated: 1, directory: "/work/two" })]
     const { local, registry, subscriptions } = await harness({
-      entries: [entry, other],
       sessions,
       results: { getSession: async (sessionID: string) => sessions.find((session) => session.id === sessionID) },
     })
@@ -140,7 +133,7 @@ describe("allowlist authorization", () => {
     expect(value.data[0].model).toEqual({ providerID: "test", id: "model" })
   })
 
-  test("always addresses the local server at the allowlisted Location, never a remote value", async () => {
+  test("always addresses the local server at its backend Location, never a remote value", async () => {
     const { local, registry, subscriptions, calls } = await harness({
       results: { prompt: async () => ({ id: "msg_1" }) },
     })
@@ -269,7 +262,7 @@ describe("operation mapping", () => {
     expect(calls.at(-1)).toEqual({ method: "autonomySet", args: ["ses_1", { directory: "/work" }, { goal: null }] })
   })
 
-  test("returns each read body verbatim and never calls the local server for logical subscriptions", async () => {
+  test("returns each read body verbatim and validates subscriptions without owning relay state", async () => {
     const snapshot = { sourceEpoch: "epoch_1", session: sessionInfo("ses_1", { updated: 1 }), messages: [], watermark: { seq: 4 } }
     const { local, registry, subscriptions, calls } = await harness({
       results: {
@@ -299,9 +292,13 @@ describe("operation mapping", () => {
     expect(valueOf(await executeRemoteOperation({ request: request("session.subscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(valueOf(await executeRemoteOperation({ request: request("session.subscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(valueOf(await executeRemoteOperation({ request: request("session.unsubscribe"), sessions: registry, subscriptions, local }))).toBeNull()
-    expect(calls.filter((call) => call.method !== "getSession").length).toBe(before)
-    expect(subscriptions.count("ses_1")).toBe(1)
-    expect(subscriptions.has("ses_1")).toBe(true)
+    expect(calls.filter((call) => call.method !== "getSession").slice(before).map((call) => call.method)).toEqual([
+      "listPage",
+      "listPage",
+      "listPage",
+    ])
+    expect(subscriptions.count("ses_1")).toBe(0)
+    expect(subscriptions.has("ses_1")).toBe(false)
     expect(valueOf(await executeRemoteOperation({ request: request("session.unsubscribe"), sessions: registry, subscriptions, local }))).toBeNull()
     expect(subscriptions.has("ses_1")).toBe(false)
   })
@@ -326,13 +323,12 @@ describe("operation mapping", () => {
       expect({ operation, frame: outcome[0] }).toMatchObject({ operation, frame: { ok: true } })
     }
     // `session.get` itself is the verification read, so it is counted below.
-    expect(calls.filter((call) => call.method !== "getSession").map((call) => call.method)).toEqual(
+    expect(calls.filter((call) => call.method !== "getSession" && call.method !== "listPage").map((call) => call.method)).toEqual(
       readOperations.map(readMethod).filter((method) => method !== "getSession"),
     )
-    // One verification per session-scoped read, plus one allowlist refresh for the
-    // process-wide running-status read.
+    // Every session-scoped read resolves and verifies its current backend Location.
     const scoped = readOperations.filter(requireSession)
-    expect(calls.filter((call) => call.method === "getSession")).toHaveLength(scoped.length + 1)
+    expect(calls.filter((call) => call.method === "getSession")).toHaveLength(scoped.length)
   })
 
   test("reports running status for shared sessions only", async () => {
@@ -360,40 +356,29 @@ describe("operation mapping", () => {
     expect(errorOf(rejected).code).toBe("invalid_message")
   })
 
-  test("fails closed when an advertised Session moved and reports the new location instead of following it", async () => {
-    const infos = [sessionInfo("ses_1", { updated: 1 })]
-    let moved = false
+  test("follows the backend's authoritative current Location after a Session moves", async () => {
+    const moved = sessionInfo("ses_1", { updated: 1, directory: "/work/moved" })
     const results: Partial<Record<keyof LocalServer, unknown>> = {
-      getSession: async () => {
-        if (moved) throw new LocalFailureClass("not_found", "gone")
-        return infos[0]
-      },
-      listPage: async () => ({ data: [sessionInfo("ses_1", { updated: 1, directory: "/work/moved" })] }),
+      getSession: async () => moved,
+      listPage: async () => ({ data: [moved] }),
       messages: async () => [{ id: "msg_1" }],
     }
     const { local, calls } = fakeLocal(results)
-    const reported: Array<{ sessionID: string; location: LocalLocation }> = []
     const registry = createSessionRegistry({
       local,
-      entries: [entry],
       staleMs: 0,
-      onMoved: (sessionID, location) => reported.push({ sessionID, location }),
     })
     await registry.refresh()
     calls.length = 0
-    expect(registry.advertised("ses_1")).toBe(true)
 
-    moved = true
     const outcome = await executeRemoteOperation({
       request: request("session.messages"),
       sessions: registry,
       subscriptions: createSubscriptions(),
       local,
     })
-    expect(errorOf(outcome).code).toBe("session_not_allowed")
-    expect(calls.some((call) => call.method === "messages")).toBe(false)
-    expect(reported).toEqual([{ sessionID: "ses_1", location: { directory: "/work/moved" } }])
-    expect(registry.advertised("ses_1")).toBe(false)
+    expect(valueOf(outcome)).toEqual({ data: [{ id: "msg_1" }] })
+    expect(calls.at(-1)).toEqual({ method: "messages", args: ["ses_1", { directory: "/work/moved" }] })
   })
 })
 
@@ -415,7 +400,7 @@ function readMethod(operation: (typeof readOperations)[number]) {
 }
 
 describe("family-wide guardrail reviews", () => {
-  test("filters reviews owned by sessions outside the advertisement and refuses their replies", async () => {
+  test("keeps reviews for every backend Session and preserves explicit replies", async () => {
     const { local, registry, subscriptions, calls } = await harness({
       results: {
         guardrailRequestList: async () => ({
@@ -433,16 +418,21 @@ describe("family-wide guardrail reviews", () => {
       subscriptions,
       local,
     })
-    expect(valueOf(listed)).toEqual({ data: [{ id: "grq_mine", sessionID: "ses_1", rootSessionID: "ses_1" }] })
+    expect(valueOf(listed)).toEqual({
+      data: [
+        { id: "grq_mine", sessionID: "ses_1", rootSessionID: "ses_1" },
+        { id: "grq_sibling", sessionID: "ses_child", rootSessionID: "ses_1" },
+      ],
+    })
 
-    const refused = await executeRemoteOperation({
+    const sibling = await executeRemoteOperation({
       request: request("session.guardrail.reply", { requestID: "grq_sibling", reply: "once" }),
       sessions: registry,
       subscriptions,
       local,
     })
-    expect(errorOf(refused).code).toBe("session_not_allowed")
-    expect(calls.some((call) => call.method === "guardrailReply")).toBe(false)
+    expect(valueOf(sibling)).toBeNull()
+    expect(calls.some((call) => call.method === "guardrailReply")).toBe(true)
 
     const allowed = await executeRemoteOperation({
       request: request("session.guardrail.reply", { requestID: "grq_mine", reply: "once" }),
@@ -455,10 +445,9 @@ describe("family-wide guardrail reviews", () => {
   })
 
   test("refuses an unknown review and allows a granted child addressed through the root", async () => {
-    const child: AllowlistSession = { sessionID: "ses_child", directory: "/work", workspaceID: undefined, title: "Child" }
     const infos = [sessionInfo("ses_1", { updated: 1 }), sessionInfo("ses_child", { updated: 1, parentID: "ses_1" })]
     const { local, registry, subscriptions, calls } = await harness({
-      entries: [entry, child],
+      sessions: infos,
       results: {
         getSession: async (sessionID: string) => infos.find((info) => info.id === sessionID),
         guardrailRequestList: async () => [{ id: "grq_child", sessionID: "ses_child", rootSessionID: "ses_1" }],
@@ -604,7 +593,7 @@ describe("session shell output read", () => {
     expect(calls.some((call) => call.method === "shellOutput")).toBe(false)
   })
 
-  test("refuses an unadvertised Session before any local call", async () => {
+  test("refuses a backend-unknown Session before any scoped local call", async () => {
     const { local, registry, subscriptions, calls } = await shellHarness()
     const outcome = await executeRemoteOperation({
       request: { ...request("session.shell.output", { shellID: "sh_1" }), sessionID: "ses_other" },
@@ -613,7 +602,7 @@ describe("session shell output read", () => {
       local,
     })
     expect(errorOf(outcome).code).toBe("session_not_allowed")
-    expect(calls).toEqual([])
+    expect(calls.map((call) => call.method)).toEqual(["listPage"])
   })
 })
 

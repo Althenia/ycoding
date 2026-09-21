@@ -270,8 +270,8 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
  */
 export function RequestCard(props: { readonly request: () => PendingRequestView; readonly activeSessionID?: string }): JSX.Element {
   const remote = useRemote()
-  const [custom, setCustom] = createSignal("")
-  const [selected, setSelected] = createSignal<string[]>([])
+  const [custom, setCustom] = createSignal<Readonly<Record<number, string>>>({})
+  const [selected, setSelected] = createSignal<Readonly<Record<number, readonly string[]>>>({})
 
   const canReply = () => {
     const request = props.request()
@@ -280,7 +280,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   }
 
   return (
-    <article class={`request request--${props.request().kind}`} aria-live="polite">
+    <article class={`request request--${props.request().kind}${isHardReview(props.request()) ? " request--hard" : ""}`} aria-live="polite">
       <Show when={props.request().kind === "permission"}>
         <header class="request__header">
           <Icon name="shield" size={16} />
@@ -365,7 +365,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
           <span>Question</span>
         </header>
         <For each={questionList(props.request())}>
-          {(question) => (
+          {(question, questionIndex) => (
             <fieldset class="question">
               <legend>{question.header}</legend>
               <p>{question.question}</p>
@@ -374,17 +374,21 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
                   <label class="question__option">
                     <input
                       type={question.multiple ? "checkbox" : "radio"}
-                      name={props.request().id}
+                      name={`${props.request().id}-${questionIndex()}`}
                       value={option.label}
-                      checked={selected().includes(option.label)}
+                      checked={(selected()[questionIndex()] ?? []).includes(option.label)}
                       onChange={() => {
-                        setSelected((current) =>
-                          question.multiple
-                            ? current.includes(option.label)
-                              ? current.filter((entry) => entry !== option.label)
-                              : [...current, option.label]
-                            : [option.label],
-                        )
+                        setSelected((current) => {
+                          const answers = current[questionIndex()] ?? []
+                          return {
+                            ...current,
+                            [questionIndex()]: question.multiple
+                              ? answers.includes(option.label)
+                                ? answers.filter((entry) => entry !== option.label)
+                                : [...answers, option.label]
+                              : [option.label],
+                          }
+                        })
                       }}
                     />
                     <span>
@@ -396,7 +400,11 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
               <Show when={question.custom}>
                 <label class="question__custom">
                   <span>Custom answer</span>
-                  <input type="text" value={custom()} onInput={(event) => setCustom(event.currentTarget.value)} />
+                  <input
+                    type="text"
+                    value={custom()[questionIndex()] ?? ""}
+                    onInput={(event) => setCustom((current) => ({ ...current, [questionIndex()]: event.currentTarget.value }))}
+                  />
                 </label>
               </Show>
             </fieldset>
@@ -407,9 +415,12 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
             type="button"
             class="button button--primary button--small"
             onClick={() => {
-              const answers = questionList(props.request()).map(() => selected())
-              const withCustom = custom().trim().length > 0 ? answers.map((answer) => [...answer, custom().trim()]) : answers
-              void remote.store.replyQuestion(props.request().id, withCustom.length > 0 ? withCustom : [[""]])
+              const answers = questionList(props.request()).map((_, index) => {
+                const answer = selected()[index] ?? []
+                const written = custom()[index]?.trim()
+                return written === undefined || written.length === 0 ? answer : [...answer, written]
+              })
+              void remote.store.replyQuestion(props.request().id, answers.length > 0 ? answers : [[""]])
             }}
           >
             Send answer

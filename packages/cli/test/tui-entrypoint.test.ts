@@ -51,7 +51,7 @@ describe("TUI entrypoint", () => {
     const help = await tui(["remote", "--help"])
 
     expect(help.exitCode).toBe(0)
-    for (const command of ["enroll", "connect", "status", "sessions", "allow", "deny"]) {
+    for (const command of ["enroll", "connect", "status", "sessions"]) {
       expect(help.stdout).toContain(command)
     }
 

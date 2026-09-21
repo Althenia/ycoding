@@ -22,9 +22,17 @@ The relay wire contract is specified in [`packages/remote/CONTRACT.md`](../packa
 
 Commands below run from the repository root and target the committed configuration with `--config infra/cloudflare/wrangler.jsonc`. Wrangler is pinned to 4.133.0; `bunx wrangler` resolves that local version.
 
+### WebSocket v2 cutover
+
+The current relay accepts WebSockets only at `/ws/v2/client` and `/ws/v2/agent`. Missing-version, v1, and unknown-version relay paths return `404` before a WebSocket upgrade; there are no aliases or protocol fallbacks. Enrollment records, device identities, and browser sign-in data remain valid, so this cutover requires no credential or data migration.
+
+Perform a coordinated release in this order: stop existing `ycoding remote connect` processes; upgrade every installed connector to a build that uses `/ws/v2/agent`; deploy the Worker and web assets from the same release; refresh open browser tabs so they use `/ws/v2/client`; then restart each connector and reconnect the existing enrolled identity. An old connector cannot connect after the Worker cutover, and an old browser tab must be refreshed. Do not re-enroll a device unless its existing credential is independently invalid.
+
 ## Stored metadata and retention
 
 D1 stores authentication and device metadata only. It never stores transcripts, message projections, streaming deltas, tool output, Session contents, or file contents; Session data stays on the user's machine and crosses the relay as live WebSocket frames.
+
+Authenticated `GET /api/devices` and `GET /api/me` return each retained device with `online: boolean`. The Worker reads that value from the owner/device Durable Object's current authenticated agent connection; a revoked device and any failed presence read report `false`. `status`, `lastSeenAt`, and enrollment alone never mark a device online. Revoked and offline devices remain in these Settings-facing lists, while a connectable-device picker must select only `status: "active"` entries whose `online` value is `true`.
 
 | Table                            | Contents                                                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------- |

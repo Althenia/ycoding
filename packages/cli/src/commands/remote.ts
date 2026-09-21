@@ -2,9 +2,8 @@ import { Argument, Flag } from "effect/unstable/cli"
 import { Spec } from "../framework/spec"
 import { ServerParams } from "./run"
 
-// `ycoding remote` shares explicitly chosen local Sessions with the YCoding web
-// app through the hosted relay. The device identity and the shared-Session
-// allowlist live outside the repository under the global YCoding directories.
+// `ycoding remote` gives an enrolled machine owner access to the backend's
+// Sessions through the authenticated outbound relay.
 
 export const RemoteCommand = Spec.make("remote", {
   description: "Control this machine's YCoding agent from the YCoding web app",
@@ -30,7 +29,7 @@ export const RemoteCommand = Spec.make("remote", {
       },
     }),
     Spec.make("connect", {
-      description: "Connect this machine to the relay and serve shared sessions",
+      description: "Connect this machine to the relay and serve backend sessions",
       params: {
         ...ServerParams,
         relay: Flag.string("relay").pipe(
@@ -40,27 +39,12 @@ export const RemoteCommand = Spec.make("remote", {
       },
     }),
     Spec.make("status", {
-      description: "Show device enrollment and shared sessions",
+      description: "Show device enrollment and backend session access",
+      params: ServerParams,
     }),
     Spec.make("sessions", {
-      description: "List the sessions shared with the relay",
-    }),
-    Spec.make("allow", {
-      description: "Share one local session with the relay",
-      params: {
-        ...ServerParams,
-        sessionID: Argument.string("sessionID").pipe(Argument.withDescription("Session ID to share")),
-        directory: Flag.string("directory").pipe(
-          Flag.withDescription("Directory holding the session, when it cannot be discovered automatically"),
-          Flag.optional,
-        ),
-      },
-    }),
-    Spec.make("deny", {
-      description: "Stop sharing one local session with the relay",
-      params: {
-        sessionID: Argument.string("sessionID").pipe(Argument.withDescription("Session ID to stop sharing")),
-      },
+      description: "List the backend sessions available to the enrolled machine owner",
+      params: ServerParams,
     }),
   ],
 })

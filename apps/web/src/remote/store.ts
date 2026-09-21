@@ -180,9 +180,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let transport: RemoteTransport | undefined
   let selectionToken = 0
   /**
-   * Generation of the advertised-session context. A session-list read may publish
-   * only while it still describes the advertised set it was issued for, and every
-   * connection change and advertisement frame starts a new generation.
+   * Generation of the backend Session-list context. A list read may publish only
+   * while it still describes the generation it was issued for, and every
+   * connection change or Session invalidation starts a new generation.
    */
   let sessionsToken = 0
   /**
@@ -342,7 +342,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       setState({
         transport: status,
-        connection: deviceConnection(state.devices.filter((device) => device.status === "active").length),
+        connection: deviceConnection(state.devices.filter((device) => device.status === "active" && device.online).length),
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
@@ -568,17 +568,41 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  /** Reads the advertised session list for the generation that requested it. */
+  const readAllSessions = async (owner: RemoteTransport): Promise<RemoteRequestOutcome> => {
+    const data: unknown[] = []
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    for (;;) {
+      const page = await owner.request("session.list", {
+        input: { limit: 200, ...(cursor === undefined ? {} : { cursor }) },
+      })
+      if (page.status !== "ok") return page
+      data.push(...readSessionInfoList(page.value))
+      const value = typeof page.value === "object" && page.value !== null ? page.value : undefined
+      const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
+      const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
+      if (typeof next !== "string" || next.length === 0) return { status: "ok", value: { data } }
+      if (seen.has(next))
+        return {
+          status: "failed",
+          error: { code: "invalid_message", message: "The device repeated a Session list cursor" },
+        }
+      seen.add(next)
+      cursor = next
+    }
+  }
+
+  /** Reads every authoritative backend page for the generation that requested it. */
   const loadSessions = async (token: number) => {
     const active = transport
     if (!active) return
     const [listed, activeStatus] = await Promise.all([
-      active.request("session.list"),
+      readAllSessions(active),
       // Optional read: a connection that cannot answer it leaves `running` unknown.
       active.request("session.active"),
     ])
     // A read that settles after its connection was replaced, or after a newer
-    // advertisement arrived, describes a list this store no longer shows.
+    // Session invalidation arrived, describes a list this store no longer shows.
     if (token !== sessionsToken || !isCurrentConnection(active)) return
     if (listed.status !== "ok") {
       // An open, authenticated browser relay reports this exact structured response
@@ -590,7 +614,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     const running = activeStatus.status === "ok" ? readActiveSessions(activeStatus.value) : undefined
-    const advertised = new Set(state.advertised)
     const sessions = readSessionInfoList(listed.value).flatMap((entry) => {
       const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
       const info = readSessionInfo(entry, {
@@ -600,7 +623,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     })
     setState({
       ...(state.connection.kind === "offline" ? { connection: connectionFor(active.status(), state.activeDeviceID) } : {}),
-      sessions: advertised.size === 0 ? sessions : sessions.filter((session) => advertised.has(session.id)),
+      sessions,
+      advertised: sessions.map((session) => session.id),
     })
   }
 
@@ -722,7 +746,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return
       }
       const devices = me.value.devices
-      const activeDevices = devices.filter((device) => device.status === "active")
+      const selected = devices.find((device) => device.id === state.activeDeviceID)
+      if (selected?.status === "active" && !selected.online) {
+        setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
+        api.disconnect()
+        setState({
+          activeDeviceID: selected.id,
+          connection: { kind: "offline", deviceName: selected.name },
+          transport: { kind: "idle" },
+        })
+        return
+      }
+      const activeDevices = devices.filter((device) => device.status === "active" && device.online)
       const first = activeDevices[0]
       const stillPresent = activeDevices.some((device) => device.id === state.activeDeviceID)
       const adoptOnlyDevice = !stillPresent && first !== undefined && activeDevices.length === 1
@@ -733,7 +768,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           ? state.connection
           : adoptOnlyDevice
             ? { kind: "connecting" }
-            : deviceConnection(activeDevices.length),
+            : deviceConnection(devices.filter((device) => device.status === "active").length),
       })
       if (adoptOnlyDevice && first !== undefined) api.connect(first.id)
       else if (!stillPresent && state.activeDeviceID !== undefined) api.disconnect()
@@ -764,10 +799,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       endAlerts()
       const created = options.createTransport(deviceID, {
         onStatus: (status) => handleStatus(created, status),
-        onSessions: (sessionIDs) => {
+        onSessions: () => {
           if (!isCurrentConnection(created)) return
           sessionsToken += 1
-          setState({ advertised: [...sessionIDs] })
+          setState({ advertised: [] })
           void loadSessions(sessionsToken)
         },
         onEvent: (sessionID, event) => {

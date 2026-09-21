@@ -23,12 +23,28 @@ function sessionInfo(id: string, table: { updated?: number; directory?: string; 
 
 type Call = { readonly method: string; readonly args: readonly unknown[] }
 
+async function waitFor<Value>(check: () => Value | undefined, timeout = 1_000) {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    const value = check()
+    if (value !== undefined) return value
+    if (Date.now() >= deadline) throw new Error("condition timed out")
+    await Bun.sleep(5)
+  }
+}
+
 function fakeLocal(results: Partial<Record<keyof LocalServer, unknown>> = {}) {
   const calls: Call[] = []
   const streams: Array<{ stream: LocalEventStream; stop: () => Promise<void>; stopped: boolean }> = []
   const local = new Proxy({} as LocalServer, {
     get(_target, property: PropertyKey) {
       if (property === "events") {
+        const result = results.events
+        if (typeof result === "function")
+          return (stream: LocalEventStream) => {
+            calls.push({ method: "events", args: [] })
+            return Promise.resolve((result as (value: LocalEventStream) => unknown)(stream))
+          }
         return async (stream: LocalEventStream) => {
           calls.push({ method: "events", args: [] })
           const record = { stream, stopped: false, stop: async () => void (record.stopped = true) }
@@ -62,6 +78,11 @@ function harness(options: {
   reloadSessions?: () => Promise<readonly AllowlistSession[]>
 }) {
   const { local, calls, streams } = fakeLocal({
+    listPage: async () => ({
+      data: (options.sessions ?? [entry]).map((value) =>
+        sessionInfo(value.sessionID, { directory: value.directory, title: value.title }),
+      ),
+    }),
     getSession: async (sessionID: string) => sessionInfo(sessionID),
     ...options.results,
   })
@@ -72,8 +93,6 @@ function harness(options: {
   let tokens = 0
   const bridge = new RemoteAgent({
     relayURL: "https://relay.example",
-    sessions: options.sessions ?? [entry],
-    ...(options.reloadSessions === undefined ? {} : { reloadSessions: options.reloadSessions }),
     local,
     credentials: options.credentials ?? (async () => ({ accessToken: `token_${++tokens}`, accessExpiresAt: clock + 600_000 })),
     createConnection: (input) => {
@@ -142,32 +161,7 @@ function sentFrames(record: ConnectionRecord) {
 function sessionsFrame(record: ConnectionRecord) {
   const frames = sentFrames(record).filter((value) => value.type === "sessions")
   expect(frames.length).toBeGreaterThan(0)
-  return frames.at(-1) as { type: "sessions"; sessionIDs: readonly string[] }
-}
-
-async function waitFor<Value>(check: () => Value | undefined, timeout = 5_000) {
-  const deadline = Date.now() + timeout
-  for (;;) {
-    const value = check()
-    if (value !== undefined) return value
-    if (Date.now() >= deadline) throw new Error("condition timed out")
-    await Bun.sleep(5)
-  }
-}
-
-function relayFrames(record: ConnectionRecord) {
-  return sentFrames(record)
-}
-
-function relayResponses(record: ConnectionRecord) {
-  return relayFrames(record).filter((frame) => frame.type === "response") as unknown as readonly {
-    readonly ok: boolean
-  }[]
-}
-
-
-function relayEventCount(record: ConnectionRecord) {
-  return relayFrames(record).filter((frame) => frame.type === "event").length
+  return frames.at(-1) as { type: "sessions" }
 }
 
 function requestFrame(operation: string, sessionID?: string, input?: Record<string, unknown>) {
@@ -175,12 +169,12 @@ function requestFrame(operation: string, sessionID?: string, input?: Record<stri
 }
 
 describe("remote bridge", () => {
-  test("advertises only verified allowlisted sessions on connect and refuses unknown or unlisted frames", async () => {
+  test("invalidates Session lists on connect and refuses backend-unknown IDs", async () => {
     const { bridge, records, calls, diagnostics } = harness({})
     await bridge.connect()
 
     expect(records).toHaveLength(1)
-    expect(sessionsFrame(records[0])).toEqual({ type: "sessions", sessionIDs: ["ses_1"] })
+    expect(sessionsFrame(records[0])).toEqual({ type: "sessions" })
 
     records[0].deliver(requestFrame("session.messages", "ses_9"))
     await Bun.sleep(5)
@@ -229,13 +223,12 @@ describe("remote bridge", () => {
     await bridge.connect()
     const connection = records[0]
 
-    connection.deliver(requestFrame("session.subscribe", "ses_1"))
-    connection.deliver(requestFrame("session.subscribe", "ses_1"))
-    connection.deliver(requestFrame("session.subscribe", "ses_2"))
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
+    connection.deliver({ type: "subscriptions", clientID: "client-2", sessionIDs: ["ses_1", "ses_2"] })
     await Bun.sleep(5)
     expect(streams).toHaveLength(1)
 
-    connection.deliver(requestFrame("session.unsubscribe", "ses_1"))
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [] })
     await Bun.sleep(5)
     expect(streams[0].stopped).toBe(false)
 
@@ -243,26 +236,25 @@ describe("remote bridge", () => {
     await Bun.sleep(5)
     expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
 
-    connection.deliver(requestFrame("session.unsubscribe", "ses_1"))
-    connection.deliver(requestFrame("session.unsubscribe", "ses_2"))
+    connection.deliver({ type: "subscriptions", clientID: "client-2", sessionIDs: [] })
     await Bun.sleep(5)
-    expect(streams[0].stopped).toBe(true)
+    expect(streams[0].stopped).toBe(false)
 
     // A redundant unsubscribe for an unknown session must not disturb the stream.
-    connection.deliver(requestFrame("session.subscribe", "ses_2"))
+    connection.deliver({ type: "subscriptions", clientID: "client-2", sessionIDs: ["ses_2"] })
     await Bun.sleep(5)
-    connection.deliver(requestFrame("session.unsubscribe", "ses_1"))
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [] })
     await Bun.sleep(5)
-    expect(streams[1].stopped).toBe(false)
+    expect(streams[0].stopped).toBe(false)
 
     await bridge.close()
   })
 
-  test("forwards only advertised and subscribed session events, in arrival order", async () => {
+  test("forwards only relay-synchronized session events, in arrival order", async () => {
     const { bridge, records, streams } = harness({ sessions: [entry, second] })
     await bridge.connect()
     const connection = records[0]
-    connection.deliver(requestFrame("session.subscribe", "ses_1"))
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
     await Bun.sleep(5)
 
     connection.sent.length = 0
@@ -284,127 +276,74 @@ describe("remote bridge", () => {
     await bridge.close()
   })
 
-  test("withholds a denied session event while the current allowlist reload is pending", async () => {
-    let reloads = 0
-    let resolveReload: ((sessions: readonly AllowlistSession[]) => void) | undefined
-    const { bridge, records, streams, advance } = harness({
-      reloadSessions: async () => {
-        reloads++
-        if (reloads === 1) return [entry]
-        return new Promise((resolve) => {
-          resolveReload = resolve
-        })
-      },
-    })
+  test("clears derived subscription interest on relay reconnect until fresh snapshots arrive", async () => {
+    const { bridge, records, streams } = harness({})
     await bridge.connect()
     const connection = records[0]
-    connection.deliver(requestFrame("session.subscribe", "ses_1"))
-    await waitFor(() => (streams.length === 1 ? true : undefined))
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
+    await Bun.sleep(5)
 
     connection.sent.length = 0
-    advance(1_000)
-    streams[0].stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await waitFor(() => (reloads === 2 ? true : undefined))
-
-    expect(relayEventCount(connection)).toBe(0)
-    resolveReload?.([])
-    await waitFor(() => (bridge.advertised.length === 0 ? true : undefined))
-    expect(relayEventCount(connection)).toBe(0)
-    expect(sessionsFrame(connection)).toEqual({ type: "sessions", sessionIDs: [] })
-
-    await bridge.close()
-  })
-
-  test("fails closed when the current event allowlist cannot be read", async () => {
-    let reloads = 0
-    const { bridge, records, streams, advance, diagnostics } = harness({
-      reloadSessions: async () => {
-        reloads++
-        if (reloads === 1) return [entry]
-        throw new Error("allowlist unavailable")
-      },
-    })
-    await bridge.connect()
-    const connection = records[0]
-    connection.deliver(requestFrame("session.subscribe", "ses_1"))
-    await waitFor(() => (streams.length === 1 ? true : undefined))
+    streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
+    await Bun.sleep(5)
+    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
 
     connection.sent.length = 0
-    advance(1_000)
-    streams[0].stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await waitFor(() => diagnostics.find((message) => message.includes("allowlist unavailable")))
+    connection.input.onClose(1012)
+    connection.input.onOpen()
+    streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
+    await Bun.sleep(5)
+    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(0)
 
-    expect(relayEventCount(connection)).toBe(0)
-    expect(bridge.currentState).toBe("live")
+    connection.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
+    streams[0].stream.onEvent({ type: "message.updated", data: { sessionID: "ses_1" } })
+    await Bun.sleep(5)
+    expect(sentFrames(connection).filter((frame) => frame.type === "event")).toHaveLength(1)
     await bridge.close()
   })
 
-  test("does not send a pending event through a replacement connection", async () => {
-    let reloads = 0
-    let resolveReload: ((sessions: readonly AllowlistSession[]) => void) | undefined
-    const { bridge, records, streams, advance } = harness({
-      reloadSessions: async () => {
-        reloads++
-        if (reloads === 1) return [entry]
-        return new Promise((resolve) => {
-          resolveReload = resolve
-        })
-      },
-    })
+  test("retries the inventory event stream with zero subscriptions and stops retrying after close", async () => {
+    const { bridge, records, streams } = harness({})
     await bridge.connect()
-    records[0].deliver(requestFrame("session.subscribe", "ses_1"))
-    await waitFor(() => (streams.length === 1 ? true : undefined))
-
+    expect(streams).toHaveLength(1)
     records[0].sent.length = 0
-    advance(1_000)
-    streams[0].stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await waitFor(() => (reloads === 2 ? true : undefined))
-    records[0].input.onClose(RemoteCloseCode.unauthorized)
-    await waitFor(() => (records.length === 2 ? true : undefined))
 
-    resolveReload?.([entry])
-    await Bun.sleep(10)
-    expect(relayEventCount(records[0])).toBe(0)
-    expect(relayEventCount(records[1])).toBe(0)
+    streams[0].stream.onEnd()
+    await waitFor(() => (streams.length === 2 ? true : undefined))
+    streams[1].stream.onEvent({ type: "session.created", data: { sessionID: "ses_new" } })
+    await waitFor(() => (sentFrames(records[0]).some((frame) => frame.type === "sessions") ? true : undefined))
 
+    streams[1].stream.onFailure(new LocalFailure("transport", "ended"))
     await bridge.close()
+    await Bun.sleep(15)
+    expect(streams).toHaveLength(2)
   })
 
-  test("bounds events waiting for allowlist authorization and reconciles on overflow", async () => {
-    let reloads = 0
-    let resolveReload: ((sessions: readonly AllowlistSession[]) => void) | undefined
-    const { bridge, records, streams, advance, diagnostics } = harness({
-      reloadSessions: async () => {
-        reloads++
-        if (reloads === 1) return [entry]
-        return new Promise((resolve) => {
-          resolveReload = resolve
-        })
+  test("retries when the event stream ends before its start promise resolves", async () => {
+    let starts = 0
+    let stops = 0
+    const { bridge } = harness({
+      results: {
+        events: async (stream: LocalEventStream) => {
+          starts++
+          if (starts === 1) stream.onEnd()
+          return async () => {
+            stops++
+          }
+        },
       },
     })
     await bridge.connect()
-    records[0].deliver(requestFrame("session.subscribe", "ses_1"))
-    await waitFor(() => (streams.length === 1 ? true : undefined))
-
-    records[0].sent.length = 0
-    advance(1_000)
-    for (let index = 0; index < 1_026; index++)
-      streams[0].stream.onEvent({ type: "session.created", data: { sessionID: "ses_1", index } })
-    await waitFor(() => (records.length === 2 ? true : undefined))
-
-    expect(diagnostics.some((message) => message.includes("authorization queue filled"))).toBe(true)
-    resolveReload?.([entry])
-    await Bun.sleep(10)
-    expect(relayEventCount(records[0])).toBe(0)
-    expect(relayEventCount(records[1])).toBe(0)
-
+    await waitFor(() => (starts === 2 ? true : undefined))
+    expect(stops).toBe(1)
     await bridge.close()
+    expect(stops).toBe(2)
   })
 
   test("closes the connection for an oversized event frame and reconnects instead of truncating", async () => {
     const { bridge, records, streams, diagnostics } = harness({})
     await bridge.connect()
-    records[0].deliver(requestFrame("session.subscribe", "ses_1"))
+    records[0].deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: ["ses_1"] })
     await Bun.sleep(5)
     const before = records.length
 
@@ -414,16 +353,17 @@ describe("remote bridge", () => {
     expect(sentFrames(records[0]).filter((frame) => frame.type === "event")).toHaveLength(0)
     expect(records[0].disconnected).toBe(true)
     expect(records.length).toBe(before + 1)
-    expect(sessionsFrame(records[1])).toEqual({ type: "sessions", sessionIDs: ["ses_1"] })
+    expect(sessionsFrame(records[1])).toEqual({ type: "sessions" })
     expect(diagnostics.some((message) => message.includes("oversized"))).toBe(true)
 
     await bridge.close()
   })
 
-  test("re-advertises on reconnect and after the allowlist changes", async () => {
+  test("re-invalidates on reconnect and after the backend inventory changes", async () => {
     let available = true
     const { bridge, records } = harness({
       results: {
+        listPage: async () => ({ data: available ? [sessionInfo("ses_1")] : [] }),
         getSession: async (sessionID: string) => {
           if (!available) throw new LocalFailure("not_found", "gone")
           return sessionInfo(sessionID)
@@ -437,11 +377,11 @@ describe("remote bridge", () => {
     connection.input.onClose(1012)
     connection.input.onOpen()
     await Bun.sleep(5)
-    expect(sessionsFrame(connection)).toEqual({ type: "sessions", sessionIDs: ["ses_1"] })
+    expect(sessionsFrame(connection)).toEqual({ type: "sessions" })
 
     available = false
     await bridge.republish()
-    expect(sessionsFrame(connection)).toEqual({ type: "sessions", sessionIDs: [] })
+    expect(sessionsFrame(connection)).toEqual({ type: "sessions" })
     expect(bridge.advertised).toEqual([])
 
     await bridge.close()
@@ -490,51 +430,6 @@ describe("remote bridge", () => {
     expect(records).toHaveLength(1)
     expect(bridge.currentState).toBe("terminal")
     expect(terminal[0]).toContain("enroll")
-    await bridge.close()
-  })
-
-  test("re-reads the allowlist while connected so a denied session stops being served", async () => {
-    let allowlist: AllowlistSession[] = [entry]
-    const { bridge, records, streams, advance } = harness({
-      results: { getSession: async (sessionID: string) => sessionInfo(sessionID), messages: async () => [] },
-      reloadSessions: async () => allowlist,
-    })
-    await bridge.connect()
-    const connection = records[0]
-    connection.deliver(requestFrame("session.subscribe", "ses_1"))
-    await Bun.sleep(5)
-    expect(streams).toHaveLength(1)
-
-    // Deny while the bridge is connected and subscribed.
-    allowlist = []
-    advance(1_000)
-    connection.deliver(requestFrame("session.messages", "ses_1"))
-    const refused = await waitFor(() => {
-      const response = relayResponses(connection).find((frame) => frame.ok === false)
-      return response as { error: { code: string } } | undefined
-    })
-    expect(refused.error.code).toBe("session_not_allowed")
-    expect(bridge.advertised).toEqual([])
-    expect(sessionsFrame(connection)).toEqual({ type: "sessions", sessionIDs: [] })
-
-    // The allowed set is gone, so events for the denied session are withheld.
-    const before = relayEventCount(connection)
-    streams.at(-1)?.stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await Bun.sleep(20)
-    advance(1_000)
-    streams.at(-1)?.stream.onEvent({ type: "session.created", data: { sessionID: "ses_1" } })
-    await Bun.sleep(20)
-    expect(relayEventCount(connection)).toBe(before)
-    expect(bridge.currentState).toBe("live")
-
-    // Re-sharing is picked up without a restart.
-    allowlist = [entry]
-    advance(1_000)
-    const responsesBefore = relayResponses(connection).length
-    connection.deliver(requestFrame("session.messages", "ses_1"))
-    await waitFor(() => (relayResponses(connection).length > responsesBefore ? true : undefined))
-    expect(bridge.advertised).toEqual(["ses_1"])
-
     await bridge.close()
   })
 

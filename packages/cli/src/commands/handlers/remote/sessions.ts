@@ -1,18 +1,22 @@
-import { Effect } from "effect"
-import { RemoteConfig } from "../../../remote-config"
+import { Effect, Option } from "effect"
+import { RemoteLocal } from "../../../remote-local"
 import { Runtime } from "../../../framework/runtime"
 import { RemoteCommand } from "../../remote"
-import { line } from "./shared"
+import { line, resolveLocalServer } from "./shared"
 
 export default Runtime.handler(
   RemoteCommand.commands.sessions,
-  Effect.fn("cli.remote.sessions")(function* () {
-    const sessions = yield* RemoteConfig.sessions()
+  Effect.fn("cli.remote.sessions")(function* (input) {
+    const local = yield* resolveLocalServer({
+      server: Option.getOrUndefined(input.server),
+      standalone: input.standalone,
+    })
+    const sessions = yield* Effect.tryPromise(() => RemoteLocal.listSessions(local))
     if (sessions.length === 0) {
-      line("No sessions are shared. Run `ycoding remote allow <sessionID>` to share one.")
+      line("The backend has no Sessions.")
       return
     }
     for (const session of sessions)
-      line(`${session.sessionID}  ${session.title ?? "(untitled)"}  ${session.directory}`)
+      line(`${session.id}  ${session.title}  ${session.location.directory}`)
   }),
 )

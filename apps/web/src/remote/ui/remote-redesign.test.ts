@@ -156,6 +156,17 @@ describe("resident session filter", () => {
   test("returns nothing for a filter that matches nothing, so the caller can say so", () => {
     expect(filterSessions(sessions, "no such session")).toEqual([])
   })
+
+  test("filters the backend session set by running and idle state", () => {
+    const classified = [
+      session({ id: "ses_running", running: true }),
+      session({ id: "ses_idle", running: false }),
+      session({ id: "ses_archived", archived: true }),
+    ]
+    expect(filterSessions(classified, "", "running").map((entry) => entry.id)).toEqual(["ses_running"])
+    expect(filterSessions(classified, "", "idle").map((entry) => entry.id)).toEqual(["ses_idle"])
+    expect(filterSessions(classified, "", "all")).toHaveLength(3)
+  })
 })
 
 describe("session summary", () => {

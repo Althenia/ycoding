@@ -374,15 +374,60 @@ export type DeviceAvailabilityView = {
   readonly showSettings: boolean
 }
 
+export type DeviceAvailabilityContext = {
+  readonly devices: readonly Readonly<Pick<import("@ycoding-ai/remote").RemoteDeviceInfo, "id" | "name" | "status" | "online">>[]
+  readonly activeDeviceID?: string
+  readonly sessionCount?: number
+}
+
 const devicePanelBody =
   "Remote access needs an account and a machine running YCoding. Add a device code from settings, then enroll the machine."
 
-export function deviceAvailabilityView(read: AccountReadState, deviceCount: number): DeviceAvailabilityView {
+export function deviceAvailabilityView(
+  read: AccountReadState,
+  deviceCount: number,
+  context?: DeviceAvailabilityContext,
+): DeviceAvailabilityView {
   if (read.kind === "signed-in") {
-    if (deviceCount > 0) {
+    const selected = context?.devices.find((device) => device.id === context.activeDeviceID)
+    if (selected?.status === "revoked") {
+      return {
+        title: `${selected.name} access was revoked`,
+        body: "Choose another online machine or enroll this machine again in settings.",
+        hint: "The selected machine is revoked and cannot accept a connection.",
+        placeholder: selected.name,
+        selectable: context?.devices.some((device) => device.status === "active" && device.online) ?? false,
+        showSettings: true,
+      }
+    }
+    if (selected?.status === "active" && !selected.online) {
+      return {
+        title: `${selected.name} is not reachable`,
+        body: "The selected machine is offline or YCoding is not running there. Reconnect after it is available.",
+        hint: "The selected machine is enrolled but not online.",
+        placeholder: selected.name,
+        selectable: context?.devices.some((device) => device.status === "active" && device.online) ?? false,
+        showSettings: false,
+      }
+    }
+    const onlineDevices = context?.devices.filter((device) => device.status === "active" && device.online)
+    if (onlineDevices !== undefined && onlineDevices.length === 0 && deviceCount > 0) {
+      const hasActiveEnrollment = context?.devices.some((device) => device.status === "active") ?? false
+      if (hasActiveEnrollment) {
+        return {
+          title: "No devices online",
+          body: "Your enrolled machines are offline. Run ycoding remote connect on a machine to make it available.",
+          hint: "No enrolled machines are online right now.",
+          placeholder: "No devices online",
+          selectable: false,
+          showSettings: false,
+        }
+      }
+    }
+    if ((onlineDevices?.length ?? deviceCount) > 0) {
       return {
         title: "No device selected",
-        body: "Choose a machine above to load the sessions it advertises.",
+        body: "Choose a machine above to load its sessions.",
         hint: "",
         placeholder: "Select a device",
         selectable: true,
@@ -436,6 +481,35 @@ export function deviceAvailabilityView(read: AccountReadState, deviceCount: numb
     selectable: false,
     showSettings: true,
   }
+}
+
+export type SessionAvailabilityView = {
+  readonly title: string
+  readonly body: string
+  readonly loading: boolean
+}
+
+/** Distinguishes an in-progress list read from a connected machine that returned no Sessions. */
+export function sessionAvailabilityView(
+  connection: RemoteConnectionState,
+  sessionCount: number,
+): SessionAvailabilityView | undefined {
+  if (sessionCount > 0) return undefined
+  if (connection.kind === "loading" || connection.kind === "connecting") {
+    return {
+      title: "Loading sessions",
+      body: "Connecting to the selected machine and loading its sessions.",
+      loading: true,
+    }
+  }
+  if (connection.kind === "connected") {
+    return {
+      title: "No sessions",
+      body: "Start YCoding in your project folder on this machine.",
+      loading: false,
+    }
+  }
+  return undefined
 }
 
 /**
