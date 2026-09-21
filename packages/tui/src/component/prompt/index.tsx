@@ -2254,14 +2254,40 @@ export function Prompt(props: PromptProps) {
   async function applyGoalCommand(candidate?: string) {
     const sessionID = props.sessionID
     if (!sessionID) {
-      // Landing has no Session: retain the hint for the next Session creation, then clear the draft.
+      // Landing with explicit goal text: create a Session, set the goal, and continue in transcript.
+      if (candidate) {
+        const location = data.location.default()
+        const agentID = local.agent.current()?.id ?? data.location.agent.list(location)?.[0]?.id ?? "default"
+        const currentModel = local.model.current()
+        if (!currentModel) {
+          toast.show({ message: "Connect a provider and select a model before setting a goal", variant: "warning", duration: 3000 })
+          return false
+        }
+        const modelRef = { id: currentModel.modelID, providerID: currentModel.providerID, variant: local.model.variant.current() || undefined }
+        try {
+          const created = await client.api.session.create({
+            location: location as never,
+            agent: agentID,
+            model: modelRef,
+          }) as unknown as { data: { id: string } }
+          const createdID = created?.data?.id ?? (created as unknown as string)
+          await client.api.session.autonomy.set({ sessionID: createdID, payload: { goal: candidate } })
+          props.onLandingGoalToggle?.(candidate)
+          clearPrompt()
+          setTimeout(() => route.navigate({ type: "session", sessionID: createdID }), 50)
+          return true
+        } catch (error) {
+          toast.show({ title: "Failed to create a session with the goal", message: errorMessage(error), variant: "error" })
+          return false
+        }
+      }
+      // Landing bare /goal: toggles the local hint for display only.
       const current = props.autonomy
-      if (candidate) props.onLandingGoalToggle?.(candidate)
-      else if (current?.goal?.status === "active") props.onLandingGoalToggle?.(null)
+      if (current?.goal?.status === "active") props.onLandingGoalToggle?.(null)
       else if (current?.goal?.text.trim()) props.onLandingGoalToggle?.(current.goal.text)
       else return false
       toast.show({
-        message: candidate ? "Goal activated (landing)" : current?.goal?.status === "active" ? "Goal deactivated (landing)" : "Goal activated (landing)",
+        message: current?.goal?.status === "active" ? "Goal deactivated (landing)" : "Goal activated (landing)",
         variant: "success",
         duration: 2000,
       })

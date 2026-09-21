@@ -36,6 +36,15 @@ export const RELEASES: readonly ReleaseEntry[] = [
     ],
   },
   {
+    version: "0.5.2",
+    date: "2026-09-21",
+    title: "Landing goal activation",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Landing /goal with text now creates a session, sets the goal durably, and navigates to the transcript instead of only toggling a local hint." },
+    ],
+  },
+  {
     version: "0.5.1",
     date: "2026-09-21",
     title: "Remote workspace and reliable browser shutdown",
