@@ -4,7 +4,7 @@ mode: primary
 request:
   body:
     temperature: 0.1
-color: "#95a5a6"
+color: "#e3242b"
 permissions:
   - action: external_directory
     resource: "~/.local/share/ycoding/shell/*/*"
