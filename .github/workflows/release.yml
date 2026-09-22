@@ -369,3 +369,50 @@ jobs:
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
           gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md
+
+  deploy-web:
+    name: deploy web (cloudflare)
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Resolve web release version
+        run: |
+          set -euo pipefail
+          web_version=$(node -p "require('./apps/web/package.json').version")
+          echo "WEB_VERSION=$web_version" >>"$GITHUB_ENV"
+          echo "WEB_RELEASE_TAG=web-$web_version" >>"$GITHUB_ENV"
+          test -f "docs/releases/web-$web_version.md" || { echo "Missing web release notes: docs/releases/web-$web_version.md" >&2; exit 1; }
+      - name: Create web GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="$WEB_VERSION"
+          tag="$WEB_RELEASE_TAG"
+          gh release view "$tag" >/dev/null 2>&1 && {
+            echo "Web release $tag already exists"
+            exit 1
+          }
+          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.tag) | .tagName] | first // empty' 2>/dev/null || true)"
+          prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"${tag}\" and .draft == false) | .tag_name] | first // empty" 2>/dev/null || true)}"
+          range="${prev:+$prev...}${tag}"
+          {
+            cat "docs/releases/web-$version.md"
+            echo ""
+            echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
+          } > release-notes.md
+          gh release create "$tag" --verify-tag --title "YCoding Web $version" --notes-file release-notes.md
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+        with:
+          install-flags: --frozen-lockfile
+      - name: Build web
+        run: bun run build:web
+      - name: Deploy to Cloudflare
+        run: bun run deploy:cloudflare

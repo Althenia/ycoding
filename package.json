@@ -26,6 +26,7 @@
     "test:cloudflare": "cd infra/cloudflare && bun test test/*.test.ts",
     "typecheck:cloudflare": "wrangler types infra/cloudflare/worker-configuration.d.ts --config infra/cloudflare/wrangler.jsonc --check && tsgo --noEmit -p infra/cloudflare/tsconfig.json",
     "build:cloudflare": "wrangler deploy --dry-run --config infra/cloudflare/wrangler.jsonc",
+    "deploy:cloudflare": "wrangler deploy --config infra/cloudflare/wrangler.jsonc",
     "rebrand:ycoding": "bun script/ycoding-rebrand.ts --write",
     "lint": "oxlint",
     "lint:effect-patterns": "ast-grep scan -c script/ast-grep/sgconfig.yml packages/core/src packages/server/src packages/protocol/src packages/cli/src",
