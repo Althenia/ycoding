@@ -67,6 +67,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
                   owned_by: "remote",
                   name: "Remote Model",
                   capabilities: { tools: true, input: ["text"], output: ["text"] },
+                  limit: { context: 131_072, input: 98_304, output: 32_768 },
                   variants: [{ id: "high", body: { reasoning: { mode: "high" } } }],
                 },
               ],
@@ -111,7 +112,7 @@ describe("ConfigProviderPlugin.Plugin", () => {
           )
           expect(model).toMatchObject({
             name: "Remote Model",
-            limit: { context: 200_000, output: 20_000 },
+            limit: { context: 131_072, input: 98_304, output: 32_768 },
             capabilities: { tools: true, input: ["text"], output: ["text"] },
             variants: [{ id: "high", body: { reasoning: { mode: "high" } } }],
           })
