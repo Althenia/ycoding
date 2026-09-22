@@ -26,6 +26,7 @@ function fixture(service: Pick<SessionV2.Interface, "usageAll" | "usageReportAll
               Layer.mock(SessionV2.Service, {
                 ...service,
                 autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
+                daybreak: { set: () => Effect.die("unused") },
                 revert: {
                   stage: () => Effect.die("unused"),
                   clear: () => Effect.die("unused"),

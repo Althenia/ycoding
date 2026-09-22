@@ -153,6 +153,44 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("inherits the parent Daybreak selection for a child session", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const parent = yield* session.create({ location, title: "daybreak parent" })
+      yield* session.daybreak.set({ sessionID: parent.id, daybreak: "daybreak_blue" })
+
+      const child = yield* session.create({ parentID: parent.id, title: "child" })
+
+      expect(child.daybreak).toBe("daybreak_blue")
+      expect((yield* session.get(child.id)).daybreak).toBe("daybreak_blue")
+    }),
+  )
+
+  it.effect("leaves a child session without Daybreak when the parent has none", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const parent = yield* session.create({ location, title: "off parent" })
+
+      const child = yield* session.create({ parentID: parent.id, title: "child" })
+
+      expect(child.daybreak).toBeUndefined()
+      expect((yield* session.get(child.id)).daybreak).toBeUndefined()
+    }),
+  )
+
+  it.effect("keeps a forked session without Daybreak", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const parent = yield* session.create({ location, title: "daybreak parent" })
+      yield* session.daybreak.set({ sessionID: parent.id, daybreak: "daybreak_blue" })
+
+      const fork = yield* session.fork({ sessionID: parent.id })
+
+      expect(fork.daybreak).toBeUndefined()
+      expect((yield* session.get(fork.id)).daybreak).toBeUndefined()
+    }),
+  )
+
   it.effect("does not let child creation drop the parent permission ceiling", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service

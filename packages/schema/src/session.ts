@@ -43,6 +43,7 @@ export const Info = Schema.Struct({
   projectID: Project.ID,
   agent: Agent.ID.pipe(optional),
   model: Model.Ref.pipe(optional),
+  daybreak: Model.Daybreak.pipe(optional),
   permissionCeiling: Permission.Ruleset.pipe(optional),
   cost: Money.USD,
   tokens: TokenUsage.Info,

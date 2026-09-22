@@ -492,6 +492,23 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.daybreak.set",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session.daybreak.set({ sessionID: ctx.params.sessionID, daybreak: ctx.payload.daybreak }).pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+            ),
+          }
+        }),
+      )
+      .handle(
         "session.move",
         Effect.fn(function* (ctx) {
           yield* session

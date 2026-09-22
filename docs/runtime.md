@@ -22,6 +22,12 @@ Automatic retention deletion is not performed. Standalone and managed processes 
 
 SQLite can still reclaim pages freed by explicit deletion without deleting additional records; see [automatic SQLite space reclamation](./configuration.md#automatic-sqlite-space-reclamation) for startup conversion and disk-space constraints.
 
+### Daybreak access program
+
+Daybreak is OpenAI's Trusted Access for Cyber program with the access levels `daybreak_blue` and `daybreak_red`. A Session stores its selection in `session.daybreak`; an absent value is off and requests keep standard safeguards. Every change appends the durable `session.daybreak.set` event containing the Session ID and the optional selected program, where an absent program means off.
+
+One toggle command controls the selection: it is visible in the Session command palette and also runs as the `/daybreak` slash command with the optional arguments `blue`, `red`, and `off`. Without an argument it cycles off → blue → red → off, offering only programs the active model advertises and skipping programs it does not advertise. The model picker lists ordinary models only; Daybreak state comes from the toggle, not from picking a special model. Catalog discovery and provider request fields are specified in [configuration](./configuration.md).
+
 ### Managed attachments
 
 Prompt inputs remain URI-shaped. Admission reads `data:` and local file URIs, normalizes supported images, enforces a 20 MiB byte limit, and imports the resulting bytes into the global content-addressed attachment store. An opaque existing reference is accepted only in the exact form `ycoding-attachment://sha256/<lowercase SHA-256>` and is reverified before admission.

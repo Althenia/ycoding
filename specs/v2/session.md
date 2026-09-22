@@ -71,6 +71,16 @@ Transition reservations prevent new drains from starting while queued or active 
 
 Canceling the request releases its reservation and must not publish a late model selection. An already-admitted compaction has an independent executor and may still finish and activate a validated summary. That completion does not select a model or resume interrupted work by itself.
 
+## Daybreak Is A Session Selection
+
+Daybreak is OpenAI's Trusted Access for Cyber program with the access levels `daybreak_blue` and `daybreak_red`. `Session.Info.daybreak` records the Session's selected access program; an absent value is off and requests keep standard safeguards.
+
+`POST /api/session/:sessionID/daybreak` sets the selection with payload `{ daybreak: "daybreak_blue" | "daybreak_red" | null }`; `null` or an omitted value clears the selection. Every change publishes the durable `session.daybreak.set` event containing `{ sessionID, daybreak? }`, where an absent `daybreak` means off.
+
+Requests carry `access_programs: { cyber: <program> }` only when `session.daybreak` is set, the credential is ChatGPT OAuth on Codex backend routes, and the active model advertises that program in its `daybreak` list; a program the active model does not advertise omits the field, failing closed to standard safeguards while the stored Session selection persists.
+
+A Session whose stored model ID ends in `-daybreak-blue` or `-daybreak-red` fails model resolution until the user re-selects the base model; there is no compatibility mapping.
+
 ## Goal Objectives Are User-Owned
 
 `PUT /api/session/:sessionID/autonomy` uses Session Location middleware and accepts a nonempty operation with optional `yolo` and `goal`. The `goal` field is one of:

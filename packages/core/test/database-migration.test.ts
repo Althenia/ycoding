@@ -49,6 +49,7 @@ const currentMigrations = [
   { id: "20260806071025_drop-compaction-admission-mode" },
   { id: "20260808031138_provider-request-cache-read-reported" },
   { id: "20260908062843_session-archive-retention" },
+  { id: "20260922051821_long_spitfire" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",

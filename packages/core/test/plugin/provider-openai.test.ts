@@ -50,7 +50,7 @@ function fakeSelectorSdk(calls: string[]) {
 }
 
 describe("OpenAIPlugin", () => {
-  it.effect("adds account-advertised Daybreak model entries despite malformed sibling metadata without changing ordinary models", () =>
+  it.effect("advertises per-model Daybreak fields without adding catalog entries despite malformed sibling metadata", () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       const credentials = yield* Credential.Service
@@ -58,7 +58,7 @@ describe("OpenAIPlugin", () => {
         draft.provider.update(ProviderV2.ID.openai, (provider) => {
           provider.package = ProviderV2.aisdk("@ai-sdk/openai")
         })
-        for (const id of ["gpt-5.6-luna", "gpt-5.6-sol", "gpt-6-astra"])
+        for (const id of ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"])
           draft.model.update(ProviderV2.ID.openai, ModelV2.ID.make(id), (model) => {
             model.name = id
             model.limit = { context: 100_000, output: 10_000 }
@@ -79,7 +79,7 @@ describe("OpenAIPlugin", () => {
         expect(request.headers["chatgpt-account-id"]).toBe("fixture-account")
         return HttpClientResponse.fromWeb(request, Response.json({ models: [
           { slug: "gpt-5.6-luna", available_access_programs: { cyber: ["standard", "daybreak_blue", "future"] } },
-          { slug: "gpt-5.6-terra", available_access_programs: {} },
+          { slug: "gpt-5.6-terra", available_access_programs: { cyber: "daybreak_blue" } },
           { slug: "gpt-5.6-sol", available_access_programs: { cyber: ["daybreak_blue", "daybreak_red"] } },
           { slug: "gpt-6-astra", available_access_programs: { cyber: [] } },
           { slug: "gpt-5.4-mini", available_access_programs: null },
@@ -87,23 +87,26 @@ describe("OpenAIPlugin", () => {
       }))
       yield* addPlugin(http)
       yield* TestClock.adjust("500 millis")
-      const normal = required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna")))
-      const daybreak = yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))
       expect(requests).toHaveLength(1)
-      expect(daybreak).toMatchObject({
-        name: "gpt-5.6-luna · Daybreak Blue", modelID: "gpt-5.6-luna", enabled: true,
-        body: { access_programs: { cyber: "daybreak_blue" } }, limit: normal.limit,
-      })
-      expect(normal.body?.access_programs).toBeUndefined()
-      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-sol-daybreak-red"))).toBeDefined()
-      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6-astra-daybreak-blue"))).toBeUndefined()
       expect(requests[0]).toStartWith("https://chatgpt.com/backend-api/codex/models")
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna")))).toMatchObject({
+        name: "gpt-5.6-luna", enabled: true, daybreak: ["daybreak_blue"],
+      })
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-sol"))).daybreak).toEqual([
+        "daybreak_blue", "daybreak_red",
+      ])
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-terra"))).daybreak).toBeUndefined()
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-6-astra"))).daybreak).toBeUndefined()
+      for (const id of ["gpt-5.6-luna-daybreak-blue", "gpt-5.6-sol-daybreak-red", "gpt-6-astra-daybreak-blue"])
+        expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make(id))).toBeUndefined()
       const integrations = yield* Integration.Service
       const api = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value: Credential.Key.make({ type: "key", key: "fixture-key" }) })
       yield* integrations.connection.activate(api.id)
       yield* TestClock.adjust("500 millis")
-      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).daybreak).toBeUndefined()
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-sol"))).daybreak).toBeUndefined()
       expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).enabled).toBe(true)
+      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
       expect(requests).toHaveLength(1)
     }),
   )
@@ -129,7 +132,7 @@ describe("OpenAIPlugin", () => {
         Effect.map((value) => HttpClientResponse.fromWeb(request, value)),
       )))
       expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).enabled).toBe(true)
-      expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).daybreak).toBeUndefined()
       const api = yield* credentials.create({ integrationID: Integration.ID.make("openai"), value: Credential.Key.make({ type: "key", key: "fixture-key" }) })
       yield* integrations.connection.activate(api.id)
       yield* TestClock.adjust("500 millis")
@@ -137,6 +140,7 @@ describe("OpenAIPlugin", () => {
         { slug: "gpt-5.6-luna", available_access_programs: { cyber: ["daybreak_blue"] } },
       ] }))
       yield* TestClock.adjust("500 millis")
+      expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna"))).daybreak).toBeUndefined()
       expect(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna-daybreak-blue"))).toBeUndefined()
     }),
   )
@@ -146,7 +150,7 @@ describe("OpenAIPlugin", () => {
     { name: "unknown programs", status: 200, body: { models: [{ slug: "gpt-5.6-luna", available_access_programs: { cyber: ["future"] } }] } },
     { name: "denied discovery", status: 403, body: { error: "denied" } },
     { name: "malformed discovery", status: 200, body: { models: [{ slug: "gpt-5.6-luna", available_access_programs: { cyber: true } }] } },
-  ]) it.effect(`keeps ordinary models without Daybreak entries for ${scenario.name}`, () =>
+  ]) it.effect(`keeps ordinary models without a Daybreak field for ${scenario.name}`, () =>
     Effect.gen(function* () {
       const catalog = yield* Catalog.Service
       const credentials = yield* Credential.Service

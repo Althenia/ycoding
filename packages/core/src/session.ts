@@ -3,6 +3,7 @@ export * from "./session/schema"
 
 import { Cause, DateTime, Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
+import type { Model } from "@ycoding-ai/schema/model"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
@@ -313,6 +314,12 @@ export interface Interface {
     NotFoundError | MessageDecodeError | SessionRunnerModel.Error | CompactionConflictError
   >
   readonly rename: (input: { sessionID: SessionSchema.ID; title: string }) => Effect.Effect<void, NotFoundError>
+  readonly daybreak: {
+    readonly set: (input: {
+      sessionID: SessionSchema.ID
+      daybreak: Model.Daybreak | null
+    }) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  }
   readonly move: (input: {
     sessionID: SessionSchema.ID
     directory: AbsolutePath
@@ -1519,6 +1526,16 @@ const layer = Layer.effect(
           title: input.title,
         })
       }),
+      daybreak: {
+        set: Effect.fn("V2Session.daybreakSet")(function* (input) {
+          yield* result.get(input.sessionID)
+          yield* events.publish(SessionEvent.DaybreakSet, {
+            sessionID: input.sessionID,
+            ...(input.daybreak ? { daybreak: input.daybreak } : {}),
+          })
+          return yield* result.get(input.sessionID)
+        }),
+      },
       move: Effect.fn("V2Session.move")(function* (input) {
         const current = yield* result.get(input.sessionID)
         const value = input.directory.trim()

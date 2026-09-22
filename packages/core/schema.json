@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "1944ca5b-ab2f-48db-be76-437981bdfe39",
+  "id": "6d7f2e02-d9f1-439b-9c08-923c8f46c587",
   "prevIds": [
-    "d34baf9f-353b-4d84-bffe-9fababe5b050"
+    "1944ca5b-ab2f-48db-be76-437981bdfe39"
   ],
   "ddl": [
     {
@@ -4071,6 +4071,16 @@
       "default": null,
       "generated": null,
       "name": "model",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "daybreak",
       "entityType": "columns",
       "table": "session"
     },

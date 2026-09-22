@@ -599,6 +599,23 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.daybreak.set", "/api/session/:sessionID/daybreak", {
+        params: { sessionID: Session.ID },
+        payload: Schema.Struct({ daybreak: Model.Daybreak.pipe(Schema.NullOr) }),
+        success: Schema.Struct({ data: Session.Info }),
+        error: [SessionNotFoundError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.daybreak.set",
+            summary: "Set Daybreak",
+            description:
+              "Set or clear the Session's Daybreak cyber access program (daybreak_blue or daybreak_red; null clears). ChatGPT-authenticated OpenAI requests then include access_programs.cyber only for models whose advertised daybreak list contains that program.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.post("session.move", "/api/session/:sessionID/move", {
         params: { sessionID: Session.ID },
         payload: Location.Ref,

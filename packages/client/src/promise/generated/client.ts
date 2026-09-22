@@ -54,6 +54,8 @@ import type {
   SessionSwitchModelOutput,
   SessionRenameInput,
   SessionRenameOutput,
+  SessionDaybreakSetInput,
+  SessionDaybreakSetOutput,
   SessionMoveInput,
   SessionMoveOutput,
   SessionPromptInput,
@@ -835,6 +837,20 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+      daybreak: {
+        set: (input: SessionDaybreakSetInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: SessionDaybreakSetOutput }>(
+            {
+              method: "POST",
+              path: `/api/session/${encodeURIComponent(input.sessionID)}/daybreak`,
+              body: { daybreak: input["daybreak"] },
+              successStatus: 200,
+              declaredStatuses: [404, 400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
       move: (input: SessionMoveInput, requestOptions?: RequestOptions) =>
         request<SessionMoveOutput>(
           {

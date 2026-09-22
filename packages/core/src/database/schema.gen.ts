@@ -751,6 +751,7 @@ export default {
           \`orchestration_revision\` integer DEFAULT 0 NOT NULL,
           \`agent\` text,
           \`model\` text,
+          \`daybreak\` text,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
           \`time_archived\` integer,

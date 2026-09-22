@@ -740,6 +740,14 @@ const layer = Layer.effectDiscard(
     const db = (yield* Database.Service).db
     yield* events.project(SessionEvent.Created, (event) =>
       Effect.gen(function* () {
+        const parentDaybreak = event.data.parentID
+          ? yield* db
+              .select({ daybreak: SessionTable.daybreak })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, event.data.parentID))
+              .get()
+              .pipe(Effect.orDie)
+          : undefined
         const stored = yield* db
           .insert(SessionTable)
           .values({
@@ -747,6 +755,7 @@ const layer = Layer.effectDiscard(
             project_id: event.data.projectID,
             workspace_id: event.data.location.workspaceID ? WorkspaceV2.ID.make(event.data.location.workspaceID) : null,
             parent_id: event.data.parentID,
+            daybreak: parentDaybreak?.daybreak ?? null,
             directory: event.data.location.directory,
             path: event.data.subpath,
             title: event.data.title,
@@ -840,6 +849,17 @@ const layer = Layer.effectDiscard(
         yield* db
           .update(SessionTable)
           .set({ model: event.data.model, time_updated: DateTime.toEpochMillis(event.created) })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+    )
+    yield* events.project(SessionEvent.DaybreakSet, (event) =>
+      Effect.gen(function* () {
+        yield* run(db, event)
+        yield* db
+          .update(SessionTable)
+          .set({ daybreak: event.data.daybreak ?? null, time_updated: DateTime.toEpochMillis(event.created) })
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)

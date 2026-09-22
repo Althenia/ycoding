@@ -24,6 +24,7 @@ function fixture(set: SessionV2.Interface["autonomy"]["set"]) {
   const services = Layer.mergeAll(
     Layer.mock(SessionV2.Service, {
       autonomy: { get: () => Effect.succeed(SessionAutonomy.defaultState), set },
+      daybreak: { set: () => Effect.die("unused") },
       revert: { stage: () => Effect.die("unused"), clear: () => Effect.die("unused"), commit: () => Effect.die("unused") },
     }),
     Layer.mock(SessionOrchestration.Service, {}),

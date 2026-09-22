@@ -96,6 +96,16 @@ export const ModelSelected = Event.durable({
 })
 export type ModelSelected = typeof ModelSelected.Type
 
+export const DaybreakSet = Event.durable({
+  type: "session.daybreak.set",
+  ...options,
+  schema: {
+    ...Base,
+    daybreak: Model.Daybreak.pipe(optional),
+  },
+})
+export type DaybreakSet = typeof DaybreakSet.Type
+
 export const ProjectArtifactsEnded = Event.durable({
   type: "session.project-artifacts-ended",
   ...options,
@@ -767,6 +777,7 @@ export const Definitions = Event.inventory(
   Created,
   AgentSelected,
   ModelSelected,
+  DaybreakSet,
   ProjectArtifactsEnded,
   Moved,
   Renamed,

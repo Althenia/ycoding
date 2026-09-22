@@ -147,6 +147,7 @@ describe("public event manifest", () => {
         "session.unarchived.2",
         "session.agent.selected.1",
         "session.model.selected.1",
+        "session.daybreak.set.1",
         "session.project-artifacts-ended.1",
         "session.moved.1",
         "session.renamed.1",
@@ -249,6 +250,14 @@ describe("public event manifest", () => {
   test("keeps the current Session skill event as durable version 1", () => {
     expect(EventManifest.Durable.get("session.skill.activated.1")).toBe(SessionEvent.Skill.Activated)
     expect(EventManifest.Latest.get("session.skill.activated")).toBe(SessionEvent.Skill.Activated)
+  })
+
+  test("keeps Daybreak selection changes as a public durable event", () => {
+    expect(SessionEvent.DaybreakSet.durable).toEqual({ aggregate: "sessionID", version: 1 })
+    expect(EventManifest.Latest.get("session.daybreak.set")).toBe(SessionEvent.DaybreakSet)
+    expect(EventManifest.Durable.get("session.daybreak.set.1")).toBe(SessionEvent.DaybreakSet)
+    expect(SessionEvent.Definitions).toContain(SessionEvent.DaybreakSet)
+    expect(SessionEvent.PublicDurableDefinitions).toContain(SessionEvent.DaybreakSet)
   })
 
   test("keeps simplified session fragment and tool payloads on durable version 1", () => {

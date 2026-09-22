@@ -389,6 +389,7 @@ function modelInfo(value: ModelV2.Info | ModelV2.MutableInfo) {
     settings: value.settings && { ...value.settings },
     headers: value.headers && { ...value.headers },
     body: value.body && { ...value.body },
+    daybreak: value.daybreak && [...value.daybreak],
     capabilities: {
       ...value.capabilities,
       input: [...value.capabilities.input],

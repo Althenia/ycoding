@@ -302,6 +302,7 @@ export function update(adapter: Adapter, event: UpdaterEvent) {
           )
         })
       },
+      "session.daybreak.set": () => Effect.void,
       "session.project-artifacts-ended": (event) =>
         adapter.appendMessage(
           SessionMessage.Synthetic.make({

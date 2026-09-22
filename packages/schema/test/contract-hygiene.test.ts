@@ -88,6 +88,39 @@ describe("contract hygiene", () => {
     ).toThrow()
   })
 
+  test("Daybreak program selection is closed and optional on every owning contract", () => {
+    const sessionID = Session.ID.make("ses_daybreak")
+    const payload = Schema.encodeSync(SessionEvent.DaybreakSet.data)({ sessionID })
+    expect(payload).toEqual({ sessionID })
+    expect(payload).not.toHaveProperty("daybreak")
+    expect(
+      Schema.decodeUnknownSync(SessionEvent.DaybreakSet.data)({ sessionID, daybreak: "daybreak_blue" }),
+    ).toEqual({ sessionID, daybreak: "daybreak_blue" })
+    expect(() => Schema.decodeUnknownSync(Model.Daybreak)("daybreak_green")).toThrow()
+
+    const session = Schema.decodeUnknownSync(Session.Info)({
+      id: "ses_daybreak",
+      projectID: "project",
+      cost: 1,
+      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      time: { created: 0, updated: 0 },
+      title: "Daybreak",
+      location: { directory: "/project" },
+    })
+    expect(session).not.toHaveProperty("daybreak")
+    expect(Schema.encodeSync(Session.Info)(session)).not.toHaveProperty("daybreak")
+    expect(Schema.encodeSync(Session.Info)({ ...session, daybreak: "daybreak_red" })).toHaveProperty(
+      "daybreak",
+      "daybreak_red",
+    )
+
+    const model = Model.Info.empty(Provider.ID.make("provider"), Model.ID.make("model"))
+    expect(Schema.encodeSync(Model.Info)(model)).not.toHaveProperty("daybreak")
+    expect(Schema.encodeSync(Model.Info)({ ...model, daybreak: ["daybreak_blue"] })).toHaveProperty("daybreak", [
+      "daybreak_blue",
+    ])
+  })
+
   test("current ID constructors expose create", () => {
     expect(Question.ID.create()).toStartWith("que_")
     expect(Pty.ID.create()).toStartWith("pty_")
@@ -110,6 +143,7 @@ describe("contract hygiene", () => {
       Model.Capabilities,
       Model.Cost,
       Model.Variant,
+      Model.Daybreak,
       Project.Current,
       Project.Directory,
       Project.DirectoriesInput,

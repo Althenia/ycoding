@@ -4164,3 +4164,82 @@ test("refetches durable subagent tasks changed during an in-flight sync", async 
     app.renderer.destroy()
   }
 })
+
+test("patches the durable Daybreak program onto stored Session info", async () => {
+  const events = createEventStream()
+  const sessionID = "ses_daybreak_event"
+  const calls = createFetch((url) => {
+    if (url.pathname === `/api/session/${sessionID}`)
+      return json({
+        data: {
+          id: sessionID,
+          projectID: "proj_test",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: 0, updated: 0 },
+          title: "Daybreak event",
+          location: { directory },
+        },
+      })
+  }, events)
+  let data!: ReturnType<typeof useData>
+  let ready!: () => void
+  const mounted = new Promise<void>((resolve) => {
+    ready = resolve
+  })
+
+  function Probe() {
+    data = useData()
+    onMount(ready)
+    return <box />
+  }
+
+  const app = await testRender(() => (
+    <TestTuiContexts>
+      <ClientProvider api={createApi(calls.fetch)}>
+        <ProjectProvider>
+          <DataProvider>
+            <Probe />
+          </DataProvider>
+        </ProjectProvider>
+      </ClientProvider>
+    </TestTuiContexts>
+  ))
+
+  try {
+    await mounted
+    await data.session.sync(sessionID)
+    expect(data.session.get(sessionID)?.daybreak).toBeUndefined()
+
+    emitEvent(events, {
+      id: "evt_daybreak_blue",
+      created: 1,
+      type: "session.daybreak.set",
+      durable: durable(sessionID),
+      data: { sessionID, daybreak: "daybreak_blue" },
+    })
+    await wait(() => data.session.get(sessionID)?.daybreak === "daybreak_blue")
+
+    emitEvent(events, {
+      id: "evt_daybreak_clear",
+      created: 2,
+      type: "session.daybreak.set",
+      durable: durable(sessionID, 1),
+      data: { sessionID },
+    })
+    await wait(() => data.session.get(sessionID)?.daybreak === undefined)
+
+    // The patch must not materialize Session info that was never stored.
+    emitEvent(events, {
+      id: "evt_daybreak_missing",
+      created: 3,
+      type: "session.daybreak.set",
+      durable: durable("ses_missing_daybreak"),
+      data: { sessionID: "ses_missing_daybreak", daybreak: "daybreak_red" },
+    })
+    await Bun.sleep(50)
+    expect(data.session.get("ses_missing_daybreak")).toBeUndefined()
+  } finally {
+    app.renderer.destroy()
+  }
+})

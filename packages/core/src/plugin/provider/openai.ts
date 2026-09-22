@@ -260,20 +260,14 @@ export const OpenAIPlugin = define({
         ) {
           evt.model.update(item.provider.id, model.id, (draft) => {
             draft.enabled = false
+            draft.daybreak = undefined
           })
           continue
         }
-        for (const program of daybreak.get(model.modelID ?? model.id) ?? []) {
-          const id = ModelV2.ID.make(`${model.id}-${program.replaceAll("_", "-")}`)
-          evt.model.update(item.provider.id, id, (draft) => {
-            Object.assign(draft, model, {
-              id,
-              name: `${model.name} · Daybreak ${program === "daybreak_blue" ? "Blue" : "Red"}`,
-              modelID: model.modelID ?? model.id,
-              body: { ...model.body, access_programs: { cyber: program } },
-            })
-          })
-        }
+        const programs = daybreak.get(model.modelID ?? model.id) ?? []
+        evt.model.update(item.provider.id, model.id, (draft) => {
+          draft.daybreak = programs.length > 0 ? [...programs] : undefined
+        })
       }
     })
 

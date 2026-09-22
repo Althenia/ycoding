@@ -14,6 +14,8 @@ export type PermissionV2Effect = "allow" | "deny" | "ask"
 
 export type PluginInfo = { id: string }
 
+export type ModelDaybreak = "daybreak_blue" | "daybreak_red"
+
 export type MoneyUSD = number
 
 export type TokenUsageInfo = {
@@ -628,6 +630,17 @@ export type SessionModelSelected = {
   durable: { aggregateID: string; seq: number; version: 1 }
   location?: LocationRef
   data: { sessionID: string; model: ModelRef }
+}
+
+export type SessionDaybreakSet = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.daybreak.set"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string; daybreak?: ModelDaybreak }
 }
 
 export type SessionProjectArtifactsEnded = {
@@ -2287,6 +2300,7 @@ export type ModelInfo = {
   cost: Array<ModelCost>
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
+  daybreak?: Array<ModelDaybreak>
   limit: { context: number; input?: number; output: number }
 }
 
@@ -2492,6 +2506,7 @@ export type SessionInfo = {
   projectID: string
   agent?: string
   model?: ModelRef
+  daybreak?: ModelDaybreak
   permissionCeiling?: PermissionV2Ruleset
   cost: MoneyUSD
   tokens: TokenUsageInfo
@@ -2744,6 +2759,16 @@ export type SessionLogItem =
       durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
       data: { sessionID: string; model: ModelRef }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.daybreak.set"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string; daybreak?: ModelDaybreak }
     }
   | {
       id: string
@@ -3339,6 +3364,7 @@ export type V2Event =
   | SessionCreated
   | SessionAgentSelected
   | SessionModelSelected
+  | SessionDaybreakSet
   | SessionProjectArtifactsEnded
   | SessionMoved
   | SessionRenamed
@@ -4086,6 +4112,13 @@ export type SessionRenameInput = {
 }
 
 export type SessionRenameOutput = void
+
+export type SessionDaybreakSetInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly daybreak: { readonly daybreak: ("daybreak_blue" | "daybreak_red") | null }["daybreak"]
+}
+
+export type SessionDaybreakSetOutput = { data: SessionInfo }["data"]
 
 export type SessionMoveInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]

@@ -63,6 +63,7 @@ import {
   yoloLevel,
   type SessionSubmissionRetry,
 } from "../../util/session-autonomy"
+import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
 import type { SessionAutonomyState } from "@ycoding-ai/client"
 
@@ -896,6 +897,38 @@ export function Prompt(props: PromptProps) {
             variant: "success",
             duration: 2000,
           })
+        },
+      },
+      {
+        title: daybreakTitle(props.sessionID ? data.session.get(props.sessionID)?.daybreak : undefined),
+        name: "session.daybreak.toggle",
+        category: "Session",
+        palette: true,
+        slash: { name: "daybreak", arguments: true as const },
+        run: async (input?: string) => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const selected = local.model.pendingTarget(sessionID) ?? local.model.current()
+          const advertised = selected
+            ? (data.location.model.list(currentLocation.current)?.find(
+                (item) => item.providerID === selected.providerID && item.id === selected.modelID,
+              )?.daybreak ?? [])
+            : []
+          const plan = daybreakPlan({
+            current: data.session.get(sessionID)?.daybreak,
+            advertised,
+            argument: input,
+          })
+          if (plan.type === "reject") {
+            toast.show({ message: plan.message, variant: "error", duration: 3000 })
+            return
+          }
+          try {
+            await client.api.session.daybreak.set({ sessionID, daybreak: plan.daybreak })
+            toast.show({ message: daybreakSuccessLabel(plan.daybreak), variant: "success", duration: 3000 })
+          } catch (error) {
+            toast.show({ title: "Failed to change Daybreak", message: errorMessage(error), variant: "error" })
+          }
         },
       },
       {

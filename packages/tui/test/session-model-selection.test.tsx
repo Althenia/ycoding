@@ -4,6 +4,7 @@ import { InputRenderable } from "@opentui/core"
 import { expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
+import type { ModelDaybreak } from "@ycoding-ai/client"
 import { createEffect, onMount } from "solid-js"
 import { DialogModel } from "../src/component/dialog-model"
 import { ArgsProvider } from "../src/context/args"
@@ -46,7 +47,13 @@ type PreferenceModel = { providerID: string; modelID: string }
 
 const switches: Array<{ sessionID: string; model: { providerID: string; id: string; variant?: string } }> = []
 
-function model(input: { id: string; providerID: string; name: string; context: number }) {
+function model(input: {
+  id: string
+  providerID: string
+  name: string
+  context: number
+  daybreak?: ModelDaybreak[]
+}) {
   return {
     id: input.id,
     modelID: input.id,
@@ -59,6 +66,7 @@ function model(input: { id: string; providerID: string; name: string; context: n
     cost: [],
     status: "active" as const,
     enabled: true,
+    ...(input.daybreak === undefined ? {} : { daybreak: input.daybreak }),
     limit: { context: input.context, output: 32_000 },
   }
 }
@@ -247,22 +255,32 @@ async function waitFor(predicate: () => boolean, label: string, attempts = 200) 
   throw new Error(`timed out waiting for ${label}`)
 }
 
-test("renders Daybreak separately and records it as this Session's desired model", async () => {
+test("renders one row for a Daybreak-advertising model and records the ordinary model id", async () => {
   switches.length = 0
-  const normal = model({ id: "gpt-5.6-luna", providerID: "openai", name: "GPT-5.6 Luna", context: 1_050_000 })
   const screen = await renderPicker({
     stateDir: "daybreak",
-    order: [{ providerID: "openai", modelID: "gpt-5.6-luna-daybreak-blue" }],
-    catalog: [...models, normal, { ...normal, id: "gpt-5.6-luna-daybreak-blue", name: "GPT-5.6 Luna · Daybreak Blue" }],
+    order: [{ providerID: "openai", modelID: "gpt-5.6-luna" }],
+    catalog: [
+      ...models,
+      model({
+        id: "gpt-5.6-luna",
+        providerID: "openai",
+        name: "GPT-5.6 Luna",
+        context: 1_050_000,
+        daybreak: ["daybreak_blue", "daybreak_red"],
+      }),
+    ],
   })
   try {
-    await screen.app.waitForFrame((frame) => frame.includes("GPT-5.6 Luna · Daybreak Blue"))
-    const rows = screen.app.captureCharFrame().split("\n").filter((row) => row.includes("GPT-5.6 Luna"))
-    expect(rows).toHaveLength(2)
-    expect(rows.some((row) => !row.includes("Daybreak"))).toBe(true)
+    await screen.app.waitForFrame((frame) => frame.includes("GPT-5.6 Luna"))
+    const frame = screen.app.captureCharFrame()
+    const rows = frame.split("\n").filter((row) => row.includes("GPT-5.6 Luna"))
+    expect(rows).toHaveLength(1)
+    expect(frame).not.toContain("· Daybreak Blue")
+    expect(frame).not.toContain("· Daybreak Red")
     screen.app.mockInput.pressEnter()
-    await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5.6-luna-daybreak-blue", "the desired Daybreak model")
-    expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna-daybreak-blue" })
+    await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5.6-luna", "the desired model")
+    expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna" })
     expect(switches).toEqual([])
   } finally {
     await screen.dispose()

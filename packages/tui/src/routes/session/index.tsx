@@ -130,6 +130,7 @@ import {
   type SessionAutonomyResponse,
   yoloLevel,
 } from "../../util/session-autonomy"
+import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
 import { Header, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
@@ -332,6 +333,12 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? railWidth(dimensions().width) : 0) - 4)
   const models = createMemo(() => data.location.model.list(location()) ?? [])
+  const daybreakPrograms = createMemo(() => {
+    const selected = local.model.pendingTarget(route.sessionID) ?? local.model.current()
+    if (!selected) return []
+    return models().find((item) => item.providerID === selected.providerID && item.id === selected.modelID)
+      ?.daybreak ?? []
+  })
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
   const toast = useToast()
@@ -980,6 +987,27 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         const lvl = yoloLevel(autonomy() as unknown as { yolo?: unknown })
         const next = ((lvl + 1) % 4) as 0 | 1 | 2 | 3
         updateAutonomy({ yolo: next })
+      },
+    },
+    {
+      title: daybreakTitle(session()?.daybreak),
+      id: "session.daybreak.toggle",
+      group: "Session",
+      slash: { name: "daybreak", arguments: true as const },
+      run: (input?: string) => {
+        const plan = daybreakPlan({
+          current: session()?.daybreak,
+          advertised: daybreakPrograms(),
+          argument: input,
+        })
+        if (plan.type === "reject") {
+          toast.show({ message: plan.message, variant: "error", duration: 3000 })
+          return
+        }
+        void client.api.session.daybreak
+          .set({ sessionID: route.sessionID, daybreak: plan.daybreak })
+          .then(() => toast.show({ message: daybreakSuccessLabel(plan.daybreak), variant: "success", duration: 3000 }))
+          .catch((error) => toast.show({ message: errorMessage(error), variant: "error", duration: 5000 }))
       },
     },
     {

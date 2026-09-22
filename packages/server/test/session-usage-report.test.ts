@@ -32,6 +32,7 @@ function fixture(usageReport: SessionV2.Interface["usageReport"]) {
     Layer.mock(SessionV2.Service, {
       usageReport,
       autonomy: { get: () => Effect.die("unused"), set: () => Effect.die("unused") },
+      daybreak: { set: () => Effect.die("unused") },
       revert: { stage: () => Effect.die("unused"), clear: () => Effect.die("unused"), commit: () => Effect.die("unused") },
     }),
     Layer.mock(SessionOrchestration.Service, {}),

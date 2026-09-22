@@ -68,6 +68,11 @@ export const Variant = Schema.Struct({
   ...Provider.Overlays,
 }).annotate({ identifier: "Model.Variant" })
 
+export const Daybreak = Schema.Literals(["daybreak_blue", "daybreak_red"]).annotate({
+  identifier: "Model.Daybreak",
+})
+export type Daybreak = typeof Daybreak.Type
+
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
   id: ID,
@@ -85,6 +90,8 @@ export const Info = Schema.Struct({
   cost: Schema.Array(Cost),
   status: Schema.Literals(["alpha", "beta", "deprecated", "active"]),
   enabled: Schema.Boolean,
+  /** Daybreak programs an authenticated account advertises for this model; absent means none advertised. */
+  daybreak: Schema.Array(Daybreak).pipe(optional),
   limit: Schema.Struct({
     context: Schema.Int,
     input: Schema.Int.pipe(optional),

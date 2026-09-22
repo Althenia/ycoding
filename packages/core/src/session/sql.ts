@@ -75,6 +75,7 @@ export const SessionTable = sqliteTable(
       providerID: string
       variant?: string
     }>(),
+    daybreak: text().$type<Model.Daybreak>(),
     ...Timestamps,
     time_archived: integer(),
     time_suspended: integer(),

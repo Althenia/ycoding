@@ -36,6 +36,7 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
           variant: ModelV2.VariantID.make(row.model.variant ?? "default"),
         }
       : undefined,
+    daybreak: row.daybreak ?? undefined,
     permissionCeiling: permissionCeiling.length > 0 ? permissionCeiling : undefined,
     cost: Money.USD.make(row.cost),
     tokens: {

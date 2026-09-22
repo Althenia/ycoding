@@ -2,6 +2,18 @@
 
 Status: **Historical pre-release compatibility ledger.** Older entries retain the names and behavior that were accurate when written; current contracts live in Protocol, Schema, Core, and the indexed specifications.
 
+## 2026-09-22: Add Session Daybreak Access Program Selection
+
+- Add `Model.Daybreak` (`"daybreak_blue" | "daybreak_red"`), the optional advertised `Model.Info.daybreak` list on ordinary catalog model entries, and optional `Session.Info.daybreak` recording the Session's selected program.
+- Add durable event `session.daybreak.set` with payload `{ sessionID, daybreak? }`; an absent `daybreak` means off.
+- Add `POST /api/session/:sessionID/daybreak` with payload `{ daybreak: "daybreak_blue" | "daybreak_red" | null }`; `null` or omission clears the selection.
+- Model lists stay one entry per model: each entry advertising a program through `available_access_programs.cyber` carries its `daybreak` list, and requests carry `access_programs: { cyber: <program> }` only when `session.daybreak` is set, the credential is ChatGPT OAuth on Codex backend routes, and the active model advertises that program in its `daybreak` list; a non-advertising model, API-key credentials, and custom providers omit the field.
+
+Compatibility:
+
+- `Model.Info.daybreak` and `Session.Info.daybreak` are additive optional fields; absent values mean off.
+- Programs are advertised through each entry's `daybreak` list instead of sibling `-daybreak-blue` / `-daybreak-red` catalog IDs or separate picker entries. Sessions that stored such a model ID fail model resolution until the user re-selects the base model; no compatibility mapping exists.
+
 ## 2026-09-09: Add Session-Owned Selected-Tab Browser Contracts
 
 - Add bounded browser status, pairing, shared-tab, observation, action, capture, and control shapes.

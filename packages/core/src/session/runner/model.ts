@@ -463,9 +463,21 @@ export const resolve = (
 ) =>
   withVariant(model, session.model?.variant).pipe(
     Effect.flatMap((model) =>
-      fromCatalogModel(model, credential, dependencies, connection),
+      fromCatalogModel(withDaybreak(model, session.daybreak, credential), credential, dependencies, connection),
     ),
   );
+
+const withDaybreak = (
+  model: ModelV2.Info,
+  daybreak: SessionSchema.Info["daybreak"],
+  credential: Credential.Value | undefined,
+) => {
+  if (daybreak === undefined || !OpenAICodex.isChatGPT(credential)) return model;
+  if (!model.daybreak?.includes(daybreak)) return model;
+  return produce(model, (draft) => {
+    draft.body = ProviderV2.mergeOverlay(draft.body, { access_programs: { cyber: daybreak } });
+  });
+};
 
 export const supported = (model: ModelV2.Info) => Boolean(model.package);
 

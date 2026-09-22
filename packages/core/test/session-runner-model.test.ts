@@ -26,6 +26,7 @@ interface ModelOptions {
   readonly headers?: ModelV2.Info["headers"];
   readonly body?: ModelV2.Info["body"];
   readonly variants?: ModelV2.Info["variants"];
+  readonly daybreak?: ModelV2.Info["daybreak"];
 }
 
 const model = (packageName: string | undefined, options: ModelOptions = {}) =>
@@ -40,11 +41,34 @@ const model = (packageName: string | undefined, options: ModelOptions = {}) =>
     body: options.body ?? { custom_extension: { enabled: true } },
     capabilities: { tools: true, input: ["text"], output: ["text"] },
     variants: options.variants ?? [],
+    ...(options.daybreak === undefined ? {} : { daybreak: options.daybreak }),
     time: { released: 0 },
     cost: [],
     status: "active",
     enabled: true,
     limit: { context: 100, output: 20 },
+  });
+
+const sessionInfo = (id: string, daybreak?: SessionV2.Info["daybreak"]) =>
+  SessionV2.Info.make({
+    id: SessionV2.ID.make(id),
+    projectID: ProjectV2.ID.global,
+    title: "test",
+    cost: Money.USD.zero,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+    location: { directory: AbsolutePath.make("/project") },
+    ...(daybreak === undefined ? {} : { daybreak }),
+  });
+
+const chatgptCredential = () =>
+  Credential.OAuth.make({
+    type: "oauth",
+    methodID: Integration.MethodID.make("chatgpt-browser"),
+    access: "fixture-access",
+    refresh: "fixture-refresh",
+    expires: Date.now() + 600_000,
+    metadata: { accountID: "fixture-account" },
   });
 
 const cacheSystem = [SystemPart.make("Stable cache system")];
@@ -628,22 +652,102 @@ describe("SessionRunnerModel", () => {
       }),
   );
 
+  it.effect("merges access_programs on the codex route for an advertised ChatGPT Daybreak selection", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.resolve(
+        sessionInfo("ses_daybreak_blue", "daybreak_blue"),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          modelID: "gpt-5.6-luna",
+          daybreak: ["daybreak_blue", "daybreak_red"],
+        }),
+        chatgptCredential(),
+      );
+
+      expect(resolved.route.defaults.http?.body).toMatchObject({
+        access_programs: { cyber: "daybreak_blue" },
+      });
+    }),
+  );
+
+  it.effect("merges the red advertised program for a daybreak_red selection", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.resolve(
+        sessionInfo("ses_daybreak_red", "daybreak_red"),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          modelID: "gpt-5.6-luna",
+          daybreak: ["daybreak_blue", "daybreak_red"],
+        }),
+        chatgptCredential(),
+      );
+
+      expect(resolved.route.defaults.http?.body).toMatchObject({
+        access_programs: { cyber: "daybreak_red" },
+      });
+    }),
+  );
+
+  it.effect("omits access_programs for API-key credentials", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.resolve(
+        sessionInfo("ses_daybreak_key", "daybreak_blue"),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          modelID: "gpt-5.6-luna",
+          daybreak: ["daybreak_blue"],
+        }),
+        Credential.Key.make({ type: "key", key: "sk-test" }),
+      );
+
+      expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
+    }),
+  );
+
+  it.effect("omits access_programs when the model advertises no Daybreak programs", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.resolve(
+        sessionInfo("ses_daybreak_unadvertised", "daybreak_blue"),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          modelID: "gpt-5.6-luna",
+        }),
+        chatgptCredential(),
+      );
+
+      expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
+    }),
+  );
+
+  it.effect("omits access_programs when the Session Daybreak selection is unset", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.resolve(
+        sessionInfo("ses_daybreak_unset"),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          modelID: "gpt-5.6-luna",
+          daybreak: ["daybreak_blue", "daybreak_red"],
+        }),
+        chatgptCredential(),
+      );
+
+      expect(resolved.route.defaults.http?.body).not.toHaveProperty("access_programs");
+    }),
+  );
+
   for (const program of ["daybreak_blue", "daybreak_red"] as const) for (const transport of ["http", "websocket"] as const) {
-    it.effect(`routes a ${program} catalog entry over ${transport} with explicit access selection`, () =>
+    it.effect(`routes a ${program} selection over ${transport} with explicit access selection`, () =>
       Effect.gen(function* () {
-        const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        const resolved = yield* SessionRunnerModel.resolve(
+          sessionInfo(`ses_daybreak_${program}`, program),
           model(ProviderV2.aisdk("@ai-sdk/openai"), {
             providerID: "openai",
-            id: `gpt-5.6-luna-${program.replaceAll("_", "-")}`,
+            id: "gpt-5.6-luna",
             modelID: "gpt-5.6-luna",
             settings: { transport },
-            body: { access_programs: { cyber: program } },
+            daybreak: ["daybreak_blue", "daybreak_red"],
           }),
-          Credential.OAuth.make({
-            type: "oauth", methodID: Integration.MethodID.make("chatgpt-browser"),
-            access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 600_000,
-            metadata: { accountID: "fixture-account" },
-          }),
+          chatgptCredential(),
         );
         expect(resolved.route.id).toBe(transport === "http" ? "openai-codex-responses" : "openai-codex-websocket-responses");
         const requests: unknown[] = [];

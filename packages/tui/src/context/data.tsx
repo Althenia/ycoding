@@ -1003,6 +1003,10 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
             })
           })
           break
+        case "session.daybreak.set":
+          if (store.session.info[event.data.sessionID])
+            setStore("session", "info", event.data.sessionID, "daybreak", event.data.daybreak)
+          break
         case "todo.updated":
           setStore("session", "todo", event.data.sessionID, reconcile(event.data.todos))
           break
