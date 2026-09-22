@@ -134,7 +134,7 @@ After the public site and a native release are published, `curl -fsSL https://yc
 
 `ycoding update` checks GitHub Releases and replaces an installed release only after verifying its archive checksum and exact contents. On macOS, releases from 0.2.0 onward must contain both `ycoding` and `ycoding-computer-helper`; self-update preserves the installed pair and restores it if either replacement fails. Explicit rollback to a published pre-0.2.0 macOS version accepts its historical single-file archive and leaves any sibling helper unchanged. Linux remains single-file. Self-update supports macOS arm64/x64 and Linux x64, matching the shell installer. Development builds must be rebuilt locally; Windows users must exit YCoding and replace the executable from the release ZIP manually.
 
-The background update check resolves the newest release from the same GitHub Releases source and installs it with that release installer; it never consults the npm registry. It runs only after the background service is running or attached, because the release install replaces the executable that service spawns from. The `autoupdate` policy still governs it: `false` disables the check, and major releases are never installed automatically.
+The background update check resolves the newest release from the same GitHub Releases source and only announces its availability with the explicit `ycoding update` command. It never downloads release assets, installs an update, replaces executables, or restarts the application. An omitted `autoupdate`, `true`, and `"notify"` all enable notice-only checks for patch, minor, and major releases; `false` disables the check. Installation requires the user to run `ycoding update`.
 
 ### Remote access
 
@@ -202,7 +202,7 @@ The MCP shape where server names appear directly under `mcp` is also rejected. U
 | `shell_memory_limit_mb` | non-negative integer                  | Default shell command process-tree memory limit in MiB; zero disables the default.          |
 | `model`                 | model selector                        | Default model.                                                                              |
 | `default_agent`         | string                                | Default selectable primary agent.                                                           |
-| `autoupdate`            | boolean or `notify`                   | Update automatically or only notify.                                                        |
+| `autoupdate`            | boolean or `notify`                   | Notice-only update checks; `false` disables checks. Installation is always manual.           |
 | `share`                 | `manual`, `auto`, or `disabled`       | Session sharing policy accepted by Schema.                                                  |
 | `enterprise.url`        | string                                | Enterprise sharing endpoint accepted by Schema.                                             |
 | `username`              | string                                | Display and telemetry identity.                                                             |
@@ -270,7 +270,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `shell_memory_limit_mb`                           | non-negative integer `<= 1048576`                                              | unset           | Default sampled resident-memory limit in MiB; zero means unlimited.                               |
 | `model`                                           | model selector                                                                 | unset           | Session/agent model fallback.                                                                     |
 | `default_agent`, `username`                       | string                                                                         | unset           | Primary agent ID and display identity.                                                            |
-| `autoupdate`                                      | boolean \| `notify`                                                            | unset           | Update policy.                                                                                    |
+| `autoupdate`                                      | boolean \| `notify`                                                            | unset           | Notice-only checks; `false` disables them.                                                          |
 | `share`                                           | `manual` \| `auto` \| `disabled`                                               | unset           | Sharing policy.                                                                                   |
 | `enterprise.url`                                  | string                                                                         | unset           | Enterprise endpoint.                                                                              |
 | `permissions`                                     | ordered `[{ action: string, resource: string, effect: allow \| deny \| ask }]` | unset           | Global permission rules.                                                                          |

@@ -65,7 +65,7 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   autoupdate: Schema.Union([Schema.Boolean, Schema.Literal("notify")])
     .pipe(Schema.optional)
     .annotate({
-      description: "Automatically update or notify when a new version is available",
+      description: "Check for updates and notify when a new version is available",
     }),
   share: Schema.Literals(["manual", "auto", "disabled"]).pipe(Schema.optional).annotate({
     description: "Control whether sessions may be shared manually, automatically, or not at all",

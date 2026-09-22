@@ -2,7 +2,7 @@ import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { Global } from "@ycoding-ai/core/global"
 import { Npm } from "@ycoding-ai/core/npm"
 import { run } from "@ycoding-ai/tui"
-import { Context, Effect, FileSystem, Option } from "effect"
+import { Context, Deferred, Effect, FileSystem, Option } from "effect"
 import { Config } from "../../config"
 import { ServerConnection } from "../../services/server-connection"
 import { UpdatePreflight } from "../../services/update-preflight"
@@ -36,9 +36,10 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
   }).pipe(
     Effect.tapError(() => Effect.promise(() => preflight.fail("YCoding update could not start the new background service"))),
   )
-  // The background server spawns from this executable, so the release install
-  // must not replace that path while the service is still starting.
-  yield* updater.check().pipe(Effect.forkScoped)
+  const updateNotice = yield* Deferred.make<string | undefined>()
+  yield* updater
+    .check((message) => Deferred.succeed(updateNotice, message))
+    .pipe(Effect.ensuring(Deferred.succeed(updateNotice, undefined)), Effect.forkScoped)
   preflight.loading()
   const config = yield* Config.Service
   const npm = yield* Npm.Service
@@ -59,6 +60,7 @@ export const runTui = Effect.fnUntraced(function* (input: Input) {
         : undefined,
     },
     args: { continue: input.continue, sessionID: Option.getOrUndefined(input.session) },
+    updateNotice: Effect.runPromise(Deferred.await(updateNotice)),
     config: {
       path: config.path,
       get: () => runPromise(config.get()),

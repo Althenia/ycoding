@@ -2,12 +2,13 @@
 import { testRender } from "@opentui/solid"
 import { BoxRenderable, TextRenderable, type Renderable } from "@opentui/core"
 import { expect, test } from "bun:test"
-import { onMount } from "solid-js"
+import { createSignal, onMount, Show } from "solid-js"
 import { ConfigProvider } from "../../src/config"
 import { ThemeProvider } from "../../src/context/theme"
 import { railPlacement, railWidth } from "../../src/routes/session/rail"
 import { SessionRailContent } from "../../src/routes/session/sidebar"
 import { Toast, ToastProvider, useToast } from "../../src/ui/toast"
+import { UpdateNotice } from "../../src/app"
 import { RouteProvider } from "../../src/context/route"
 import { json } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
@@ -28,6 +29,123 @@ const variants = [
 }>
 const overlay = [37, 42, 51, 255] satisfies [number, number, number, number]
 const messageInk = [242, 244, 247, 255] satisfies [number, number, number, number]
+
+test("renders an update availability notice with the manual update command", async () => {
+  const message = "YCoding 1.2.4 available. Run `ycoding update`."
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <RouteProvider initialRoute={{ type: "home" }}>
+              <ToastProvider>
+                <UpdateNotice message={Promise.resolve(message)} />
+                <Toast />
+              </ToastProvider>
+            </RouteProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    DESIGN_VIEWPORT,
+  )
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes(message))
+
+  try {
+    expect(app.captureCharFrame()).toContain("YCoding update available")
+    expect(app.captureCharFrame()).toContain("Run `ycoding update`.")
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("does not render an update toast when no update is available", async () => {
+  let mounted = () => {}
+  const ready = new Promise<void>((resolve) => {
+    mounted = resolve
+  })
+  let toast: ReturnType<typeof useToast> | undefined
+  function Fixture() {
+    toast = useToast()
+    onMount(mounted)
+    return <UpdateNotice message={Promise.resolve(undefined)} />
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <RouteProvider initialRoute={{ type: "home" }}>
+              <ToastProvider>
+                <Fixture />
+              </ToastProvider>
+            </RouteProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    DESIGN_VIEWPORT,
+  )
+  app.renderer.start()
+  await ready
+  await Promise.resolve()
+
+  try {
+    expect(toast?.currentToast).toBeNull()
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
+test("does not show an update toast after unmount", async () => {
+  let resolve = (_message: string | undefined) => {}
+  const message = new Promise<string | undefined>((next) => {
+    resolve = next
+  })
+  let toast: ReturnType<typeof useToast> | undefined
+  let mounted = () => {}
+  const ready = new Promise<void>((next) => {
+    mounted = next
+  })
+  let hide = () => {}
+  function Fixture() {
+    toast = useToast()
+    const [shown, setShown] = createSignal(true)
+    hide = () => setShown(false)
+    onMount(mounted)
+    return <Show when={shown()}><UpdateNotice message={message} /></Show>
+  }
+
+  const app = await testRender(
+    () => (
+      <TestTuiContexts>
+        <ConfigProvider config={createTuiResolvedConfig()}>
+          <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+            <RouteProvider initialRoute={{ type: "home" }}>
+              <ToastProvider>
+                <Fixture />
+              </ToastProvider>
+            </RouteProvider>
+          </ThemeProvider>
+        </ConfigProvider>
+      </TestTuiContexts>
+    ),
+    DESIGN_VIEWPORT,
+  )
+  app.renderer.start()
+  await ready
+  hide()
+  await Promise.resolve()
+  resolve("YCoding 1.2.4 available. Run `ycoding update`.")
+  await Promise.resolve()
+  try {
+    expect(toast?.currentToast).toBeNull()
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 for (const viewport of [DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE]) {
   for (const current of variants) {

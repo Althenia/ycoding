@@ -8,13 +8,13 @@ import { Context, Effect, FileSystem, Layer } from "effect"
 import { parse, type ParseError } from "jsonc-parser"
 import path from "node:path"
 import semver from "semver"
-import { installRelease, latestRelease, type Fetch } from "../update/update"
+import { latestRelease, type Fetch } from "../update/update"
 
 export type Policy = boolean | "notify"
-export type Action = "none" | "upgrade"
+export type Action = "none" | "notify"
 
 export interface Interface {
-  readonly check: () => Effect.Effect<void>
+  readonly check: (notify: (message: string) => Effect.Effect<void>) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/cli/Updater") {}
@@ -31,10 +31,8 @@ export function decodePolicy(text: string): Policy | undefined {
 
 export function action(current: string, latest: string, policy: Policy): Action {
   if (policy === false) return "none"
-  if (!semver.valid(current) || !semver.valid(latest) || semver.eq(latest, current)) return "none"
-  // Major upgrades are never installed automatically.
-  if (semver.major(latest) !== semver.major(current)) return "none"
-  return "upgrade"
+  if (!semver.valid(current) || !semver.valid(latest) || !semver.gt(latest, current)) return "none"
+  return "notify"
 }
 
 export type UpdateCheckSkipReason = "local-install" | "disabled" | "preview-build"
@@ -51,9 +49,6 @@ export function updateCheckSkipReason(input: {
 
 export type Options = {
   readonly fetch?: Fetch
-  readonly executable?: string
-  readonly platform?: string
-  readonly arch?: string
   readonly local?: boolean
   readonly version?: string
 }
@@ -67,9 +62,6 @@ export const layerWith = (options: Options = {}) =>
       const local = options.local ?? InstallationLocal
       const version = options.version ?? InstallationVersion
       const disabled = ["1", "true"].includes(process.env.YCODING_DISABLE_AUTOUPDATE?.toLowerCase() ?? "")
-      const executable = options.executable ?? process.execPath
-      const platform = options.platform ?? process.platform
-      const arch = options.arch ?? process.arch
 
       const readPolicy = Effect.fnUntraced(function* () {
         const values = yield* Effect.forEach(["config.json", "ycoding.json", "ycoding.jsonc"], (name) =>
@@ -87,14 +79,7 @@ export const layerWith = (options: Options = {}) =>
         })
       })
 
-      const upgrade = Effect.fnUntraced(function* (version: string) {
-        yield* Effect.tryPromise({
-          try: () => installRelease({ version, executable, platform, arch, fetch: options.fetch }),
-          catch: (cause) => new Error("Failed to install the update", { cause }),
-        })
-      })
-
-      const check = Effect.fn("cli.updater.check")(function* () {
+      const check = Effect.fn("cli.updater.check")(function* (notify: (message: string) => Effect.Effect<void>) {
         const reason = updateCheckSkipReason({ local, disabled, version })
         if (reason)
           return yield* Effect.logInfo("update check skipped", {
@@ -113,10 +98,11 @@ export const layerWith = (options: Options = {}) =>
           })
           const next = action(version, latestVersion, policy)
           if (next === "none") return yield* Effect.logInfo("update check done", { action: "up-to-date" })
-          yield* upgrade(latestVersion)
-          yield* Effect.logInfo("updated YCoding", { from: version, to: latestVersion })
+          const message = `YCoding ${latestVersion} available. Run \`ycoding update\`.`
+          yield* notify(message)
+          return yield* Effect.logInfo("update available", { current: version, latest: latestVersion })
         })
-      }, Effect.catchCause((cause) => Effect.logWarning("automatic update failed", { cause })))
+      }, Effect.catchCause((cause) => Effect.logWarning("update check failed", { cause })))
 
       return Service.of({ check })
     }),

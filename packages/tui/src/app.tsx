@@ -148,6 +148,7 @@ export type TuiInput = {
     }
   }
   args: Args
+  updateNotice?: Promise<string | undefined>
   config: Config.Interface
   packages: PackageResolver
   terminalHandoff?: () => Promise<
@@ -319,6 +320,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                 >
                                   <Keymap.Provider>
                                     <ToastProvider>
+                                      <UpdateNotice message={input.updateNotice} />
                                       <RouteProvider
                                         initialRoute={
                                           input.args.continue
@@ -398,6 +400,23 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
     if (result.epilogue) process.stdout.write(result.epilogue + "\n")
   })
 })
+
+export function UpdateNotice(props: { message?: Promise<string | undefined> }) {
+  const toast = useToast()
+  onMount(() => {
+    let mounted = true
+    onCleanup(() => {
+      mounted = false
+    })
+    void props.message
+      ?.then((message) => {
+        if (!mounted || !message) return
+        toast.show({ title: "YCoding update available", message, variant: "info", duration: 30_000 })
+      })
+      .catch(() => {})
+  })
+  return null
+}
 
 function App(props: { pair?: DialogPairCredentials; started: number }) {
   const sessionViewports: SessionViewportStore = new Map()
