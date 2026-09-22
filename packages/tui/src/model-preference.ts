@@ -36,7 +36,7 @@ function variants(value: unknown) {
 }
 
 export function normalizeModelVariant(value: string | undefined) {
-  return value === "default" ? undefined : value
+  return value === "default" || value === "none" ? undefined : value
 }
 
 export function modelPreferenceKey(model: ModelPreferenceModel) {
