@@ -541,6 +541,70 @@ it.effect("marks a grouped cost current-catalog when any request was derived", (
   }),
 )
 
+it.effect("summarizes absent, mixed, and explicit-zero cache-read reporting by model", () =>
+  Effect.sync(() => {
+    const firstModel = ModelV2.Ref.make({
+      id: ModelV2.ID.make("first"),
+      providerID: ProviderV2.ID.make("openai"),
+    })
+    const secondModel = ModelV2.Ref.make({
+      id: ModelV2.ID.make("second"),
+      providerID: ProviderV2.ID.make("openai"),
+    })
+    const record = {
+      sessionID: SessionV2.ID.make("ses_provider_request_cache_summary"),
+      source: "step" as const,
+      agent: AgentV2.ID.make("build"),
+      routeID: "openai-responses",
+      promptCacheKey: "cache-key",
+      systemDigest: "system",
+      toolDigest: "tools",
+      attempts: 1,
+      invalidation: "first-request" as const,
+      continuation: "full" as const,
+      tokens: { input: 10, output: 2, reasoning: 1, cache: { read: 0, write: 0 } },
+      time: DateTime.makeUnsafe(1),
+    }
+    const explicitZero = {
+      ...record,
+      id: ProviderRequest.ID.make("prq_cache_summary_explicit"),
+      request: 1,
+      model: firstModel,
+      cacheReadReported: true,
+    }
+
+    expect(SessionProviderRequest.summarize([])).not.toHaveProperty("cacheReadReported")
+    expect(SessionProviderRequest.summarize([explicitZero])).toMatchObject({
+      cacheReadReported: true,
+      models: [{ model: firstModel, cacheReadReported: true, tokens: { cache: { read: 0 } } }],
+    })
+    expect(
+      SessionProviderRequest.summarize([
+        explicitZero,
+        {
+          ...record,
+          id: ProviderRequest.ID.make("prq_cache_summary_unknown"),
+          request: 2,
+          model: firstModel,
+        },
+        {
+          ...record,
+          id: ProviderRequest.ID.make("prq_cache_summary_second"),
+          request: 3,
+          model: secondModel,
+          cacheReadReported: true,
+        },
+      ]),
+    ).toMatchObject({
+      cacheReadReported: false,
+      models: [
+        { model: firstModel, requests: 2, cacheReadReported: false },
+        { model: secondModel, requests: 1, cacheReadReported: true },
+      ],
+    })
+  }),
+)
+
 it.effect("prioritizes compaction and model cache reset diagnostics while normalizing legacy default variants", () =>
   Effect.gen(function* () {
     const sessionID = SessionV2.ID.make("ses_provider_request_resets")

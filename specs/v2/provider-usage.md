@@ -1,15 +1,13 @@
 # Provider usage
 
-Status: **Implemented**
-
-Provider usage is a read-only Location-scoped service that normalizes quota, credit, and usage information from multiple provider-owned sources for Protocol clients and the TUI Provider Usage command.
+Provider usage is a read-only Location-scoped service that normalizes quota, credit, and usage information from multiple provider-owned sources for Protocol clients and the dedicated TUI Provider Usage screen.
 
 ## Ownership
 
 - Schema owns normalized snapshot, window, source, stability, and status shapes.
-- Core owns credential selection, provider adapters, caching, observation precedence, redaction, and source isolation.
+- Core owns catalog-based provider discovery, credential selection, provider adapters, caching, observation precedence, redaction, and source isolation.
 - Protocol and Server expose normalized list/get operations through Location middleware.
-- TUI owns active-running-provider selection, command visibility, dialog ordering, progress-bar thresholds, reset formatting, and stale/source labels.
+- TUI owns screen navigation, progress-bar thresholds, reset formatting, and stale/source labels. It renders the connected-provider list independently of Session/model selection. The Session footer's usage action and `<leader>Shift+U` open the screen; `<leader>u` remains Undo. Escape returns with the Session draft intact.
 
 ## Snapshot contract
 
@@ -117,31 +115,45 @@ GET /api/provider/:providerID/usage
 
 Both operations accept the Location query. `refresh=true` requests a source refresh. The response contains normalized snapshots only and never exposes credential IDs, access tokens, API keys, refresh tokens, account emails, or raw provider payloads.
 
-## Durable session usage
+The list uses `Catalog.provider.available()` to enumerate each available configured provider once, respecting disabled providers and provider policy. It includes connected providers with no selected Session and providers without a quota adapter; the latter return explicit `unsupported` snapshots. Independent refreshes run with concurrency bounded to four and preserve successful snapshots alongside per-provider failures. Results are ordered by provider ID.
 
-Session-local provider-request usage is separate from provider quota and credit snapshots. Core derives one durable aggregate per Session and provider/model/variant from `session.provider.request.recorded` events, including logical requests, physical attempts, helper calls, continuation/fallback counts, raw token categories, and cost. Each raw provider-request record may carry `cacheReadReported`: `true` means the provider explicitly reported cache-read usage, including an explicit zero; `false` means it did not report cache-read usage; absence is historical unknown. Cache-adaptation folds measure only explicit `true` records and preserve missing or historical telemetry as unmeasured.
+## Durable provider-request usage
+
+Durable provider-request usage is separate from provider quota and credit snapshots. Core derives one aggregate per Session and provider/model/variant from `session.provider.request.recorded` events, including logical requests, physical attempts, helper calls, continuation/fallback counts, raw token categories, and cost. Each raw provider-request record may carry `cacheReadReported`: `true` means the provider explicitly reported cache-read usage, including an explicit zero; `false` means it did not report cache-read usage; absence is historical unknown. Cache-adaptation folds measure only explicit `true` records and preserve missing or historical telemetry as unmeasured.
 
 ```text
+GET /api/usage
+GET /api/usage/report?group=model|hour|day|month|session|project|agent
 GET /api/session/:sessionID/usage
+GET /api/session/:sessionID/usage/report?group=model|hour|day|month|session|project|agent
 ```
 
-The operation is Location-scoped and returns the Session aggregate even after transcript compaction or when the latest-step diagnostics are unavailable. A root Session aggregates its complete child family, while a child Session remains scoped to its own records. It exposes only the bounded latest cache invalidation reason and namespace prefix; it never exposes prompt content, full cache keys, instruction digests, credentials, or raw provider payloads. A priced model row carries `costProvenance`: `recorded` for durable provider cost or `current_catalog` for a query-time estimate. Historical records without durable cost resolve first against the current Location provider catalog, then against the current OpenRouter master catalog for the same model and variant. If neither catalog prices a request, the affected model and Session costs are absent rather than zero.
+The local-runtime operations aggregate retained projections across every stored Session exactly once, including independent roots, descendants, unrelated projects and Locations, and archived Sessions. They require the normal local Server authorization and are not part of the closed remote shared-Session transport. They accept no Session or Location selector. Sessions whose requests all have recorded costs do not initialize a Location or catalog. Missing historical costs resolve through the Session's own Location, first against that Location's provider catalog and then its current OpenRouter master catalog for the same model and variant. If neither available catalog prices a request, the affected costs are absent rather than zero. A filesystem `NotFound` during catalog acquisition preserves the original request rows, including their recorded costs, rather than failing the whole report; other acquisition failures propagate unchanged. Request and token totals remain factual even when cost totals cannot be reported.
 
-Raw request projections and aggregates are retained for current, recently updated, and locally active Sessions. A startup and hourly cleanup removes only those derived projections when a Session has been inactive for more than 30 days. Durable events and transcript rows are never pruned by usage cleanup.
+The Session operations remain the scoped contract. They are Location-scoped and return usage even after transcript compaction or when latest-step diagnostics are unavailable. A root Session aggregates its complete child family, while a child Session remains scoped to its own records. The aggregate exposes only the bounded latest cache invalidation reason and namespace prefix; it never exposes prompt content, full cache keys, instruction digests, credentials, or raw provider payloads. A priced model row carries `costProvenance`: `recorded` for durable provider cost or `current_catalog` for a query-time estimate.
+
+Both report operations group their scope by model, UTC hour, UTC day, UTC month, Session, project, or agent. Optional `from` and `to` epoch-millisecond bounds are inclusive and exclusive respectively and must satisfy `from < to`. Optional zero-based `offset` and `limit` page grouped rows; the default limit is 100 and the maximum is 200. Optional `sort` accepts `key`, `tokens`, or `cost`, and optional `order` accepts `asc` or `desc`; they default to `key` and `asc`. Sorting applies to the complete filtered grouped row set before pagination. Equal token and cost values use the ascending row key as a deterministic tie-breaker, and rows without cost remain last in either cost order. Token sorting uses the non-overlapping durable total `input + output + reasoning + cache.read + cache.write`; reasoning is excluded from `output`, while cache reads and writes are excluded from `input`. Time groups sort chronologically through their UTC key. Top-level totals and `rowCount` cover every filtered group independently of pagination. Each row and the total expose logical and physical requests, helper, continuation and fallback counts, raw token categories, optional cost with provenance, and whether every contributing request explicitly reported cache-read usage. Reports omit request IDs, routes, cache namespaces, instruction digests, raw provider payloads, and nested model arrays.
+
+Raw request projections and aggregates are retained for current, recently updated, and locally active Sessions. A startup and hourly cleanup removes only those derived projections when a Session has been inactive for more than 30 days. Durable events and transcript rows are never pruned by usage cleanup. Global summary and report totals cover the retained projections available at query time; they do not claim complete historical or billing coverage after cleanup.
+
+Summary totals and per-model spend rows expose optional `cacheReadReported`, true only when every contributing request explicitly reported cache-read telemetry. False or absent does not establish a reported zero; displays keep it unreported while retaining the raw aggregate counters.
 
 ## TUI presentation
 
-- The `Provider Usage` command is hidden until a currently running Session in the current root/subagent family has a non-unsupported usage snapshot.
-- Provider IDs are deduplicated across parallel running Sessions; account-level percentages are never added or averaged.
-- Unsupported providers are omitted. Unauthorized and error snapshots render `Usage unavailable`.
+- Ten direct views expose Overview, Usage, Models, Daily, Hourly, Monthly, Sessions, Projects, Stats, and Agents. Statistics use the backend-wide summary and report operations across all retained Sessions; the originating Session is only the return-navigation target. Report views support preset or custom UTC date ranges, recorded activity counters, whole-dataset sorting, and 100-row paging with full-scope totals. View, range, and sort changes reset paging. Selection follows row identity across refresh; stale responses cannot replace a newer query or an unmounted screen. Report cost details distinguish recorded values from current-catalog estimates. Missing cache-read reporting remains unreported. See [runtime report controls](../../docs/runtime.md#telemetry) for keyboard and display behavior.
+- Stats displays a 52-week Sunday-aligned UTC calendar using retained daily reports. Future cells are blank. Missing retained days do not prove inactivity, and coverage remains explicitly unknown after retention cleanup.
+- The Session footer's usage action and `<leader>Shift+U` open the dedicated Usage screen; `<leader>u` remains Undo. Usage is not a command-palette item. Escape or back returns without submitting or discarding the Session draft.
+- Navigation labels occupy equally sized, padded, clickable cells separated by vertical rules. Narrow terminals retain the active view in a bounded navigation window. Overview and quota content show a theme-colored vertical scrollbar only when needed; no horizontal scrollbar occupies the space above the footer.
+- Provider IDs are deduplicated across the Location-connected-provider list, retaining the newest snapshot by update time; account-level percentages are never added or averaged.
+- Unsupported, unauthorized, and error snapshots retain their status and safe message. Providers with no reported windows remain visible without fabricated values. A failed refresh retains a previous snapshot as stale and shows a partial-refresh warning.
 - Spark and other named lanes render as separate windows within their provider section.
-- A window renders a ten-character ASCII progress bar (`#` used and `-` unused) only when a ratio is derivable: a `percent` window reporting `used`, or any window reporting both `used` and a positive `limit`. Windows with no denominator, and `unlimited` windows, render their value as text. A denominator is never inferred.
+- A window renders a ten-cell progress bar (`█` used and `░` unused) only when a ratio is derivable: a `percent` window reporting `used`, or any window reporting both `used` and a positive `limit`. Windows with no denominator, and `unlimited` windows, render their value as text, subject to the explicit OpenRouter rule below.
 - OpenRouter `daily`, `weekly`, and `monthly` windows report spend without a limit of their own and borrow the same snapshot's `key` USD limit as their denominator. The borrow is scoped to OpenRouter windows within one snapshot and never crosses providers or snapshots. When the key reports no limit, those windows stay text.
 - Bar values below 70% use normal styling, 70–89% warning styling, and 90% or higher error styling.
 - Each window renders its own reset beside its value, so Codex 5-hour, weekly, and Spark lanes, and Claude session and weekly lanes, each show a distinct reset. There is no aggregated reset row. Near resets use relative duration, later resets use a concrete local timestamp, and a window with no reported reset shows none.
 - Unknown values render as `Not reported`.
-- The usage section leads with a `Total` row built from the Session-family summary's own top-level token and cost totals, so it covers every model regardless of the per-model breakdown beneath it. It is not re-summed from the model rows.
-- Usage rows align their values in a common right-hand column, and long model identifiers, session titles, and subagent titles wrap onto a detail row instead of being truncated.
-- Spend amounts render without a provenance label; `costProvenance` remains available to API consumers and does not claim historical billing.
+- Overview leads with a `Total` row built from the backend summary's own top-level token and cost totals, so it covers every model regardless of the per-model breakdown beneath it. It is not re-summed from the model rows.
+- Overview and report tables share header/row column geometry, right-aligned numeric values, and distinct metric colors. Wide layouts allocate remaining width to full model identities before truncating; narrow layouts separate identities and metric details. Selected report rows use the full-width offset surface.
+- Overview spend amounts render without a provenance label; `costProvenance` remains available to API consumers and does not claim historical billing.
 - Claude Pro/Max and ChatGPT Plus/Pro labels are shown only when reported by the credential or provider account contract; missing tiers are not inferred from quota windows.
 - Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, and additional named windows render only when present in the normalized snapshot.

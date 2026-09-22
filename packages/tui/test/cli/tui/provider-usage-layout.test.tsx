@@ -4,7 +4,7 @@ import { testRender } from "@opentui/solid"
 import type { ProviderUsageListOutput } from "@ycoding-ai/client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
-import { ProviderUsageDialogContent } from "../../../src/routes/session/provider-usage"
+import { ProviderUsageScreenContent } from "../../../src/routes/session/provider-usage"
 
 type Snapshot = ProviderUsageListOutput["data"][number]
 
@@ -35,7 +35,7 @@ test("renders each provider quota window with its own reset and derivable progre
       ],
     },
     {
-      providerID: "openrouter",
+      providerID: "openrouter-uncapped",
       label: "OpenRouter uncapped",
       status: "available",
       source: "provider_api",
@@ -74,7 +74,7 @@ test("renders each provider quota window with its own reset and derivable progre
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <ToastProvider>
                 <DialogProvider>
-                  <ProviderUsageDialogContent snapshots={() => snapshots} now={() => now} />
+                  <ProviderUsageScreenContent snapshots={() => snapshots} initialTab="usage" now={() => now} />
                 </DialogProvider>
               </ToastProvider>
             </ThemeProvider>
@@ -85,16 +85,16 @@ test("renders each provider quota window with its own reset and derivable progre
     { width: 80, height: 60 },
   )
   app.renderer.start()
-  await app.waitForFrame((frame) => frame.includes("Provider quota"))
+  await app.waitForFrame((frame) => frame.includes("Usage"))
 
   try {
     const frame = app.captureCharFrame()
     const rows = frame.split("\n")
     expect(rows.find((row) => row.includes("Openrouter"))).toContain("updated now")
     expect(rows.find((row) => row.includes("Key limit"))).toContain("███░░░░░░░ $3.20 / $10.00 ($6.80 left)")
-    expect(rows.find((row) => row.includes("Daily"))).toContain("███████░░░ $7.02 / $10.00")
+    expect(rows.find((row) => /^\s*Daily\s/.test(row))).toContain("███████░░░ $7.02 / $10.00")
     expect(rows.find((row) => row.includes("Weekly"))).toContain("██████████ $11.22 / $10.00")
-    expect(rows.find((row) => row.includes("Monthly"))).toContain("██████████ $18.45 / $10.00")
+    expect(rows.find((row) => /^\s*Monthly\s/.test(row))).toContain("██████████ $18.45 / $10.00")
     expect(rows.find((row) => row.includes("Later reset"))).toContain("███░░░░░░░ 25% used · resets in 4h")
     expect(rows.find((row) => row.includes("Sooner reset"))).toContain("█████████░ 91% used · resets in 2h 3m")
     expect(rows.find((row) => row.includes("Uncapped daily"))).toContain("$7.02 used")
@@ -105,7 +105,7 @@ test("renders each provider quota window with its own reset and derivable progre
     expect(frame).not.toMatch(/^.*\sReset\s/m)
     expect(frame).not.toContain("Monupdated now")
     expect(frame).not.toContain("Weeklyupdated now")
-    expect(frame).not.toMatch(/[\#-]{3,}/)
+    expect(frame).not.toMatch(/[#-]{3,}/)
   } finally {
     app.renderer.destroy()
   }
@@ -170,7 +170,7 @@ test("preserves reported account tiers and renders each reported reset without i
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
               <ToastProvider>
                 <DialogProvider>
-                  <ProviderUsageDialogContent snapshots={() => snapshots} now={() => now} />
+                  <ProviderUsageScreenContent snapshots={() => snapshots} initialTab="usage" now={() => now} />
                 </DialogProvider>
               </ToastProvider>
             </ThemeProvider>
@@ -186,7 +186,7 @@ test("preserves reported account tiers and renders each reported reset without i
   try {
     const rows = app.captureCharFrame().split("\n")
     expect(rows.find((row) => row.includes("Claude Max"))).toContain("live")
-    expect(rows.find((row) => row.includes("Session"))).toContain("resets in 1h")
+    expect(rows.find((row) => /^\s*Session\s/.test(row))).toContain("resets in 1h")
     expect(rows.find((row) => row.includes("Weekly all models"))).toContain("resets in 2h")
     expect(rows.find((row) => row.includes("Experimental lane"))).toContain("resets in 3h")
     expect(rows.find((row) => row.includes("Codex Pro"))).toContain("updated now")

@@ -33,7 +33,12 @@ export type TerminalInspectorRoute = {
   ptyID: string
 }
 
-export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute | TerminalInspectorRoute
+export type ProviderUsageRoute = {
+  type: "provider-usage"
+  sessionID: string
+}
+
+export type Route = HomeRoute | SessionRoute | PluginRoute | ShellOutputRoute | TerminalInspectorRoute | ProviderUsageRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   name: "Route",

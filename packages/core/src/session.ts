@@ -1,7 +1,7 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { DateTime, Effect, Layer, Schema, Context, Stream, Scope } from "effect"
+import { Cause, DateTime, Effect, Layer, Schema, Context, Stream, Scope } from "effect"
 import { ListAnchor } from "@ycoding-ai/schema/session"
 import { ID, type Admission, type Result } from "@ycoding-ai/schema/session-compaction"
 import { and, asc, desc, eq, gt, isNull, like, lt, or, type SQL } from "drizzle-orm"
@@ -337,6 +337,11 @@ export interface Interface {
     sessionID: SessionSchema.ID,
   ) => Effect.Effect<Session.CacheDiagnostics | undefined, NotFoundError | MessageDecodeError>
   readonly usage: (sessionID: SessionSchema.ID) => Effect.Effect<ProviderRequest.Summary, NotFoundError>
+  readonly usageReport: (
+    input: ProviderRequest.ReportInput & { readonly sessionID: SessionSchema.ID },
+  ) => Effect.Effect<ProviderRequest.Report, NotFoundError>
+  readonly usageAll: () => Effect.Effect<ProviderRequest.Summary>
+  readonly usageReportAll: (input: ProviderRequest.ReportInput) => Effect.Effect<ProviderRequest.Report>
   readonly autonomy: {
     readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionAutonomy.State, NotFoundError>
     readonly set: (input: AutonomyInput) => Effect.Effect<SessionAutonomy.State, NotFoundError | SessionGoal.Error>
@@ -406,6 +411,92 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/Session") {}
+
+function usageReportGroup(
+  group: ProviderRequest.ReportGroup,
+  item: { readonly record: SessionProviderRequest.CostedRecord; readonly session: SessionSchema.Info },
+) {
+  if (group === "model") {
+    const variant = item.record.model.variant
+    return {
+      key: [item.record.model.providerID, item.record.model.id, variant]
+        .flatMap((part) => (part === undefined ? [] : [part]))
+        .map((part) => encodeURIComponent(part))
+        .join("/"),
+      label: `${item.record.model.providerID}/${item.record.model.id}${variant ? ` (${variant})` : ""}`,
+    }
+  }
+  if (group === "session") return { key: item.session.id, label: item.session.title }
+  if (group === "project") return { key: item.session.projectID, label: item.session.projectID }
+  if (group === "agent") return { key: item.record.agent, label: item.record.agent }
+  const iso = new Date(DateTime.toEpochMillis(item.record.time)).toISOString()
+  if (group === "hour") return { key: `${iso.slice(0, 13)}:00:00.000Z`, label: `${iso.slice(0, 13)}:00 UTC` }
+  if (group === "day") return { key: iso.slice(0, 10), label: iso.slice(0, 10) }
+  return { key: iso.slice(0, 7), label: iso.slice(0, 7) }
+}
+
+function usageReportTokenTotal(row: ProviderRequest.ReportRow) {
+  return row.tokens.input + row.tokens.output + row.tokens.reasoning + row.tokens.cache.read + row.tokens.cache.write
+}
+
+function usageReportComparator(sort: ProviderRequest.ReportSort, order: ProviderRequest.ReportOrder) {
+  return (left: ProviderRequest.ReportRow, right: ProviderRequest.ReportRow) => {
+    const key = left.key < right.key ? -1 : left.key > right.key ? 1 : 0
+    if (sort === "key") return order === "asc" ? key : -key
+    if (sort === "cost") {
+      if (left.cost === undefined) return right.cost === undefined ? key : 1
+      if (right.cost === undefined) return -1
+      const cost = left.cost < right.cost ? -1 : left.cost > right.cost ? 1 : 0
+      return (order === "asc" ? cost : -cost) || key
+    }
+    const leftTokens = usageReportTokenTotal(left)
+    const rightTokens = usageReportTokenTotal(right)
+    const tokens = leftTokens < rightTokens ? -1 : leftTokens > rightTokens ? 1 : 0
+    return (order === "asc" ? tokens : -tokens) || key
+  }
+}
+
+function buildUsageReport(
+  input: ProviderRequest.ReportInput,
+  items: ReadonlyArray<{
+    readonly record: SessionProviderRequest.CostedRecord
+    readonly session: SessionSchema.Info
+  }>,
+): ProviderRequest.Report {
+  const records = items.filter(({ record }) => {
+    const time = DateTime.toEpochMillis(record.time)
+    return (input.from === undefined || time >= input.from) && (input.to === undefined || time < input.to)
+  })
+  const grouped = new Map<
+    string,
+    { readonly label: string; readonly records: SessionProviderRequest.CostedRecord[] }
+  >()
+  for (const item of records) {
+    const group = usageReportGroup(input.group, item)
+    const current = grouped.get(group.key)
+    if (current) {
+      current.records.push(item.record)
+      continue
+    }
+    grouped.set(group.key, { label: group.label, records: [item.record] })
+  }
+  const rows = Array.from(grouped, ([key, value]) => ({
+    key,
+    label: value.label,
+    ...SessionProviderRequest.reportMetrics(value.records),
+  })).toSorted(usageReportComparator(input.sort ?? "key", input.order ?? "asc"))
+  const offset = input.offset ?? 0
+  const limit = input.limit ?? 100
+  const page = rows.slice(offset, offset + limit)
+  const nextOffset = offset + page.length < rows.length ? offset + page.length : undefined
+  return {
+    group: input.group,
+    rows: page,
+    total: SessionProviderRequest.reportMetrics(records.map((item) => item.record)),
+    rowCount: rows.length,
+    ...(nextOffset === undefined ? {} : { nextOffset }),
+  }
+}
 
 const layer = Layer.effect(
   Service,
@@ -588,9 +679,16 @@ const layer = Layer.effect(
     const family = Effect.fnUntraced(function* (session: SessionSchema.Info) {
       if (session.parentID) return [session]
       const sessions = [session]
+      const seen = new Set<SessionSchema.ID>([session.id])
       for (const current of sessions) {
         const children = yield* result.list({ parentID: current.id })
-        sessions.push(...children.data)
+        sessions.push(
+          ...children.data.filter((child) => {
+            if (seen.has(child.id)) return false
+            seen.add(child.id)
+            return true
+          }),
+        )
       }
       return sessions
     })
@@ -598,7 +696,14 @@ const layer = Layer.effect(
       session: SessionSchema.Info,
       records: ReadonlyArray<ProviderRequest.Record>,
     ) {
-      const catalog = yield* Catalog.Service.pipe(Effect.provide(locations.get(session.location)))
+      if (records.every((record) => record.cost !== undefined)) return records
+      const catalog = yield* Catalog.Service.pipe(
+        Effect.provide(locations.get(session.location)),
+        Effect.catchCause((cause) =>
+          isMissingLocation(Cause.squash(cause)) ? Effect.succeed(undefined) : Effect.failCause(cause),
+        ),
+      )
+      if (catalog === undefined) return records
       return yield* Effect.forEach(records, (record) => {
         if (record.cost !== undefined) return Effect.succeed(record)
         return Effect.gen(function* () {
@@ -616,6 +721,8 @@ const layer = Layer.effect(
         })
       })
     })
+    const costedRecords = (session: SessionSchema.Info) =>
+      providerRequests.list(session.id).pipe(Effect.flatMap((records) => estimated(session, records)))
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
         Effect.mapError(
@@ -771,13 +878,38 @@ const layer = Layer.effect(
       }),
       usage: Effect.fn("V2Session.usage")(function* (sessionID) {
         const session = yield* result.get(sessionID)
-        const records = yield* Effect.forEach(yield* family(session), (item) =>
-          providerRequests.list(item.id).pipe(Effect.flatMap((records) => estimated(item, records))),
-        )
+        const records = yield* Effect.forEach(yield* family(session), costedRecords)
         return SessionProviderRequest.summarize(
           records
             .flat()
             .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
+        )
+      }),
+      usageReport: Effect.fn("V2Session.usageReport")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        return buildUsageReport(
+          input,
+          yield* Effect.forEach(yield* family(session), (item) =>
+            costedRecords(item).pipe(Effect.map((records) => records.map((record) => ({ record, session: item })))),
+          ).pipe(Effect.map((items) => items.flat())),
+        )
+      }),
+      usageAll: Effect.fn("V2Session.usageAll")(function* () {
+        const sessions = (yield* result.list({ order: "asc" })).data
+        const records = yield* Effect.forEach(sessions, costedRecords)
+        return SessionProviderRequest.summarize(
+          records
+            .flat()
+            .toSorted((left, right) => DateTime.toEpochMillis(left.time) - DateTime.toEpochMillis(right.time)),
+        )
+      }),
+      usageReportAll: Effect.fn("V2Session.usageReportAll")(function* (input) {
+        const sessions = (yield* result.list({ order: "asc" })).data
+        return buildUsageReport(
+          input,
+          yield* Effect.forEach(sessions, (session) =>
+            costedRecords(session).pipe(Effect.map((records) => records.map((record) => ({ record, session })))),
+          ).pipe(Effect.map((items) => items.flat())),
         )
       }),
       autonomy: {
@@ -1881,6 +2013,15 @@ function hasTime(data: unknown, key: string) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
+}
+
+function isMissingLocation(value: unknown) {
+  return (
+    isRecord(value) &&
+    value._tag === "PlatformError" &&
+    isRecord(value.reason) &&
+    value.reason._tag === "NotFound"
+  )
 }
 
 // Mirrors the shell tool's in-memory preview safety limit.

@@ -512,11 +512,13 @@ export type ProviderRequestSummary = {
   helpers: number
   continued: number
   fallback: number
+  cacheReadReported?: boolean
   cost?: MoneyUSD
   models?: Array<{
     model: ModelRef
     requests: number
     tokens: TokenUsageInfo
+    cacheReadReported?: boolean
     cost?: MoneyUSD
     costProvenance?: "recorded" | "current_catalog"
   }>
@@ -535,6 +537,36 @@ export type ProviderRequestSummary = {
     | "cache-disabled"
     | "retry-fallback"
   latestNamespace?: string
+}
+
+export type ProviderRequestReport = {
+  group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+  rows: Array<{
+    key: string
+    label: string
+    logical: number
+    physical: number
+    helpers: number
+    continued: number
+    fallback: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+    cacheReadReported?: boolean
+  }>
+  total: {
+    logical: number
+    physical: number
+    helpers: number
+    continued: number
+    fallback: number
+    tokens: TokenUsageInfo
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+    cacheReadReported?: boolean
+  }
+  rowCount: number
+  nextOffset?: number
 }
 
 export type ModelsDevRefreshed = {
@@ -4390,6 +4422,75 @@ export type SessionUsageInput = { readonly sessionID: { readonly sessionID: stri
 
 export type SessionUsageOutput = { data: ProviderRequestSummary }["data"]
 
+export type SessionUsageReportInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly group: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["group"]
+  readonly from?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["from"]
+  readonly to?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["to"]
+  readonly offset?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["offset"]
+  readonly limit?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["limit"]
+  readonly sort?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["sort"]
+  readonly order?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["order"]
+}
+
+export type SessionUsageReportOutput = { data: ProviderRequestReport }["data"]
+
 export type SessionSkillsInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionSkillsOutput = {
@@ -7520,3 +7621,73 @@ export type IsolatedBrowserControlOutput = { data: IsolatedBrowserStatus }["data
 export type IsolatedBrowserStopInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type IsolatedBrowserStopOutput = void
+
+export type UsageGetOutput = { data: ProviderRequestSummary }["data"]
+
+export type UsageReportInput = {
+  readonly group: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["group"]
+  readonly from?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["from"]
+  readonly to?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["to"]
+  readonly offset?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["offset"]
+  readonly limit?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["limit"]
+  readonly sort?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["sort"]
+  readonly order?: {
+    readonly group: "model" | "hour" | "day" | "month" | "session" | "project" | "agent"
+    readonly from?: number | undefined
+    readonly to?: number | undefined
+    readonly offset?: number | undefined
+    readonly limit?: number | undefined
+    readonly sort?: "key" | "tokens" | "cost" | undefined
+    readonly order?: "asc" | "desc" | undefined
+  }["order"]
+}
+
+export type UsageReportOutput = { data: ProviderRequestReport }["data"]

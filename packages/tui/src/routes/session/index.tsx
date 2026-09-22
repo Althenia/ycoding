@@ -71,7 +71,6 @@ import { DialogTimeline } from "./dialog-timeline"
 import { Sidebar } from "./sidebar"
 import { Composer } from "./composer"
 import { Footer } from "./footer"
-import { ProviderUsageCommand } from "./provider-usage"
 import {
   hydrateSubagentPage,
   navigateSubagentSibling,
@@ -1429,7 +1428,6 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         <Show when={location()}>
           {(ownerLocation) => <SessionIsolatedBrowserCommand sessionID={route.sessionID} location={ownerLocation()} />}
         </Show>
-        <ProviderUsageCommand />
         <Header
         path={location()?.directory}
         branch={branch()}

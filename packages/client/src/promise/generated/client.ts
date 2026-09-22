@@ -64,6 +64,8 @@ import type {
   SessionSkillOutput,
   SessionUsageInput,
   SessionUsageOutput,
+  SessionUsageReportInput,
+  SessionUsageReportOutput,
   SessionSkillsInput,
   SessionSkillsOutput,
   SessionResolveSkillConflictInput,
@@ -327,6 +329,9 @@ import type {
   IsolatedBrowserControlOutput,
   IsolatedBrowserStopInput,
   IsolatedBrowserStopOutput,
+  UsageGetOutput,
+  UsageReportInput,
+  UsageReportOutput,
 } from "./types"
 import { ClientError } from "./client-error"
 
@@ -901,6 +906,26 @@ export function make(options: ClientOptions) {
           {
             method: "GET",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/usage`,
+            successStatus: 200,
+            declaredStatuses: [404, 400, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      usageReport: (input: SessionUsageReportInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: SessionUsageReportOutput }>(
+          {
+            method: "GET",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/usage/report`,
+            query: {
+              group: input["group"],
+              from: input["from"],
+              to: input["to"],
+              offset: input["offset"],
+              limit: input["limit"],
+              sort: input["sort"],
+              order: input["order"],
+            },
             successStatus: 200,
             declaredStatuses: [404, 400, 401],
             empty: false,
@@ -2682,6 +2707,33 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ),
+    },
+    usage: {
+      get: (requestOptions?: RequestOptions) =>
+        request<{ readonly data: UsageGetOutput }>(
+          { method: "GET", path: `/api/usage`, successStatus: 200, declaredStatuses: [401, 400], empty: false },
+          requestOptions,
+        ).then((value) => value.data),
+      report: (input: UsageReportInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: UsageReportOutput }>(
+          {
+            method: "GET",
+            path: `/api/usage/report`,
+            query: {
+              group: input["group"],
+              from: input["from"],
+              to: input["to"],
+              offset: input["offset"],
+              limit: input["limit"],
+              sort: input["sort"],
+              order: input["order"],
+            },
+            successStatus: 200,
+            declaredStatuses: [401, 400],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
     },
   }
 }

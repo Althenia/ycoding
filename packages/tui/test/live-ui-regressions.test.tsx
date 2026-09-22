@@ -135,7 +135,9 @@ test("keeps subagent and shell footer counts as independent segments", async () 
             <Keymap.Provider config={config}>
               <ClientProvider api={createApi(calls.fetch)}>
                 <DataProvider>
-                  <FooterFixture />
+                  <RouteProvider initialRoute={{ type: "session", sessionID: "ses_footer" }}>
+                    <FooterFixture />
+                  </RouteProvider>
                 </DataProvider>
               </ClientProvider>
             </Keymap.Provider>

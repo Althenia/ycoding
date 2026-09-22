@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test"
 import { Schema } from "effect"
 import { ProviderRequest } from "@ycoding-ai/schema/provider-request"
+import { Money } from "@ycoding-ai/schema/money"
 
 const decode = Schema.decodeUnknownSync(ProviderRequest.Record)
 const decodeSpend = Schema.decodeUnknownSync(ProviderRequest.ModelSpend)
+const decodeSummary = Schema.decodeUnknownSync(ProviderRequest.Summary)
+const decodeReportInput = Schema.decodeUnknownSync(ProviderRequest.ReportInput)
+const decodeReport = Schema.decodeUnknownSync(ProviderRequest.Report)
 
 const record = {
   id: "prq_123",
@@ -60,4 +64,90 @@ test("requires cost provenance for priced model spend", () => {
   expect(decodeSpend({ ...spend, costProvenance: "recorded" }).costProvenance).toBe("recorded")
   expect(decodeSpend({ ...spend, costProvenance: "current_catalog" }).costProvenance).toBe("current_catalog")
   expect(decodeSpend({ model: record.model, requests: 1, tokens: record.tokens })).not.toHaveProperty("costProvenance")
+})
+
+test("preserves optional cache-read reporting certainty on summaries and model spend", () => {
+  const metrics = {
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    tokens: { ...record.tokens, cache: { ...record.tokens.cache, read: 0 } },
+  }
+  expect(decodeSummary({ ...metrics, cacheReadReported: true }).cacheReadReported).toBe(true)
+  expect(decodeSummary(metrics)).not.toHaveProperty("cacheReadReported")
+  expect(
+    decodeSummary({
+      ...metrics,
+      cacheReadReported: false,
+      models: [{ model: record.model, requests: 1, tokens: metrics.tokens, cacheReadReported: true }],
+    }),
+  ).toMatchObject({ cacheReadReported: false, models: [{ cacheReadReported: true }] })
+  expect(decodeSpend({ model: record.model, requests: 1, tokens: metrics.tokens })).not.toHaveProperty(
+    "cacheReadReported",
+  )
+})
+
+test("validates bounded usage report inputs", () => {
+  expect(decodeReportInput({ group: "day" })).toEqual({ group: "day" })
+  expect(
+    decodeReportInput({ group: "model", from: 0, to: 1, offset: 0, limit: 200, sort: "tokens", order: "desc" }),
+  ).toEqual({
+    group: "model",
+    from: 0,
+    to: 1,
+    offset: 0,
+    limit: 200,
+    sort: "tokens",
+    order: "desc",
+  })
+  for (const input of [
+    { group: "week" },
+    { group: "day", from: 2, to: 2 },
+    { group: "day", from: 3, to: 2 },
+    { group: "day", offset: -1 },
+    { group: "day", limit: 0 },
+    { group: "day", limit: 201 },
+    { group: "day", sort: "requests" },
+    { group: "day", order: "newest" },
+  ])
+    expect(() => decodeReportInput(input)).toThrow()
+})
+
+test("keeps report metrics aggregate-only and requires cost provenance", () => {
+  const metrics = {
+    logical: 2,
+    physical: 3,
+    helpers: 1,
+    continued: 1,
+    fallback: 0,
+    tokens: { input: 10, output: 3, reasoning: 2, cache: { read: 4, write: 1 } },
+    cost: Money.USD.make(0.25),
+    costProvenance: "current_catalog" as const,
+    cacheReadReported: true,
+  }
+  const report = decodeReport({
+    group: "agent",
+    rows: [{ key: "build", label: "build", ...metrics }],
+    total: metrics,
+    rowCount: 1,
+  })
+
+  expect(report.rows[0]).toEqual({ key: "build", label: "build", ...metrics })
+  expect(Object.keys(report.rows[0] ?? {}).sort()).toEqual([
+    "cacheReadReported",
+    "continued",
+    "cost",
+    "costProvenance",
+    "fallback",
+    "helpers",
+    "key",
+    "label",
+    "logical",
+    "physical",
+    "tokens",
+  ])
+  expect(() => decodeReport({ ...report, total: { ...metrics, costProvenance: undefined } })).toThrow()
+  expect(() => decodeReport({ ...report, total: { ...metrics, cost: undefined } })).toThrow()
 })

@@ -1,18 +1,14 @@
 import type {
-  ModelInfo,
+  ProviderRequestReport,
   ProviderRequestSummary,
   ProviderUsageListOutput,
-  SessionCacheDiagnostics,
-  SessionInfo,
 } from "@ycoding-ai/client"
-import { CREDIT_TO_USD } from "@ycoding-ai/core/provider-usage/copilot"
+import { ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, type Accessor } from "solid-js"
+import { createMemo, createSignal, For, onCleanup, onMount, Show, type Accessor } from "solid-js"
 import { useClient } from "../../context/client"
-import { useData } from "../../context/data"
-import { Keymap, type KeymapCommand } from "../../context/keymap"
-import { useRouteData } from "../../context/route"
-import { dialogContentWidth, DIALOG_INSET_RIGHT, useDialog } from "../../ui/dialog"
+import { Keymap } from "../../context/keymap"
+import { useRoute, useRouteData } from "../../context/route"
 import {
   formatBillDue,
   formatReset,
@@ -21,30 +17,26 @@ import {
   progressBar,
   usageSeverity,
 } from "../../util/provider-usage"
-import { formatDiagnosticsModel, type ProviderRequestDiagnostics } from "../../util/cache-diagnostics"
-import { DialogSelect } from "../../ui/dialog-select"
 import { useTheme } from "../../context/theme"
+import { BrandMark } from "../../component/logo"
 import { Locale } from "../../util/locale"
+import {
+  PROVIDER_USAGE_VIEWS,
+  ProviderUsageReports,
+  providerUsageViewLabel,
+  type ProviderUsageReportInput,
+  type ProviderUsageView,
+} from "./provider-usage-reports"
 
 export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
-
-export function selectedProviderIDs(
-  sessionIDs: readonly string[],
-  getSession: (sessionID: string) => Pick<SessionInfo, "model"> | undefined,
-) {
-  return [
-    ...new Set(
-      sessionIDs.flatMap((sessionID) => {
-        const providerID = getSession(sessionID)?.model?.providerID
-        return providerID ? [providerID] : []
-      }),
-    ),
-  ].toSorted()
-}
+const NAV_CELL_WIDTH = 12
 
 export function visibleProviderSnapshots(snapshots: readonly ProviderUsageSnapshot[]) {
-  return snapshots
-    .filter((snapshot) => snapshot.status !== "unsupported")
+  return [...snapshots.reduce((result, snapshot) => {
+    const current = result.get(snapshot.providerID)
+    if (!current || snapshot.updatedAt >= current.updatedAt) result.set(snapshot.providerID, snapshot)
+    return result
+  }, new Map<string, ProviderUsageSnapshot>()).values()]
     .toSorted((left, right) => left.label.localeCompare(right.label) || left.providerID.localeCompare(right.providerID))
 }
 
@@ -64,252 +56,354 @@ export function createProviderUsageGenerationGuard() {
   }
 }
 
-export async function loadProviderUsageSnapshots(
-  providerIDs: readonly string[],
-  load: (providerID: string) => Promise<ProviderUsageSnapshot>,
-) {
-  const unique = [...new Set(providerIDs)].toSorted()
-  return visibleProviderSnapshots(await Promise.all(unique.map(load)))
-}
-
-export function providerUsageCommandDefinition(
-  snapshots: readonly ProviderUsageSnapshot[],
-  run: () => void,
-  hasLocalUsage = false,
-): KeymapCommand | undefined {
-  if (visibleProviderSnapshots(snapshots).length === 0 && !hasLocalUsage) return undefined
-  return {
-    id: "session.provider-usage",
-    title: "Provider Usage",
-    group: "Session",
-    palette: true,
-    bind: false,
-    run,
-  }
-}
-
-type DiagnosticsWithRequests = SessionCacheDiagnostics & { readonly requests?: ProviderRequestDiagnostics }
-
-const providerRequestDiagnostics = (diagnostics: SessionCacheDiagnostics | null | undefined) =>
-  (diagnostics as DiagnosticsWithRequests | null | undefined)?.requests
-
-export function ProviderUsageCommand() {
-  const route = useRouteData("session")
-  const data = useData()
+export function ProviderUsageScreen() {
+  const route = useRouteData("provider-usage")
+  const router = useRoute()
   const client = useClient()
-  const dialog = useDialog()
   const guard = createProviderUsageGenerationGuard()
+  const backendUsageGuard = createProviderUsageGenerationGuard()
   const [snapshots, setSnapshots] = createSignal<ProviderUsageSnapshot[]>([])
-  const family = createMemo(() => {
-    const sessionIDs = data.session.family(route.sessionID)
-    return sessionIDs.length > 0 ? sessionIDs : [route.sessionID]
-  })
-  const providerIDs = createMemo(() =>
-    selectedProviderIDs(
-      family(),
-      (sessionID) => data.session.get(sessionID),
-    ),
-  )
-  const diagnostics = createMemo(() => data.session.diagnostics.get(route.sessionID))
-  const usage = createMemo(() => data.session.usage.get(route.sessionID))
-
-  onMount(() => {
-    void data.session.diagnostics.sync(route.sessionID).catch(() => undefined)
-    void data.session.usage.sync(route.sessionID).catch(() => undefined)
-  })
-
-  createEffect(
-    on(
-      () => providerIDs().join("\u0000"),
-      () => {
-        const ids = providerIDs()
-        const token = guard.next()
-        setSnapshots([])
-        if (ids.length === 0) return
-        void loadProviderUsageSnapshots(ids, async (providerID) => {
-          const result = await client.api.providerUsage.get({ providerID })
-          return result.data
-        })
-          .then((result) => {
-            if (guard.current(token)) setSnapshots(result)
-          })
-          .catch(() => {
-            if (guard.current(token)) setSnapshots([])
-          })
-      },
-    ),
-  )
-  onCleanup(() => guard.invalidate())
-
-  const command = createMemo(() =>
-    providerUsageCommandDefinition(snapshots(), () => {
-      const ids = providerIDs()
-      const initial = snapshots()
-      dialog.replace(() => (
-        <ProviderUsageDialog sessionID={route.sessionID} providerIDs={ids} initialSnapshots={initial} />
-      ))
-    }, providerRequestDiagnostics(diagnostics()) !== undefined || usage() !== undefined),
-  )
-
-  Keymap.createLayer(() => ({
-    mode: "global",
-    commands: command() ? [command()!] : [],
-  }))
-
-  return null
-}
-
-export function ProviderUsageDialog(props: {
-  sessionID: string
-  providerIDs: readonly string[]
-  initialSnapshots: readonly ProviderUsageSnapshot[]
-}) {
-  const client = useClient()
-  const data = useData()
-  const dialog = useDialog()
-  const guard = createProviderUsageGenerationGuard()
-  const [snapshots, setSnapshots] = createSignal(visibleProviderSnapshots(props.initialSnapshots))
   const [refreshing, setRefreshing] = createSignal(true)
-  const diagnostics = createMemo(() => data.session.diagnostics.get(props.sessionID))
-  const usage = createMemo(() => data.session.usage.get(props.sessionID))
-  const sessionFamily = createMemo(() => {
-    const ids = data.session.family(props.sessionID)
-    return ids.length > 0 ? ids : [props.sessionID]
-  })
-
-  onMount(() => {
-    sessionFamily().forEach((sessionID) => void data.session.diagnostics.sync(sessionID).catch(() => undefined))
+  const [failed, setFailed] = createSignal(false)
+  const [backendUsage, setBackendUsage] = createSignal<ProviderRequestSummary>()
+  const [backendUsageRefreshing, setBackendUsageRefreshing] = createSignal(true)
+  const [backendUsageFailed, setBackendUsageFailed] = createSignal(false)
+  const refresh = () => {
+    const backendToken = backendUsageGuard.next()
+    setBackendUsageRefreshing(true)
+    setBackendUsageFailed(false)
+    void client.api.usage
+      .get()
+      .then((summary) => {
+        if (backendUsageGuard.current(backendToken)) setBackendUsage(summary)
+      })
+      .catch(() => {
+        if (backendUsageGuard.current(backendToken)) setBackendUsageFailed(true)
+      })
+      .finally(() => {
+        if (backendUsageGuard.current(backendToken)) setBackendUsageRefreshing(false)
+      })
     const token = guard.next()
-    void loadProviderUsageSnapshots(props.providerIDs, async (providerID) => {
-      const result = await client.api.providerUsage.get({ providerID, refresh: true })
-      return result.data
-    })
+    setRefreshing(true)
+    setFailed(false)
+    void client.api.providerUsage
+      .list({ refresh: true })
       .then((result) => {
         if (!guard.current(token)) return
-        setSnapshots(result)
+        setSnapshots(visibleProviderSnapshots(result.data))
       })
-      .catch(() => undefined)
+      .catch(() => {
+        if (guard.current(token)) setFailed(true)
+      })
       .finally(() => {
         if (guard.current(token)) setRefreshing(false)
       })
+  }
+  onMount(refresh)
+  onCleanup(() => {
+    guard.invalidate()
+    backendUsageGuard.invalidate()
   })
-  createEffect(() => void data.session.usage.sync(props.sessionID).catch(() => undefined))
-  onCleanup(() => guard.invalidate())
 
+  const back = () => router.navigate({ type: "session", sessionID: route.sessionID })
   return (
-    <ProviderUsageDialogContent
+    <ProviderUsageScreenContent
       snapshots={snapshots}
-      diagnostics={diagnostics}
-      usage={usage}
+      backendUsage={backendUsage}
+      backendUsageRefreshing={backendUsageRefreshing}
+      backendUsageFailed={backendUsageFailed}
       refreshing={refreshing}
-      onClose={() => dialog.clear()}
-      sessionFamily={sessionFamily()}
-      sessionID={props.sessionID}
-      getSession={(sessionID) => data.session.get(sessionID)}
-      getModel={(sessionID) => {
-        const session = data.session.get(sessionID)
-        if (!session?.model) return
-        return data.location
-          .model.list(session.location)
-          ?.find((model) => model.providerID === session.model?.providerID && model.id === session.model?.id)
-      }}
-      getDiagnostics={(sessionID) => data.session.diagnostics.get(sessionID)}
-      getUsage={(sessionID) => data.session.usage.get(sessionID)}
-      getStatus={(sessionID) => data.session.status(sessionID)}
+      failed={failed}
+      onBack={back}
+      onRefresh={refresh}
+      loadReport={(input) => client.api.usage.report(input)}
     />
   )
 }
 
-export function ProviderUsageDialogContent(props: {
+export function ProviderUsageScreenContent(props: {
   snapshots: Accessor<readonly ProviderUsageSnapshot[]>
-  diagnostics?: Accessor<SessionCacheDiagnostics | null | undefined>
-  usage?: Accessor<ProviderRequestSummary | undefined>
+  backendUsage?: Accessor<ProviderRequestSummary | undefined>
+  backendUsageRefreshing?: Accessor<boolean>
+  backendUsageFailed?: Accessor<boolean>
   now?: Accessor<number>
   refreshing?: Accessor<boolean>
-  onClose?: () => void
-  sessionFamily?: readonly string[]
-  sessionID?: string
-  getSession?: (sessionID: string) => Pick<SessionInfo, "model" | "title"> | undefined
-  getModel?: (sessionID: string) => ModelInfo | undefined
-  getDiagnostics?: (sessionID: string) => SessionCacheDiagnostics | null | undefined
-  getUsage?: (sessionID: string) => ProviderRequestSummary | undefined
-  getStatus?: (sessionID: string) => string
-  sessionUsage?: ProviderUsageSessionPresentation
-  subagentUsage?: readonly ProviderUsageSubagentPresentation[]
+  failed?: Accessor<boolean>
+  onBack?: () => void
+  onRefresh?: () => void
+  initialTab?: ProviderUsageView
+  loadReport?: (input: ProviderUsageReportInput) => Promise<ProviderRequestReport>
 }) {
+  const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
-  const sessionUsage = createMemo(() =>
-    props.sessionUsage ??
-    usagePresentation(
-      props.diagnostics?.(),
-      props.usage?.(),
-      props.sessionID ? formatDiagnosticsModel(props.getSession?.(props.sessionID)?.model) : undefined,
-      props.sessionID ? props.getModel?.(props.sessionID) : undefined,
-    ),
-  )
-  const subagentUsage = createMemo(() =>
-    props.subagentUsage ??
-    (props.sessionFamily ?? []).flatMap((sessionID) => {
-      if (sessionID === props.sessionID) return []
-      const diagnostics = props.getDiagnostics?.(sessionID)
-      const session = props.getSession?.(sessionID)
-      const usage = usagePresentation(
-        diagnostics,
-        props.getUsage?.(sessionID),
-        formatDiagnosticsModel(session?.model),
-        props.getModel?.(sessionID),
-      )
-      if (!usage || !session) return []
-      return [{ ...usage, name: session.title }]
-    }),
-  )
-  const totalUsage = createMemo(() => props.usage ? usagePresentation(undefined, props.usage(), "Total") : undefined)
-  const familySpend = createMemo(() => props.usage?.()?.models?.map(spendPresentation))
-  const options = createMemo(() => [
-    ...(familySpend() === undefined ? [
-      ...(sessionUsage() ? usageOptions("This session", "session", sessionUsage()!, "Session") : []),
-      ...subagentUsage().flatMap((item) => usageOptions("Subagents", `subagent:${item.name}`, item, "Subagent", item.name)),
-    ] : aggregateUsageOptions([totalUsage()!, ...familySpend()!], dimensions().width)),
-    ...visibleProviderSnapshots(props.snapshots()).flatMap((snapshot) => providerQuotaOptions(snapshot, props.now?.() ?? Date.now())),
-  ])
-
+  const backShortcut = Keymap.useShortcut("provider-usage.back")
+  const refreshShortcut = Keymap.useShortcut("provider-usage.refresh")
+  const aggregateUsage = createMemo(() => {
+    const summary = props.backendUsage?.()
+    if (!summary) return undefined
+    return [summaryPresentation(summary), ...(summary.models ?? []).map(spendPresentation)]
+  })
+  const [view, setView] = createSignal<ProviderUsageView>(props.initialTab ?? "overview")
+  const [reportRefresh, setReportRefresh] = createSignal(0)
+  const reportView = createMemo(() => {
+    const current = view()
+    if (current === "overview" || current === "usage") return undefined
+    return current
+  })
+  const visibleViews = createMemo(() => usageNavigationWindow(view(), dimensions().width))
+  let simpleScroll: ScrollBoxRenderable | undefined
+  const back = () => props.onBack?.()
+  const refresh = () => {
+    props.onRefresh?.()
+    setReportRefresh((value) => value + 1)
+  }
+  const selectView = (next: ProviderUsageView) => {
+    setView(next)
+    requestAnimationFrame(() => simpleScroll?.scrollTo(0))
+  }
+  const moveView = (direction: -1 | 1) => {
+    setView((current) => {
+      const index = PROVIDER_USAGE_VIEWS.indexOf(current)
+      return PROVIDER_USAGE_VIEWS[(index + direction + PROVIDER_USAGE_VIEWS.length) % PROVIDER_USAGE_VIEWS.length]
+    })
+    requestAnimationFrame(() => simpleScroll?.scrollTo(0))
+  }
+  const scrollSimple = (action: "up" | "down" | "home" | "end" | "pageup" | "pagedown") => {
+    if (reportView() || !simpleScroll || simpleScroll.isDestroyed) return
+    if (action === "home") return simpleScroll.scrollTo(0)
+    if (action === "end") return simpleScroll.scrollTo(simpleScroll.scrollHeight)
+    const distance = action === "pageup" || action === "pagedown" ? simpleScroll.viewport.height : 1
+    simpleScroll.scrollBy(action === "up" || action === "pageup" ? -distance : distance)
+  }
+  Keymap.createLayer(() => ({
+    mode: "base",
+    commands: [
+      { id: "provider-usage.back", title: "Back to session", group: "Provider usage", bind: "escape", run: back },
+      { id: "provider-usage.refresh", title: "Refresh provider usage", group: "Provider usage", bind: "r", run: refresh },
+      { id: "provider-usage.view.previous", title: "Previous usage view", group: "Provider usage", bind: "left", run: () => moveView(-1) },
+      { id: "provider-usage.view.next", title: "Next usage view", group: "Provider usage", bind: "right", run: () => moveView(1) },
+      { id: "provider-usage.view.previous-tab", title: "Previous usage view", group: "Provider usage", bind: "shift+tab", run: () => moveView(-1) },
+      { id: "provider-usage.view.next-tab", title: "Next usage view", group: "Provider usage", bind: "tab", run: () => moveView(1) },
+      { id: "provider-usage.scroll.previous", title: "Scroll usage up", group: "Provider usage", bind: reportView() ? false : "up", run: () => scrollSimple("up") },
+      { id: "provider-usage.scroll.next", title: "Scroll usage down", group: "Provider usage", bind: reportView() ? false : "down", run: () => scrollSimple("down") },
+      { id: "provider-usage.scroll.home", title: "First usage item", group: "Provider usage", bind: reportView() ? false : "home", run: () => scrollSimple("home") },
+      { id: "provider-usage.scroll.end", title: "Last usage item", group: "Provider usage", bind: reportView() ? false : "end", run: () => scrollSimple("end") },
+      { id: "provider-usage.scroll.page-up", title: "Scroll usage one page up", group: "Provider usage", bind: reportView() ? false : "pageup", run: () => scrollSimple("pageup") },
+      { id: "provider-usage.scroll.page-down", title: "Scroll usage one page down", group: "Provider usage", bind: reportView() ? false : "pagedown", run: () => scrollSimple("pagedown") },
+    ],
+    bindings: ["provider-usage.back", "provider-usage.refresh"],
+  }))
   return (
-    <DialogSelect title="Provider usage" options={options()} />
+    <box width={dimensions().width} height={dimensions().height} flexDirection="column" backgroundColor={themeV2.background.default}>
+      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={themeV2.background.chrome}>
+        <BrandMark width={2} height={1} />
+        <text> Usage</text>
+        <box flexGrow={1} />
+        <box flexDirection="row" gap={2}>
+          <text fg={themeV2.text.feedback.info.default} onMouseUp={refresh}>
+            {refreshShortcut() ? `${refreshShortcut()} ` : ""}refresh
+          </text>
+          <text fg={themeV2.text.feedback.info.default} onMouseUp={back}>
+            {backShortcut() ? `${backShortcut()} ` : ""}back
+          </text>
+        </box>
+      </box>
+      <box flexGrow={1} minHeight={0} flexDirection="column" paddingLeft={3} paddingRight={3}>
+      <box flexShrink={0} height={3} flexDirection="row" alignItems="center">
+        <For each={visibleViews()}>{(item, index) => (
+          <>
+            <Show when={index() > 0}><text flexShrink={0} fg={themeV2.border.default}>│</text></Show>
+            <box width={NAV_CELL_WIDTH} height={1} flexShrink={0} alignItems="center" onMouseUp={() => selectView(item)}>
+              <text
+                fg={view() === item ? themeV2.text.feedback.info.default : themeV2.text.subdued}
+                attributes={view() === item ? TextAttributes.BOLD : undefined}
+              >
+                {providerUsageViewLabel(item)}
+              </text>
+            </box>
+          </>
+        )}</For>
+      </box>
+      <Show when={!reportView()}>
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => { simpleScroll = value }}
+        flexGrow={1}
+        minHeight={0}
+        horizontalScrollbarOptions={{ visible: false }}
+        verticalScrollbarOptions={{
+          trackOptions: {
+            backgroundColor: themeV2.background.default,
+            foregroundColor: themeV2.scrollbar.default,
+          },
+        }}
+        paddingBottom={1}
+      >
+        <Show when={view() === "overview" && props.backendUsageRefreshing?.() && props.backendUsage?.()}>
+          <text fg={themeV2.text.feedback.warning.default}>Refreshing YCoding backend usage · showing previous data</text>
+        </Show>
+        <Show when={view() === "overview" && props.backendUsageFailed?.() && props.backendUsage?.()}>
+          <text fg={themeV2.text.feedback.error.default}>YCoding backend usage refresh failed · showing stale data</text>
+        </Show>
+        <Show when={view() === "usage" && props.failed?.()}>
+          <text fg={themeV2.text.feedback.warning.default}>Some provider usage could not be refreshed.</text>
+        </Show>
+        <Show when={view() === "overview" && aggregateUsage()}>
+          {(items) => <OverviewTable items={items()} width={dimensions().width} />}
+        </Show>
+        <Show when={view() === "usage"}><For each={visibleProviderSnapshots(props.snapshots())}>
+          {(snapshot) => <QuotaSection snapshot={snapshot} now={props.now?.() ?? Date.now()} />}
+        </For></Show>
+        <Show when={view() === "usage" && visibleProviderSnapshots(props.snapshots()).length === 0}>
+          <text fg={themeV2.text.subdued}>{props.refreshing?.() ? "Loading provider quotas..." : props.failed?.() ? "Provider quotas could not be loaded." : "No provider quotas are reported."}</text>
+        </Show>
+        <Show
+          when={view() === "overview" && !aggregateUsage()}
+        >
+          <text fg={themeV2.text.subdued}>
+            {props.backendUsageFailed?.()
+              ? "YCoding backend usage could not be loaded."
+              : props.backendUsageRefreshing?.()
+                ? "Loading YCoding backend usage..."
+                : "No retained usage is reported across the YCoding backend."}
+          </text>
+        </Show>
+      </scrollbox>
+      </Show>
+      <Show when={reportView()}>{(current) => (
+        <ProviderUsageReports
+          view={current()}
+          refresh={reportRefresh()}
+          now={props.now}
+          load={props.loadReport}
+        />
+      )}</Show>
+      </box>
+      <box height={3} flexShrink={0} alignItems="center" flexDirection="row" paddingLeft={3} paddingRight={3} backgroundColor={themeV2.background.chrome}>
+        <text fg={themeV2.text.subdued}>
+          {reportView() ? "Local report cost · not a provider bill" : view() === "overview" ? "YCoding backend · All sessions · lifetime retained usage" : "Provider-reported quota windows"}
+        </text>
+        <box flexGrow={1} />
+        <text fg={themeV2.text.subdued}>←→/Tab views · ↑↓ {reportView() ? "select" : "scroll"} · {refreshShortcut() ? `${refreshShortcut()} refresh` : "refresh"} · {backShortcut() ? `${backShortcut()} back` : "back"}</text>
+      </box>
+    </box>
   )
 }
 
-function providerQuotaOptions(snapshot: ProviderUsageSnapshot, now: number) {
-  const openRouterKeyLimit = snapshot.providerID === "openrouter"
-    ? snapshot.windows.find((window) => window.id === "key" && window.unit === "usd")?.limit
-    : undefined
-  return [
-    {
-      title: snapshot.label,
-      footer: snapshot.status === "available" ? freshnessLabel(snapshot, now) : "Unavailable",
-      category: "Provider quota",
-      value: `provider:${snapshot.providerID}`,
-    },
-    ...snapshot.windows.map((window) => {
-      const limit = window.limit ?? (
-        snapshot.providerID === "openrouter" && ["daily", "weekly", "monthly"].includes(window.id)
-          ? openRouterKeyLimit
-          : undefined
-      )
-      const presented = limit === undefined ? window : { ...window, limit }
-      const ratio = quotaRatio(presented)
-      const deadline =
-        snapshot.providerID === "meta" && window.id === "current-bill"
-          ? formatBillDue(window.resetAt, now)
-          : formatReset(window.resetAt, now)
-      const value = deadline === undefined ? formatWindowValue(presented) : `${formatWindowValue(presented)} · ${deadline}`
-      return {
-        title: `  ${window.label}`,
-        footer: ratio === undefined ? value : <QuotaWindowFooter ratio={ratio} value={value} />,
-        category: "Provider quota",
-        value: `provider:${snapshot.providerID}:${window.id}`,
-      }
-    }),
-  ]
+function usageNavigationWindow(active: ProviderUsageView, width: number) {
+  const count = Math.max(1, Math.floor((width - 6 + 1) / (NAV_CELL_WIDTH + 1)))
+  const index = PROVIDER_USAGE_VIEWS.indexOf(active)
+  const start = Math.min(index, Math.max(0, PROVIDER_USAGE_VIEWS.length - count))
+  return PROVIDER_USAGE_VIEWS.slice(start, start + count)
+}
+
+function OverviewTable(props: { items: readonly OverviewItem[]; width: number }) {
+  const { themeV2 } = useTheme()
+  const geometry = () => overviewGeometry(props.width)
+  const narrow = () => !geometry().fits
+  return <box flexDirection="column" paddingTop={1}>
+    <text fg={themeV2.text.subdued}>LIFETIME MODEL BREAKDOWN · YCODING BACKEND</text>
+    <text fg={themeV2.border.default}>{"─".repeat(Math.max(1, Math.min(props.width - 6, 96)))}</text>
+    <Show when={!narrow()}><text fg={themeV2.text.subdued}>{overviewHeader(geometry())}</text></Show>
+    <For each={props.items}>{(item, index) => {
+      const identity = index() === 0 ? "Total" : item.model
+      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps ?? "Unreported"} · reasoning {item.reasoning ?? "Unreported"} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
+      return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
+    }}</For>
+  </box>
+}
+
+type OverviewGeometry = ReturnType<typeof overviewGeometry>
+
+function overviewGeometry(width: number) {
+  const available = Math.max(1, width - 7)
+  const steps = 7
+  const input = 11
+  const output = 14
+  const reasoning = 10
+  const cache = 17
+  const cost = 16
+  const reserved = steps + input + output + reasoning + cache + cost + 6
+  return { name: Math.max(20, available - reserved), steps, input, output, reasoning, cache, cost, fits: available >= 20 + reserved }
+}
+
+function overviewHeader(geometry: OverviewGeometry) {
+  return `${"MODEL".padEnd(geometry.name)} ${"STEPS".padStart(geometry.steps)} ${"INPUT".padStart(geometry.input)} ${"VISIBLE OUTPUT".padStart(geometry.output)} ${"REASONING".padStart(geometry.reasoning)} ${"CACHE R/W".padStart(geometry.cache)} ${"COST".padStart(geometry.cost)}`
+}
+
+function OverviewRow(props: {
+  item: OverviewItem
+  identity: string
+  geometry: OverviewGeometry
+  total: boolean
+}) {
+  const { themeV2 } = useTheme()
+  return (
+    <text>
+      <span style={{ fg: props.total ? themeV2.text.feedback.info.default : themeV2.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
+      <span>{(props.item.steps ?? "Unreported").padStart(props.geometry.steps)}</span>{" "}
+      <span style={{ fg: themeV2.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
+      <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
+      <span style={{ fg: themeV2.text.label }}>{(props.item.reasoning ?? "Unreported").padStart(props.geometry.reasoning)}</span>{" "}
+      <span style={{ fg: themeV2.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
+      <span style={{ fg: themeV2.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
+    </text>
+  )
+}
+
+function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
+  const { themeV2 } = useTheme()
+  return (
+    <box flexDirection="column" paddingBottom={1}>
+      <text fg={themeV2.text.feedback.info.default}>
+        {props.snapshot.label} ·{" "}
+        {props.snapshot.status === "available" || props.snapshot.status === "stale"
+          ? freshnessLabel(props.snapshot, props.now)
+          : props.snapshot.status}{" "}
+        · {props.snapshot.source} · {props.snapshot.stability}
+      </text>
+      <For each={props.snapshot.windows}>
+        {(window) => {
+          const keyLimit =
+            props.snapshot.providerID === "openrouter"
+              ? props.snapshot.windows.find((candidate) => candidate.id === "key" && candidate.unit === "usd")?.limit
+              : undefined
+          const presented =
+            window.limit === undefined &&
+            props.snapshot.providerID === "openrouter" &&
+            ["daily", "weekly", "monthly"].includes(window.id)
+              ? { ...window, limit: keyLimit }
+              : window
+          const ratio = quotaRatio(presented)
+          const deadline =
+            props.snapshot.providerID === "meta" && window.id === "current-bill"
+              ? formatBillDue(window.resetAt, props.now)
+              : formatReset(window.resetAt, props.now)
+          const color =
+            usageSeverity(ratio) === "error"
+              ? themeV2.text.feedback.error.default
+              : usageSeverity(ratio) === "warning"
+                ? themeV2.text.feedback.warning.default
+                : themeV2.text.feedback.success.default
+          return (
+            <box flexDirection="column" paddingBottom={1}>
+              <text>
+                {" "}
+                {window.label} <span style={{ fg: color }}>{ratio === undefined ? "" : `${progressBar(ratio)} `}</span>
+                {formatWindowValue(presented)}
+                {deadline ? ` · ${deadline}` : ""}
+              </text>
+            </box>
+          )
+        }}
+      </For>
+      <Show when={props.snapshot.message}>
+        {(message) => <text fg={themeV2.text.subdued}> {message()}</text>}
+      </Show>
+      <Show when={!props.snapshot.message && props.snapshot.windows.length === 0}>
+        <text fg={themeV2.text.subdued}> Quota information is not reported.</text>
+      </Show>
+    </box>
+  )
 }
 
 function quotaRatio(window: ProviderUsageSnapshot["windows"][number]) {
@@ -319,181 +413,45 @@ function quotaRatio(window: ProviderUsageSnapshot["windows"][number]) {
   return (window.used / window.limit) * 100
 }
 
-function QuotaWindowFooter(props: { ratio: number; value: string }) {
-  const { themeV2 } = useTheme().contextual("elevated")
-  const color = () => {
-    const severity = usageSeverity(props.ratio)
-    if (severity === "error") return themeV2.text.feedback.error.default
-    if (severity === "warning") return themeV2.text.feedback.warning.default
-    return themeV2.text.feedback.success.default
-  }
-
-  return (
-    <span>
-      <span style={{ fg: color() }}>{progressBar(props.ratio)}</span> {props.value}
-    </span>
-  )
-}
-
-export type ProviderUsageSessionPresentation = {
+type OverviewItem = {
   model: string
-  hit: string
+  steps: string
   input: string
   output: string
+  reasoning: string
   cacheRead: string
   cacheWrite: string
   spent: string
-  aic?: {
-    input: string
-    output: string
-    cacheRead: string
-    cacheWrite: string
-  }
 }
 
-export type ProviderUsageSubagentPresentation = ProviderUsageSessionPresentation & { name: string }
-
-const USAGE_METRICS = [
-  { key: "hit", label: "Hit", width: 10 },
-  { key: "input", label: "Input", width: 5 },
-  { key: "output", label: "Output", width: 6 },
-  { key: "cacheRead", label: "Read", width: 5 },
-  { key: "cacheWrite", label: "Write", width: 5 },
-  { key: "spent", label: "Spent", width: 12 },
-] as const
-
-function aggregateUsageOptions(usages: readonly ProviderUsageSessionPresentation[], viewportWidth: number) {
-  const columns = USAGE_METRICS.filter((column) => usages.some((usage) => !unavailableUsageMetric(usage[column.key])))
-  const width = Math.max(1, dialogContentWidth(viewportWidth) - 6 - DIALOG_INSET_RIGHT)
-  return usages.map((usage, index) => ({
-    title: usage.model,
-    titleView: <>{usageTableRow(usage.model, usage, columns, width)}</>,
-    category: "Usage",
-    categoryView: index === 0 ? <UsageTableHeader columns={columns} width={width} /> : undefined,
-    value: `usage:${index}:${usage.model}`,
-  }))
-}
-
-function UsageTableHeader(props: { columns: readonly (typeof USAGE_METRICS)[number][]; width: number }) {
-  const { themeV2 } = useTheme().contextual("elevated")
-  return (
-    <text fg={themeV2.text.feedback.info.default}>{`   ${usageTableRow("Usage", Object.fromEntries(props.columns.map((column) => [column.key, column.label])), props.columns, props.width)}`}</text>
-  )
-}
-
-function usageTableRow(
-  subject: string,
-  usage: Partial<ProviderUsageSessionPresentation>,
-  columns: readonly (typeof USAGE_METRICS)[number][],
-  width: number,
-) {
-  const metrics = columns.map((column) => (unavailableUsageMetric(usage[column.key]) ? "" : usage[column.key] ?? "").padStart(column.width)).join(" ")
-  const subjectWidth = Math.max(1, width - metrics.length - 1)
-  return `${Locale.truncate(subject, subjectWidth).padEnd(subjectWidth)} ${metrics}`
-}
-
-function unavailableUsageMetric(value: string | undefined) {
-  return value === undefined || value === "Unreported" || value === "Not reported"
-}
-
-/**
- * The measured subject is one row and its metrics are indented detail rows beneath it, so a session
- * and a subagent read as the same shape.
- */
-function usageOptions(category: string, key: string, usage: ProviderUsageSessionPresentation, title = usage.model, detail?: string) {
-  return [
-    {
-      title,
-      details: title === usage.model && detail === undefined ? undefined : [detail === undefined ? usage.model : `${detail} · ${usage.model}`],
-      detailsWrap: title !== usage.model || detail !== undefined,
-      footer: usage.hit,
-      category,
-      value: `${key}:model`,
-    },
-    { title: "  Raw input", footer: metric(usage.input, usage.aic?.input), category, value: `${key}:input` },
-    { title: "  Raw output", footer: metric(usage.output, usage.aic?.output), category, value: `${key}:output` },
-    { title: "  Cache read", footer: metric(usage.cacheRead, usage.aic?.cacheRead), category, value: `${key}:cache-read` },
-    { title: "  Cache write", footer: metric(usage.cacheWrite, usage.aic?.cacheWrite), category, value: `${key}:cache-write` },
-    { title: "  Spent", footer: usage.spent, category, value: `${key}:spent` },
-  ]
-}
-
-function diagnosticsPresentation(
-  diagnostics: SessionCacheDiagnostics | null | undefined,
-  model?: string,
-  modelInfo?: ModelInfo,
-): ProviderUsageSessionPresentation | undefined {
-  if (!diagnostics) return
+function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
   return {
-    model: model ?? formatDiagnosticsModel(diagnostics.model) ?? diagnostics.model.id,
-    hit: hitLabel(diagnostics.cache.hitRatio),
-    input: diagnostics.tokens.uncachedInput.toLocaleString("en-US"),
-    output: diagnostics.tokens.output.toLocaleString("en-US"),
-    cacheRead: diagnostics.tokens.cacheRead.toLocaleString("en-US"),
-    cacheWrite: diagnostics.tokens.cacheWrite.toLocaleString("en-US"),
-    spent: money(diagnostics.estimatedCost),
-    ...(aiCredits(diagnostics, modelInfo) === undefined ? {} : { aic: aiCredits(diagnostics, modelInfo) }),
+    model: "Total",
+    steps: summary.logical.toLocaleString("en-US"),
+    input: summary.tokens.input.toLocaleString("en-US"),
+    output: summary.tokens.output.toLocaleString("en-US"),
+    reasoning: summary.tokens.reasoning.toLocaleString("en-US"),
+    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "Unreported",
+    cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
+    spent: money(summary.cost),
   }
-}
-
-function usagePresentation(
-  diagnostics: SessionCacheDiagnostics | null | undefined,
-  usage: ProviderRequestSummary | undefined,
-  model?: string,
-  modelInfo?: ModelInfo,
-): ProviderUsageSessionPresentation | undefined {
-  if (diagnostics?.requests) return diagnosticsPresentation(diagnostics, model, modelInfo)
-  if (usage)
-    return {
-      model: model ?? usage.models?.at(0)?.model.id ?? "Unknown model",
-      hit: "Unreported",
-      input: usage.tokens.input.toLocaleString("en-US"),
-      output: usage.tokens.output.toLocaleString("en-US"),
-      cacheRead: usage.tokens.cache.read.toLocaleString("en-US"),
-      cacheWrite: usage.tokens.cache.write.toLocaleString("en-US"),
-      spent: usage.cost === undefined
-        ? "Not reported"
-        : money(usage.cost),
-    }
-  return diagnosticsPresentation(diagnostics, model, modelInfo)
-}
-
-function metric(tokens: string, credits: string | undefined) {
-  return credits === undefined ? tokens : `${tokens}    ${credits}`
-}
-
-function aiCredits(diagnostics: SessionCacheDiagnostics, model: ModelInfo | undefined) {
-  if (model?.providerID !== "github-copilot") return undefined
-  const cost = model.cost.find((item) => item.tier === undefined)
-  if (!cost) return undefined
-  const credits = (tokens: number, rate: number) =>
-    Math.round((tokens * rate) / 1_000_000 / CREDIT_TO_USD).toLocaleString("en-US")
-  return {
-    input: credits(diagnostics.tokens.uncachedInput, cost.input),
-    output: credits(diagnostics.tokens.output, cost.output),
-    cacheRead: credits(diagnostics.tokens.cacheRead, cost.cache.read),
-    cacheWrite: credits(diagnostics.tokens.cacheWrite, cost.cache.write),
-  }
-}
-
-function hitLabel(ratio: number | undefined) {
-  return ratio === undefined ? "Unreported" : `${Math.round(ratio * 100)}% hit`
 }
 
 function money(value: number | undefined) {
   return value === undefined ? "Not reported" : `$${value.toFixed(2)}`
 }
 
-function spendPresentation(spend: NonNullable<ProviderRequestSummary["models"]>[number]): ProviderUsageSessionPresentation {
+function spendPresentation(
+  spend: NonNullable<ProviderRequestSummary["models"]>[number],
+): OverviewItem {
   return {
-    model: formatDiagnosticsModel(spend.model) ?? spend.model.id,
-    hit: "Unreported",
+    model: `${spend.model.providerID}/${spend.model.id}${spend.model.variant ? `#${spend.model.variant}` : ""}`,
+    steps: spend.requests.toLocaleString("en-US"),
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),
-    cacheRead: spend.tokens.cache.read.toLocaleString("en-US"),
+    reasoning: spend.tokens.reasoning.toLocaleString("en-US"),
+    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "Unreported",
     cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
-    spent: spend.cost === undefined
-      ? "Not reported"
-      : money(spend.cost),
+    spent: spend.cost === undefined ? "Not reported" : money(spend.cost),
   }
 }

@@ -188,6 +188,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.usageReport",
+        Effect.fn(function* (ctx) {
+          return {
+            data: yield* session
+              .usageReport({ sessionID: ctx.params.sessionID, ...ctx.query })
+              .pipe(Effect.catchTag("Session.NotFoundError", (error) => Effect.fail(mapSessionNotFound(error)))),
+          }
+        }),
+      )
+      .handle(
         "session.autonomy.get",
         Effect.fn(function* (ctx) {
           return {

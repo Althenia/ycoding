@@ -5,7 +5,7 @@ import { ProviderUsageV2 } from "@ycoding-ai/core/provider-usage"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/schema/integration"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { Effect, Schema } from "effect"
+import { Deferred, Effect, Schema } from "effect"
 
 const providerID = ProviderV2.ID.make("test-provider")
 
@@ -97,6 +97,104 @@ describe("ProviderUsageCache", () => {
 })
 
 describe("ProviderUsageV2", () => {
+  test("refreshes independent providers concurrently and preserves successes beside failures", async () => {
+    const ready = await Effect.runPromise(Deferred.make<void>())
+    const started: string[] = []
+    const service = ProviderUsageV2.make({
+      credentials: {
+        all: () => Effect.succeed(["healthy", "failed"].map((id) => new Credential.Info({
+          id: Credential.ID.make(`cred_${id}`),
+          integrationID: Integration.ID.make(id),
+          label: "default",
+          value: { type: "key", key: "test-key", metadata: {} },
+        }))),
+      },
+      providers: {
+        available: () => Effect.succeed(["healthy", "failed"].map((id) => ({ id: ProviderV2.ID.make(id) }))),
+      },
+      adapters: Object.fromEntries(["healthy", "failed"].map((id) => [id, (input: ProviderUsageV2.AdapterInput) =>
+        Effect.gen(function* () {
+          started.push(id)
+          if (started.length === 2) yield* Deferred.succeed(ready, undefined)
+          yield* Deferred.await(ready)
+          if (id === "failed") return yield* Effect.fail(new Error("private upstream details"))
+          return new ProviderUsage.Snapshot({
+            providerID: input.providerID,
+            label: input.label,
+            status: "available",
+            source: "provider_api",
+            stability: "stable",
+            updatedAt: input.updatedAt,
+            windows: [new ProviderUsage.Window({ id: "weekly", label: "Weekly", unit: "percent", used: 25 })],
+          })
+        }),
+      ] as const)),
+    })
+
+    try {
+      const result = await Effect.runPromise(service.list({ refresh: true }).pipe(Effect.timeout("1 second")))
+      expect(result).toMatchObject([
+        { providerID: "failed", status: "error", message: "Provider usage refresh failed", windows: [] },
+        { providerID: "healthy", status: "available", windows: [{ used: 25 }] },
+      ])
+      expect(JSON.stringify(result)).not.toContain("private upstream details")
+    } finally {
+      await Effect.runPromise(Deferred.succeed(ready, undefined))
+    }
+  })
+
+  test("lists every connected provider once and reports unsupported connected providers honestly", async () => {
+    const unsupportedProviderID = ProviderV2.ID.make("connected-without-usage-adapter")
+    const unconnectedProviderID = ProviderV2.ID.make("unconnected-with-adapter")
+    const credential = new Credential.Info({
+      id: Credential.ID.make("cred_connected_provider_usage"),
+      integrationID: Integration.ID.make("test-provider"),
+      label: "default",
+      value: { type: "key", key: "secret", metadata: {} },
+    })
+    const calls: string[] = []
+    const service = ProviderUsageV2.make({
+      credentials: { all: () => Effect.succeed([credential]) },
+      providers: {
+        available: () => Effect.succeed([
+          ProviderV2.Info.empty(providerID),
+          ProviderV2.Info.empty(unsupportedProviderID),
+          ProviderV2.Info.empty(providerID),
+        ]),
+      },
+      adapters: {
+        "test-provider": ({ providerID, label, updatedAt }) =>
+          Effect.sync(() => {
+            calls.push(providerID)
+            return new ProviderUsage.Snapshot({
+              providerID,
+              label,
+              status: "available",
+              source: "provider_api",
+              stability: "stable",
+              updatedAt,
+              windows: [],
+            })
+          }),
+        "unconnected-with-adapter": () =>
+          Effect.sync(() => {
+            calls.push(unconnectedProviderID)
+            return snapshot(1, 100)
+          }),
+      },
+      now: () => 100,
+    })
+
+    const values = await Effect.runPromise(service.list({ refresh: true }))
+
+    expect(values.map((value) => [String(value.providerID), value.status])).toEqual([
+      ["connected-without-usage-adapter", "unsupported"],
+      ["test-provider", "available"],
+    ])
+    expect(values[0]?.message).toBe("Provider usage is unsupported")
+    expect(calls).toEqual(["test-provider"])
+  })
+
   test("resolves credentials safely and lets newer observations replace API snapshots", async () => {
     const credential = new Credential.Info({
       id: Credential.ID.make("cred_provider_usage"),
@@ -107,6 +205,7 @@ describe("ProviderUsageV2", () => {
     let loads = 0
     const service = ProviderUsageV2.make({
       credentials: { all: () => Effect.succeed([credential]) },
+      providers: { available: () => Effect.succeed([ProviderV2.Info.empty(providerID)]) },
       adapters: {
         "test-provider": ({ providerID, label, updatedAt }) =>
           Effect.sync(() => {
@@ -162,6 +261,7 @@ describe("ProviderUsageV2", () => {
     })
     const service = ProviderUsageV2.make({
       credentials: { all: () => Effect.succeed([credential]) },
+      providers: { available: () => Effect.succeed([ProviderV2.Info.empty(providerID)]) },
       adapters: {
         "test-provider": () => Effect.fail(new ProviderUsageV2.RequestError({ status: 401 })),
       },

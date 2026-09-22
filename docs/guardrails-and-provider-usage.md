@@ -211,20 +211,20 @@ The TUI waits 500 ms after a pending guardrail checkpoint. If the review is stil
 
 The provider-usage service is read-only and best effort. A refresh failure never blocks Session startup or model execution. The TUI keeps a previous valid snapshot as `stale` when a later refresh fails.
 
-The `Provider Usage` command appears in the Session command palette when a provider selected by any Session in the current root family has visible quota data, including idle family members, or when local request diagnostics exist. Opening it renders one section per unique selected provider with visible quota data; parallel Sessions using the same provider share one section and do not combine percentages.
+The Session footer's **usage** action and `<leader>Shift+U` open the dedicated Usage screen; `<leader>u` remains Undo. Escape or **back** returns to the Session with its draft intact, and `r` or **refresh** reloads statistics and quotas. It is not a command-palette item. Overview, Models, Daily, Hourly, Monthly, Sessions, Projects, Stats, and Agents show retained usage across all Sessions in the local backend. The Usage view renders provider-reported quotas, with one section per available configured provider in the current Location, including connected providers not selected by any Session. Account-level percentages are never combined. Backend statistics describe retained records, not complete historical invoices. See [runtime report controls](./runtime.md#telemetry).
 
 ```text
 Provider Usage
 Claude Max  live
-Session       #######--- 68% used
-All models    ##-------- 24% used
+Session       ███████░░░ 68% used
+All models    ██░░░░░░░░ 24% used
 Extra usage   $38.00 left
 Codex Pro  app-server
-Weekly        ###------- 31% used
-Spark weekly  #--------- 7% used
+Weekly        ███░░░░░░░ 31% used
+Spark weekly  █░░░░░░░░░ 7% used
 ```
 
-Percentage windows show stable ten-character ASCII progress bars, reset times, freshness, and source stability. Claude Pro/Max and ChatGPT Plus/Pro are included in the safe provider label only when the account source reports the tier; YCoding does not infer a tier from missing quota categories. Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, credit, and additional named windows render only when reported. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Unsupported providers are omitted. Unauthorized and failed provider inquiries render `Usage unavailable`.
+Percentage windows show stable ten-cell progress bars, reset times, freshness, and source stability. Claude Pro/Max and ChatGPT Plus/Pro are included in the safe provider label only when the account source reports the tier; YCoding does not infer a tier from missing quota categories. Claude session, all-model, model-specific, and extra-usage windows and Codex weekly, Spark, credit, and additional named windows render only when reported. Percentages below 70% use normal styling, 70–89% use warning styling, and 90% or above use error styling. Unsupported, unauthorized, and failed providers remain visible with their status and safe message. A failed request retains a prior snapshot as stale and surfaces a partial-refresh warning.
 
 Unknown values render as `Not reported`; they are never rendered as zero.
 
@@ -242,7 +242,7 @@ For Meta Model API credentials, YCoding sums the USD cost buckets reported for t
 | Codex / Spark | Configured Codex app-server `account/rateLimits/read` | official local client contract |
 | Codex / Spark | ChatGPT OAuth backend usage fallback | best-effort provider-internal API |
 
-Provider results are cached by provider and credential identity. Credentials, account email addresses, key fragments, OAuth tokens, and provider response bodies are not returned through Protocol or rendered in the Provider Usage dialog.
+Provider results are cached by provider and credential identity. Credentials, account email addresses, key fragments, OAuth tokens, and provider response bodies are not returned through Protocol or rendered in the Usage screen.
 
 ### Codex app-server configuration
 
@@ -284,4 +284,4 @@ GET /api/provider/usage
 GET /api/provider/:providerID/usage
 ```
 
-Provider usage endpoints accept `refresh=true`. They return normalized snapshots; provider authentication or refresh failures are represented by each snapshot's status rather than failing coding Sessions.
+Provider usage endpoints accept `refresh=true`. The list enumerates the current Location's available configured providers independently of Session/model selection, respecting disabled providers and provider policy. Provider refreshes run independently with concurrency bounded to four. Endpoints return normalized snapshots; provider authentication or refresh failures are represented by each snapshot's status rather than discarding other providers or failing coding Sessions.

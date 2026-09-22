@@ -95,9 +95,33 @@ const addTokens = (left: TokenUsage.Info, right: TokenUsage.Info): TokenUsage.In
   cache: { read: left.cache.read + right.cache.read, write: left.cache.write + right.cache.write },
 })
 
-type CostedRecord = ProviderRequest.Record & { readonly costProvenance?: ProviderRequest.CostProvenance }
+export type CostedRecord = ProviderRequest.Record & { readonly costProvenance?: ProviderRequest.CostProvenance }
+
+export function reportMetrics(records: readonly CostedRecord[]): ProviderRequest.ReportMetrics {
+  const priced = records.length > 0 && records.every((record) => record.cost !== undefined)
+  return {
+    logical: records.length,
+    physical: records.reduce((total, record) => total + record.attempts, 0),
+    helpers: records.reduce((total, record) => total + (record.source === "step" ? 0 : 1), 0),
+    continued: records.reduce((total, record) => total + (record.continuation === "continued" ? 1 : 0), 0),
+    fallback: records.reduce((total, record) => total + (record.continuation === "fallback" ? 1 : 0), 0),
+    tokens: records.reduce((total, record) => addTokens(total, record.tokens), zeroTokens()),
+    ...(priced
+      ? {
+          cost: Money.USD.make(records.reduce((total, record) => total + (record.cost ?? 0), 0)),
+          costProvenance: ProviderRequest.CostProvenance.make(
+            records.some((record) => record.costProvenance === "current_catalog") ? "current_catalog" : "recorded",
+          ),
+        }
+      : {}),
+    ...(records.length === 0
+      ? {}
+      : { cacheReadReported: records.every((record) => record.cacheReadReported === true) }),
+  }
+}
 
 export function summarize(records: readonly CostedRecord[]): ProviderRequest.Summary {
+  const metrics = reportMetrics(records)
   const models = new Map<
     string,
     {
@@ -107,6 +131,7 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
       priced: boolean
       cost: Money.USD
       currentCatalog: boolean
+      cacheReadReported: boolean
     }
   >()
   for (const record of records) {
@@ -120,6 +145,7 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
         priced: record.cost !== undefined,
         cost: record.cost ?? Money.USD.zero,
         currentCatalog: record.costProvenance === "current_catalog",
+        cacheReadReported: record.cacheReadReported === true,
       })
       continue
     }
@@ -128,12 +154,14 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     current.priced &&= record.cost !== undefined
     current.cost = Money.USD.make(current.cost + (record.cost ?? 0))
     current.currentCatalog ||= record.costProvenance === "current_catalog"
+    current.cacheReadReported &&= record.cacheReadReported === true
   }
   const items = Array.from(models.values())
     .map((item) => ({
       model: item.model,
       requests: item.requests,
       tokens: item.tokens,
+      cacheReadReported: item.cacheReadReported,
       ...(item.priced ? { cost: item.cost } : {}),
       ...(item.priced
         ? { costProvenance: ProviderRequest.CostProvenance.make(item.currentCatalog ? "current_catalog" : "recorded") }
@@ -152,19 +180,17 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
         left.model.id.localeCompare(right.model.id) ||
         (left.model.variant ?? "").localeCompare(right.model.variant ?? ""),
     )
-  const cost = records.every((record) => record.cost !== undefined)
-    ? Money.USD.make(records.reduce((total, record) => total + (record.cost ?? 0), 0))
-    : undefined
   const latest = records.at(-1)
   return {
-    logical: records.length,
-    physical: records.reduce((total, record) => total + record.attempts, 0),
-    helpers: records.reduce((total, record) => total + (record.source === "step" ? 0 : 1), 0),
-    continued: records.reduce((total, record) => total + (record.continuation === "continued" ? 1 : 0), 0),
-    fallback: records.reduce((total, record) => total + (record.continuation === "fallback" ? 1 : 0), 0),
-    ...(cost === undefined ? {} : { cost }),
+    logical: metrics.logical,
+    physical: metrics.physical,
+    helpers: metrics.helpers,
+    continued: metrics.continued,
+    fallback: metrics.fallback,
+    ...(metrics.cacheReadReported === undefined ? {} : { cacheReadReported: metrics.cacheReadReported }),
+    ...(records.length === 0 ? { cost: Money.USD.zero } : metrics.cost === undefined ? {} : { cost: metrics.cost }),
     ...(items.length === 0 ? {} : { models: items }),
-    tokens: records.reduce((total, record) => addTokens(total, record.tokens), zeroTokens()),
+    tokens: metrics.tokens,
     ...(latest === undefined
       ? {}
       : { latestInvalidation: latest.invalidation, latestNamespace: latest.promptCacheKey.slice(0, 8) }),

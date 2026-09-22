@@ -58,6 +58,7 @@ test("exposes every standard HTTP API group", () => {
     "debug",
     "browser",
     "isolatedBrowser",
+    "usage",
   ])
   expect(Object.keys(client.debug)).toEqual(["location"])
   expect(Object.keys(client.debug.location)).toEqual(["list", "evict"])
@@ -185,6 +186,82 @@ test("session diagnostics expose only bounded provider-request telemetry", async
   expect(result?.requests?.latestNamespace).toBe("a1b2c3d4")
   expect(JSON.stringify(result)).not.toContain("promptCacheKey")
   expect(request && new URL(request.url).pathname).toBe("/api/session/ses_test/diagnostics")
+})
+
+test("session usage report uses the generated filtered report contract", async () => {
+  let request: Request | undefined
+  const tokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  const report = {
+    group: "day" as const,
+    rows: [],
+    total: { logical: 0, physical: 0, helpers: 0, continued: 0, fallback: 0, tokens },
+    rowCount: 0,
+  }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      request = input instanceof Request ? input : new Request(input, init)
+      return Response.json({ data: report })
+    },
+  })
+
+  expect(
+    await client.session.usageReport({
+      sessionID: "ses_usage",
+      group: "day",
+      from: 100,
+      to: 200,
+      offset: 20,
+      limit: 25,
+      sort: "tokens",
+      order: "desc",
+    }),
+  ).toEqual(report)
+  expect(request?.method).toBe("GET")
+  expect(request && `${new URL(request.url).pathname}${new URL(request.url).search}`).toBe(
+    "/api/session/ses_usage/usage/report?group=day&from=100&to=200&offset=20&limit=25&sort=tokens&order=desc",
+  )
+})
+
+test("global usage methods use the local-runtime HTTP contract without a Session or Location", async () => {
+  const requests: Request[] = []
+  const tokens = { input: 10, output: 2, reasoning: 1, cache: { read: 3, write: 4 } }
+  const summary = {
+    logical: 1,
+    physical: 1,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    cacheReadReported: false,
+    models: [
+      {
+        model: { providerID: "openai", id: "gpt-5.6" },
+        requests: 1,
+        tokens,
+        cacheReadReported: true,
+      },
+    ],
+    tokens,
+  }
+  const report = { group: "project" as const, rows: [], total: summary, rowCount: 0 }
+  const client = YCoding.make({
+    baseUrl: "http://localhost:3000",
+    fetch: async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init)
+      requests.push(request)
+      return Response.json({ data: new URL(request.url).pathname.endsWith("/report") ? report : summary })
+    },
+  })
+
+  const decodedSummary = await client.usage.get()
+  expect(decodedSummary).toEqual(summary)
+  expect(decodedSummary.cacheReadReported).toBe(false)
+  expect(decodedSummary.models?.[0]?.cacheReadReported).toBe(true)
+  expect(await client.usage.report({ group: "project", sort: "cost", order: "desc", limit: 25 })).toEqual(report)
+  expect(requests.map((request) => `${new URL(request.url).pathname}${new URL(request.url).search}`)).toEqual([
+    "/api/usage",
+    "/api/usage/report?group=project&limit=25&sort=cost&order=desc",
+  ])
 })
 
 test("guardrail methods use the public HTTP contract", async () => {

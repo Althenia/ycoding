@@ -36,6 +36,7 @@ const providerUsageLayer = Layer.succeed(
   ProviderUsageV2.Service,
   ProviderUsageV2.make({
     credentials: { all: () => Effect.succeed([]) },
+    providers: { available: () => Effect.succeed([]) },
     adapters: {},
   }),
 )

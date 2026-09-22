@@ -2,6 +2,7 @@ export * as ProviderUsageV2 from "./provider-usage"
 export { ProviderUsage } from "@ycoding-ai/schema/provider-usage"
 
 import { Config } from "./config"
+import { Catalog } from "./catalog"
 import { Credential } from "./credential"
 import { makeLocationNode } from "./effect/app-node"
 import { httpClient } from "./effect/app-node-platform"
@@ -55,6 +56,9 @@ export type Adapter = (input: AdapterInput) => Effect.Effect<ProviderUsage.Snaps
 
 export interface MakeInput {
   readonly credentials: Pick<Credential.Interface, "all">
+  readonly providers: {
+    readonly available: () => Effect.Effect<ReadonlyArray<Pick<Provider.Info, "id">>>
+  }
   readonly adapters: Readonly<Record<string, Adapter>>
   readonly cache?: ProviderUsageCache.Interface
   readonly ttlMs?: Readonly<Record<string, number>>
@@ -144,12 +148,14 @@ export function make(input: MakeInput): Interface {
 
   return {
     get,
-    list: Effect.fn("ProviderUsage.list")((request) =>
-      Effect.forEach(
-        Object.keys(input.adapters).map((value) => Provider.ID.make(value)),
+    list: Effect.fn("ProviderUsage.list")(function* (request) {
+      const providers = yield* input.providers.available()
+      return yield* Effect.forEach(
+        [...new Set(providers.map((provider) => provider.id))].toSorted(),
         (providerID) => get({ providerID, refresh: request?.refresh }),
-      ),
-    ),
+        { concurrency: 4 },
+      )
+    }),
     observe: Effect.fn("ProviderUsage.observe")((observation) =>
       Effect.sync(() => {
         const snapshot = new ProviderUsage.Snapshot({
@@ -172,6 +178,7 @@ const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const catalog = yield* Catalog.Service
     const credentials = yield* Credential.Service
     const global = yield* Global.Service
     const http = yield* HttpClient.HttpClient
@@ -182,6 +189,7 @@ const layer = Layer.effect(
     return Service.of(
       make({
         credentials,
+        providers: catalog.provider,
         adapters: {
           anthropic: (input) => claudeOAuth(http, claude, input),
           openrouter: (input) => openRouter(http, input),
@@ -195,7 +203,7 @@ const layer = Layer.effect(
   }),
 )
 
-export const node = makeLocationNode({ service: Service, layer, deps: [Config.node, Credential.node, Global.node, httpClient] })
+export const node = makeLocationNode({ service: Service, layer, deps: [Catalog.node, Config.node, Credential.node, Global.node, httpClient] })
 
 const claudeOAuth = (
   http: HttpClient.HttpClient,

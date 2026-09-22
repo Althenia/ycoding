@@ -5,7 +5,7 @@ import { PromptInput } from "@ycoding-ai/schema/prompt-input"
 import { Session } from "@ycoding-ai/schema/session"
 import { InstructionEntry } from "@ycoding-ai/schema/instruction-entry"
 import { Project } from "@ycoding-ai/schema/project"
-import { AbsolutePath, PositiveInt, RelativePath, statics } from "@ycoding-ai/schema/schema"
+import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, statics } from "@ycoding-ai/schema/schema"
 import { Event } from "@ycoding-ai/schema/event"
 import { Workspace } from "@ycoding-ai/schema/workspace"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
@@ -222,6 +222,18 @@ export const SessionSubagentListQuery = Schema.Struct({
   limit: Schema.NumberFromString.pipe(Schema.decodeTo(SubagentPageLimit), Schema.optional),
   cursor: SubagentCursor.pipe(Schema.optional),
 }).annotate({ identifier: "SessionSubagentListQuery" })
+
+export const SessionUsageReportQuery = Schema.Struct({
+  group: ProviderRequest.ReportGroup,
+  from: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
+  to: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
+  offset: Schema.NumberFromString.pipe(Schema.decodeTo(NonNegativeInt), Schema.optional),
+  limit: Schema.NumberFromString.pipe(Schema.decodeTo(PositiveInt), Schema.optional),
+  sort: ProviderRequest.ReportSort.pipe(Schema.optional),
+  order: ProviderRequest.ReportOrder.pipe(Schema.optional),
+})
+  .pipe(Schema.decodeTo(ProviderRequest.ReportInput))
+  .annotate({ identifier: "SessionUsageReportQuery" })
 
 const SessionsQueryCursor = SessionsCursor.annotate({
   description: "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response.",
@@ -684,6 +696,23 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
             summary: "Get durable session provider usage",
             description:
               "Retrieve provider-request usage and recorded or current-catalog-estimated spend after transcript compaction or when cache diagnostics are unavailable. Each priced model row identifies its cost provenance. Root sessions include their descendant subagent family; child sessions remain scoped to themselves.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.get("session.usageReport", "/api/session/:sessionID/usage/report", {
+        params: { sessionID: Session.ID },
+        query: SessionUsageReportQuery,
+        success: Schema.Struct({ data: ProviderRequest.Report }),
+        error: [SessionNotFoundError, InvalidRequestError],
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.usageReport",
+            summary: "Report durable session provider usage",
+            description:
+              "Group and sort retained provider-request usage for a Session or root Session family before bounded pagination without exposing request routing, cache namespaces, digests, or raw provider payloads. Sorting defaults to ascending row key.",
           }),
         ),
     )

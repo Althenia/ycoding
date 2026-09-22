@@ -4,7 +4,7 @@ import { testRender } from "@opentui/solid"
 import { expect, test } from "bun:test"
 import { BoxRenderable, type Renderable } from "@opentui/core"
 import path from "node:path"
-import { onMount, type JSX } from "solid-js"
+import type { JSX } from "solid-js"
 import { ClientProvider } from "../../src/context/client"
 import { DataProvider } from "../../src/context/data"
 import { Keymap } from "../../src/context/keymap"
@@ -12,9 +12,8 @@ import { LocationProvider } from "../../src/context/location"
 import { ThemeProvider } from "../../src/context/theme"
 import { GuardrailPrompt } from "../../src/routes/session/guardrail"
 import { PermissionPrompt } from "../../src/routes/session/permission"
-import { ProviderUsageDialogContent } from "../../src/routes/session/provider-usage"
+import { ProviderUsageScreenContent } from "../../src/routes/session/provider-usage"
 import { ToastProvider } from "../../src/ui/toast"
-import { DialogProvider, useDialog } from "../../src/ui/dialog"
 import { ConfigProvider } from "../../src/config"
 import { createApi, createFetch } from "../fixture/tui-client"
 import { TestTuiContexts } from "../fixture/tui-environment"
@@ -61,13 +60,13 @@ const guardrailRequest = {
 
 test("captures runtime dialog frames at reference dimensions", async () => {
   for (const viewport of viewports) {
-    await capture(`dialog-runtime-provider-usage-${viewport.width}x${viewport.height}.txt`, viewport, "Provider usage", () => (
-      <RuntimeProviders>
-        <DialogProvider>
-          <ProviderUsageFixture />
-        </DialogProvider>
-      </RuntimeProviders>
-    ))
+    for (const tab of ["overview", "usage"] as const) {
+      await capture(`screen-runtime-provider-usage-${tab}-${viewport.width}x${viewport.height}.txt`, viewport, tab === "overview" ? "YCODING BACKEND" : "Provider capture", () => (
+        <RuntimeProviders>
+          <ProviderUsageFixture tab={tab} />
+        </RuntimeProviders>
+      ))
+    }
     await capture(`dialog-runtime-permission-${viewport.width}x${viewport.height}.txt`, viewport, "Permission required", () => (
       <RuntimeProviders>
         <PermissionPrompt request={permissionRequest} />
@@ -81,48 +80,40 @@ test("captures runtime dialog frames at reference dimensions", async () => {
   }
 }, 120_000)
 
-function ProviderUsageFixture() {
-  const dialog = useDialog()
-  onMount(() =>
-    dialog.replace(() => (
-      <ProviderUsageDialogContent
+function ProviderUsageFixture(props: { tab: "overview" | "usage" }) {
+  return (
+    <ProviderUsageScreenContent
+        initialTab={props.tab}
         snapshots={() => providerSnapshots}
         now={() => 1_000}
-        sessionUsage={{
-          model: "anthropic/claude-opus-5#high",
-          hit: "71% hit",
-          input: "1,411",
-          output: "53",
-          cacheRead: "220,672",
-          cacheWrite: "12,004",
-          spent: "$9.08",
-        }}
-        subagentUsage={[
-          {
-            name: "docs-sync",
-            model: "anthropic/claude-sonnet-5",
-            hit: "74% hit",
-            input: "812",
-            output: "44",
-            cacheRead: "18,204",
-            cacheWrite: "1,200",
-            spent: "$0.41",
-          },
-          {
-            name: "test-triage",
-            model: "anthropic/claude-sonnet-5",
-            hit: "68% hit",
-            input: "640",
-            output: "31",
-            cacheRead: "9,120",
-            cacheWrite: "980",
-            spent: "$0.63",
-          },
-        ]}
-      />
-    )),
+        backendUsage={() => ({
+          logical: 3,
+          physical: 3,
+          helpers: 0,
+          continued: 0,
+          fallback: 0,
+          tokens: { input: 2_863, output: 128, reasoning: 0, cache: { read: 247_996, write: 14_184 } },
+          cacheReadReported: true,
+          cost: 10.12,
+          models: [
+            {
+              model: { providerID: "anthropic", id: "claude-opus-5", variant: "high" },
+              requests: 1,
+              tokens: { input: 1_411, output: 53, reasoning: 0, cache: { read: 220_672, write: 12_004 } },
+              cacheReadReported: true,
+              cost: 9.08,
+            },
+            {
+              model: { providerID: "anthropic", id: "claude-sonnet-5" },
+              requests: 2,
+              tokens: { input: 1_452, output: 75, reasoning: 0, cache: { read: 27_324, write: 2_180 } },
+              cacheReadReported: true,
+              cost: 1.04,
+            },
+          ],
+        })}
+    />
   )
-  return null
 }
 
 function RuntimeProviders(props: { children: JSX.Element }) {
@@ -161,7 +152,7 @@ async function capture(
     const rows = frame.endsWith("\n") ? frame.slice(0, -1).split("\n") : frame.split("\n")
     expect(rows).toHaveLength(viewport.height)
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
-    if (name.includes("provider-usage")) assertProviderUsageGrammar(rows)
+    if (name.includes("provider-usage")) assertProviderUsageScreen(rows, name.includes("provider-usage-usage"))
     if (name.includes("permission")) assertPermissionGrammar(app.renderer.root, rows, viewport.width)
     if (name.includes("guardrail")) assertGuardrailGrammar(app.renderer.root, rows, viewport.width)
     await Bun.write(path.join(output, name), rows.join("\n"))
@@ -170,23 +161,22 @@ async function capture(
   }
 }
 
-function assertProviderUsageGrammar(rows: string[]) {
-  const title = origin(rows, "Provider usage")
-  expectAt(rows, title.row, title.column + 88, "esc")
-  expectAt(rows, title.row + 3, title.column + 3, "S")
-  expectAt(rows, title.row + 6, title.column, "This session")
-  // Usage rows identify the subject as Session and render its provider-qualified model as detail.
-  expectAt(rows, title.row + 8, title.column + 3, "Session")
-  expectAt(rows, title.row + 9, title.column + 3, "anthropic/claude-opus-5#high")
-  expectAt(rows, title.row + 10, title.column + 5, "Raw input")
-  expectAt(rows, title.row + 11, title.column + 5, "Raw output")
-  expectAt(rows, title.row + 12, title.column + 5, "Cache read")
-  expectAt(rows, title.row + 13, title.column + 5, "Cache write")
-  expectAt(rows, title.row + 14, title.column + 5, "Spent")
-  expectAt(rows, title.row + 16, title.column, "Subagents")
-  expectAt(rows, title.row + 18, title.column + 3, "Subagent")
-  expectAt(rows, title.row + 19, title.column + 3, "docs-sync · anthropic/claude-sonnet-5")
-  expectAt(rows, title.row + 20, title.column + 5, "Raw input")
+function assertProviderUsageScreen(rows: string[], quotas: boolean) {
+  const frame = rows.join("\n")
+  expect(frame).toContain("▌▐ Usage")
+  expect(frame).toContain("refresh")
+  expect(frame).toContain("back")
+  expect(frame).toContain("Overview")
+  expect(frame).toContain("Usage")
+  if (quotas) {
+    expect(frame).toContain("Provider capture")
+    expect(frame).toContain("71%")
+    expect(frame).toContain("Not reported")
+    return
+  }
+  expect(frame).toContain("LIFETIME MODEL BREAKDOWN · YCODING BACKEND")
+  expect(frame).toContain("247,996/14,184")
+  expect(frame).not.toContain("Provider capture")
 }
 
 function assertPermissionGrammar(root: Renderable, rows: string[], width: number) {
@@ -227,7 +217,7 @@ function assertGuardrailGrammar(root: Renderable, rows: string[], width: number)
 function origin(rows: string[], title: string) {
   const row = rows.findIndex((line) => line.includes(title))
   if (row === -1) throw new Error(`missing dialog title ${title}`)
-  return { row, column: rows[row]!.indexOf(title) }
+  return { row, column: rows[row].indexOf(title) }
 }
 
 function expectAt(rows: string[], row: number, column: number, text: string) {

@@ -8,6 +8,7 @@ import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { DataProvider } from "../src/context/data"
 import { Keymap } from "../src/context/keymap"
+import { RouteProvider } from "../src/context/route"
 import { ThemeProvider } from "../src/context/theme"
 import { LandingHero } from "../src/routes/home"
 import { Footer } from "../src/routes/session/footer"
@@ -63,7 +64,9 @@ describe("session footer identity", () => {
               <Keymap.Provider config={config}>
                 <ClientProvider api={createApi(calls.fetch)}>
                   <DataProvider>
-                    <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={{ mode: "normal", yolo: false }} />
+                    <RouteProvider initialRoute={{ type: "session", sessionID: "ses_0085fc701234567" }}>
+                      <Footer branch="main" sessionID="ses_0085fc701234567" autonomy={{ mode: "normal", yolo: false }} />
+                    </RouteProvider>
                   </DataProvider>
                 </ClientProvider>
               </Keymap.Provider>
