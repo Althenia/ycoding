@@ -22,6 +22,49 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.2",
+    date: "2026-09-22",
+    title: "Usage reports and deliberate updates",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "A dedicated terminal Usage screen with retained backend totals, model and time-based reports, Sessions, projects, agents, and an activity calendar." },
+      { tag: "Added", text: "Reopen BTW conversations from a separate Side chats tab with distinct parent navigation." },
+      { tag: "Changed", text: "Background update checks only notify. Run ycoding update explicitly to install a release." },
+      { tag: "Changed", text: "The GSD orchestration-only agent replaces TLDR. Update configured TLDR agent references to GSD or another maintained primary agent." },
+      { tag: "Changed", text: "Goal steers and automatic ntfy attention messages use Session context without granting human approval." },
+      { tag: "Fixed", text: "Show quota status for every available connected provider using its active profile, and preserve successful results when another provider fails." },
+      { tag: "Fixed", text: "Keep recorded usage available for deleted historical workspaces without inventing missing cost estimates." },
+      { tag: "Fixed", text: "Apply model changes on prompt submission, retain drafts after failed switches, refresh subagent status after reconnect, and show child Session todos." },
+      { tag: "Fixed", text: "Use maintained YCoding branding in shared UI components and local OAuth callback pages." },
+    ],
+  },
+  {
+    version: "0.6.1",
+    date: "2026-09-22",
+    title: "Answer native forms remotely",
+    tags: ["Fixed", "Changed"],
+    changes: [
+      { tag: "Fixed", text: "Show and answer the questions created by the local agent in the remote workspace." },
+      { tag: "Fixed", text: "Render typed forms with defaults, conditional fields, multiple selections, external-step acknowledgement, and cancellation." },
+      { tag: "Fixed", text: "Keep form replies scoped to their owning Session and track live creation and settlement in the request queue and notifications." },
+      { tag: "Changed", text: "Upgrade the local connector and reload the remote workspace for the coordinated protocol update. Existing sign-ins and device enrollments remain valid." },
+    ],
+  },
+  {
+    version: "0.6.0",
+    date: "2026-09-21",
+    title: "Remote access to every Session",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Running ycoding remote connect grants the device owner access to all existing and future Sessions on that backend. Per-Session allow and deny commands are not supported." },
+      { tag: "Changed", text: "Upgrade connectors and refresh browser tabs for the remote protocol update. Existing enrollments and browser sign-ins remain valid." },
+      { tag: "Changed", text: "A responsive landing page and remote workspace with custom device, delivery, and autonomy menus and independent notification channels." },
+      { tag: "Fixed", text: "Discover every backend Session page and update the list as Sessions are created, moved, or deleted." },
+      { tag: "Fixed", text: "Preserve an unreachable selected machine, distinguish empty backends from missing devices, and restore live subscriptions after connector replacement." },
+      { tag: "Fixed", text: "Recover the inventory stream without a selected Session and keep status chips and keyboard-accessible menus within their containers." },
+    ],
+  },
+  {
     version: "0.5.2",
     date: "2026-09-21",
     title: "Landing goal activation",

@@ -1,14 +1,13 @@
 export * as RemoteConfig from "./remote-config"
 
 import { Global } from "@ycoding-ai/core/global"
-import { RemoteLimits } from "@ycoding-ai/remote"
+import { RemoteWebSocketPath } from "@ycoding-ai/remote"
 import { Effect, FileSystem, Schema } from "effect"
 import path from "node:path"
 
-// The explicit local allowlist for remote access. A session is reachable from
-// the relay only after the local user opted it in here, and the entry binds the
-// session to the Location it was verified at, so a remote client can never
-// choose or influence which folder YCoding serves.
+// Existing remote.json files may contain Session entries. They are decoded so
+// operator data is left intact, but remote authorization and Location resolution
+// never read them.
 
 export const AllowlistSession = Schema.Struct({
   sessionID: Schema.String,
@@ -30,8 +29,6 @@ export const envVar = "YCODING_REMOTE_URL"
 const empty = (): Config => ({ sessions: [] })
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(Config))
-const encodeConfig = Schema.encodeEffect(Schema.fromJsonString(Config))
-
 export const file = Effect.gen(function* () {
   const global = yield* Global.Service
   return path.join(global.config, filename)
@@ -45,41 +42,6 @@ export const read = Effect.fn("cli.remote-config.read")(function* () {
   return yield* decodeConfig(text).pipe(
     Effect.mapError(() => new Error(`Malformed remote configuration at ${target}; fix or remove it`)),
   )
-})
-
-const write = Effect.fnUntraced(function* (config: Config) {
-  const fs = yield* FileSystem.FileSystem
-  const target = yield* file
-  const encoded = yield* encodeConfig(config)
-  yield* fs.makeDirectory(path.dirname(target), { recursive: true })
-  const temp = `${target}.${crypto.randomUUID()}.tmp`
-  yield* fs.writeFileString(temp, encoded, { mode: 0o600 })
-  yield* fs.rename(temp, target)
-})
-
-export const sessions = Effect.fn("cli.remote-config.sessions")(function* () {
-  return (yield* read()).sessions
-})
-
-/** Upsert one opted-in session. The session identity is the allowlist key. */
-export const allow = Effect.fn("cli.remote-config.allow")(function* (session: AllowlistSession) {
-  const config = yield* read()
-  const existing = config.sessions.findIndex((entry) => entry.sessionID === session.sessionID)
-  if (existing === -1 && config.sessions.length >= RemoteLimits.maxAdvertisedSessions)
-    return yield* Effect.fail(
-      new Error(`At most ${RemoteLimits.maxAdvertisedSessions} sessions can be exposed to the relay`),
-    )
-  const next = existing === -1 ? [...config.sessions, session] : config.sessions.with(existing, session)
-  yield* write({ ...config, sessions: next })
-  return session
-})
-
-export const deny = Effect.fn("cli.remote-config.deny")(function* (sessionID: string) {
-  const config = yield* read()
-  const next = config.sessions.filter((entry) => entry.sessionID !== sessionID)
-  if (next.length === config.sessions.length) return false
-  yield* write({ ...config, sessions: next })
-  return true
 })
 
 /**
@@ -143,5 +105,5 @@ function parseURL(value: string) {
 export function agentURL(relayURL: string) {
   const base = new URL(relayURL)
   base.protocol = base.protocol === "http:" ? "ws:" : "wss:"
-  return new URL("/ws/agent", base).toString()
+  return new URL(RemoteWebSocketPath.agent, base).toString()
 }

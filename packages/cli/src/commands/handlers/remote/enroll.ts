@@ -55,7 +55,7 @@ export default Runtime.handler(
         `  Relay       ${identity.relayURL}`,
         `  Identity    ${yield* RemoteCredentials.file}`,
         "",
-        "  Share a session with `ycoding remote allow <sessionID>`, then run `ycoding remote connect`.",
+        "  Run `ycoding remote connect` to serve this backend's Sessions to the device owner.",
         "",
       ].join(EOL) + EOL,
     )

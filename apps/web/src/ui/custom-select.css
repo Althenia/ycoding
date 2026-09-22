@@ -1,0 +1,178 @@
+.custom-select {
+  position: relative;
+  min-inline-size: 0;
+}
+
+.custom-select__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--yc-space-2);
+  inline-size: 100%;
+  min-block-size: var(--yc-control-h);
+  padding-inline: var(--yc-space-3);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+  color: var(--yc-text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.custom-select__trigger[disabled] {
+  color: var(--yc-text-subtle);
+  background: var(--yc-surface-sunken);
+  cursor: not-allowed;
+}
+
+.custom-select__value {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-select__chevron {
+  margin-inline-start: auto;
+  color: var(--yc-text-muted);
+  transition: rotate var(--yc-dur-quick) var(--yc-ease-standard);
+}
+
+.custom-select--open .custom-select__chevron {
+  rotate: 180deg;
+}
+
+.custom-select__surface {
+  position: fixed;
+  z-index: var(--yc-z-overlay);
+  inset-block-start: var(--custom-select-top);
+  inset-inline-start: var(--custom-select-left);
+  inline-size: var(--custom-select-width);
+  max-block-size: min(360px, calc(100dvh - 96px));
+  overflow: auto;
+  padding: var(--yc-space-2);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
+  box-shadow: var(--yc-shadow-lg);
+}
+
+.custom-select__list {
+  display: grid;
+  gap: var(--yc-space-1);
+}
+
+.custom-select__option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--yc-space-2);
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-2);
+  border: var(--yc-border-width) solid transparent;
+  border-radius: var(--yc-radius-sm);
+  background: transparent;
+  color: var(--yc-text);
+  text-align: start;
+  cursor: pointer;
+}
+
+.custom-select__option--active {
+  border-color: color-mix(in srgb, var(--yc-green-strong) 45%, var(--yc-border));
+  background: var(--yc-green-soft);
+}
+
+.custom-select__check {
+  color: var(--yc-green-strong);
+  font-weight: var(--yc-weight-bold);
+}
+
+.custom-select__option-body {
+  display: grid;
+  min-inline-size: 0;
+}
+
+.custom-select__option-body small,
+.custom-select__sheet-head small {
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-2xs);
+}
+
+.custom-select__badge {
+  padding: 2px 6px;
+  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-green-strong) 45%, transparent);
+  border-radius: var(--yc-radius-sm);
+  color: var(--yc-green-strong);
+  font-size: var(--yc-size-2xs);
+}
+
+.custom-select__sheet-head,
+.custom-select__scrim {
+  display: none;
+}
+
+@media (max-width: 479px) {
+  .custom-select__scrim {
+    display: block;
+    position: fixed;
+    z-index: var(--yc-z-scrim);
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.56);
+  }
+
+  .custom-select__surface {
+    position: fixed;
+    z-index: var(--yc-z-overlay);
+    inset: auto 0 0;
+    inline-size: 100%;
+    max-block-size: min(70dvh, 520px);
+    padding: var(--yc-space-3) var(--yc-gutter) max(var(--yc-space-4), env(safe-area-inset-bottom));
+    border-width: var(--yc-border-width) 0 0;
+    border-radius: var(--yc-radius-lg) var(--yc-radius-lg) 0 0;
+  }
+
+  .custom-select__surface::before {
+    content: "";
+    display: block;
+    inline-size: 40px;
+    block-size: 4px;
+    margin: 0 auto var(--yc-space-3);
+    border-radius: var(--yc-radius-pill);
+    background: var(--yc-border-strong);
+  }
+
+  .custom-select__sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--yc-space-3);
+    padding-block-end: var(--yc-space-3);
+    border-block-end: var(--yc-border-width) solid var(--yc-border);
+  }
+
+  .custom-select__sheet-head > span {
+    display: grid;
+  }
+
+  .custom-select__close {
+    inline-size: var(--yc-hit-min);
+    block-size: var(--yc-hit-min);
+    border: 0;
+    background: transparent;
+    font-size: var(--yc-size-xl);
+    cursor: pointer;
+  }
+
+  .custom-select__list {
+    margin-block-start: var(--yc-space-2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custom-select__chevron {
+    transition-duration: 0.01ms;
+  }
+}

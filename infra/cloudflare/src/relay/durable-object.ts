@@ -2,7 +2,7 @@
  * `DeviceRelay` Durable Object: one object per `<ownerID>:<deviceID>`.
  *
  * The object is a thin adapter over `relay/core.ts`: it owns the sockets, the
- * per-connection attachment, the session advertisement, and the expiry alarm. It
+ * per-connection attachment and the expiry alarm. It
  * holds no session content and never executes session work.
  */
 
@@ -43,10 +43,6 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     saveSubscriptions: (connectionID, subscriptions) =>
       this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, subscriptions })),
     savePending: (connectionID, pending) => this.#patchAttachment(connectionID, (attachment) => ({ ...attachment, pending })),
-    loadAdvertisement: async () => (await this.ctx.storage.get<string[]>("sessionIDs")) ?? [],
-    saveAdvertisement: async (sessionIDs) => {
-      await this.ctx.storage.put("sessionIDs", [...sessionIDs])
-    },
     authorizeClientCommand: async (sessionID, deviceID) =>
       toAuthority(await this.#service.authorizeClientCommand(sessionID, deviceID)),
     authorizeAgentCommand: async (deviceID) => toAuthority(await this.#service.authorizeAgentCommand(deviceID)),
@@ -59,6 +55,7 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     super(ctx, env)
     // Heartbeats are answered by the runtime so an idle connection never wakes the object.
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(heartbeatRequest, heartbeatResponse))
+    this.ctx.blockConcurrencyWhile(() => this.#restoreConnections())
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -123,6 +120,10 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
     if (request.headers.get("x-ycoding-internal") !== "1") return new Response("Not found", { status: 404 })
     await this.#restoreConnections()
     if (url.pathname === "/_ycoding/close-device") this.#relay.closeDevice()
+    if (url.pathname === "/_ycoding/presence")
+      return new Response(JSON.stringify({ online: this.#relay.agentConnected() }), {
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+      })
     if (url.pathname === "/_ycoding/revoke-session") {
       const sessionID = request.headers.get("x-ycoding-target-session")
       if (sessionID === null || sessionID.length === 0) return new Response(null, { status: 204 })
@@ -133,12 +134,13 @@ export class DeviceRelay extends DurableObject<WorkerEnv> {
   }
 
   async #restoreConnections(): Promise<void> {
-    for (const socket of this.ctx.getWebSockets()) {
+    const connections = this.ctx.getWebSockets().flatMap((socket) => {
       const attachment = readAttachment(socket)
-      if (!attachment || this.#attached.has(attachment.connectionID)) continue
+      if (!attachment || this.#attached.has(attachment.connectionID)) return []
       this.#attached.add(attachment.connectionID)
-      await this.#relay.attach(toConnection(attachment))
-    }
+      return [toConnection(attachment)]
+    })
+    await this.#relay.restore(connections)
   }
 
   #socketFor(connectionID: string): WebSocket | undefined {

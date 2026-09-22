@@ -15,9 +15,9 @@
  * (fixed text, plus a hold mode used for the interrupt proof). Provider identity,
  * quotas, retries, and real vendor payloads are not exercised. The exact-id
  * admission proof deliberately admits with `resume: false` so admission semantics
- * are isolated from execution; the execution proof runs a real SessionRunner step.
- * Approval round-trips are not driven here (they need a provider-emitted tool
- * call). No deployment, no real credentials, no network beyond 127.0.0.1.
+ * are isolated from execution; the execution proof runs real SessionRunner steps,
+ * including provider-emitted shell and question tool calls. No deployment, no real
+ * credentials, no network beyond 127.0.0.1.
  *
  * Usage: bun infra/cloudflare/test/integration/real-flow.ts
  */
@@ -31,16 +31,16 @@ import { join } from "node:path"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
 import { createLocalServer } from "../../../../packages/cli/src/remote-local"
 import { RemoteAgent } from "../../../../packages/cli/src/remote-bridge"
+import { RemoteLimits, RemoteWebSocketPath } from "../../../../packages/remote/src/index"
 import {
   enroll,
   generateDeviceKey,
   Identity,
   RemoteCredentials,
-  signChallenge,
 } from "../../../../packages/cli/src/remote-credentials"
 import { createRemoteHttp } from "../../../../apps/web/src/remote/http"
 import { createRemoteStore } from "../../../../apps/web/src/remote/store"
-import { createRemoteTransport } from "../../../../apps/web/src/remote/transport"
+import { createRemoteTransport, type RemoteTransportStatus } from "../../../../apps/web/src/remote/transport"
 import { base64UrlEncode } from "../../src/auth/crypto"
 import { deltaChunk, finishChunk, toolCallChunk } from "../../../../packages/ai/test/lib/openai-chunks"
 import { Global } from "../../../../packages/core/src/global"
@@ -83,7 +83,10 @@ try {
   let providerMode: "instant" | "hold" = "instant"
   let releaseStream: (() => void) | undefined
   // One scripted tool call per prompt, then plain text for the follow-up turn.
-  let providerTurn: { readonly tool?: { readonly id: string; readonly command: string }; readonly text: string } = {
+  let providerTurn: {
+    readonly tool?: { readonly id: string; readonly name: string; readonly input: Readonly<Record<string, unknown>> }
+    readonly text: string
+  } = {
     text: providerText,
   }
   const providerShellCalls: { readonly id: string; readonly command: string }[] = []
@@ -100,9 +103,10 @@ try {
       const frames = turn.tool === undefined
         ? [deltaChunk({ role: "assistant" }), deltaChunk({ content: turn.text }), finishChunk("stop")]
         : (() => {
-            providerShellCalls.push(turn.tool)
+            if (turn.tool.name === "shell" && typeof turn.tool.input.command === "string")
+              providerShellCalls.push({ id: turn.tool.id, command: turn.tool.input.command })
             return [
-              toolCallChunk(turn.tool.id, "shell", JSON.stringify({ command: turn.tool.command })),
+              toolCallChunk(turn.tool.id, turn.tool.name, JSON.stringify(turn.tool.input)),
               finishChunk("tool_calls"),
             ]
           })()
@@ -317,13 +321,18 @@ try {
   const http = createRemoteHttp({ baseURL: workerOrigin, fetch: browserFetch })
   const events: unknown[] = []
   const clientSockets: WebSocket[] = []
+  const browserStatuses: RemoteTransportStatus[] = []
   const store = createRemoteStore({
     http,
     createTransport: (deviceID, handlers) =>
       createRemoteTransport({
-        url: `${socketOrigin}/ws/client?device=${deviceID}`,
+        url: `${socketOrigin}${RemoteWebSocketPath.client}?device=${deviceID}`,
         handlers: {
           ...handlers,
+          onStatus: (status) => {
+            browserStatuses.push(status)
+            handlers.onStatus?.(status)
+          },
           onEvent: (eventSessionID, event) => {
             events.push({ sessionID: eventSessionID, event })
             handlers.onEvent?.(eventSessionID, event)
@@ -411,17 +420,11 @@ try {
     return rotated
   }
 
-  let allowlist: { sessionID: string; directory: string; title: string }[] = [
-    { sessionID, directory: workspace, title: "Shared" },
-    { sessionID: guardSessionID, directory: workspace, title: "Guardrail" },
-  ]
   agent = new RemoteAgent({
     relayURL: workerOrigin,
-    sessions: allowlist,
-    reloadSessions: async () => allowlist,
     local,
     credentials,
-    refreshIntervalMs: 500,
+    refreshIntervalMs: 3_600_000,
     onDiagnostic: (message) => diagnostics.push(message),
     onTerminal: (message) => diagnostics.push(`terminal: ${message}`),
   })
@@ -430,22 +433,22 @@ try {
   await waitFor(() => (agent?.currentState === "live" ? true : undefined), 20_000, "the agent never went live")
   checks.push("real CLI RemoteAgent connected to the relay with a signed device credential")
 
-  /* --------------------------------------------- browser device + advertisement */
+  /* ------------------------------------------ browser device + Session discovery */
 
   await store.load()
   expect(
-    store.state().devices.some((info) => info.id === enrolled.deviceID),
-    "the enrolled device is missing from the browser device list",
+    store.state().devices.some((info) => info.id === enrolled.deviceID && info.online),
+    "the connected enrolled device is not online in the browser device list",
   )
   store.connect(enrolled.deviceID)
   await waitFor(
     () => (store.state().advertised.includes(sessionID) ? true : undefined),
     20_000,
-    "the browser never received the session advertisement",
+    "the browser never loaded the backend Session inventory",
   )
   expect(
-    store.state().advertised.length === 2,
-    `advertisement leaked sessions: ${store.state().advertised.join(",")}`,
+    [sessionID, hiddenSessionID, guardSessionID].every((id) => store.state().advertised.includes(id)),
+    `Session inventory was incomplete: ${store.state().advertised.join(",")}`,
   )
 
   await waitFor(
@@ -455,17 +458,30 @@ try {
   )
   const listed = store.state().sessions.map((info) => info.id)
   expect(
-    listed.includes(sessionID) && listed.includes(guardSessionID) && !listed.includes(hiddenSessionID),
-    `session filtering failed: ${listed.join(",")}`,
+    listed.includes(sessionID) && listed.includes(guardSessionID) && listed.includes(hiddenSessionID),
+    `Session discovery failed: ${listed.join(",")}`,
   )
-  checks.push("only the opted-in sessions are advertised and listed to the browser")
+  checks.push("all backend Sessions are listed to the authenticated device owner")
+
+  const futureSessionID = "ses_real_flow_future"
+  await createSession(server, futureSessionID, workspace, { providerID, id: providerModel })
+  await waitFor(
+    () => (store.state().sessions.some((info) => info.id === futureSessionID) ? true : undefined),
+    20_000,
+    "a Session created while connected never appeared",
+  )
+  checks.push("a Session created while connected invalidated and refreshed the complete list")
 
   /* ------------------------------------------- protocol-level client (same cookie) */
 
-  let probeSessions: readonly string[] = []
+  let probeInvalidated = false
+  const probeStatuses: RemoteTransportStatus[] = []
   const probe = createRemoteTransport({
-    url: `${socketOrigin}/ws/client?device=${enrolled.deviceID}`,
-    handlers: { onSessions: (ids) => (probeSessions = ids) },
+    url: `${socketOrigin}${RemoteWebSocketPath.client}?device=${enrolled.deviceID}`,
+    handlers: {
+      onSessions: () => (probeInvalidated = true),
+      onStatus: (status) => probeStatuses.push(status),
+    },
     createSocket: (url) => new WebSocket(url, { headers: { cookie, origin: workerOrigin } }),
   })
   disposals.push(async () => probe.close(1000, "flow complete"))
@@ -489,10 +505,10 @@ try {
     }
   }
 
-  await waitFor(() => (probeSessions.includes(sessionID) ? true : undefined), 20_000, "probe client never advertised")
-  const denied = await probeRequest("session.get", { sessionID: hiddenSessionID })
-  expect(denied.status === "failed" && denied.error.code === "session_not_allowed", `hidden session read: ${JSON.stringify(denied)}`)
-  checks.push("relay refuses a session outside the agent allowlist")
+  await waitFor(() => (probeInvalidated ? true : undefined), 20_000, "probe client never received a Session invalidation")
+  const hidden = await probeRequest("session.get", { sessionID: hiddenSessionID })
+  expect(hidden.status === "ok", `backend Session read failed: ${JSON.stringify(hidden)}`)
+  checks.push("a backend Session needs no per-Session allow operation")
 
   await store.selectSession(sessionID)
   await waitFor(
@@ -558,6 +574,56 @@ try {
     "the canonical transcript does not carry the executed user message",
   )
   checks.push("one real SessionRunner prompt executed against the local provider stand-in and persisted")
+
+  /* ---------------- provider question tool -> native Form -> remote browser reply */
+
+  const questionFinalText = "Stand-in reply after the native Form answer."
+  providerFollowUpText = questionFinalText
+  providerTurn = {
+    tool: {
+      id: "call_flow_question",
+      name: "question",
+      input: {
+        questions: [
+          {
+            question: "Proceed with the remote flow?",
+            header: "Proceed",
+            options: [{ label: "Yes", description: "Continue the composed flow" }],
+          },
+        ],
+      },
+    },
+    text: "",
+  }
+  await store.sendPrompt({ text: "Ask the composed-flow question", delivery: "steer" })
+  const pendingForm = await waitFor(
+    () => {
+      const request = store.state().view?.requests.find((entry) => entry.kind === "form")
+      return request?.kind === "form" && request.form.metadata?.kind === "question" ? request.form : undefined
+    },
+    30_000,
+    "the provider-emitted question tool never became a native pending Form in the remote store",
+  )
+  expect(pendingForm.sessionID === sessionID, "the pending Form was not owned by the selected Session")
+  await store.selectSession(sessionID)
+  expect(
+    store.state().view?.requests.some((entry) => entry.kind === "form" && entry.id === pendingForm.id),
+    "reloading the selected Session lost its pending native Form",
+  )
+  await store.replyForm(pendingForm.id, { q0: "Yes" })
+  await waitFor(
+    async () => {
+      const read = await probeRequest("session.messages", { sessionID })
+      return read.status === "ok" && JSON.stringify(read.value).includes(questionFinalText) ? true : undefined
+    },
+    30_000,
+    "the SessionRunner did not continue to final text after the remote Form reply",
+  )
+  expect(
+    store.state().view?.requests.some((entry) => entry.id === pendingForm.id) === false,
+    "the settled native Form remained pending in the remote store",
+  )
+  checks.push("provider question tool created a native Form, remote store replied, and SessionRunner reached final text")
 
   /* ---------------------------------------------- streamed event to the client */
 
@@ -641,7 +707,7 @@ try {
 
   const raiseApproval = async (command: string, label: string, followUp: string) => {
     providerFollowUpText = followUp
-    providerTurn = { tool: { id: `call_flow_${label}`, command }, text: "" }
+    providerTurn = { tool: { id: `call_flow_${label}`, name: "shell", input: { command } }, text: "" }
     const prompted = await probeRequest("session.prompt", {
       sessionID,
       input: { id: `msg_approval_${label}`, text: `run ${command}` },
@@ -672,7 +738,7 @@ try {
   })
   expect(
     otherSessionReply.status === "failed",
-    `a reply for an unadvertised session was accepted: ${JSON.stringify(otherSessionReply)}`,
+    `a reply through the wrong Session was accepted: ${JSON.stringify(otherSessionReply)}`,
   )
   const unknownReply = await probeRequest("session.permission.reply", {
     sessionID,
@@ -741,14 +807,29 @@ try {
 
   /* --------------------- guardrail reviews: ordinary and hard, via the relay */
 
+  // The composed flow deliberately performs more than one connection's request
+  // budget across independent scenarios. Start the guardrail phase in a fresh
+  // rate window instead of treating the relay's policy close as a transport retry.
+  await Bun.sleep(RemoteLimits.clientRateWindowMs + 1)
+
   const guardrailReviewFor = async (command: string, label: string) => {
     providerFollowUpText = `Stand-in reply after guardrail ${label}.`
-    providerTurn = { tool: { id: `call_guard_${label}`, command }, text: "" }
+    providerTurn = { tool: { id: `call_guard_${label}`, name: "shell", input: { command } }, text: "" }
     const prompted = await probeRequest("session.prompt", {
       sessionID: guardSessionID,
       input: { id: `msg_guard_${label}`, text: `run ${command}` },
     })
-    expect(prompted.status === "ok", `guardrail prompt (${label}) failed: ${JSON.stringify(prompted)}`)
+    expect(
+      prompted.status === "ok",
+      `guardrail prompt (${label}) failed: ${JSON.stringify({
+        prompted,
+        agent: agent?.currentState,
+        agentDiagnostics: diagnostics.slice(-4),
+        browserStatuses: browserStatuses.slice(-6),
+        probeStatuses: probeStatuses.slice(-6),
+        largestEventChars: Math.max(0, ...events.map((event) => JSON.stringify(event).length)),
+      })}`,
+    )
     const deadline = Date.now() + 30_000
     for (;;) {
       const listed = await probeRequest("session.guardrail.request.list", { sessionID: guardSessionID })
@@ -909,37 +990,7 @@ try {
   )
   checks.push("interrupt stopped the running step through the real local service")
 
-  /* ------------------------------------------------------------- deny blocks */
-
-  allowlist = []
-  const deniedAfter = await waitFor(
-    async () => {
-      const outcome = await probeRequest("session.get", { sessionID })
-      return outcome.status === "failed" ? outcome : undefined
-    },
-    20_000,
-    "a denied session was still served",
-  )
-  expect(
-    deniedAfter.error.code === "session_not_allowed" || deniedAfter.error.code === "agent_unavailable",
-    `unexpected deny error ${deniedAfter.error.code}`,
-  )
-  const eventsBeforeDeny = events.length
-  await server.request(`/api/session/${sessionID}/rename`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title: "Renamed after deny" }),
-  })
-  await Bun.sleep(1_500)
-  expect(
-    !events.slice(eventsBeforeDeny).some((entry) => JSON.stringify(entry).includes("Renamed after deny")),
-    "a denied session still streamed events to the browser",
-  )
-  checks.push("removing the local allowlist entry blocked both commands and events")
-
   /* ------------------------------------------------------- logout closes client */
-
-  allowlist = [{ sessionID, directory: workspace, title: "Shared" }]
   const logout = await http.logout()
   expect(logout.ok, `logout failed: ${JSON.stringify(logout)}`)
   await waitFor(() => (probe.status().kind === "closed" ? true : undefined), 20_000, "the client socket stayed open after logout")
@@ -975,17 +1026,6 @@ async function pendingIDs(server: { request: (path: string, init?: RequestInit) 
   const body: unknown = await response.json()
   if (!isRecord(body) || !Array.isArray(body.data)) return []
   return body.data.flatMap((row) => (isRecord(row) ? [String(row.id)] : []))
-}
-
-async function post(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) throw new Error(`POST ${new URL(url).pathname} returned ${response.status}`)
-  const payload: unknown = await response.json()
-  return isRecord(payload) ? payload : {}
 }
 
 async function sha256Hex(value: string) {

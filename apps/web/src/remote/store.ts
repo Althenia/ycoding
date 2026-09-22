@@ -24,7 +24,7 @@ import {
   sealedPartKeys,
   readGuardrailRequests,
   readPermissionRequests,
-  readQuestionRequests,
+  readFormRequests,
   readSessionInfoList,
   readSnapshot,
   replaceFileChanges,
@@ -62,7 +62,7 @@ export type SessionInfoView = {
 
 export type PendingMutation = {
   readonly id: string
-  readonly kind: "prompt" | "interrupt" | "permission" | "guardrail" | "question" | "autonomy" | "goal"
+  readonly kind: "prompt" | "interrupt" | "permission" | "guardrail" | "form" | "autonomy" | "goal"
   readonly label: string
   readonly state: "sending" | "unknown" | "failed"
   readonly detail?: string
@@ -121,7 +121,8 @@ export type RemoteStore = {
   readonly interrupt: () => Promise<void>
   readonly replyPermission: (id: string, reply: "once" | "always" | "reject") => Promise<void>
   readonly replyGuardrail: (id: string, reply: "once" | "always" | "reject") => Promise<void>
-  readonly replyQuestion: (id: string, answers: readonly (readonly string[])[]) => Promise<void>
+  readonly replyForm: (formID: string, answer: Readonly<Record<string, string | number | boolean | readonly string[]>>) => Promise<void>
+  readonly cancelForm: (formID: string) => Promise<void>
   readonly setYolo: (level: 0 | 1 | 2 | 3) => Promise<void>
   readonly setGoal: (text: string) => Promise<void>
   readonly stopGoal: () => Promise<void>
@@ -180,9 +181,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
   let transport: RemoteTransport | undefined
   let selectionToken = 0
   /**
-   * Generation of the advertised-session context. A session-list read may publish
-   * only while it still describes the advertised set it was issued for, and every
-   * connection change and advertisement frame starts a new generation.
+   * Generation of the backend Session-list context. A list read may publish only
+   * while it still describes the generation it was issued for, and every
+   * connection change or Session invalidation starts a new generation.
    */
   let sessionsToken = 0
   /**
@@ -342,7 +343,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       sessionsToken += 1
       setState({
         transport: status,
-        connection: deviceConnection(state.devices.filter((device) => device.status === "active").length),
+        connection: deviceConnection(state.devices.filter((device) => device.status === "active" && device.online).length),
         activeDeviceID: undefined,
         advertised: [],
         sessions: [],
@@ -435,11 +436,11 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const pending = { sessionID, live: [] as FileChangeView[] }
     fileChangeRead = pending
     try {
-      const [autonomy, permissions, guardrails, questions, changes] = await Promise.all([
+      const [autonomy, permissions, guardrails, forms, changes] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
         active.request("session.permission.list", { sessionID }),
         active.request("session.guardrail.request.list", { sessionID }),
-        active.request("session.question.list", { sessionID }),
+        active.request("session.form.list", { sessionID }),
         active.request("session.fileChange.list", { sessionID }),
       ])
       if (token !== selectionToken || state.activeSessionID !== sessionID) return
@@ -448,7 +449,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const requests = [
         ...(permissions.status === "ok" ? readPermissionRequests(permissions.value, now()) : []),
         ...(guardrails.status === "ok" ? readGuardrailRequests(guardrails.value, now()) : []),
-        ...(questions.status === "ok" ? readQuestionRequests(questions.value, now()) : []),
+        ...(forms.status === "ok" ? readFormRequests(forms.value, now()).filter((request) => request.form.sessionID === sessionID) : []),
       ]
       const withRequests = replaceRequests(view, requests)
       // The ledger read is authoritative except for records that arrived while it was
@@ -457,7 +458,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         changes.status === "ok"
           ? replaceFileChanges(withRequests, mergeFileChanges(readFileChangeList(changes.value), pending.live))
           : withRequests
-      const failure = [autonomy, permissions, guardrails, questions, changes].find(
+      const failure = [autonomy, permissions, guardrails, forms, changes].find(
         (outcome) => outcome.status !== "ok",
       )
       setState({
@@ -568,17 +569,41 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  /** Reads the advertised session list for the generation that requested it. */
+  const readAllSessions = async (owner: RemoteTransport): Promise<RemoteRequestOutcome> => {
+    const data: unknown[] = []
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    for (;;) {
+      const page = await owner.request("session.list", {
+        input: { limit: 200, ...(cursor === undefined ? {} : { cursor }) },
+      })
+      if (page.status !== "ok") return page
+      data.push(...readSessionInfoList(page.value))
+      const value = typeof page.value === "object" && page.value !== null ? page.value : undefined
+      const cursors = value === undefined ? undefined : Reflect.get(value, "cursor")
+      const next = typeof cursors === "object" && cursors !== null ? Reflect.get(cursors, "next") : undefined
+      if (typeof next !== "string" || next.length === 0) return { status: "ok", value: { data } }
+      if (seen.has(next))
+        return {
+          status: "failed",
+          error: { code: "invalid_message", message: "The device repeated a Session list cursor" },
+        }
+      seen.add(next)
+      cursor = next
+    }
+  }
+
+  /** Reads every authoritative backend page for the generation that requested it. */
   const loadSessions = async (token: number) => {
     const active = transport
     if (!active) return
     const [listed, activeStatus] = await Promise.all([
-      active.request("session.list"),
+      readAllSessions(active),
       // Optional read: a connection that cannot answer it leaves `running` unknown.
       active.request("session.active"),
     ])
     // A read that settles after its connection was replaced, or after a newer
-    // advertisement arrived, describes a list this store no longer shows.
+    // Session invalidation arrived, describes a list this store no longer shows.
     if (token !== sessionsToken || !isCurrentConnection(active)) return
     if (listed.status !== "ok") {
       // An open, authenticated browser relay reports this exact structured response
@@ -590,7 +615,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return
     }
     const running = activeStatus.status === "ok" ? readActiveSessions(activeStatus.value) : undefined
-    const advertised = new Set(state.advertised)
     const sessions = readSessionInfoList(listed.value).flatMap((entry) => {
       const id = typeof entry === "object" && entry !== null ? (entry as { id?: unknown }).id : undefined
       const info = readSessionInfo(entry, {
@@ -600,7 +624,8 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     })
     setState({
       ...(state.connection.kind === "offline" ? { connection: connectionFor(active.status(), state.activeDeviceID) } : {}),
-      sessions: advertised.size === 0 ? sessions : sessions.filter((session) => advertised.has(session.id)),
+      sessions,
+      advertised: sessions.map((session) => session.id),
     })
   }
 
@@ -722,7 +747,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
         return
       }
       const devices = me.value.devices
-      const activeDevices = devices.filter((device) => device.status === "active")
+      const selected = devices.find((device) => device.id === state.activeDeviceID)
+      if (selected?.status === "active" && !selected.online) {
+        setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
+        api.disconnect()
+        setState({
+          activeDeviceID: selected.id,
+          connection: { kind: "offline", deviceName: selected.name },
+          transport: { kind: "idle" },
+        })
+        return
+      }
+      const activeDevices = devices.filter((device) => device.status === "active" && device.online)
       const first = activeDevices[0]
       const stillPresent = activeDevices.some((device) => device.id === state.activeDeviceID)
       const adoptOnlyDevice = !stillPresent && first !== undefined && activeDevices.length === 1
@@ -733,7 +769,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
           ? state.connection
           : adoptOnlyDevice
             ? { kind: "connecting" }
-            : deviceConnection(activeDevices.length),
+            : deviceConnection(devices.filter((device) => device.status === "active").length),
       })
       if (adoptOnlyDevice && first !== undefined) api.connect(first.id)
       else if (!stillPresent && state.activeDeviceID !== undefined) api.disconnect()
@@ -764,10 +800,10 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       endAlerts()
       const created = options.createTransport(deviceID, {
         onStatus: (status) => handleStatus(created, status),
-        onSessions: (sessionIDs) => {
+        onSessions: () => {
           if (!isCurrentConnection(created)) return
           sessionsToken += 1
-          setState({ advertised: [...sessionIDs] })
+          setState({ advertised: [] })
           void loadSessions(sessionsToken)
         },
         onEvent: (sessionID, event) => {
@@ -917,22 +953,30 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       )
       settleRequest(id, outcome)
     },
-    replyQuestion: async (id, answers) => {
+    replyForm: async (formID, answer) => {
       const sessionID = state.activeSessionID
-      if (sessionID === undefined) return
+      if (sessionID === undefined || !ownsPendingForm(formID, sessionID)) return
+      const token = selectionToken
       const outcome = await request(
         {
-          id: `question_${id}_${now()}`,
-          kind: "question",
+          id: `form_${formID}_${now()}`,
+          kind: "form",
           label: "Answer",
           state: "sending",
           sessionID,
-          operation: "session.question.reply",
-          input: { requestID: id, answers: answers.map((answer) => [...answer]) },
+          operation: "session.form.reply",
+          input: { formID, answer },
         },
         { sessionID },
       )
-      settleRequest(id, outcome)
+      if (token === selectionToken && state.activeSessionID === sessionID) settleRequest(formID, outcome)
+    },
+    cancelForm: async (formID) => {
+      const sessionID = state.activeSessionID
+      if (sessionID === undefined || !ownsPendingForm(formID, sessionID)) return
+      const token = selectionToken
+      const outcome = await request({ id: `form_cancel_${formID}_${now()}`, kind: "form", label: "Cancel form", state: "sending", sessionID, operation: "session.form.cancel", input: { formID } }, { sessionID })
+      if (token === selectionToken && state.activeSessionID === sessionID) settleRequest(formID, outcome)
     },
     setYolo: async (level) => {
       const sessionID = state.activeSessionID
@@ -1006,6 +1050,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * event; removing locally keeps the row from accepting a second answer while
    * that event is in flight.
    */
+  const ownsPendingForm = (formID: string, sessionID: string) => {
+    if (state.view?.id === sessionID && state.view.requests.some((request) => request.kind === "form" && request.id === formID && request.form.sessionID === sessionID)) return true
+    setState({ notice: "This form is no longer pending or belongs to another session." })
+    return false
+  }
+
   const settleRequest = (requestID: string, outcome: RemoteRequestOutcome) => {
     if (outcome.status !== "ok") return
     const view = state.view

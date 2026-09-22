@@ -227,7 +227,7 @@ export const usePages: readonly DocPage[] = [
             kind: "callout",
             tone: "info",
             title: "What remote access does today",
-            text: "The workspace at `/remote` controls a session running on your own machine. It lists the sessions a connected device advertises, streams the conversation, sends prompts, answers permission, guardrail, and question requests, changes autonomy and goal state, and raises in-app and desktop alerts for live events. It needs a signed-in account and a device running YCoding; without them it shows a signed-out or not-connected state and never sample conversations.",
+            text: "The workspace at `/remote` controls sessions running on your own machine. Connecting an enrolled machine gives its signed-in owner access to all existing and future sessions on that backend. Select a session to work in its existing project folder. The workspace streams the conversation, sends prompts, answers permission, guardrail, and question requests, changes autonomy and goal state, and raises in-app and desktop alerts for live events. It needs a signed-in account and a connected device running YCoding; without them it shows the relevant account or connection state and never sample conversations.",
           },
           {
             kind: "paragraph",
@@ -267,8 +267,8 @@ export const usePages: readonly DocPage[] = [
                 text: "The command prompts for the code, which is never a command argument: it stays out of your shell history, and it cannot be displayed again.",
               },
               {
-                title: "Share and connect",
-                text: "Run `ycoding remote allow <sessionID>` for each session this browser may control, then `ycoding remote connect` to serve them.",
+                title: "Connect your sessions",
+                text: "Run `ycoding remote connect` on the machine, then select that device and a session in the web workspace. All existing and future sessions on the connected backend are available to your account. Keep the command running while you work remotely.",
               },
             ],
           },
@@ -286,10 +286,10 @@ export const usePages: readonly DocPage[] = [
             head: ["Area", "Behavior"],
             rows: [
               ["Devices", "List enrolled machines, their connection state, and last activity."],
-              ["Session list", "Show the sessions the connected device advertises, including running and archived state."],
+              ["Session list", "Show all sessions on the connected backend, including running and archived state. New sessions appear while the device remains connected."],
               ["Conversation", "Load the canonical conversation for a session and stream new output as it arrives."],
               ["Composer", "Send a prompt with an explicit delivery mode, and interrupt the active step."],
-              ["Requests", "Answer permission, guardrail, and question requests. Hard guardrail reviews accept only one-time approval or rejection."],
+              ["Requests", "Answer permission, guardrail, question, and form requests. Forms support typed fields, defaults, conditional fields, and cancellation. External steps require your acknowledgement. Hard guardrail reviews accept only one-time approval or rejection."],
               ["Autonomy", "Read and change the session's autonomy state, including setting or stopping a goal."],
               ["Alerts", "Show an in-app notice for each enabled category, and a desktop alert when this browser is permitted."],
             ],

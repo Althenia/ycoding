@@ -20,7 +20,7 @@ async function harness(options: {
   autonomy?: unknown
   permissions?: readonly unknown[]
   guardrailRequests?: readonly unknown[]
-  questions?: readonly unknown[]
+  forms?: readonly unknown[]
 } = {}): Promise<Harness> {
   const relay = await startRelayDouble({
     handler: options.handler,
@@ -29,7 +29,7 @@ async function harness(options: {
     autonomy: options.autonomy,
     permissions: options.permissions,
     guardrailRequests: options.guardrailRequests,
-    questions: options.questions,
+    forms: options.forms,
     advertisedSessions: ["ses_a", "ses_b"],
   })
   const timers: (() => void)[] = []
@@ -111,7 +111,7 @@ async function fakeConnectionHarness() {
     createTransport: (_deviceID, handlers) => {
       const socket: FakeSocket = {
         publish: (status) => handlers.onStatus?.(status),
-        sessions: (sessionIDs) => handlers.onSessions?.(sessionIDs),
+        sessions: (_sessionIDs) => handlers.onSessions?.(),
         event: (sessionID, event) => handlers.onEvent?.(sessionID, event),
         reconnect: () => handlers.onReconnect?.(),
         unsubscribes: [],
@@ -164,7 +164,7 @@ describe("remote store integration", () => {
       await test.store.load()
       expect(test.store.state().owner?.id).toBe("user_1")
       expect(test.store.state().devices.map((device) => device.id)).toEqual(["dev_1"])
-      waitFor(() => test.store.state().connection.kind === "connected")
+      await waitFor(() => test.store.state().connection.kind === "connected")
       await waitFor(() => test.store.state().sessions.length > 0)
       expect(test.store.state().advertised).toEqual(["ses_a", "ses_b"])
       const sessions = test.store.state().sessions
@@ -177,6 +177,98 @@ describe("remote store integration", () => {
       })
     } finally {
       await test.stop()
+    }
+  })
+
+  test("loads every backend Session page beyond the old five-page cap", async () => {
+    const count = 1_205
+    const relay = await startRelayDouble({
+      handler: (request) => {
+        if (request.operation !== "session.list") return "default"
+        const offset = typeof request.input?.cursor === "string" ? Number(request.input.cursor) : 0
+        const limit = typeof request.input?.limit === "number" ? request.input.limit : 200
+        const data = Array.from({ length: Math.min(limit, count - offset) }, (_, index) => {
+          const value = offset + index
+          return { id: `ses_${value}`, title: `Session ${value}`, time: { created: value, updated: value } }
+        })
+        const next = offset + data.length < count ? String(offset + data.length) : undefined
+        return { ok: true, value: { data, cursor: { next } } }
+      },
+    })
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: relay.httpURL }),
+      createTransport: (deviceID, handlers) =>
+        createRemoteTransport({ url: relay.wsURL(deviceID), handlers, resetDelayMs: 10 }),
+    })
+    try {
+      await store.load()
+      await waitFor(() => store.state().sessions.length === count)
+      expect(store.state().sessions[0]?.id).toBe("ses_0")
+      expect(store.state().sessions.at(-1)?.id).toBe("ses_1204")
+      expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(7)
+    } finally {
+      store.dispose()
+      await relay.stop()
+    }
+  })
+
+  test("create and delete invalidations supersede in-flight multi-page Session lists", async () => {
+    const oldPage = Promise.withResolvers<void>()
+    const createdPage = Promise.withResolvers<void>()
+    let phase = "initial"
+    let settledPages = 0
+    const row = (id: string) => ({ id, title: id, time: { created: 1, updated: 1 } })
+    const relay = await startRelayDouble({
+      handler: async (request) => {
+        if (request.operation !== "session.list") return "default"
+        if (request.input?.cursor === "initial-tail") {
+          await oldPage.promise
+          return { ok: true, value: { data: [row("ses_stable")] } }
+        }
+        if (request.input?.cursor === "created-tail") {
+          await createdPage.promise
+          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")] } }
+        }
+        if (request.input?.cursor === "final-tail") return { ok: true, value: { data: [row("ses_stable")] } }
+        return { ok: true, value: {
+          data: [row(phase === "initial" ? "ses_deleted" : "ses_created")],
+          cursor: { next: `${phase === "deleted" ? "final" : phase}-tail` },
+        } }
+      },
+    })
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: relay.httpURL }),
+      createTransport: (deviceID, handlers) => {
+        const transport = createRemoteTransport({ url: relay.wsURL(deviceID), handlers })
+        return { ...transport, request: async (operation, input) => {
+          const outcome = await transport.request(operation, input)
+          if (operation === "session.list") settledPages++
+          return outcome
+        } }
+      },
+    })
+    const published: string[][] = []
+    const unsubscribe = store.subscribe(() => published.push(store.state().sessions.map((session) => session.id)))
+    try {
+      await store.load()
+      await waitFor(() => relay.requests.some((request) => request.input?.cursor === "initial-tail"))
+      phase = "created"
+      relay.pushSessions([])
+      await waitFor(() => relay.requests.some((request) => request.input?.cursor === "created-tail"))
+      phase = "deleted"
+      relay.pushSessions([])
+      await waitFor(() => store.state().sessions.length === 2)
+      oldPage.resolve()
+      createdPage.resolve()
+      await waitFor(() => settledPages === 6)
+      expect(store.state().sessions.map((session) => session.id)).toEqual(["ses_created", "ses_stable"])
+      expect(published.filter((ids) => ids.length > 0).every((ids) => ids.join(",") === "ses_created,ses_stable")).toBe(true)
+    } finally {
+      oldPage.resolve()
+      createdPage.resolve()
+      unsubscribe()
+      store.dispose()
+      await relay.stop()
     }
   })
 
@@ -340,8 +432,8 @@ describe("remote store integration", () => {
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
         devices: [
-          { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active" },
-          { id: "dev_2", name: "Laptop", createdAt: 2, status: "active" },
+          { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true },
+          { id: "dev_2", name: "Laptop", createdAt: 2, status: "active", online: true },
         ],
       },
     })
@@ -366,8 +458,8 @@ describe("remote store integration", () => {
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
         devices: [
-          { id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked" },
-          { id: "dev_active", name: "Studio Mac", createdAt: 2, status: "active" },
+          { id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked", online: false },
+          { id: "dev_active", name: "Studio Mac", createdAt: 2, status: "active", online: true },
         ],
       },
     })
@@ -391,7 +483,7 @@ describe("remote store integration", () => {
       me: {
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
-        devices: [{ id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked" }],
+        devices: [{ id: "dev_revoked", name: "Old laptop", createdAt: 1, status: "revoked", online: false }],
       },
     })
     const store = createRemoteStore({
@@ -402,6 +494,30 @@ describe("remote store integration", () => {
       await store.load()
       expect(store.state().connection).toEqual({ kind: "no-device-enrolled" })
       expect(store.state().devices.map((device) => device.status)).toEqual(["revoked"])
+      expect(relay.connections).toBe(0)
+    } finally {
+      store.dispose()
+      await relay.stop()
+    }
+  })
+
+  test("retains an offline active device without offering a relay connection", async () => {
+    const relay = await startRelayDouble({
+      me: {
+        user: { id: "user_1" },
+        session: { expiresAt: 4_102_444_800_000 },
+        devices: [{ id: "dev_offline", name: "Sleeping Mac", createdAt: 1, status: "active", online: false }],
+      },
+    })
+    const store = createRemoteStore({
+      http: createRemoteHttp({ baseURL: relay.httpURL }),
+      createTransport: (deviceID, handlers) => createRemoteTransport({ url: relay.wsURL(deviceID), handlers }),
+    })
+    try {
+      await store.load()
+      expect(store.state().devices).toHaveLength(1)
+      expect(store.state().devices[0]).toMatchObject({ id: "dev_offline", online: false })
+      expect(store.state().activeDeviceID).toBeUndefined()
       expect(relay.connections).toBe(0)
     } finally {
       store.dispose()
@@ -830,7 +946,7 @@ describe("remote store integration", () => {
       test.relay.setMe({
         user: { id: "user_1" },
         session: { expiresAt: 4_102_444_800_000 },
-        devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "revoked" }],
+        devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "revoked", online: false }],
       })
       test.relay.dropConnections(4403, "device revoked")
       await test.runUntil(() => test.store.state().connection.kind === "no-device-enrolled")
@@ -859,7 +975,7 @@ describe("remote store integration", () => {
 
       // The replacement advertises and streams its own state.
       test.sockets[1]?.sessions(["ses_b"])
-      expect(test.store.state().advertised).toEqual(["ses_b"])
+      expect(test.store.state().advertised).toEqual([])
       test.sockets[1]?.event("ses_a", {
         id: "evt_live",
         type: "session.text.delta",
@@ -878,7 +994,7 @@ describe("remote store integration", () => {
       test.sockets[0]?.reconnect()
       await test.flush()
 
-      expect(test.store.state().advertised).toEqual(["ses_b"])
+      expect(test.store.state().advertised).toEqual([])
       expect(streamed()).toEqual(["LIVE"])
       expect(test.store.state().notice).toBeUndefined()
     } finally {
@@ -1247,7 +1363,7 @@ describe("remote store integration", () => {
     }
   })
 
-  test("replies to permission, guardrail, and question requests with protocol payloads", async () => {
+  test("replies to permission, guardrail, and native form requests with protocol payloads", async () => {
     const test = await harness()
     try {
       await test.store.load()
@@ -1261,25 +1377,117 @@ describe("remote store integration", () => {
       })
       test.relay.pushEvent("ses_a", {
         id: "evt_q",
-        type: "question.v2.asked",
-        data: { id: "que_1", questions: [{ header: "S", question: "Which?", options: [{ label: "a", description: "A" }] }] },
+        type: "form.created",
+        data: {
+          form: {
+            id: "frm_1",
+            sessionID: "ses_a",
+            title: "Question",
+            metadata: { kind: "question" },
+            fields: [{ key: "q0", type: "string", title: "Which?", options: [{ value: "a", label: "A" }], custom: true }],
+          },
+        },
       })
       await test.flush()
-      expect(test.store.state().view?.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "question"])
+      expect(test.store.state().view?.requests.map((request) => request.kind)).toEqual(["permission", "guardrail", "form"])
 
       await test.store.replyPermission("per_1", "once")
       await test.store.replyGuardrail("grq_1", "reject")
-      await test.store.replyQuestion("que_1", [["a"]])
+      await test.store.replyForm("frm_1", { q0: "a" })
       await waitFor(() => test.relay.requests.filter((request) => request.operation.endsWith(".reply")).length === 3)
       const replies = test.relay.requests.filter((request) => request.operation.endsWith(".reply"))
       expect(replies.map((request) => request.operation)).toEqual([
         "session.permission.reply",
         "session.guardrail.reply",
-        "session.question.reply",
+        "session.form.reply",
       ])
       expect(replies[0]?.input).toEqual({ requestID: "per_1", reply: "once" })
       expect(replies[1]?.input).toEqual({ requestID: "grq_1", reply: "reject" })
-      expect(replies[2]?.input).toEqual({ requestID: "que_1", answers: [["a"]] })
+      expect(replies[2]?.input).toEqual({ formID: "frm_1", answer: { q0: "a" } })
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("hydrates native forms, applies live settlement, and cancels with the form payload", async () => {
+    const form = {
+      id: "frm_seed",
+      sessionID: "ses_a",
+      title: "Question",
+      metadata: { kind: "question" },
+      fields: [{ key: "q0", type: "string", title: "Which module?", options: [{ value: "core", label: "Core" }], custom: true }],
+    }
+    const test = await harness({ forms: [form] })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.requests).toMatchObject([{ kind: "form", id: "frm_seed", form }])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_live", type: "form.created", data: { form: { ...form, id: "frm_live" } } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_seed", "frm_live"])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_replied", type: "form.replied", data: { id: "frm_live", sessionID: "ses_a", answer: { q0: "core" } } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_seed"])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_cancelled_created", type: "form.created", data: { form: { ...form, id: "frm_cancelled" } } })
+      test.relay.pushEvent("ses_a", { id: "evt_form_cancelled", type: "form.cancelled", data: { id: "frm_cancelled", sessionID: "ses_a" } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_seed"])
+
+      await test.store.cancelForm("frm_seed")
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.form.cancel"))
+      expect(test.relay.requests.find((request) => request.operation === "session.form.cancel")?.input).toEqual({ formID: "frm_seed" })
+      expect(test.store.state().view?.requests).toHaveLength(0)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("refuses foreign forms and does not let a stale form reply alter a newly selected session", async () => {
+    const form = (id: string, sessionID: string) => ({
+      id,
+      sessionID,
+      title: "Question",
+      metadata: { kind: "question" },
+      fields: [{ key: "q0", type: "string", title: "Which module?", options: [{ value: "core", label: "Core" }] }],
+    })
+    let releaseReply: (() => void) | undefined
+    const replyGate = new Promise<void>((resolve) => {
+      releaseReply = resolve
+    })
+    const test = await harness({
+      forms: [form("frm_a", "ses_a"), form("frm_b", "ses_b")],
+      handler: async (request) => {
+        if (request.operation !== "session.form.reply") return "default" as const
+        await replyGate
+        return "default" as const
+      },
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().sessions.length > 0)
+      await test.store.selectSession("ses_a")
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_a"])
+
+      test.relay.pushEvent("ses_a", { id: "evt_form_foreign", type: "form.created", data: { form: form("frm_foreign", "ses_b") } })
+      await test.flush()
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_a"])
+
+      const reply = test.store.replyForm("frm_a", { q0: "core" })
+      await waitFor(() => test.relay.requests.some((request) => request.operation === "session.form.reply"))
+      await test.store.selectSession("ses_b")
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_b"])
+      if (releaseReply === undefined) throw new Error("Reply gate was not initialized")
+      releaseReply()
+      await reply
+      expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(["frm_b"])
+
+      await test.store.replyForm("frm_foreign", { q0: "core" })
+      expect(test.relay.requests.filter((request) => request.operation === "session.form.reply")).toHaveLength(1)
+      expect(test.store.state().notice).toContain("another session")
     } finally {
       await test.stop()
     }
@@ -1419,7 +1627,15 @@ describe("remote store integration", () => {
         { id: "grq_mine", sessionID: "ses_a", rootSessionID: "ses_a", action: "rm -rf build", resources: ["build"], reason: "Deletion", hardReview: false },
         { id: "grq_child", sessionID: "ses_child", rootSessionID: "ses_a", action: "rm -rf dist", resources: ["dist"], reason: "Deletion", hardReview: true },
       ],
-      questions: [{ id: "que_1", sessionID: "ses_a", questions: [{ header: "S", question: "Which?", options: [{ label: "a", description: "A" }] }] }],
+      forms: [
+        {
+          id: "frm_1",
+          sessionID: "ses_a",
+          title: "Question",
+          metadata: { kind: "question" },
+          fields: [{ key: "q0", type: "string", title: "Which?", options: [{ value: "a", label: "A" }], custom: true }],
+        },
+      ],
     })
     try {
       await test.store.load()
@@ -1427,7 +1643,7 @@ describe("remote store integration", () => {
       await test.store.selectSession("ses_a")
       const view = test.store.state().view
       expect(view?.autonomy).toMatchObject({ mode: "goal", yolo: 2, goal: { iteration: 4 } })
-      expect(view?.requests.map((request) => request.id)).toEqual(["per_1", "grq_mine", "grq_child", "que_1"])
+      expect(view?.requests.map((request) => request.id)).toEqual(["per_1", "grq_mine", "grq_child", "frm_1"])
       const foreign = view?.requests.find((request) => request.id === "grq_child")
       expect(foreign && canReplyToRequest(foreign, "ses_a")).toBe(false)
       const mine = view?.requests.find((request) => request.id === "grq_mine")

@@ -27,7 +27,7 @@ export type RemoteSocketFactory = (url: string, options: RemoteSocketOptions) =>
 
 type Options = {
   readonly url: string
-  /** Upgrade headers, such as the device bearer credential for `/ws/agent`. */
+  /** Upgrade headers, such as the device bearer credential for the versioned agent route. */
   readonly headers?: Record<string, string>
   readonly createSocket?: RemoteSocketFactory
   readonly heartbeatIntervalMs?: number

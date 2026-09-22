@@ -93,9 +93,13 @@ The public web build publishes a landing page, curated user documentation, a cha
 
 Remote access preserves the local runtime as the only execution authority. The Cloudflare Worker and its per-device Durable Object coordinate an outbound local-agent connection with authenticated browser clients. D1 stores authentication and device metadata, never conversation history, model reasoning, streamed output, or tool events.
 
-Remote control requires an authenticated user, an authenticated enrolled device, ownership of that device, and an explicitly shared local Session. The operation set is closed; clients cannot proxy arbitrary local requests. Uncertain mutation outcomes must not trigger automatic replay. Reconnection preserves Session identity and reconciles against the existing local durable history.
+Remote control requires an authenticated user, an authenticated enrolled device, and ownership of that device. Running `ycoding remote connect` grants that owner access to all existing and future Sessions on the connected local backend. The backend determines each Session's working directory; the browser cannot choose an arbitrary local Location. The operation set is closed; clients cannot proxy arbitrary local requests. Uncertain mutation outcomes must not trigger automatic replay. Reconnection preserves Session identity and reconciles against the existing local durable history.
 
 The responsive layout reflows at desktop, tablet, and mobile breakpoints. Light and dark themes, keyboard-accessible approvals, bounded tool/terminal output, and an accessible composer are required on each surface. Offline mode never queues remote mutations.
+
+Remote questions use the runtime's native Forms. The workspace renders string, multiselect, number, integer, boolean, and external-step fields, preserves defaults and conditional visibility, and submits typed answers or explicit cancellation. External steps expose HTTP(S) links and require acknowledgement. Only pending Forms owned by the selected Session can be answered; the local runtime validates every answer.
+
+The device picker lists online, active enrollments. An account refresh that reports the selected machine offline preserves its name and reconnect action rather than switching to another machine. Settings retains offline and revoked enrollments and exposes notification preferences as five event categories with independent workspace and desktop channels.
 
 ## Compatibility policy
 

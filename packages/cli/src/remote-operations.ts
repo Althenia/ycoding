@@ -1,6 +1,6 @@
 export * as RemoteOperations from "./remote-operations"
 
-import type { SessionInfo } from "@ycoding-ai/client/promise"
+import type { FormAnswer, SessionInfo } from "@ycoding-ai/client/promise"
 import {
   RemoteLimits,
   isSessionID,
@@ -12,7 +12,6 @@ import {
   type RemoteRequest,
   type RemoteResponse,
 } from "@ycoding-ai/remote"
-import type { AllowlistSession } from "./remote-config"
 import {
   LocalFailure,
   findSession,
@@ -25,9 +24,8 @@ import {
 /** Operations the relay proxies without addressing one session. */
 export const unscopedOperations: ReadonlySet<RemoteOperation> = new Set(["session.list", "session.active"])
 
-// Authorization and mapping for the allowlisted relay operations. Every remote
-// request is re-validated here against the local advertisement: the relay is
-// never trusted to have authorized a session, and no remote field can select a
+// Authorization and mapping for the closed relay operation set. The local agent
+// resolves every scoped Session against the backend; no remote field can select a
 // URL, HTTP method, or Location header.
 
 const maxLogReadItems = 2_000
@@ -73,203 +71,117 @@ export function failureFrame(id: string, code: RemoteErrorCode, message: string)
 }
 
 export type SubscriptionRegistry = {
-  readonly subscribe: (sessionID: string) => void
-  readonly unsubscribe: (sessionID: string) => void
+  readonly apply: (clientID: string, sessionIDs: readonly string[]) => void
+  readonly clear: () => void
   readonly has: (sessionID: string) => boolean
   readonly count: (sessionID: string) => number
   readonly sessions: () => readonly string[]
 }
 
 /**
- * Subscription interest is refcounted so one remote client's unsubscribe never
- * tears down a stream another client still wants; the relay owns per-client
- * subscription state. The event stream itself is shared per agent connection.
+ * The relay owns per-client subscription state. The agent keeps only the latest
+ * ordered snapshot for each live relay client and derives the forwarding union.
  */
 export function createSubscriptions(options: { readonly onChange?: () => void } = {}): SubscriptionRegistry {
-  const counts = new Map<string, number>()
+  const clients = new Map<string, ReadonlySet<string>>()
   const changed = () => options.onChange?.()
   return {
-    subscribe(sessionID) {
-      counts.set(sessionID, (counts.get(sessionID) ?? 0) + 1)
+    apply(clientID, sessionIDs) {
+      if (sessionIDs.length === 0) clients.delete(clientID)
+      else clients.set(clientID, new Set(sessionIDs))
       changed()
     },
-    unsubscribe(sessionID) {
-      const current = counts.get(sessionID) ?? 0
-      if (current <= 1) counts.delete(sessionID)
-      else counts.set(sessionID, current - 1)
-      if (current > 0) changed()
+    clear() {
+      if (clients.size === 0) return
+      clients.clear()
+      changed()
     },
-    has: (sessionID) => (counts.get(sessionID) ?? 0) > 0,
-    count: (sessionID) => counts.get(sessionID) ?? 0,
-    sessions: () => [...counts.keys()],
+    has: (sessionID) => Array.from(clients.values()).some((sessions) => sessions.has(sessionID)),
+    count: (sessionID) => Array.from(clients.values()).filter((sessions) => sessions.has(sessionID)).length,
+    sessions: () => [...new Set(Array.from(clients.values()).flatMap((sessions) => [...sessions]))],
   }
 }
 
 export type SessionRegistry = {
-  readonly advertised: (sessionID: string) => boolean
   readonly ids: () => readonly string[]
   readonly list: () => Promise<readonly SessionInfo[]>
   readonly get: (sessionID: string) => Promise<SessionInfo | undefined>
-  /** Live verification at the bound Location; fails closed when the Session moved away. */
+  /** Resolve the Session from the complete backend inventory, then verify its current Location. */
   readonly verify: (sessionID: string) => Promise<SessionInfo | undefined>
-  readonly entry: (sessionID: string) => AllowlistSession | undefined
   readonly refresh: () => Promise<void>
-  /** Re-read the local allowlist; a denied Session stops being advertised immediately. */
-  readonly reloadEntries: () => Promise<boolean>
-  /** Serialize a live event send behind a successful current allowlist read. */
-  readonly withEventAuthorization: (sessionID: string, send: () => Promise<void>) => Promise<boolean>
 }
 
 /**
- * The advertised set is the locally opted-in sessions that still exist at the
- * Location they were verified at. A transient local server failure keeps the
- * last verified entry instead of silently dropping the user's session, while a
- * definitively missing session is removed from the advertisement. A Session that
- * moved is never followed implicitly: it is dropped until the local user grants
- * it again at its new Location.
+ * Device ownership grants access to the backend's complete Session inventory.
+ * Locations always come from that inventory; remote input never selects placement.
  */
 export function createSessionRegistry(input: {
   readonly local: LocalServer
-  readonly entries: readonly AllowlistSession[]
-  /** Re-reads the local allowlist so a denied Session stops being served without a restart. */
-  readonly reload?: () => Promise<readonly AllowlistSession[]>
-  readonly reloadMs?: number
   readonly staleMs?: number
   readonly now?: () => number
   readonly onChange?: () => void
-  readonly onMoved?: (sessionID: string, location: LocalLocation) => void
 }): SessionRegistry {
   const now = input.now ?? Date.now
   const staleMs = input.staleMs ?? 5_000
-  const reloadMs = input.reloadMs ?? 500
-  const entries = new Map(input.entries.map((entry) => [entry.sessionID, entry]))
   const verified = new Map<string, SessionInfo>()
-  let refreshedAt = 0
-  let reloadedAt = Number.NEGATIVE_INFINITY
-  let reloadQueue = Promise.resolve()
+  let refreshedAt = Number.NEGATIVE_INFINITY
+  let refreshQueue = Promise.resolve<readonly SessionInfo[]>([])
 
-  const applyEntries = (loaded: readonly AllowlistSession[]) => {
-    const next = new Map(loaded.map((entry) => [entry.sessionID, entry]))
-    let changed = false
-    for (const sessionID of [...entries.keys()])
-      if (!next.has(sessionID)) {
-        entries.delete(sessionID)
-        if (verified.delete(sessionID)) changed = true
-      }
-    for (const [sessionID, entry] of next) {
-      if (!entries.has(sessionID)) changed = true
-      entries.set(sessionID, entry)
+  const readAll = async () => {
+    const sessions: SessionInfo[] = []
+    let cursor: string | undefined
+    for (;;) {
+      const result = await input.local.listPage({ limit: RemoteLimits.maxSessionListPage, ...(cursor === undefined ? {} : { cursor }) })
+      sessions.push(...result.data)
+      if (result.next === undefined || result.data.length === 0) return sessions
+      cursor = result.next
     }
-    if (changed) input.onChange?.()
-    return changed
   }
 
-  const serializeReload = <Value>(run: () => Promise<Value>) => {
-    const result = reloadQueue.then(run)
-    reloadQueue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
-  }
-
-  const reconcile = () =>
-    serializeReload(async () => {
-      if (input.reload === undefined || now() - reloadedAt < reloadMs) return false
-      reloadedAt = now()
-      // A transient request-side read failure keeps the last allowlist. Event
-      // forwarding uses the strict path below and fails closed instead.
-      const loaded = await input.reload().catch(() => undefined)
-      if (loaded === undefined) return false
-      return applyEntries(loaded)
+  const refresh = () => {
+    const run = refreshQueue.then(async () => {
+      const sessions = await readAll()
+      const before = [...verified.keys()].sort().join(",")
+      verified.clear()
+      for (const session of sessions) verified.set(session.id, session)
+      refreshedAt = now()
+      if ([...verified.keys()].sort().join(",") !== before) input.onChange?.()
+      return sessions
     })
-
-  const refresh = async () => {
-    for (const entry of entries.values()) {
-      const location = locationOf(entry)
-      try {
-        verified.set(entry.sessionID, await input.local.getSession(entry.sessionID, location))
-      } catch (cause) {
-        if (cause instanceof LocalFailure && cause.kind === "not_found") verified.delete(entry.sessionID)
-      }
-    }
-    refreshedAt = now()
+    refreshQueue = run.catch(() => [...verified.values()])
+    return run
   }
 
   const ensureFresh = async () => {
-    if (now() - refreshedAt < staleMs && verified.size > 0) return
-    await refresh()
+    if (now() - refreshedAt < staleMs) return [...verified.values()]
+    return refresh()
   }
 
   const verify = async (sessionID: string) => {
-    await reconcile()
-    const entry = entries.get(sessionID)
-    if (entry === undefined) {
-      // The Session was denied locally: fail closed and stop advertising it.
+    const info = await findSession(input.local, sessionID)
+    if (info === undefined) {
       if (verified.delete(sessionID)) input.onChange?.()
       return undefined
     }
     try {
-      const info = await input.local.getSession(sessionID, locationOf(entry))
-      if (!verified.has(sessionID)) input.onChange?.()
-      verified.set(sessionID, info)
-      return info
+      const current = await input.local.getSession(sessionID, locationInfo(info))
+      verified.set(sessionID, current)
+      return current
     } catch (cause) {
       if (!(cause instanceof LocalFailure && cause.kind === "not_found")) throw cause
-      const moved = await findSession(input.local, sessionID).catch(() => undefined)
-      const had = verified.delete(sessionID)
-      if (had) input.onChange?.()
-      if (moved !== undefined) input.onMoved?.(sessionID, locationInfo(moved))
+      if (verified.delete(sessionID)) input.onChange?.()
       return undefined
     }
   }
 
-  const advertised = (sessionID: string) => entries.has(sessionID) && verified.has(sessionID)
-
   return {
-    advertised,
-    ids: () => [...verified.keys()].filter((sessionID) => entries.has(sessionID)),
-    list: async () => {
-      await reconcile()
-      await ensureFresh()
-      return [...verified.entries()].filter(([sessionID]) => entries.has(sessionID)).map(([, info]) => info)
-    },
-    get: async (sessionID) => {
-      await reconcile()
-      const entry = entries.get(sessionID)
-      if (entry === undefined) return undefined
-      try {
-        const info = await input.local.getSession(sessionID, locationOf(entry))
-        verified.set(sessionID, info)
-        return info
-      } catch (cause) {
-        if (cause instanceof LocalFailure && cause.kind === "not_found") {
-          if (verified.delete(sessionID)) input.onChange?.()
-          return undefined
-        }
-        throw cause
-      }
-    },
+    ids: () => [...verified.keys()],
+    list: ensureFresh,
+    get: verify,
     verify,
-    entry: (sessionID) => entries.get(sessionID),
     refresh: async () => {
-      const before = [...verified.keys()].sort().join(",")
-      await reconcile()
       await refresh()
-      if ([...verified.keys()].sort().join(",") !== before) input.onChange?.()
     },
-    reloadEntries: reconcile,
-    withEventAuthorization: (sessionID, send) =>
-      serializeReload(async () => {
-        if (input.reload !== undefined) {
-          const loaded = await input.reload()
-          reloadedAt = now()
-          applyEntries(loaded)
-        }
-        if (!advertised(sessionID)) return false
-        await send()
-        return true
-      }),
   }
 }
 
@@ -315,8 +227,8 @@ async function run(input: OperationInput) {
   const validated = validate(request)
   if (validated.kind === "list") return listPage(await input.sessions.list(), validated.query)
   if (validated.kind === "active") {
-    // The local route is process-wide, so the relay answer is filtered to the
-    // Sessions this user explicitly shared.
+    // The local route is process-wide; retain only IDs present in the current
+    // complete backend inventory.
     await input.sessions.list()
     const allowed = new Set(input.sessions.ids())
     const active = await input.local.activeSessions()
@@ -346,10 +258,10 @@ async function run(input: OperationInput) {
       return { data: await input.local.guardrailStatus(sessionID, location) }
     case "guardrail.request.list": {
       const listing = await input.local.guardrailRequestList(sessionID, location)
-      return { data: asReviewList(listing).filter((review) => ownedByAdvertisedSession(input, review)) }
+      return { data: asReviewList(listing) }
     }
-    case "question.list":
-      return { data: await input.local.questionList(sessionID, location) }
+    case "form.list":
+      return await input.local.formList(sessionID, location)
     case "fileChange.list":
       return { data: await input.local.fileChangeList(sessionID, location) }
     case "shell.output": {
@@ -370,10 +282,8 @@ async function run(input: OperationInput) {
       return { data: items }
     }
     case "subscribe":
-      input.subscriptions.subscribe(sessionID)
       return null
     case "unsubscribe":
-      input.subscriptions.unsubscribe(sessionID)
       return null
     case "prompt":
       return { data: await input.local.prompt(sessionID, location, validated.input) }
@@ -393,8 +303,13 @@ async function run(input: OperationInput) {
       await requireOwnedReview(input, sessionID, location, validated.requestID)
       await input.local.guardrailReply(sessionID, location, validated.requestID, validated.reply)
       return null
-    case "question.reply":
-      await input.local.questionReply(sessionID, location, validated.requestID, validated.answers)
+    case "form.reply":
+      await requireOwnedForm(input, sessionID, location, validated.formID)
+      await input.local.formReply(sessionID, location, validated.formID, validated.answer)
+      return null
+    case "form.cancel":
+      await requireOwnedForm(input, sessionID, location, validated.formID)
+      await input.local.formCancel(sessionID, location, validated.formID)
       return null
     case "autonomy.set":
       return { data: await input.local.autonomySet(sessionID, location, validated.payload) }
@@ -423,7 +338,7 @@ type Validated =
   | { readonly kind: "permission.list" }
   | { readonly kind: "guardrail.status" }
   | { readonly kind: "guardrail.request.list" }
-  | { readonly kind: "question.list" }
+  | { readonly kind: "form.list" }
   | { readonly kind: "fileChange.list" }
   | { readonly kind: "shell.output"; readonly shellID: string; readonly cursor?: number; readonly limit: number }
   | { readonly kind: "log"; readonly after?: number }
@@ -433,7 +348,8 @@ type Validated =
   | { readonly kind: "interrupt" }
   | { readonly kind: "permission.reply"; readonly requestID: string; readonly reply: Reply; readonly message?: string }
   | { readonly kind: "guardrail.reply"; readonly requestID: string; readonly reply: Reply }
-  | { readonly kind: "question.reply"; readonly requestID: string; readonly answers: readonly (readonly string[])[] }
+  | { readonly kind: "form.reply"; readonly formID: string; readonly answer: FormAnswer }
+  | { readonly kind: "form.cancel"; readonly formID: string }
   | { readonly kind: "autonomy.set"; readonly payload: LocalAutonomy }
   | { readonly kind: "goal.set"; readonly payload: LocalAutonomy }
   | { readonly kind: "goal.stop" }
@@ -446,7 +362,7 @@ const plainKinds: Readonly<Record<string, Validated["kind"]>> = {
   "session.permission.list": "permission.list",
   "session.guardrail.status": "guardrail.status",
   "session.guardrail.request.list": "guardrail.request.list",
-  "session.question.list": "question.list",
+  "session.form.list": "form.list",
   "session.fileChange.list": "fileChange.list",
   "session.subscribe": "subscribe",
   "session.unsubscribe": "unsubscribe",
@@ -494,8 +410,10 @@ function validate(request: RemoteRequest): Validated {
       }
     case "session.guardrail.reply":
       return { kind: "guardrail.reply", requestID: requestIDOf(fields.requestID, "grq_"), reply: reply(fields.reply) }
-    case "session.question.reply":
-      return { kind: "question.reply", requestID: requestIDOf(fields.requestID, "que_"), answers: answers(fields.answers) }
+    case "session.form.reply":
+      return { kind: "form.reply", formID: formID(fields.formID), answer: formAnswer(fields.answer) }
+    case "session.form.cancel":
+      return { kind: "form.cancel", formID: formID(fields.formID) }
     case "session.autonomy.set":
       return { kind: "autonomy.set", payload: yoloPayload(fields) }
     case "session.goal.set":
@@ -510,18 +428,6 @@ function validate(request: RemoteRequest): Validated {
     default:
       return unknownOperation()
   }
-}
-
-/**
- * Guardrail reviews are pending for a whole root Session family. A granted root
- * Session must not become a path to reviews owned by ungranted child Sessions, so
- * the list is filtered and a reply is refused unless the review's own Session is
- * advertised. Sharing a child Session is an explicit local decision; it is never
- * implied by sharing its root.
- */
-function ownedByAdvertisedSession(input: OperationInput, request: unknown) {
-  const owning = typeof request === "object" && request !== null ? Reflect.get(request, "sessionID") : undefined
-  return typeof owning === "string" && input.sessions.advertised(owning)
 }
 
 /**
@@ -564,11 +470,17 @@ async function requireOwnedReview(
   )
   if (review === undefined)
     throw new OperationError("invalid_message", "That guardrail review is no longer pending; reload before replying")
-  if (!ownedByAdvertisedSession(input, review))
-    throw new OperationError(
-      "session_not_allowed",
-      "That guardrail review belongs to a Session that is not exposed to the relay",
-    )
+}
+
+async function requireOwnedForm(
+  input: OperationInput,
+  sessionID: string,
+  location: LocalLocation,
+  formID: string,
+) {
+  const forms = await input.local.formList(sessionID, location)
+  if (!forms.some((form) => form.id === formID && form.sessionID === sessionID))
+    throw new OperationError("invalid_message", "That form is not pending for the authorized Session")
 }
 
 function scopedOperation(operation: RemoteOperation) {
@@ -596,12 +508,12 @@ export function parseListQuery(fields: Readonly<Record<string, unknown>>): ListQ
     order: fields.order === undefined ? "desc" : literal(fields.order, ["asc", "desc"], "order"),
     search: fields.search === undefined ? undefined : requireString(fields.search, "search", 200, { allowEmpty: true }),
     parentID: fields.parentID === undefined ? undefined : fields.parentID === null ? null : sessionID(fields.parentID, "parentID"),
-    limit: fields.limit === undefined ? 50 : optionalInteger(fields.limit, "limit", 1, RemoteLimits.maxAdvertisedSessions)!,
+    limit: fields.limit === undefined ? 50 : optionalInteger(fields.limit, "limit", 1, RemoteLimits.maxSessionListPage)!,
     anchor: fields.cursor === undefined ? undefined : cursor(fields.cursor),
   }
 }
 
-/** The remote list is always the intersection of the allowlist and local sessions. */
+/** Page the complete backend Session list without truncation. */
 export function listPage(sessions: readonly SessionInfo[], query: ListQuery) {
   const { order, search, parentID, limit, anchor } = query
   const direction = anchor?.direction ?? "next"
@@ -669,7 +581,7 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.permission.list": [],
   "session.guardrail.status": [],
   "session.guardrail.request.list": [],
-  "session.question.list": [],
+  "session.form.list": [],
   "session.fileChange.list": [],
   "session.shell.output": ["shellID", "cursor", "limit"],
   "session.subscribe": [],
@@ -678,7 +590,8 @@ const allowedFields: Readonly<Record<string, readonly string[]>> = {
   "session.interrupt": [],
   "session.permission.reply": ["requestID", "reply", "message"],
   "session.guardrail.reply": ["requestID", "reply"],
-  "session.question.reply": ["requestID", "answers"],
+  "session.form.reply": ["formID", "answer"],
+  "session.form.cancel": ["formID"],
   "session.autonomy.set": ["yolo", "maxNoProgress"],
   "session.goal.set": ["goal", "maxNoProgress"],
   "session.goal.stop": ["goal"],
@@ -697,7 +610,8 @@ const mutations: ReadonlySet<string> = new Set([
   "session.interrupt",
   "session.permission.reply",
   "session.guardrail.reply",
-  "session.question.reply",
+  "session.form.reply",
+  "session.form.cancel",
   "session.autonomy.set",
   "session.goal.set",
   "session.goal.stop",
@@ -710,7 +624,8 @@ function isMutation(request: RemoteRequest) {
 const reviewReplies: ReadonlySet<string> = new Set([
   "session.permission.reply",
   "session.guardrail.reply",
-  "session.question.reply",
+  "session.form.reply",
+  "session.form.cancel",
 ])
 
 function localError(cause: LocalFailure, request: RemoteRequest): readonly [RemoteErrorCode, string] {
@@ -738,10 +653,6 @@ function localError(cause: LocalFailure, request: RemoteRequest): readonly [Remo
   }
 }
 
-function locationOf(entry: AllowlistSession): LocalLocation {
-  return { directory: entry.directory, ...(entry.workspaceID === undefined ? {} : { workspaceID: entry.workspaceID }) }
-}
-
 function yoloPayload(fields: Readonly<Record<string, unknown>>) {
   const yolo = fields.yolo
   if (typeof yolo === "boolean") return { yolo, ...maxNoProgress(fields) }
@@ -764,14 +675,28 @@ function delivery(value: unknown) {
   return literal(value, ["steer", "queue"] as const, "delivery")
 }
 
-function answers(value: unknown) {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 64)
-    throw new OperationError("invalid_message", 'The "answers" field must be an array of answer lists')
-  return value.map((answer) => {
-    if (!Array.isArray(answer) || answer.length > 64)
-      throw new OperationError("invalid_message", 'The "answers" field must be an array of answer lists')
-    return answer.map((label) => requireString(label, "answers", 1_024, { allowEmpty: true }))
-  })
+function formID(value: unknown) {
+  const id = requireString(value, "formID", RemoteLimits.maxRequestIDChars)
+  if (!/^frm_[A-Za-z0-9_-]+$/.test(id)) throw new OperationError("invalid_message", 'The "formID" field is invalid')
+  return id
+}
+
+function formAnswer(value: unknown): FormAnswer {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new OperationError("invalid_message", 'The "answer" field must be a Form.Answer object')
+  const result: FormAnswer = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean") {
+      result[key] = entry
+      continue
+    }
+    if (Array.isArray(entry) && entry.every((item) => typeof item === "string")) {
+      result[key] = entry
+      continue
+    }
+    throw new OperationError("invalid_message", 'The "answer" field must contain only Form.Value values')
+  }
+  return result
 }
 
 function fileAttachments(value: unknown) {

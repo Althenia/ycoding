@@ -9,6 +9,7 @@ import {
   describeUnavailableReason,
   deviceAvailabilityView,
   enrollmentInstructions,
+  sessionAvailabilityView,
   sessionStateChips,
   shellOutputPaging,
   summarizeConnection,
@@ -363,6 +364,72 @@ describe("deviceAvailabilityView", () => {
     expect(view.body).toMatch(/machine/i)
     expect(view.placeholder).toBe("Select a device")
     expect(view.selectable).toBe(true)
+  })
+
+  test("keeps a selected active enrollment that loses presence distinct from no selection", () => {
+    const view = deviceAvailabilityView(
+      { kind: "signed-in", expiresAt: 1 },
+      2,
+      {
+        devices: [
+          { id: "dev_studio", name: "Studio Mac", status: "active", online: false },
+          { id: "dev_laptop", name: "Laptop", status: "active", online: true },
+        ],
+        activeDeviceID: "dev_studio",
+      },
+    )
+    expect(view.title).toBe("Studio Mac is not reachable")
+    expect(view.body).toMatch(/not reachable|offline|asleep/i)
+    expect(`${view.title} ${view.body}`).not.toMatch(/no device selected|no sessions/i)
+  })
+
+  test("distinguishes enrolled machines that are all offline from no enrollment", () => {
+    const view = deviceAvailabilityView(
+      { kind: "signed-in", expiresAt: 1 },
+      2,
+      {
+        devices: [
+          { id: "dev_studio", name: "Studio Mac", status: "active", online: false },
+          { id: "dev_old", name: "Old Mac", status: "revoked", online: false },
+        ],
+      },
+    )
+    expect(view.title).toBe("No devices online")
+    expect(view.body).toMatch(/not responding|offline|running YCoding/i)
+    expect(view.placeholder).toBe("No devices online")
+    expect(view.selectable).toBe(false)
+  })
+
+  test("names a selected enrollment whose access was revoked", () => {
+    const view = deviceAvailabilityView(
+      { kind: "signed-in", expiresAt: 1 },
+      2,
+      {
+        devices: [
+          { id: "dev_studio", name: "Studio Mac", status: "revoked", online: false },
+          { id: "dev_laptop", name: "Laptop", status: "active", online: true },
+        ],
+        activeDeviceID: "dev_studio",
+      },
+    )
+    expect(view.title).toBe("Studio Mac access was revoked")
+    expect(view.body).toMatch(/choose another|enroll/i)
+    expect(`${view.title} ${view.body}`).not.toMatch(/no device selected|no sessions/i)
+  })
+})
+
+describe("sessionAvailabilityView", () => {
+  test("keeps connection progress distinct from an empty connected backend", () => {
+    expect(sessionAvailabilityView({ kind: "connecting" }, 0)).toEqual({
+      title: "Loading sessions",
+      body: "Connecting to the selected machine and loading its sessions.",
+      loading: true,
+    })
+    expect(sessionAvailabilityView({ kind: "connected", deviceName: "Studio Mac" }, 0)).toEqual({
+      title: "No sessions",
+      body: "Start YCoding in your project folder on this machine.",
+      loading: false,
+    })
   })
 })
 

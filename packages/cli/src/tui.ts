@@ -14,8 +14,6 @@ const handlers = Runtime.handlers(TuiCommand, {
     connect: () => import("./commands/handlers/remote/connect"),
     status: () => import("./commands/handlers/remote/status"),
     sessions: () => import("./commands/handlers/remote/sessions"),
-    allow: () => import("./commands/handlers/remote/allow"),
-    deny: () => import("./commands/handlers/remote/deny"),
   },
   serve: () => import("./commands/handlers/tui-serve"),
 })

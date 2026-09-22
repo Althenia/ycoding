@@ -5,7 +5,7 @@ import { boundedCleanupInterval, cleanupIntervalMs, maxCleanupIntervalMs, minCle
 import { sha256Hex } from "../src/auth/crypto"
 import { clearCookie, readCookie, setCookie } from "../src/http"
 import { createRouter, type RelayNamespace } from "../src/router"
-import { deviceSignaturePayload, type RemotePublicKey } from "../../../packages/remote/src/index"
+import { RemoteWebSocketPath, deviceSignaturePayload, type RemotePublicKey } from "../../../packages/remote/src/index"
 import { createMemoryAuthStore } from "./support/memory-store"
 import {
   googleFetch,
@@ -359,13 +359,41 @@ describe("router: browser session routes", () => {
 
     const ownerList = (await (
       await h.router(new Request(`${origin}/api/devices`, { headers: sessionCookie(owner.token) }))
-    ).json()) as { devices: { id: string }[] }
+    ).json()) as { devices: { id: string; online: boolean }[] }
     expect(ownerList.devices.map((entry) => entry.id)).toEqual([device.deviceID])
+    expect(ownerList.devices[0]?.online).toBe(false)
 
     const intruderList = (await (
       await h.router(new Request(`${origin}/api/devices`, { headers: sessionCookie(intruder.token) }))
     ).json()) as { devices: unknown[] }
     expect(intruderList.devices).toEqual([])
+  })
+
+  test("reports authenticated relay presence instead of enrollment or last-seen state", async () => {
+    const online = new Set<string>()
+    const h = await harness({
+      relay: {
+        getByName: (name) => ({
+          fetch: async (request) =>
+            new URL(request.url).pathname === "/_ycoding/presence"
+              ? Response.json({ online: online.has(name) })
+              : new Response(null, { status: 204 }),
+        }),
+      },
+    })
+    const owner = await signIn(h, "owner")
+    const first = await enrollDevice(h, owner.userID)
+    const second = await enrollDevice(h, owner.userID, "Offline Mac")
+    online.add(`${owner.userID}:${first.deviceID}`)
+
+    const response = await h.router(new Request(`${origin}/api/devices`, { headers: sessionCookie(owner.token) }))
+    const body = (await response.json()) as { devices: { id: string; online: boolean }[] }
+    expect(new Map(body.devices.map((device) => [device.id, device.online]))).toEqual(
+      new Map([
+        [first.deviceID, true],
+        [second.deviceID, false],
+      ]),
+    )
   })
 })
 
@@ -525,6 +553,13 @@ describe("router: device enrollment and credentials", () => {
     expect(h.relayCalls.at(-1)?.name).toBe(`${owner.userID}:${device.deviceID}`)
     expect(new URL(h.relayCalls.at(-1)?.request.url ?? "").pathname).toBe("/_ycoding/close-device")
     expect((await h.service.createChallenge(device.deviceID)).ok).toBe(false)
+    const listed = (await (
+      await h.router(new Request(`${origin}/api/devices`, { headers: sessionCookie(owner.token) }))
+    ).json()) as { devices: { id: string; status: string; online: boolean }[] }
+    expect(listed.devices.find((entry) => entry.id === device.deviceID)).toMatchObject({
+      status: "revoked",
+      online: false,
+    })
   })
 })
 
@@ -533,7 +568,7 @@ describe("router: websocket upgrades", () => {
     const h = await harness()
     const session = await signIn(h)
     const device = await enrollDevice(h, session.userID)
-    const url = `${origin}/ws/client?device=${device.deviceID}`
+    const url = `${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`
     const upgrade = { upgrade: "websocket" }
 
     expect((await h.router(new Request(url))).status).toBe(426)
@@ -557,7 +592,7 @@ describe("router: websocket upgrades", () => {
     const session = await signIn(h)
     const device = await enrollDevice(h, session.userID)
     const response = await h.router(
-      new Request(`${origin}/ws/client?device=${device.deviceID}`, {
+      new Request(`${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`, {
         headers: {
           upgrade: "websocket",
           origin,
@@ -588,7 +623,7 @@ describe("router: websocket upgrades", () => {
     expect(
       (
         await h.router(
-          new Request(`${origin}/ws/client?device=${device.deviceID}`, {
+          new Request(`${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`, {
             headers: { ...upgrade, ...sessionCookie(intruder.token) },
           }),
         )
@@ -597,12 +632,12 @@ describe("router: websocket upgrades", () => {
     expect(
       (
         await h.router(
-          new Request(`${origin}/ws/client?device=dev_unknown`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }),
+          new Request(`${origin}${RemoteWebSocketPath.client}?device=dev_unknown`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }),
         )
       ).status,
     ).toBe(404)
     expect(
-      (await h.router(new Request(`${origin}/ws/client`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }))).status,
+      (await h.router(new Request(`${origin}${RemoteWebSocketPath.client}`, { headers: { ...upgrade, ...sessionCookie(owner.token) } }))).status,
     ).toBe(400)
   })
 
@@ -612,7 +647,7 @@ describe("router: websocket upgrades", () => {
     const device = await enrollDevice(h, owner.userID)
     const issued = await h.service.issueCredentials(device.deviceID)
     if (!issued.ok) throw new Error("issue failed")
-    const url = `${origin}/ws/agent`
+    const url = `${origin}${RemoteWebSocketPath.agent}`
     const upgrade = { upgrade: "websocket" }
 
     expect((await h.router(new Request(url))).status).toBe(426)
@@ -644,11 +679,18 @@ describe("router: websocket upgrades", () => {
     if (!issued.ok) throw new Error("issue failed")
     await h.service.revokeDevice({ deviceID: device.deviceID, userID: owner.userID })
     const response = await h.router(
-      new Request(`${origin}/ws/agent`, {
+      new Request(`${origin}${RemoteWebSocketPath.agent}`, {
         headers: { upgrade: "websocket", authorization: `Bearer ${issued.value.accessToken}` },
       }),
     )
     expect(response.status).toBe(401)
+    expect(h.relayCalls).toEqual([])
+  })
+
+  test("rejects missing, old, and unknown WebSocket protocol routes before upgrade", async () => {
+    const h = await harness()
+    for (const path of ["/ws/client", "/ws/agent", "/ws/v1/client", "/ws/v1/agent", "/ws/v2/client", "/ws/v2/agent", "/ws/v4/client", "/ws/v4/agent"])
+      expect((await h.router(new Request(`${origin}${path}`, { headers: { upgrade: "websocket" } }))).status).toBe(404)
     expect(h.relayCalls).toEqual([])
   })
 })
@@ -816,7 +858,7 @@ describe("router: static asset delegation", () => {
 
     expect((await h.router(new Request(`${origin}/api/me`))).status).toBe(401)
     expect((await h.router(new Request(`${origin}/health`))).status).toBe(200)
-    expect((await h.router(new Request(`${origin}/ws/client?device=dev_1`))).status).toBe(426)
+    expect((await h.router(new Request(`${origin}${RemoteWebSocketPath.client}?device=dev_1`))).status).toBe(426)
     expect(seen).toEqual(["/", "/remote/chat", "/docs/configuration"])
   })
 
@@ -886,7 +928,7 @@ describe("router: static asset delegation", () => {
     const session = await h.service.signIn({ provider: "google", subject: "subject-1" })
     const device = await enrollDevice(h, session.userID)
     const forwarded = await router(
-      new Request(`${origin}/ws/client?device=${device.deviceID}`, {
+      new Request(`${origin}${RemoteWebSocketPath.client}?device=${device.deviceID}`, {
         headers: { upgrade: "websocket", origin, ...sessionCookie(session.token) },
       }),
     )

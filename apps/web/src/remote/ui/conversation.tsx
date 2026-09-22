@@ -14,6 +14,7 @@ import {
   type ShellOutputView,
 } from "../projection"
 import { shellOutputPaging } from "../view-model"
+import { FormRequest } from "./form-request"
 
 type ToolPartView = Extract<AssistantPart, { kind: "tool" }>
 type AssistantMessageView = Extract<RemoteMessageView, { kind: "assistant" }>
@@ -270,9 +271,6 @@ export function MessageRow(props: { readonly message: () => RemoteMessageView })
  */
 export function RequestCard(props: { readonly request: () => PendingRequestView; readonly activeSessionID?: string }): JSX.Element {
   const remote = useRemote()
-  const [custom, setCustom] = createSignal("")
-  const [selected, setSelected] = createSignal<string[]>([])
-
   const canReply = () => {
     const request = props.request()
     if (request.kind !== "guardrail") return true
@@ -280,7 +278,7 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   }
 
   return (
-    <article class={`request request--${props.request().kind}`} aria-live="polite">
+    <article class={`request request--${props.request().kind}${isHardReview(props.request()) ? " request--hard" : ""}`} aria-live="polite">
       <Show when={props.request().kind === "permission"}>
         <header class="request__header">
           <Icon name="shield" size={16} />
@@ -359,62 +357,8 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
         </div>
       </Show>
 
-      <Show when={props.request().kind === "question"}>
-        <header class="request__header">
-          <Icon name="chat" size={16} />
-          <span>Question</span>
-        </header>
-        <For each={questionList(props.request())}>
-          {(question) => (
-            <fieldset class="question">
-              <legend>{question.header}</legend>
-              <p>{question.question}</p>
-              <For each={question.options}>
-                {(option) => (
-                  <label class="question__option">
-                    <input
-                      type={question.multiple ? "checkbox" : "radio"}
-                      name={props.request().id}
-                      value={option.label}
-                      checked={selected().includes(option.label)}
-                      onChange={() => {
-                        setSelected((current) =>
-                          question.multiple
-                            ? current.includes(option.label)
-                              ? current.filter((entry) => entry !== option.label)
-                              : [...current, option.label]
-                            : [option.label],
-                        )
-                      }}
-                    />
-                    <span>
-                      <strong>{option.label}</strong> — {option.description}
-                    </span>
-                  </label>
-                )}
-              </For>
-              <Show when={question.custom}>
-                <label class="question__custom">
-                  <span>Custom answer</span>
-                  <input type="text" value={custom()} onInput={(event) => setCustom(event.currentTarget.value)} />
-                </label>
-              </Show>
-            </fieldset>
-          )}
-        </For>
-        <div class="request__actions">
-          <button
-            type="button"
-            class="button button--primary button--small"
-            onClick={() => {
-              const answers = questionList(props.request()).map(() => selected())
-              const withCustom = custom().trim().length > 0 ? answers.map((answer) => [...answer, custom().trim()]) : answers
-              void remote.store.replyQuestion(props.request().id, withCustom.length > 0 ? withCustom : [[""]])
-            }}
-          >
-            Send answer
-          </button>
-        </div>
+      <Show when={formOf(props.request())}>
+        {form => <FormRequest form={form} activeSessionID={props.activeSessionID} />}
       </Show>
     </article>
   )
@@ -472,6 +416,6 @@ const guardrailAction = (request: PendingRequestView) => (request.kind === "guar
 const guardrailReason = (request: PendingRequestView) => (request.kind === "guardrail" ? request.reason : "")
 const isHardReview = (request: PendingRequestView) => request.kind === "guardrail" && request.hardReview
 const resourceList = (request: PendingRequestView) => (request.kind === "permission" ? request.resources : [])
-const questionList = (request: PendingRequestView) => (request.kind === "question" ? request.questions : [])
+const formOf = (request: PendingRequestView) => (request.kind === "form" ? request.form : undefined)
 const partText = (part: AssistantPart) => (part.kind === "text" || part.kind === "reasoning" ? part.text : "")
 const toolOf = (part: AssistantPart): ToolPartView | undefined => (part.kind === "tool" ? part : undefined)

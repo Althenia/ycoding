@@ -8,15 +8,15 @@
  *
  * Two WebSocket surfaces use one envelope vocabulary:
  *
- * - Browser: `GET /ws/client?device=<deviceID>` authenticated by the browser
+ * - Browser: `GET /ws/v3/client?device=<deviceID>` authenticated by the browser
  *   session cookie, then device selection. Client frames are `request` and `ping`
  *   (plus the `pong` heartbeat reply).
- * - Local agent: `GET /ws/agent` authenticated by `Authorization: Bearer <access
+ * - Local agent: `GET /ws/v3/agent` authenticated by `Authorization: Bearer <access
  *   token>` from the device challenge flow. Agent frames are `response`, `event`,
  *   `sessions`, and `ping`/`pong`.
  *
  * The relay never invents session semantics: it authenticates both sides,
- * enforces the agent's explicit session allowlist, bounds work, and forwards
+ * enforces authenticated device ownership, bounds work, and forwards
  * frames. Authorization decisions for individual operations remain with the
  * local YCoding server that serves `packages/protocol`.
  *
@@ -25,7 +25,13 @@
  */
 
 /** Envelope revision. Bump only with a coordinated relay/agent/client release. */
-export const RemoteProtocolVersion = 1
+export const RemoteProtocolVersion = 3
+
+/** Versioned WebSocket routes derived from the envelope revision. */
+export const RemoteWebSocketPath = {
+  client: `/ws/v${RemoteProtocolVersion}/client`,
+  agent: `/ws/v${RemoteProtocolVersion}/agent`,
+} as const
 
 /** Operations the relay proxies. Every other operation is rejected. */
 export const remoteOperations = [
@@ -44,8 +50,9 @@ export const remoteOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
-  "session.question.list",
-  "session.question.reply",
+  "session.form.list",
+  "session.form.reply",
+  "session.form.cancel",
   "session.fileChange.list",
   "session.shell.output",
   "session.autonomy.get",
@@ -69,8 +76,9 @@ export const remoteSessionOperations = [
   "session.guardrail.status",
   "session.guardrail.request.list",
   "session.guardrail.reply",
-  "session.question.list",
-  "session.question.reply",
+  "session.form.list",
+  "session.form.reply",
+  "session.form.cancel",
   "session.fileChange.list",
   "session.shell.output",
   "session.autonomy.get",
@@ -86,7 +94,7 @@ export const RemoteLimits = {
   maxClientMessageChars: 32_768,
   maxAgentMessageChars: 262_144,
   maxPendingRequestsPerClient: 32,
-  maxAdvertisedSessions: 200,
+  maxSessionListPage: 200,
   maxSubscriptionsPerClient: 64,
   maxRequestIDChars: 64,
   maxSessionIDChars: 128,
@@ -170,7 +178,13 @@ export type RemoteFailedResponse = { readonly type: "response"; readonly id: str
 export type RemoteResponse = RemoteSucceededResponse | RemoteFailedResponse
 
 export type RemoteEvent = { readonly type: "event"; readonly sessionID: string; readonly event: unknown }
-export type RemoteSessions = { readonly type: "sessions"; readonly sessionIDs: readonly string[] }
+/** Bounded invalidation: clients page the authoritative backend list after receipt. */
+export type RemoteSessions = { readonly type: "sessions" }
+export type RemoteSubscriptions = {
+  readonly type: "subscriptions"
+  readonly clientID: string
+  readonly sessionIDs: readonly string[]
+}
 export type RemoteHeartbeat = { readonly type: "ping" } | { readonly type: "pong" }
 
 /** Frames accepted from a browser connection. */
@@ -180,7 +194,7 @@ export type RemoteAgentMessage = RemoteResponse | RemoteEvent | RemoteSessions |
 /** Frames the relay sends to a browser connection. */
 export type RemoteRelayToClient = RemoteResponse | RemoteEvent | RemoteSessions | RemoteHeartbeat
 /** Frames the relay sends to a local agent connection. */
-export type RemoteRelayToAgent = RemoteRequest | RemoteHeartbeat
+export type RemoteRelayToAgent = RemoteRequest | RemoteSubscriptions | RemoteHeartbeat
 
 export type ParseResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -212,7 +226,11 @@ export function serializeEvent(event: RemoteEvent): string {
 }
 
 export function serializeSessions(sessions: RemoteSessions): string {
-  return JSON.stringify({ type: "sessions", sessionIDs: [...sessions.sessionIDs] })
+  return JSON.stringify(sessions)
+}
+
+export function serializeSubscriptions(subscriptions: RemoteSubscriptions): string {
+  return JSON.stringify({ ...subscriptions, sessionIDs: [...subscriptions.sessionIDs] })
 }
 
 export function serializeError(id: string, code: RemoteErrorCode, message: string): string {
@@ -233,6 +251,20 @@ export function parseAgentMessage(raw: string): ParseResult<RemoteAgentMessage> 
   const frame = decodeJson(raw)
   if (!frame.ok) return frame
   return parseAgentFrame(frame.value)
+}
+
+/** Strict parser for the relay control surface received by the local agent. */
+export function parseRelayToAgentMessage(raw: string): ParseResult<RemoteRelayToAgent> {
+  if (raw.length > RemoteLimits.maxClientMessageChars)
+    return fail("message_too_large", "Message exceeds the relay frame bound")
+  const frame = decodeJson(raw)
+  if (!frame.ok) return frame
+  if (!isRecord(frame.value)) return invalid()
+  if (frame.value.type === "ping" || frame.value.type === "pong")
+    return withOnlyKeys(frame.value, ["type"], { type: frame.value.type })
+  if (frame.value.type === "request") return parseRequest(frame.value)
+  if (frame.value.type === "subscriptions") return parseSubscriptions(frame.value)
+  return invalid()
 }
 
 function parseClientFrame(frame: unknown): ParseResult<RemoteClientMessage> {
@@ -336,16 +368,21 @@ function parseEvent(frame: Record<string, unknown>): ParseResult<RemoteEvent> {
 }
 
 function parseSessions(frame: Record<string, unknown>): ParseResult<RemoteSessions> {
-  const keys = withOnlyKeys(frame, ["type", "sessionIDs"], frame.type)
+  return withOnlyKeys(frame, ["type"], { type: "sessions" })
+}
+
+function parseSubscriptions(frame: Record<string, unknown>): ParseResult<RemoteSubscriptions> {
+  const keys = withOnlyKeys(frame, ["type", "clientID", "sessionIDs"], frame.type)
   if (!keys.ok) return keys
-  if (!Array.isArray(frame.sessionIDs)) return invalid()
-  if (frame.sessionIDs.length > RemoteLimits.maxAdvertisedSessions) return invalid()
+  if (typeof frame.clientID !== "string" || frame.clientID.length === 0 || frame.clientID.length > 64) return invalid()
+  if (!/^[A-Za-z0-9_-]+$/.test(frame.clientID)) return invalid()
+  if (!Array.isArray(frame.sessionIDs) || frame.sessionIDs.length > RemoteLimits.maxSubscriptionsPerClient) return invalid()
   const sessionIDs: string[] = []
   for (const value of frame.sessionIDs) {
     if (!isSessionID(value)) return invalid()
     if (!sessionIDs.includes(value)) sessionIDs.push(value)
   }
-  return { ok: true, value: { type: "sessions", sessionIDs } }
+  return { ok: true, value: { type: "subscriptions", clientID: frame.clientID, sessionIDs } }
 }
 
 function parseError(value: unknown): ParseResult<RemoteError> {
@@ -439,6 +476,8 @@ export type RemoteDeviceInfo = {
   readonly lastSeenAt?: number
   readonly revokedAt?: number
   readonly status: "active" | "revoked"
+  /** Current authenticated local-agent presence, read from the device relay. */
+  readonly online: boolean
 }
 
 export type MeResponse = {

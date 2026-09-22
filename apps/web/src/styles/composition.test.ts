@@ -57,12 +57,11 @@ describe("responsive contract", () => {
 
   test("declares the public column steps at their derived breakpoints", async () => {
     const site = await readStylesheet("site.css")
-    expect(columnSteps(site, ".hero__grid")).toEqual([{ min: 1280, tracks: 2 }])
+    expect(columnSteps(site, ".hero__grid")).toEqual([])
     expect(columnSteps(site, ".features__grid")).toEqual([
       { min: 640, tracks: 2 },
-      { min: 1024, tracks: 3 },
+      { min: 1280, tracks: 4 },
     ])
-    expect(columnSteps(site, ".trust__grid")).toEqual([{ min: 768, tracks: 3 }])
     expect(columnSteps(site, ".footer__grid")).toEqual([
       { min: 640, tracks: 2 },
       { min: 1024, tracks: 4 },

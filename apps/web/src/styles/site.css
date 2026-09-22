@@ -20,21 +20,17 @@
   padding-block: var(--yc-space-10) var(--yc-space-12);
 }
 
-/* Two columns appear only where both halves can hold their minimum: the copy needs
-   480px and the terminal plate needs 480px, so 480 + 480 + a 48px gap = 1008 inside
-   the content box. At 1024 the gutter is 32px, so the content box is 960 and the two
-   tracks cannot both hold their minimum; at 1280 it is 1200 and they can. */
-.hero__grid {
+.hero__content {
   display: grid;
-  gap: var(--yc-space-8);
-  align-items: center;
+  gap: var(--yc-space-6);
+  justify-items: center;
+  text-align: center;
 }
 
-@media (min-width: 1280px) {
-  .hero__grid {
-    grid-template-columns: minmax(480px, 1fr) minmax(480px, 1fr);
-    gap: var(--yc-space-12);
-  }
+.hero__content > .code-block {
+  inline-size: min(100%, 640px);
+  min-inline-size: 0;
+  text-align: start;
 }
 
 .hero__eyebrow {
@@ -60,8 +56,8 @@
   line-height: var(--yc-leading-display);
   font-weight: var(--yc-weight-bold);
   letter-spacing: var(--yc-tracking-tight);
-  max-inline-size: 16ch;
-  margin-block: var(--yc-space-5) var(--yc-space-4);
+  max-inline-size: 28ch;
+  margin: 0;
 }
 
 .hero__support {
@@ -74,6 +70,7 @@
 .hero__actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: var(--yc-space-3);
   margin-block-start: var(--yc-space-6);
 }
@@ -181,17 +178,15 @@
   margin-block-start: var(--yc-space-6);
 }
 
-/* Never six columns: at 173px a card holds six words per line, so three is the
-   maximum that keeps a readable measure in every card. */
 @media (min-width: 640px) {
   .features__grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (min-width: 1024px) {
+@media (min-width: 1280px) {
   .features__grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -199,6 +194,21 @@
   display: grid;
   gap: var(--yc-space-2);
   align-content: start;
+  padding: var(--yc-space-5);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-sm);
+  background: var(--yc-surface);
+}
+
+@media (max-width: 479px) {
+  .hero__content {
+    justify-items: stretch;
+    text-align: start;
+  }
+
+  .hero__actions {
+    flex-direction: column;
+  }
 }
 
 .feature__icon {

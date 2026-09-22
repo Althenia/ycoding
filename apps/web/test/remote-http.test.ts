@@ -29,7 +29,7 @@ describe("remote HTTP integration", () => {
       expect(me.value.user.id).toBe("user_1")
       expect(me.value.session.expiresAt).toBeGreaterThan(0)
       expect(me.value.devices).toEqual([
-        { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active" },
+        { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true },
       ])
     } finally {
       await relay.stop()
@@ -52,7 +52,7 @@ describe("remote HTTP integration", () => {
 
   test("reads the pinned { devices } list shape", async () => {
     const relay = await startRelayDouble({
-      devices: [{ id: "dev_2", name: "Laptop", createdAt: 3, status: "active" }],
+      devices: [{ id: "dev_2", name: "Laptop", createdAt: 3, status: "active", online: true }],
     })
     try {
       const devices = await createRemoteHttp({ baseURL: relay.httpURL }).devices()
@@ -88,9 +88,9 @@ describe("remote HTTP integration", () => {
   test("drops malformed device entries instead of trusting them", async () => {
     const relay = await startRelayDouble({
       devices: [
-        { id: "dev_ok", name: "Studio Mac", createdAt: 1, status: "active" },
+        { id: "dev_ok", name: "Studio Mac", createdAt: 1, status: "active", online: true },
         { id: "dev_missing_status", name: "Broken", createdAt: 1 },
-        { name: "No id", createdAt: 1, status: "active" },
+        { name: "No id", createdAt: 1, status: "active", online: true },
       ],
     })
     try {

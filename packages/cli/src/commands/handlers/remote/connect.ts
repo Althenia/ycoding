@@ -21,9 +21,6 @@ export default Runtime.handler(
       }),
     )
     const endpoint = yield* resolveLocalServer({ server: Option.getOrUndefined(input.server), standalone: input.standalone })
-    const sessions = yield* RemoteConfig.sessions()
-    if (sessions.length === 0)
-      process.stderr.write("remote: no sessions are shared yet; run `ycoding remote allow <sessionID>`" + EOL)
 
     // Providers run outside this Effect, so bind the services the handler already
     // has before handing them to the bridge.
@@ -32,8 +29,6 @@ export default Runtime.handler(
       Effect.runPromise(effect.pipe(Effect.provide(services)))
     const bridge = new RemoteAgent({
       relayURL,
-      sessions,
-      reloadSessions: () => run(RemoteConfig.sessions()),
       local: endpoint,
       credentials: () =>
         run(
@@ -47,7 +42,7 @@ export default Runtime.handler(
       onTerminal: (message) => process.stderr.write(`remote: ${message}${EOL}`),
     })
 
-    line(`Connecting ${identity.name} to ${relayURL} with ${sessions.length} shared session(s); press Ctrl-C to stop.`)
+    line(`Connecting ${identity.name} to ${relayURL}; all backend Sessions are available to its owner. Press Ctrl-C to stop.`)
     yield* Effect.scoped(
       Effect.gen(function* () {
         yield* Effect.acquireRelease(

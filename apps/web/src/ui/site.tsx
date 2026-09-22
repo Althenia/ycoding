@@ -5,18 +5,8 @@ import { useTheme } from "../theme/theme-store"
 import { themePreferenceLabel } from "../theme/theme"
 import { shouldShowOfflineNotice, useOnlineStatus } from "./online"
 import { Modal } from "./modal"
-import { Icon, type IconName } from "./icon"
-import { Chip } from "./chip"
+import { Icon } from "./icon"
 import { CodeBlock } from "./docs"
-
-const featureIcons: Record<string, IconName> = {
-  terminal: "terminal",
-  puzzle: "package",
-  target: "target",
-  shield: "shield",
-  bell: "bell",
-  devices: "devices",
-}
 
 export function BrandMark(props: { readonly compact?: boolean }): JSX.Element {
   return (
@@ -80,16 +70,15 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
             <BrandMark />
           </Link>
           <nav class="nav" aria-label="Primary">
+            <Link href="/" class={`nav__link${router.path() === "/" ? " nav__link--active" : ""}`}>
+              Home
+            </Link>
             <Link href="/docs" class={`nav__link${inDocs() ? " nav__link--active" : ""}`}>
-              Docs
+              Documentation
             </Link>
             <Link href="/changelog" class={`nav__link${inChangelog() ? " nav__link--active" : ""}`}>
               Changelog
             </Link>
-            <a class="nav__link" href={SITE.repositoryURL} rel="noreferrer noopener" target="_blank">
-              GitHub
-              <Icon name="external" size={14} />
-            </a>
           </nav>
           <div class="app-header__end">
             <span class="app-header__theme">
@@ -97,7 +86,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
             </span>
             <span class="app-header__cta">
               <Link href="/remote" class="button button--primary">
-                Open Remote
+                Open workspace
                 <Icon name="chevron-right" size={16} />
               </Link>
             </span>
@@ -181,94 +170,31 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
   )
 }
 
-/**
- * The terminal plate replaces the shipped product mock's rail and phone stack with
- * one plate and one callout bar. Its text is the shipped illustration: the same
- * session lines the mock showed, read as terminal lines.
- */
-function TerminalPlate(): JSX.Element {
-  return (
-    <div class="terminal-plate" aria-label="YCoding session on Studio Mac">
-      <div class="terminal-plate__bar" aria-hidden="true">
-        <span class="terminal-plate__dot" />
-        <span class="terminal-plate__dot" />
-        <span class="terminal-plate__dot" />
-        <span class="terminal-plate__title">Studio Mac</span>
-      </div>
-      <div class="terminal-plate__body">
-        <div class="terminal-plate__row">
-          <span class="terminal-plate__key">›</span>
-          <span class="terminal-plate__step">Refactor the session store and run the tests.</span>
-        </div>
-        <div class="terminal-plate__row">
-          <span class="terminal-plate__note">·</span>
-          <span class="terminal-plate__step">Reading the session module</span>
-        </div>
-        <div class="terminal-plate__row">
-          <span class="terminal-plate__note">·</span>
-          <span class="terminal-plate__step">Editing durable admission</span>
-        </div>
-        <div class="terminal-plate__row">
-          <span class="terminal-plate__note">·</span>
-          <span class="terminal-plate__step">Running the targeted tests</span>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export function LandingPage(): JSX.Element {
   const router = useRouter()
   return (
     <>
       <section class="hero">
-        <div class="container hero__grid">
-          <div>
-            <p class="hero__eyebrow">
-              <For each={SITE.hero.eyebrow}>
-                {(item, index) => (
-                  <>
-                    <span>{item}</span>
-                    <Show when={index() < SITE.hero.eyebrow.length - 1}>
-                      <span class="hero__times" aria-hidden="true">
-                        ×
-                      </span>
-                    </Show>
-                  </>
-                )}
-              </For>
-            </p>
-            <h1 class="hero__headline">{SITE.hero.headline}</h1>
-            {/* The second support line carries the plate's callout bar, so it is
-                rendered once, where the approved composition puts it. */}
-            <p class="hero__support">{SITE.hero.support[0]}</p>
-            <div class="hero__actions">
-              <button
-                type="button"
-                class="button button--primary button--large"
-                onClick={() => router.navigate(SITE.hero.primaryAction.href)}
-              >
-                <Icon name="terminal" size={18} />
-                {SITE.hero.primaryAction.label}
-                <Icon name="chevron-right" size={16} />
-              </button>
-              <button
-                type="button"
-                class="button button--secondary button--large"
-                onClick={() => router.navigate(SITE.hero.secondaryAction.href)}
-              >
-                {SITE.hero.secondaryAction.label}
-              </button>
-            </div>
-            <p class="hero__footnote">{SITE.hero.footnote}</p>
+        <div class="container hero__content">
+          <h1 class="hero__headline">{SITE.hero.headline}</h1>
+          <p class="hero__support">{SITE.hero.support}</p>
+          <div class="hero__actions">
+            <button
+              type="button"
+              class="button button--primary button--large"
+              onClick={() => router.navigate(SITE.hero.primaryAction.href)}
+            >
+              {SITE.hero.primaryAction.label}
+            </button>
+            <button
+              type="button"
+              class="button button--secondary button--large"
+              onClick={() => router.navigate(SITE.hero.secondaryAction.href)}
+            >
+              {SITE.hero.secondaryAction.label}
+            </button>
           </div>
-          <div>
-            <TerminalPlate />
-            <div class="callout-bar">
-              <Icon name="devices" size={18} />
-              <span>{SITE.hero.support[1]}</span>
-            </div>
-          </div>
+          <CodeBlock code={SITE.installing.command} language="shell" label="Install command" />
         </div>
       </section>
 
@@ -278,9 +204,6 @@ export function LandingPage(): JSX.Element {
             <For each={SITE.features}>
               {(feature) => (
                 <article class="feature">
-                  <span class="feature__icon" aria-hidden="true">
-                    <Icon name={featureIcons[feature.icon] ?? "terminal"} />
-                  </span>
                   <h2 class="feature__title">{feature.title}</h2>
                   <p class="feature__text">{feature.text}</p>
                 </article>
@@ -290,63 +213,6 @@ export function LandingPage(): JSX.Element {
         </div>
       </section>
 
-      <section class="section trust" aria-label="Why local">
-        <div class="container">
-          <div class="trust__grid">
-            <For each={SITE.trust}>
-              {(item) => (
-                <article class="trust__item">
-                  <h2 class="trust__title">{item.title}</h2>
-                  <p class="prose">{item.text}</p>
-                </article>
-              )}
-            </For>
-          </div>
-        </div>
-      </section>
-
-      <section class="section" aria-labelledby="install-heading">
-        <div class="container install">
-          <div>
-            <h2 id="install-heading">Install YCoding</h2>
-            <p class="prose">
-              The installer downloads the newest release, verifies its SHA-256 checksum, and puts the terminal
-              application in
-              <code> ~/.local/bin</code>.
-            </p>
-            <div class="install__platforms">
-              <For each={SITE.installing.platforms}>{(platform) => <Chip label={platform} />}</For>
-            </div>
-            <p class="install__link">
-              <Link href="/docs/installation" class="text-link">
-                Installation guide
-                <Icon name="chevron-right" size={14} />
-              </Link>
-            </p>
-          </div>
-          <div class="install__commands">
-            <CodeBlock code={SITE.installing.command} language="shell" label="Terminal" />
-          </div>
-        </div>
-      </section>
-
-      <section class="section" aria-labelledby="remote-heading">
-        <div class="container">
-          <div class="callout-bar">
-            <Icon name="devices" size={18} />
-            <span class="callout-bar__body">
-              <strong id="remote-heading">{SITE.remoteStatus.title}</strong>
-              <span>{SITE.remoteStatus.body}</span>
-            </span>
-            <span class="callout-bar__action">
-              <Link href={SITE.remoteStatus.cta.href} class="button button--secondary">
-                {SITE.remoteStatus.cta.label}
-                <Icon name="chevron-right" size={16} />
-              </Link>
-            </span>
-          </div>
-        </div>
-      </section>
     </>
   )
 }

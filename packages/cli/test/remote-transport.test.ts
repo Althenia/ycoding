@@ -57,12 +57,12 @@ async function waitFor(check: () => boolean, timeout = 1_000) {
 
 describe("CloudflareRemoteTransport", () => {
   test("requires a secure remote URL and rejects sends before opening", async () => {
-    expect(() => new CloudflareRemoteTransport({ url: "ws://example.com/ws/agent" })).toThrow(
+    expect(() => new CloudflareRemoteTransport({ url: "ws://example.com/ws/v3/agent" })).toThrow(
       "Remote transport requires WSS",
     )
-    expect(() => new CloudflareRemoteTransport({ url: "ws://127.0.0.1:8787/ws/agent" })).not.toThrow()
+    expect(() => new CloudflareRemoteTransport({ url: "ws://127.0.0.1:8787/ws/v3/agent" })).not.toThrow()
     const transport = new CloudflareRemoteTransport({
-      url: "wss://ycoding-cloud.lostq901.workers.dev/ws/agent",
+      url: "wss://ycoding-cloud.lostq901.workers.dev/ws/v3/agent",
       createSocket: () => new FakeSocket(),
     })
     expect(transport.send('{"type":"ping"}')).rejects.toThrow("Remote transport is not connected")
@@ -72,7 +72,7 @@ describe("CloudflareRemoteTransport", () => {
     const sockets: FakeSocket[] = []
     const messages: unknown[] = []
     const transport = new CloudflareRemoteTransport({
-      url: "wss://ycoding-cloud.lostq901.workers.dev/ws/agent",
+      url: "wss://ycoding-cloud.lostq901.workers.dev/ws/v3/agent",
       createSocket: () => {
         const socket = new FakeSocket()
         sockets.push(socket)
@@ -114,7 +114,7 @@ describe("CloudflareRemoteTransport", () => {
     const opens: number[] = []
     const closes: number[] = []
     const transport = new CloudflareRemoteTransport({
-      url: "wss://ycoding-cloud.example/ws/agent",
+      url: "wss://ycoding-cloud.example/ws/v3/agent",
       headers: { authorization: "Bearer access-token" },
       createSocket: (url, options) => {
         factoryCalls.push({ url, headers: options.headers })
@@ -132,7 +132,7 @@ describe("CloudflareRemoteTransport", () => {
     sockets[0].open()
     await connected
     expect(factoryCalls).toEqual([
-      { url: "wss://ycoding-cloud.example/ws/agent", headers: { authorization: "Bearer access-token" } },
+      { url: "wss://ycoding-cloud.example/ws/v3/agent", headers: { authorization: "Bearer access-token" } },
     ])
     expect(opens).toEqual([1])
 
@@ -142,7 +142,7 @@ describe("CloudflareRemoteTransport", () => {
     expect(opens).toEqual([1, 2])
     expect(closes).toEqual([1])
     expect(factoryCalls[1]).toEqual({
-      url: "wss://ycoding-cloud.example/ws/agent",
+      url: "wss://ycoding-cloud.example/ws/v3/agent",
       headers: { authorization: "Bearer access-token" },
     })
 
@@ -158,14 +158,14 @@ describe("CloudflareRemoteTransport", () => {
       hostname: "127.0.0.1",
       port: 0,
       fetch(request, socketServer) {
-        if (new URL(request.url).pathname !== "/ws/agent") return new Response(null, { status: 404 })
+        if (new URL(request.url).pathname !== "/ws/v3/agent") return new Response(null, { status: 404 })
         seen.push(request.headers.get("authorization"))
         return socketServer.upgrade(request) ? undefined : new Response(null, { status: 400 })
       },
       websocket: { message() {} },
     })
     const transport = new CloudflareRemoteTransport({
-      url: `ws://127.0.0.1:${server.port}/ws/agent`,
+      url: `ws://127.0.0.1:${server.port}/ws/v3/agent`,
       headers: { authorization: "Bearer device-token" },
       heartbeatIntervalMs: 10_000,
     })
@@ -181,7 +181,7 @@ describe("CloudflareRemoteTransport", () => {
   test("closes and reconnects when a heartbeat is not acknowledged", async () => {
     const sockets: FakeSocket[] = []
     const transport = new CloudflareRemoteTransport({
-      url: "wss://ycoding-cloud.lostq901.workers.dev/ws/agent",
+      url: "wss://ycoding-cloud.lostq901.workers.dev/ws/v3/agent",
       createSocket: () => {
         const socket = new FakeSocket()
         sockets.push(socket)

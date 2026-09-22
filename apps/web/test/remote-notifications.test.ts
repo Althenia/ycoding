@@ -69,7 +69,7 @@ async function harness(options: {
   readonly devices?: readonly RemoteDeviceInfo[]
 } = {}): Promise<Harness> {
   const devices: readonly RemoteDeviceInfo[] =
-    options.devices ?? [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active" }]
+    options.devices ?? [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true }]
   const relay = await startRelayDouble({
     watermark: 5,
     advertisedSessions: ["ses_a", "ses_b"],
@@ -388,8 +388,8 @@ describe("remote notification delivery", () => {
   test("ends the previous machine's alerts when the device selection changes", async () => {
     const test = await harness({
       devices: [
-        { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active" },
-        { id: "dev_2", name: "Laptop", createdAt: 2, status: "active" },
+        { id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true },
+        { id: "dev_2", name: "Laptop", createdAt: 2, status: "active", online: true },
       ],
     })
     try {

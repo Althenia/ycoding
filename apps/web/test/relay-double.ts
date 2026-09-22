@@ -1,4 +1,5 @@
 import {
+  RemoteWebSocketPath,
   parseClientMessage,
   serializeEvent,
   serializeResponse,
@@ -39,7 +40,7 @@ export type RelayDoubleOptions = {
   readonly autonomy?: unknown
   readonly permissions?: readonly unknown[]
   readonly guardrailRequests?: readonly unknown[]
-  readonly questions?: readonly unknown[]
+  readonly forms?: readonly unknown[]
 }
 
 export type RelayDouble = {
@@ -72,7 +73,7 @@ const defaultSessionModel = { id: "gpt-5", providerID: "openai" } as const
 const defaultMe = {
   user: { id: "user_1" },
   session: { expiresAt: 4_102_444_800_000 },
-  devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active" }],
+  devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: true }],
 }
 
 export async function startRelayDouble(options: RelayDoubleOptions = {}): Promise<RelayDouble> {
@@ -129,8 +130,8 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       if (request.operation === "session.guardrail.request.list") {
         return { ok: true, value: { data: options.guardrailRequests ?? [] } }
       }
-      if (request.operation === "session.question.list") {
-        return { ok: true, value: { data: options.questions ?? [] } }
+      if (request.operation === "session.form.list") {
+        return { ok: true, value: options.forms ?? [] }
       }
       if (request.operation === "session.fileChange.list") {
         return { ok: true, value: { data: [] } }
@@ -203,7 +204,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     port: 0,
     fetch(request, self) {
       const url = new URL(request.url)
-      if (url.pathname === "/ws/client") {
+      if (url.pathname === RemoteWebSocketPath.client) {
         const deviceID = url.searchParams.get("device") ?? ""
         if (self.upgrade(request, { data: { deviceID } })) return undefined
         return new Response("upgrade failed", { status: 400 })
@@ -236,7 +237,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
       open(socket) {
         connections += 1
         sockets.add(socket as unknown as { send: (data: string) => void; close: () => void })
-        socket.send(serializeSessions({ type: "sessions", sessionIDs: options.advertisedSessions ?? ["ses_a", "ses_b"] }))
+        socket.send(serializeSessions({ type: "sessions" }))
       },
       message(socket, raw) {
         const text = typeof raw === "string" ? raw : raw.toString()
@@ -290,7 +291,7 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
 
   return {
     httpURL: `http://127.0.0.1:${server.port}`,
-    wsURL: (deviceID: string) => `ws://127.0.0.1:${server.port}/ws/client?device=${encodeURIComponent(deviceID)}`,
+    wsURL: (deviceID: string) => `ws://127.0.0.1:${server.port}${RemoteWebSocketPath.client}?device=${encodeURIComponent(deviceID)}`,
     requests,
     get pongs() {
       return pongs
@@ -311,8 +312,8 @@ export async function startRelayDouble(options: RelayDoubleOptions = {}): Promis
     pushEvent: (sessionID, event) => {
       for (const socket of sockets) socket.send(serializeEvent({ type: "event", sessionID, event }))
     },
-    pushSessions: (sessionIDs) => {
-      for (const socket of sockets) socket.send(serializeSessions({ type: "sessions", sessionIDs }))
+    pushSessions: (_sessionIDs) => {
+      for (const socket of sockets) socket.send(serializeSessions({ type: "sessions" }))
     },
     dropConnections: (code, reason) => {
       for (const socket of sockets) socket.close(code, reason)

@@ -104,6 +104,7 @@ export function readDeviceInfo(value: unknown): RemoteDeviceInfo | undefined {
   if (typeof value.id !== "string" || value.id.length === 0) return undefined
   if (typeof value.name !== "string") return undefined
   if (value.status !== "active" && value.status !== "revoked") return undefined
+  if (typeof value.online !== "boolean") return undefined
   return {
     id: value.id,
     name: value.name,
@@ -111,6 +112,7 @@ export function readDeviceInfo(value: unknown): RemoteDeviceInfo | undefined {
     ...(typeof value.lastSeenAt === "number" ? { lastSeenAt: value.lastSeenAt } : {}),
     ...(typeof value.revokedAt === "number" ? { revokedAt: value.revokedAt } : {}),
     status: value.status,
+    online: value.online,
   }
 }
 

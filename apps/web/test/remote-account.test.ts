@@ -17,7 +17,7 @@ function deferred(): Deferred {
   return { promise, resolve }
 }
 
-const device = (id: string, name = id) => ({ id, name, createdAt: 1, status: "active" as const })
+const device = (id: string, name = id) => ({ id, name, createdAt: 1, status: "active", online: true as const })
 
 const account = (devices: readonly unknown[]) => ({
   user: { id: "user_1" },
@@ -282,6 +282,39 @@ describe("remote account lifecycle", () => {
       expect(test.store.state().owner).toBeUndefined()
       expect(test.store.state().devices).toHaveLength(0)
       expect(test.store.state().activeDeviceID).toBeUndefined()
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("retained offline enrollments are not reported as no enrollment on initial load", async () => {
+    const test = await accountHarness({ me: () => ({ body: account([{ ...device("dev_studio"), online: false }]) }) })
+    try {
+      await test.store.load()
+      expect(test.store.state().connection).toEqual({ kind: "no-device-selected" })
+      expect(test.store.state().devices).toHaveLength(1)
+      expect(test.store.state().activeDeviceID).toBeUndefined()
+      expect(test.relay.connections).toBe(0)
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("an account refresh preserves the selected machine when it goes offline instead of switching devices", async () => {
+    const test = await accountHarness({
+      me: (call) => ({ body: account(call === 1
+        ? [device("dev_studio", "Studio Mac")]
+        : [{ ...device("dev_studio", "Studio Mac"), online: false }, device("dev_laptop", "Laptop")]) }),
+    })
+    try {
+      await test.store.load()
+      await waitFor(() => test.store.state().connection.kind === "connected")
+      await test.store.load()
+      expect(test.store.state().activeDeviceID).toBe("dev_studio")
+      expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
+      expect(test.store.state().owner).toBeDefined()
+      expect(test.store.state().sessions).toEqual([])
+      expect(test.store.state().activeSessionID).toBeUndefined()
     } finally {
       await test.stop()
     }

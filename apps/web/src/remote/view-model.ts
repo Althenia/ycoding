@@ -8,7 +8,63 @@
  */
 
 import type { CreateEnrollmentResponse } from "@ycoding-ai/remote"
-import type { ShellOutputFetch, ShellOutputView } from "./projection"
+import type { FormAnswerView, FormFieldView, FormView, ShellOutputFetch, ShellOutputView } from "./projection"
+
+export type FormDraft = Readonly<Record<string, FormAnswerView[string] | undefined>>
+
+export function formInputState(form: FormView, draft: FormDraft) {
+  return form.fields.reduce<{ fields: FormFieldView[]; answer: FormAnswerView; valid: boolean }>((state, field) => {
+    if (field.type !== "external" && field.when !== undefined && !field.when.every((when) => {
+      const value = state.answer[when.key]
+      if (value === undefined) return false
+      const equal = Array.isArray(value) ? value.includes(when.value) : value === when.value
+      return when.op === "eq" ? equal : !equal
+    })) return state
+    const value = Object.hasOwn(draft, field.key) ? draft[field.key] : field.type === "external" ? undefined : field.default
+    return {
+      fields: [...state.fields, field],
+      answer: value === undefined ? state.answer : { ...state.answer, [field.key]: value },
+      valid: state.valid && validFormValue(field, value),
+    }
+  }, { fields: [], answer: {}, valid: true })
+}
+
+function validFormValue(field: FormFieldView, value: FormAnswerView[string] | undefined): boolean {
+  if (field.type === "external") return value === true
+  if (value === undefined) return !field.required
+  if (field.type === "boolean") return typeof value === "boolean"
+  if (field.type === "number" || field.type === "integer") return typeof value === "number" && Number.isFinite(value)
+    && (field.type !== "integer" || Number.isInteger(value))
+    && (field.minimum === undefined || value >= field.minimum) && (field.maximum === undefined || value <= field.maximum)
+  if (field.type === "multiselect") return Array.isArray(value)
+    && value.every(item => typeof item === "string" && (field.custom || field.options.some(option => option.value === item)))
+    && (!field.required || value.length > 0)
+    && (field.minItems === undefined || value.length >= field.minItems) && (field.maxItems === undefined || value.length <= field.maxItems)
+  if (typeof value !== "string" || (field.required && value.length === 0)) return false
+  if (field.minLength !== undefined && value.length < field.minLength) return false
+  if (field.maxLength !== undefined && value.length > field.maxLength) return false
+  if (field.options && !field.custom && !field.options.some(option => option.value === value)) return false
+  if (field.pattern !== undefined) {
+    try {
+      if (!new RegExp(field.pattern).test(value)) return false
+    } catch { return false }
+  }
+  if (field.format === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+  if (field.format === "uri") return URL.canParse(value)
+  if (field.format === "date") {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+    const date = new Date(`${value}T00:00:00.000Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+  }
+  if (field.format === "date-time") return !Number.isNaN(new Date(value).getTime())
+  return true
+}
+
+export function safeFormLink(value: string): string | undefined {
+  if (!URL.canParse(value)) return undefined
+  const url = new URL(value)
+  return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined
+}
 
 export type RemoteUnavailableReason = "not-configured" | "no-connection"
 
@@ -374,15 +430,60 @@ export type DeviceAvailabilityView = {
   readonly showSettings: boolean
 }
 
+export type DeviceAvailabilityContext = {
+  readonly devices: readonly Readonly<Pick<import("@ycoding-ai/remote").RemoteDeviceInfo, "id" | "name" | "status" | "online">>[]
+  readonly activeDeviceID?: string
+  readonly sessionCount?: number
+}
+
 const devicePanelBody =
   "Remote access needs an account and a machine running YCoding. Add a device code from settings, then enroll the machine."
 
-export function deviceAvailabilityView(read: AccountReadState, deviceCount: number): DeviceAvailabilityView {
+export function deviceAvailabilityView(
+  read: AccountReadState,
+  deviceCount: number,
+  context?: DeviceAvailabilityContext,
+): DeviceAvailabilityView {
   if (read.kind === "signed-in") {
-    if (deviceCount > 0) {
+    const selected = context?.devices.find((device) => device.id === context.activeDeviceID)
+    if (selected?.status === "revoked") {
+      return {
+        title: `${selected.name} access was revoked`,
+        body: "Choose another online machine or enroll this machine again in settings.",
+        hint: "The selected machine is revoked and cannot accept a connection.",
+        placeholder: selected.name,
+        selectable: context?.devices.some((device) => device.status === "active" && device.online) ?? false,
+        showSettings: true,
+      }
+    }
+    if (selected?.status === "active" && !selected.online) {
+      return {
+        title: `${selected.name} is not reachable`,
+        body: "The selected machine is offline or YCoding is not running there. Reconnect after it is available.",
+        hint: "The selected machine is enrolled but not online.",
+        placeholder: selected.name,
+        selectable: context?.devices.some((device) => device.status === "active" && device.online) ?? false,
+        showSettings: false,
+      }
+    }
+    const onlineDevices = context?.devices.filter((device) => device.status === "active" && device.online)
+    if (onlineDevices !== undefined && onlineDevices.length === 0 && deviceCount > 0) {
+      const hasActiveEnrollment = context?.devices.some((device) => device.status === "active") ?? false
+      if (hasActiveEnrollment) {
+        return {
+          title: "No devices online",
+          body: "Your enrolled machines are offline. Run ycoding remote connect on a machine to make it available.",
+          hint: "No enrolled machines are online right now.",
+          placeholder: "No devices online",
+          selectable: false,
+          showSettings: false,
+        }
+      }
+    }
+    if ((onlineDevices?.length ?? deviceCount) > 0) {
       return {
         title: "No device selected",
-        body: "Choose a machine above to load the sessions it advertises.",
+        body: "Choose a machine above to load its sessions.",
         hint: "",
         placeholder: "Select a device",
         selectable: true,
@@ -436,6 +537,35 @@ export function deviceAvailabilityView(read: AccountReadState, deviceCount: numb
     selectable: false,
     showSettings: true,
   }
+}
+
+export type SessionAvailabilityView = {
+  readonly title: string
+  readonly body: string
+  readonly loading: boolean
+}
+
+/** Distinguishes an in-progress list read from a connected machine that returned no Sessions. */
+export function sessionAvailabilityView(
+  connection: RemoteConnectionState,
+  sessionCount: number,
+): SessionAvailabilityView | undefined {
+  if (sessionCount > 0) return undefined
+  if (connection.kind === "loading" || connection.kind === "connecting") {
+    return {
+      title: "Loading sessions",
+      body: "Connecting to the selected machine and loading its sessions.",
+      loading: true,
+    }
+  }
+  if (connection.kind === "connected") {
+    return {
+      title: "No sessions",
+      body: "Start YCoding in your project folder on this machine.",
+      loading: false,
+    }
+  }
+  return undefined
 }
 
 /**
