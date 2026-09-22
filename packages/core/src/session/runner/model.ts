@@ -188,11 +188,14 @@ const providerOptions = (
   return undefined;
 };
 
+const normalizeVariant = (variantID: ModelV2.VariantID | undefined) =>
+  variantID === "default" || variantID === "none" ? undefined : variantID;
+
 export const withVariant = (
   model: ModelV2.Info,
   variantID: ModelV2.VariantID | undefined,
 ): Effect.Effect<ModelV2.Info, VariantUnavailableError> => {
-  const id = variantID === "default" ? undefined : variantID;
+  const id = normalizeVariant(variantID);
   const variant = model.variants?.find((item) => item.id === id);
   if (!variant && variantID !== undefined && variantID !== "default")
     return Effect.fail(
@@ -530,21 +533,20 @@ const layer = Layer.effect(
           },
           connection,
         );
+        const variant = normalizeVariant(session.model?.variant);
         return {
           model,
           ref: ModelV2.Ref.make({
             id: selected.id,
             providerID: selected.providerID,
-            ...(session.model?.variant === undefined
-              ? {}
-              : { variant: session.model.variant }),
+            ...(variant === undefined ? {} : { variant }),
           }),
           cost: selected.cost,
           connectionIdentityDigest: digest({
             provider: selected.providerID,
             model: selected.id,
             apiModel: selected.modelID ?? selected.id,
-            variant: session.model?.variant,
+            variant,
             route: model.route.id,
             endpoint: normalizeEndpoint(model.route.endpoint.baseURL),
             organization:

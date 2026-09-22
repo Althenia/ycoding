@@ -328,6 +328,39 @@ describe("SessionRunnerModel", () => {
     }),
   );
 
+  it.effect("treats none Session variant as the base model", () =>
+    Effect.gen(function* () {
+      const catalog = model(ProviderV2.aisdk("@ai-sdk/openai"), {
+        settings: { baseURL: "https://openai.example/v1" },
+      });
+      const session = SessionV2.Info.make({
+        id: SessionV2.ID.make("ses_model_variant_none"),
+        projectID: ProjectV2.ID.global,
+        title: "test",
+        model: {
+          id: catalog.id,
+          providerID: catalog.providerID,
+          variant: ModelV2.VariantID.make("none"),
+        },
+        cost: Money.USD.zero,
+        tokens: {
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache: { read: 0, write: 0 },
+        },
+        time: {
+          created: DateTime.makeUnsafe(0),
+          updated: DateTime.makeUnsafe(0),
+        },
+        location: { directory: AbsolutePath.make("/project") },
+      });
+
+      const resolved = yield* SessionRunnerModel.resolve(session, catalog);
+      expect(resolved.ref.variant).toBeUndefined();
+    }),
+  );
+
   it.effect(
     "rejects an explicit unavailable Session variant during model resolution",
     () =>

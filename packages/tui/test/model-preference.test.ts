@@ -19,6 +19,20 @@ test("repairs known model preferences and preserves unrelated fields", () => {
   })
 })
 
+test("normalizes none and default variant sentinels to the base model", () => {
+  expect(
+    decodeModelPreference({
+      recent: [],
+      favorite: [],
+      variant: {
+        "local/qwopus": "none",
+        "local/ornith": "default",
+        "local/tiel": "fast",
+      },
+    }).variant,
+  ).toEqual({ "local/tiel": "fast" })
+})
+
 test("atomically serializes patches and variant updates", async () => {
   await using tmp = await tmpdir()
   const file = path.join(tmp.path, "model.json")
