@@ -808,7 +808,7 @@ Model entries support:
 - `modelID`, `family`, `name`, and `package`;
 - request overlays;
 - `capabilities.tools`, `capabilities.input`, and `capabilities.output`;
-- variants as an array of `{ id, settings?, headers?, body? }`;
+- variants as an array of `{ id, settings?, headers?, body? }`; `default` and `none` select the base model and are not user-facing variant IDs;
 - cost information;
 - `disabled`;
 - `limit.context`, `limit.input`, and `limit.output`.
