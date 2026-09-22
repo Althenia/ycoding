@@ -73,6 +73,11 @@ export const Daybreak = Schema.Literals(["daybreak_blue", "daybreak_red"]).annot
 })
 export type Daybreak = typeof Daybreak.Type
 
+export const API = Schema.Literals(["chat", "responses"]).annotate({
+  identifier: "Model.API",
+})
+export type API = typeof API.Type
+
 export interface Info extends Schema.Schema.Type<typeof Info> {}
 export const Info = Schema.Struct({
   id: ID,
@@ -92,6 +97,8 @@ export const Info = Schema.Struct({
   enabled: Schema.Boolean,
   /** Daybreak programs an authenticated account advertises for this model; absent means none advertised. */
   daybreak: Schema.Array(Daybreak).pipe(optional),
+  /** OpenAI-compatible API surface: chat or responses. Absent means the provider's default. */
+  api: API.pipe(optional),
   limit: Schema.Struct({
     context: Schema.Int,
     input: Schema.Int.pipe(optional),

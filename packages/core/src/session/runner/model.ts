@@ -5,7 +5,9 @@ import { Model } from "@ycoding-ai/ai";
 // ast-grep-ignore: no-star-import
 import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages";
 // ast-grep-ignore: no-star-import
-import * as OpenAICompatibleChat from "@ycoding-ai/ai/protocols/openai-compatible-chat";
+import * as OpenAICompatibleChat from "@ycoding-ai/ai/protocols/openai-compatible-chat"
+// ast-grep-ignore: no-star-import
+import * as OpenAICompatibleResponses from "@ycoding-ai/ai/protocols/openai-compatible-responses";
 // ast-grep-ignore: no-star-import
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses";
 import { Auth, type AnyRoute } from "@ycoding-ai/ai/route";
@@ -197,12 +199,12 @@ export const withVariant = (
 ): Effect.Effect<ModelV2.Info, VariantUnavailableError> => {
   const id = normalizeVariant(variantID);
   const variant = model.variants?.find((item) => item.id === id);
-  if (!variant && variantID !== undefined && variantID !== "default")
+  if (!variant && id !== undefined)
     return Effect.fail(
       new VariantUnavailableError({
         providerID: model.providerID,
         modelID: model.id,
-        variant: variantID,
+        variant: id,
       }),
     );
   return Effect.succeed(
@@ -325,8 +327,13 @@ export const fromCatalogModel = (
     packageName === "@ai-sdk/openai-compatible" &&
     typeof resolved.settings?.baseURL === "string"
   ) {
+    const api = resolved.api ?? resolved.settings?.api
+    const route =
+      api === "responses"
+        ? OpenAICompatibleResponses.route
+        : OpenAICompatibleChat.route
     return Effect.succeed(
-      withDefaults(resolved, OpenAICompatibleChat.route)
+      withDefaults(resolved, route)
         .with({ auth: key === undefined ? Auth.none : Auth.bearer(key) })
         .model({ id: resolved.modelID ?? resolved.id }),
     );

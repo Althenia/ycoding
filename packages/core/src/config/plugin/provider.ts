@@ -230,6 +230,7 @@ export const Plugin = define({
               if (config.family !== undefined) model.family = config.family
               if (config.name !== undefined) model.name = config.name
               if (config.modelID !== undefined) model.modelID = config.modelID
+              if (config.api !== undefined) model.api = config.api
               if (config.package !== undefined) model.package = config.package
               if (config.settings !== undefined)
                 model.settings = ProviderV2.mergeOverlay(model.settings, config.settings)

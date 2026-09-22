@@ -329,6 +329,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | model `.cost`                                                                           | cost object \| cost object[]                                                                                    | unset                           | USD-per-million input/output cost; optional cache and context-tier data.                                                                                                          |
 | model `.disabled`                                                                       | boolean                                                                                                         | unset                           | Model disable switch.                                                                                                                                                             |
 | model `.limit.context`, `.input`, `.output`                                             | integer                                                                                                         | unset                           | Declared model limits.                                                                                                                                                            |
+| model `.api`                                                                            | `chat` \| `responses`                                                                                           | unset                           | OpenAI-compatible request surface; `responses` overrides the source default and the catalog value.                                                                                |
 | `formatter.<name>`                                                                      | `{ disabled?, command?: string[], environment?: Record<string, string>, extensions?: string[] }`                | unset                           | Formatter override.                                                                                                                                                               |
 | `lsp.<name>`                                                                            | `{ disabled: true }` \| `{ command: string[], extensions?, disabled?, env?, initialization? }`                  | unset                           | LSP override.                                                                                                                                                                     |
 | `attachments.image.auto_resize`                                                         | boolean                                                                                                         | unset                           | Image resizing.                                                                                                                                                                   |
@@ -811,7 +812,15 @@ Model entries support:
 - variants as an array of `{ id, settings?, headers?, body? }`;
 - cost information;
 - `disabled`;
-- `limit.context`, `limit.input`, and `limit.output`.
+- `limit.context`, `limit.input`, and `limit.output`;
+- `api`, the OpenAI-compatible request surface (`chat` or `responses`) documented below.
+
+OpenAI-compatible endpoints resolve their request surface with the source code default first,
+then any value discovered by the catalog, then an explicit `api` on the provider `settings`
+(`providers.<id>.settings.api`) or on a model entry (`providers.<id>.models.<id>.api`). The
+model entry value wins over the provider value, and either overrides the chat default and any
+catalog value. An omitted `api` keeps the chat-completions route; set it to `responses` to use
+the OpenAI Responses route against the configured `baseURL`.
 
 A provider with `catalog.source: "openai-models"` discovers models from its authenticated
 `GET <baseURL>/models` endpoint. Discovered records may publish `name`, `capabilities`,

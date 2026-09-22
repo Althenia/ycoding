@@ -32,6 +32,7 @@
         "solid-js": "catalog:",
       },
       "devDependencies": {
+        "@tsconfig/bun": "catalog:",
         "@types/bun": "catalog:",
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",
@@ -351,6 +352,12 @@
     "packages/remote": {
       "name": "@ycoding-ai/remote",
       "version": "0.0.0",
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
     },
     "packages/schema": {
       "name": "@ycoding-ai/schema",
@@ -432,6 +439,7 @@
         "effect": "catalog:",
         "fuzzysort": "catalog:",
         "get-east-asian-width": "catalog:",
+        "jsonc-parser": "3.3.1",
         "open": "10.1.2",
         "opentui-spinner": "catalog:",
         "remeda": "catalog:",

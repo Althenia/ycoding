@@ -1,6 +1,7 @@
 export * as ConfigProvider from "./provider"
 
 import { Schema } from "effect"
+import { API } from "@ycoding-ai/schema/model"
 import { Money } from "@ycoding-ai/schema/money"
 import { ModelV2 } from "../model"
 
@@ -57,6 +58,7 @@ class Model extends Schema.Class<Model>("ConfigV2.Model")({
   }).pipe(Schema.Array, Schema.optional),
   cost: Schema.Union([Cost, Cost.pipe(Schema.Array)]).pipe(Schema.optional),
   disabled: Schema.Boolean.pipe(Schema.optional),
+  api: API.pipe(Schema.optional),
   limit: Limit.pipe(Schema.optional),
 }) {}
 

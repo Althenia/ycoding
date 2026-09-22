@@ -27,6 +27,7 @@ interface ModelOptions {
   readonly body?: ModelV2.Info["body"];
   readonly variants?: ModelV2.Info["variants"];
   readonly daybreak?: ModelV2.Info["daybreak"];
+  readonly api?: ModelV2.Info["api"];
 }
 
 const model = (packageName: string | undefined, options: ModelOptions = {}) =>
@@ -42,6 +43,7 @@ const model = (packageName: string | undefined, options: ModelOptions = {}) =>
     capabilities: { tools: true, input: ["text"], output: ["text"] },
     variants: options.variants ?? [],
     ...(options.daybreak === undefined ? {} : { daybreak: options.daybreak }),
+    ...(options.api === undefined ? {} : { api: options.api }),
     time: { released: 0 },
     cost: [],
     status: "active",
@@ -222,6 +224,64 @@ describe("SessionRunnerModel", () => {
       }),
   );
 
+  it.effect("defaults OpenAI-compatible endpoints to the chat route", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+          settings: { baseURL: "https://compatible.example/v1" },
+          headers: {},
+          body: {},
+        }),
+      );
+
+      expect(resolved.route.id).toBe("openai-compatible-chat");
+    }),
+  );
+
+  it.effect("selects the responses route when settings.api is responses", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+          settings: { baseURL: "https://compatible.example/v1", api: "responses" },
+          headers: {},
+          body: {},
+        }),
+      );
+
+      expect(resolved.route.id).toBe("openai-compatible-responses");
+    }),
+  );
+
+  it.effect("selects the responses route when the model api field is responses", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+          api: "responses",
+          settings: { baseURL: "https://compatible.example/v1" },
+          headers: {},
+          body: {},
+        }),
+      );
+
+      expect(resolved.route.id).toBe("openai-compatible-responses");
+    }),
+  );
+
+  it.effect("lets a model-level api field override a provider settings api", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+          api: "chat",
+          settings: { baseURL: "https://compatible.example/v1", api: "responses" },
+          headers: {},
+          body: {},
+        }),
+      );
+
+      expect(resolved.route.id).toBe("openai-compatible-chat");
+    }),
+  );
+
   it.effect(
     "overlays selected OpenAI Session variant settings and bodies",
     () =>
@@ -357,7 +417,12 @@ describe("SessionRunnerModel", () => {
       });
 
       const resolved = yield* SessionRunnerModel.resolve(session, catalog);
-      expect(resolved.ref.variant).toBeUndefined();
+      // "none" normalizes to the base model: no variant is selected and the
+      // request uses the provider's default route, not an unavailable variant.
+      expect(resolved).toMatchObject({
+        id: "api-test-model",
+        route: { id: "openai-responses" },
+      });
     }),
   );
 
