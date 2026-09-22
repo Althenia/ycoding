@@ -6,7 +6,6 @@ import { useEvent } from "./event"
 import path from "path"
 import { useTuiPaths } from "./runtime"
 import { useArgs } from "./args"
-import { useClient } from "./client"
 import { RGBA } from "@opentui/core"
 import { readJson, writeJsonAtomic } from "../util/persistence"
 import {
@@ -58,7 +57,6 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
   name: "Local",
   init: () => {
     const data = useData()
-    const client = useClient()
     const toast = useToast()
     const { theme, themeV2, mode } = useTheme()
     const route = useRoute()
@@ -164,10 +162,11 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
       const state = {
         pending: false,
       }
-      // Explicit selections serialize per Session. The desired target is reactive so the header can
-      // show switching progress without claiming a not-yet-committed model is active.
-      const selections = new Map<string, { desired: ModelPreferenceModel & { variant?: string }; promise: Promise<void> }>()
-      const [pendingTargets, setPendingTargets] = createSignal<Record<string, ModelPreferenceModel & { variant?: string }>>({})
+      // Existing Sessions keep desired model choices local until their next prompt can switch and
+      // admit atomically. The target is Session-scoped so navigation cannot retarget another draft.
+      const [pendingTargets, setPendingTargets] = createSignal<
+        Record<string, ModelPreferenceModel & { variant?: string }>
+      >({})
       const clearPendingTarget = (sessionID: string) =>
         setPendingTargets((current) => {
           if (!(sessionID in current)) return current
@@ -240,8 +239,17 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         )
       })
 
+      const selectedModel = () => {
+        const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+        const pending = sessionID ? pendingTargets()[sessionID] : undefined
+        if (pending && isModelValid(pending)) return { providerID: pending.providerID, modelID: pending.modelID }
+        return currentModel()
+      }
+
+      event.on("session.deleted", (evt) => clearPendingTarget(evt.data.sessionID))
+
       return {
-        current: currentModel,
+        current: selectedModel,
         get ready() {
           return modelStore.ready
         },
@@ -251,10 +259,6 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         favorite() {
           return modelStore.favorite
         },
-        pending(sessionID: string) {
-          return selections.get(sessionID)
-        },
-        /** The reactive desired target for a Session, so progress can render while switching. */
         pendingTarget(sessionID: string | undefined) {
           return sessionID ? pendingTargets()[sessionID] : undefined
         },
@@ -279,45 +283,25 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             this.variant.set(variant)
             return
           }
-          // Capture the agent identity now: an agent switch in this Session while the request is in
-          // flight must not apply the completed switch to the newly selected agent's preference.
-          const agentID = agent.current()?.id
-          if (!agentID) return
           const desired = { ...target, ...(variant === undefined ? {} : { variant }) }
-          const previous = selections.get(sessionID)?.promise ?? Promise.resolve()
-          const promise = previous
-            .catch(() => undefined)
-            .then(async () => {
-              await client.api.session.switchModel({
-                sessionID,
-                model: { providerID: target.providerID, id: target.modelID, ...(variant === undefined ? {} : { variant }) },
-              })
-              if (selections.get(sessionID)?.promise !== promise) return
-              // A switch the user navigated away from still applies durably, but it must not
-              // overwrite the preference of whichever Session is on screen now.
-              if (route.data.type !== "session" || route.data.sessionID !== sessionID) return
-              if (agent.current()?.id !== agentID) return
-              this.set(target, { recent: true })
-              // The variant is part of the durable selection even when it normalizes to the default,
-              // so omitting it must clear a stored variant instead of leaving the old one to be
-              // captured by the next submission.
-              this.variant.set(variant)
-            })
-            .finally(() => {
-              // A newer selection may already have replaced this entry and raised its own desired
-              // target. Only this request's own reservation may clear it, or settling the first of
-              // several rapid choices would erase the progress of the still-pending later ones.
-              if (selections.get(sessionID)?.promise === promise) {
-                selections.delete(sessionID)
-                clearPendingTarget(sessionID)
-              }
-            })
-          selections.set(sessionID, { desired, promise })
           setPendingTargets((current) => ({ ...current, [sessionID]: desired }))
-          return promise
+        },
+        commitPending(
+          sessionID: string,
+          model: { providerID: string; id: string; variant?: string },
+        ) {
+          const pending = pendingTargets()[sessionID]
+          if (!pending) return
+          if (pending.providerID !== model.providerID || pending.modelID !== model.id) return
+          if (normalizeModelVariant(pending.variant) !== normalizeModelVariant(model.variant)) return
+          if (route.data.type === "session" && route.data.sessionID === sessionID) {
+            this.set(pending, { recent: true })
+            this.variant.set(pending.variant)
+          }
+          clearPendingTarget(sessionID)
         },
         parsed: createMemo(() => {
-          const value = currentModel()
+          const value = selectedModel()
           if (!value) {
             return {
               provider: "Connect a provider",
@@ -338,7 +322,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         cycle(direction: 1 | -1) {
           const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
           // Rapid cycling follows the latest desired target, not the last committed preference.
-          const current = (sessionID ? selections.get(sessionID)?.desired : undefined) ?? currentModel()
+          const current = (sessionID ? pendingTargets()[sessionID] : undefined) ?? currentModel()
           if (!current) return Promise.resolve()
           const recent = modelStore.recent
           const index = recent.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
@@ -363,7 +347,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             return Promise.resolve()
           }
           // Rapid cycling follows the latest desired target, not the last committed preference.
-          const current = (sessionID ? selections.get(sessionID)?.desired : undefined) ?? currentModel()
+          const current = (sessionID ? pendingTargets()[sessionID] : undefined) ?? currentModel()
           let index = -1
           if (current) {
             index = favorites.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
@@ -392,7 +376,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             }
             const a = agent.current()
             if (!a) return
-            setModelStore("model", a.id, model)
+            setModelStore("model", a.id, { providerID: model.providerID, modelID: model.modelID })
             if (options?.recent) {
               setModelStore("recent", recentModels(model, modelStore.recent))
               save()
@@ -424,6 +408,9 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
         },
         variant: {
           selected() {
+            const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+            const pending = sessionID ? pendingTargets()[sessionID] : undefined
+            if (pending) return normalizeModelVariant(pending.variant)
             const m = currentModel()
             if (!m) return undefined
             return normalizeModelVariant(modelStore.variant[modelPreferenceKey(m)])
@@ -434,7 +421,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             return undefined
           },
           list() {
-            const m = currentModel()
+            const m = selectedModel()
             if (!m) return []
             const info = data.location.model
               .list(activeLocation())
@@ -442,7 +429,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
             return info?.variants?.map((variant) => variant.id) ?? []
           },
           set(value: string | undefined) {
-            const m = currentModel()
+            const m = selectedModel()
             if (!m) return
             setModelStore("variant", modelPreferenceKey(m), normalizeModelVariant(value))
             save()
@@ -450,12 +437,10 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
           cycle() {
             const variants = this.list()
             if (variants.length === 0) return Promise.resolve()
-            const m = currentModel()
+            const m = selectedModel()
             if (!m) return Promise.resolve()
             const next = cycleModelVariant(this.current(), variants)
             const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
-            // Explicit variant cycling is a durable switch for an existing Session, not a local
-            // preference edit, so it must await the same selection path as the picker.
             return model.select({ ...m, ...(next === undefined ? {} : { variant: next }) }, { sessionID })
           },
         },

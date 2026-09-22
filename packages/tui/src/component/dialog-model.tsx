@@ -9,8 +9,6 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useData } from "../context/data"
-import { useToast } from "../ui/toast"
-import { errorMessage } from "../util/error"
 
 export type DialogModelSelection = {
   providerID: string
@@ -46,7 +44,6 @@ export function DialogModel(props: {
   const local = useLocal()
   const data = useData()
   const dialog = useDialog()
-  const toast = useToast()
   const { themeV2 } = useTheme().contextual("elevated")
   const [query, setQuery] = createSignal("")
   let settled = false
@@ -241,11 +238,7 @@ export function DialogModel(props: {
       ))
       return
     }
-    local.model
-      .select({ providerID, modelID }, { sessionID: props.sessionID })
-      .catch((error: unknown) =>
-        toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-      )
+    void local.model.select({ providerID, modelID }, { sessionID: props.sessionID })
     const list = local.model.variant.list()
     const cur = local.model.variant.current()
     if (cur && list.includes(cur)) {
@@ -261,11 +254,7 @@ export function DialogModel(props: {
 
   function selectVariant(providerID: string, modelID: string, variant: string) {
     dialog.clear()
-    return local.model
-      .select({ providerID, modelID, variant }, { sessionID: props.sessionID })
-      .catch((error: unknown) =>
-        toast.show({ title: "Model switch needs attention", message: errorMessage(error), variant: "warning" }),
-      )
+    return local.model.select({ providerID, modelID, variant }, { sessionID: props.sessionID })
   }
 
   return (

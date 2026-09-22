@@ -45,10 +45,6 @@ const session = {
 type PreferenceModel = { providerID: string; modelID: string }
 
 const switches: Array<{ sessionID: string; model: { providerID: string; id: string; variant?: string } }> = []
-let switchGate: Promise<void> | undefined
-let releaseSwitch: (() => void) | undefined
-/** The Session switch response for the next POST; replaced per case. */
-let switchResponse: () => Response | Promise<Response> = () => new Response(null, { status: 204 })
 
 function model(input: { id: string; providerID: string; name: string; context: number }) {
   return {
@@ -76,17 +72,11 @@ const models = [
   model({ id: "gemini-3-pro", providerID: "google", name: "Gemini 3 Pro", context: 1_000_000 }),
 ]
 
-/** Per-request gates, so a case can release one selection while a later one stays in flight. */
-let switchGatePlan: Array<Promise<void> | undefined> = []
-
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     const body = (await request.json()) as { model: { providerID: string; id: string; variant?: string } }
     switches.push({ sessionID, model: body.model })
-    const planned = switchGatePlan[switches.length - 1]
-    if (planned) await planned
-    else if (switchGate) await switchGate
-    return switchResponse()
+    return new Response(null, { status: 204 })
   }
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -153,24 +143,22 @@ async function renderPicker(input: {
   }, events)
   let current: PreferenceModel | undefined
   let currentVariant: string | undefined
-  let currentAgent: string | undefined
   let pendingTarget: (PreferenceModel & { variant?: string }) | undefined
   let navigate: ((next: Route) => void) | undefined
   let cycle: ((direction: 1 | -1) => Promise<void>) | undefined
-  let setAgent: ((id: string) => void) | undefined
   let variantCycle: (() => Promise<void>) | undefined
+  let commitPending: ((model: { providerID: string; id: string; variant?: string }) => void) | undefined
 
   function Probe() {
     const local = useLocal()
     const router = useRoute()
     navigate = router.navigate
     cycle = (direction) => local.model.cycle(direction)
-    setAgent = (id) => local.agent.set(id)
     variantCycle = () => local.model.variant.cycle()
+    commitPending = (model) => local.model.commitPending(sessionID, model)
     createEffect(() => {
       current = local.model.current()
       currentVariant = local.model.variant.current()
-      currentAgent = local.agent.current()?.id
       pendingTarget = local.model.pendingTarget(sessionID)
     })
     return null
@@ -226,13 +214,12 @@ async function renderPicker(input: {
     app,
     current: () => current,
     variant: () => currentVariant,
-    agent: () => currentAgent,
     pendingTarget: () => pendingTarget,
-    setAgent: (id: string) => setAgent?.(id),
     variantCycle: () => {
       if (!variantCycle) throw new Error("LocalProvider is not mounted")
       return variantCycle()
     },
+    commitPending: (model: { providerID: string; id: string; variant?: string }) => commitPending?.(model),
     cycle: (direction: 1 | -1) => {
       if (!cycle) throw new Error("LocalProvider is not mounted")
       return cycle(direction)
@@ -260,10 +247,8 @@ async function waitFor(predicate: () => boolean, label: string, attempts = 200) 
   throw new Error(`timed out waiting for ${label}`)
 }
 
-test("renders Daybreak as a separate model and switches using its catalog identity", async () => {
+test("renders Daybreak separately and records it as this Session's desired model", async () => {
   switches.length = 0
-  switchGate = undefined
-  switchResponse = () => new Response(null, { status: 204 })
   const normal = model({ id: "gpt-5.6-luna", providerID: "openai", name: "GPT-5.6 Luna", context: 1_050_000 })
   const screen = await renderPicker({
     stateDir: "daybreak",
@@ -276,77 +261,38 @@ test("renders Daybreak as a separate model and switches using its catalog identi
     expect(rows).toHaveLength(2)
     expect(rows.some((row) => !row.includes("Daybreak"))).toBe(true)
     screen.app.mockInput.pressEnter()
-    await waitFor(() => screen.current()?.modelID === "gpt-5.6-luna-daybreak-blue", "the Daybreak preference")
-    expect(switches).toEqual([{ sessionID, model: { providerID: "openai", id: "gpt-5.6-luna-daybreak-blue" } }])
+    await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5.6-luna-daybreak-blue", "the desired Daybreak model")
+    expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5.6-luna-daybreak-blue" })
+    expect(switches).toEqual([])
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("the picker awaits the durable switch before committing the local preference", async () => {
+test("model and variant picker selection performs no Session request", async () => {
   switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = new Promise<void>((resolve) => (releaseSwitch = resolve))
   const screen = await renderPicker({
     stateDir: "picker",
     order: [{ providerID: "openai", modelID: "gpt-5-2" }],
   })
   try {
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
     screen.app.mockInput.pressEnter()
-    await waitFor(() => switches.length > 0, "the switch request")
-    expect(switches).toEqual([{ sessionID, model: { providerID: "openai", id: "gpt-5-2" } }])
-    // The preference is not committed while the switch is still in flight.
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
-
-    releaseSwitch?.()
-    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the committed preference")
+    await screen.app.waitForFrame((frame) => frame.includes("Select variant"))
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.variant === "high", "the desired model variant")
     expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
-  } finally {
-    switchGate = undefined
-    releaseSwitch = undefined
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("a refused switch keeps the previous preference and reports the block", async () => {
-  switches.length = 0
-  switchGate = undefined
-  switchResponse = () =>
-    json(
-      {
-        _tag: "ModelSwitchBlockedError",
-        status: "blocked",
-        currentModel: { providerID: "anthropic", id: "claude-opus-5" },
-        targetModel: { providerID: "openai", id: "gpt-5-2" },
-        currentContextTokens: 250_000,
-        targetSafeInputTokens: 200_000,
-        requiredReductionTokens: 50_000,
-        reason: "context-window-exceeded",
-      },
-      { status: 409 },
-    )
-  const screen = await renderPicker({
-    stateDir: "picker-blocked",
-    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
-  })
-  try {
-    screen.app.mockInput.pressEnter()
-    await waitFor(() => switches.length > 0, "the switch request")
-    await waitFor(() => screen.app.captureCharFrame().includes("Model switch blocked"), "the block warning")
-    // A refusal must not silently retarget the preference the user sees.
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
+    expect(screen.variant()).toBe("high")
+    expect(switches).toEqual([])
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("rapid cycling serializes against the latest desired target", async () => {
+test("rapid model cycling keeps only the newest Session target", async () => {
   switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = new Promise<void>((resolve) => (releaseSwitch = resolve))
   const screen = await renderPicker({
     stateDir: "cycle",
+    withoutPicker: true,
     recent: [
       { providerID: "anthropic", modelID: "claude-opus-5" },
       { providerID: "openai", modelID: "gpt-5-2" },
@@ -354,102 +300,37 @@ test("rapid cycling serializes against the latest desired target", async () => {
     ],
   })
   try {
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
-    void screen.cycle(1)
-    void screen.cycle(1)
-    await waitFor(() => switches.length > 0, "the first cycle request")
-    expect(switches).toEqual([{ sessionID, model: { providerID: "openai", id: "gpt-5-2" } }])
-
-    releaseSwitch?.()
-    await waitFor(() => switches.length > 1, "the queued cycle request")
-    // The queued choice advances from the latest desired target, not the still-uncommitted preference.
-    expect(switches).toEqual([
-      { sessionID, model: { providerID: "openai", id: "gpt-5-2" } },
-      { sessionID, model: { providerID: "google", id: "gemini-3-pro" } },
-    ])
-  } finally {
-    switchGate = undefined
-    releaseSwitch = undefined
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("the home screen commits the next-Session preference without a Session API call", async () => {
-  switches.length = 0
-  switchGate = undefined
-  switchResponse = () => new Response(null, { status: 204 })
-  const screen = await renderPicker({
-    stateDir: "home",
-    route: { type: "home" },
-    home: true,
-    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
-  })
-  try {
-    screen.app.mockInput.pressEnter()
-    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the local preference")
+    await waitFor(() => screen.current()?.modelID === "claude-opus-5", "the initial model")
+    await Promise.all([screen.cycle(1), screen.cycle(1)])
+    expect(screen.pendingTarget()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })
+    expect(screen.current()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })
     expect(switches).toEqual([])
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("a completion after navigation does not retarget the on-screen preference", async () => {
+test("switching routes does not leak one Session's desired model", async () => {
   switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = new Promise<void>((resolve) => (releaseSwitch = resolve))
   const screen = await renderPicker({
     stateDir: "navigation",
-    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    order: [{ providerID: "google", modelID: "gemini-3-pro" }],
   })
   try {
     screen.app.mockInput.pressEnter()
-    await waitFor(() => switches.length > 0, "the switch request")
-    // The user leaves the Session while the durable switch is still in flight.
-    screen.navigate({ type: "home" })
-    await Bun.sleep(50)
-    releaseSwitch?.()
-    await waitFor(() => switches.length > 0, "the settled switch")
-    await Bun.sleep(150)
-    // The durable switch applies to the captured Session; the local preference keeps its own value.
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
+    await waitFor(() => screen.pendingTarget()?.modelID === "gemini-3-pro", "the Session target")
+    screen.navigate({ type: "session", sessionID: "ses_other" })
+    await waitFor(() => screen.current()?.modelID === "claude-opus-5", "the other Session preference")
+    screen.navigate({ type: "session", sessionID })
+    await waitFor(() => screen.current()?.modelID === "gemini-3-pro", "the restored Session target")
+    expect(switches).toEqual([])
   } finally {
-    switchGate = undefined
-    releaseSwitch = undefined
     await screen.dispose()
   }
 }, 30_000)
 
-test("an agent switch during a pending selection does not retarget the new agent preference", async () => {
+test("selecting a model resets a stored variant until a variant is chosen", async () => {
   switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = new Promise<void>((resolve) => (releaseSwitch = resolve))
-  const screen = await renderPicker({
-    stateDir: "agent-identity",
-    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
-  })
-  try {
-    expect(screen.agent()).toBe("build")
-    screen.app.mockInput.pressEnter()
-    await waitFor(() => switches.length > 0, "the switch request")
-    // The user switches agents inside the same Session while the model request is in flight. The
-    // completed result belongs to the agent captured at selection time.
-    screen.setAgent("reviewer")
-    await Bun.sleep(50)
-    releaseSwitch?.()
-    await waitFor(() => screen.pendingTarget() === undefined, "the settled selection")
-    expect(screen.agent()).toBe("reviewer")
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
-  } finally {
-    switchGate = undefined
-    releaseSwitch = undefined
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("selecting the default variant clears a stored variant instead of retaining it", async () => {
-  switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = undefined
   const screen = await renderPicker({
     stateDir: "variant-default",
     order: [{ providerID: "openai", modelID: "gpt-5-2" }],
@@ -457,101 +338,71 @@ test("selecting the default variant clears a stored variant instead of retaining
   })
   try {
     screen.app.mockInput.pressEnter()
-    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the committed model")
-    await waitFor(() => screen.variant() === undefined, "the cleared variant")
-    // The durable switch omitted the variant, so the local preference must not keep sending `high`.
+    await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5-2", "the desired model")
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
     expect(screen.variant()).toBeUndefined()
+    expect(switches).toEqual([])
   } finally {
     await screen.dispose()
   }
 }, 30_000)
 
-test("the header renders the desired target while the switch is still in flight", async () => {
+test("rapid variant cycling advances from the newest pending variant", async () => {
   switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = new Promise<void>((resolve) => (releaseSwitch = resolve))
-  const screen = await renderPicker({
-    stateDir: "pending-progress",
-    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
-  })
-  try {
-    screen.app.mockInput.pressEnter()
-    await waitFor(() => switches.length > 0, "the switch request")
-    await waitFor(
-      () => screen.pendingTarget()?.modelID === "gpt-5-2",
-      "the reactive pending target while switching",
-    )
-    // The preference has not committed yet, so the displayed target is progress, not the active model.
-    expect(screen.current()).toEqual({ providerID: "anthropic", modelID: "claude-opus-5" })
-    releaseSwitch?.()
-    await waitFor(() => screen.pendingTarget() === undefined, "the settled pending target")
-    expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
-  } finally {
-    switchGate = undefined
-    releaseSwitch = undefined
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("keeps the latest pending target after an earlier rapid selection settles", async () => {
-  switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = undefined
-  let releaseFirst!: () => void
-  let releaseSecond!: () => void
-  const first = new Promise<void>((resolve) => (releaseFirst = resolve))
-  const second = new Promise<void>((resolve) => (releaseSecond = resolve))
-  switchGatePlan = [first, second]
-  const screen = await renderPicker({
-    stateDir: "rapid-progress",
-    recent: [
-      { providerID: "anthropic", modelID: "claude-opus-5" },
-      { providerID: "openai", modelID: "gpt-5-2" },
-      { providerID: "google", modelID: "gemini-3-pro" },
-    ],
-  })
-  try {
-    // Two rapid choices queue; the first is in flight and the second waits behind it.
-    void screen.cycle(1)
-    void screen.cycle(1)
-    await waitFor(() => switches.length >= 1, "the first switch request")
-    // Progress already shows the latest desired target while only the first is in flight.
-    await waitFor(() => screen.pendingTarget()?.modelID === "gemini-3-pro", "the latest desired target")
-
-    // The first selection settles and releases the second, which is still pending. Progress must
-    // keep showing the latest target rather than disappearing with the first request.
-    releaseFirst()
-    await waitFor(() => switches.length === 2, "the queued second switch request")
-    expect(screen.pendingTarget()?.modelID).toBe("gemini-3-pro")
-
-    releaseSecond()
-    await waitFor(() => screen.pendingTarget() === undefined, "the settled pending target")
-    expect(screen.current()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })
-  } finally {
-    releaseFirst()
-    releaseSecond()
-    switchGatePlan = []
-    switchGate = undefined
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("variant cycling for an existing Session performs a durable switch, not a local edit", async () => {
-  switches.length = 0
-  switchResponse = () => new Response(null, { status: 204 })
-  switchGate = undefined
   const screen = await renderPicker({
     stateDir: "variant-cycle",
     withoutPicker: true,
     recent: [{ providerID: "openai", modelID: "gpt-5-2" }],
   })
   try {
-    // The picker is absent, so the LocalProvider variant cycle is the only surface under test.
-    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the session preference")
-    switches.length = 0
-    void screen.variantCycle()
-    await waitFor(() => switches.length > 0, "the variant switch request")
-    expect(switches).toEqual([{ sessionID, model: { providerID: "openai", id: "gpt-5-2", variant: "high" } }])
+    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the model preference")
+    await Promise.all([screen.variantCycle(), screen.variantCycle()])
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "low" })
+    expect(screen.variant()).toBe("low")
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("keeps the desired target until the matching prompt submission commits it", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "pending-commit",
+    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Select variant"))
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.variant === "high", "the desired target")
+
+    screen.commitPending({ providerID: "openai", id: "gpt-5-2", variant: "low" })
+    expect(screen.pendingTarget()?.variant).toBe("high")
+
+    screen.commitPending({ providerID: "openai", id: "gpt-5-2", variant: "high" })
+    await waitFor(() => screen.pendingTarget() === undefined, "the committed target")
+    expect(screen.current()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
+    expect(screen.variant()).toBe("high")
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("the home screen commits the next-Session preference without a Session API call", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "home",
+    route: { type: "home" },
+    home: true,
+    order: [{ providerID: "google", modelID: "gemini-3-pro" }],
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.current()?.modelID === "gemini-3-pro", "the home preference")
+    expect(screen.pendingTarget()).toBeUndefined()
+    expect(switches).toEqual([])
   } finally {
     await screen.dispose()
   }

@@ -38,21 +38,14 @@ let autonomyState: SessionAutonomyState = { mode: "normal", yolo: 0 }
 let autonomySets: Array<Record<string, unknown>> = []
 let promptRequests: Array<{ id: string; text: string; resume?: boolean }> = []
 let failNextAutonomySet = false
-/** A gated, failing model switch so an explicit `/goal` can prove it waits for the selection. */
-let modelSwitchGate: Promise<void> | undefined
-let releaseModelSwitch: (() => void) | undefined
 let modelSwitchStarted = false
-let modelSwitchStatus = 204
 
 function resetFixture(state: SessionAutonomyState) {
   autonomyState = state
   autonomySets = []
   promptRequests = []
   failNextAutonomySet = false
-  modelSwitchGate = undefined
-  releaseModelSwitch = undefined
   modelSwitchStarted = false
-  modelSwitchStatus = 204
 }
 
 const route: FetchHandler = async (url, request) => {
@@ -74,8 +67,6 @@ const route: FetchHandler = async (url, request) => {
   }
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     modelSwitchStarted = true
-    if (modelSwitchGate) await modelSwitchGate
-    if (modelSwitchStatus !== 204) return json({ error: "simulated switch failure" }, { status: modelSwitchStatus })
     return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
@@ -268,45 +259,8 @@ test("keeps the draft and attachment and reports an error when goal calculation 
   }
 }, 30_000)
 
-test("awaits a pending model selection before an explicit /goal synthesis", async () => {
+test("keeps a model selection pending while an explicit /goal changes autonomy", async () => {
   resetFixture(goalState("active", "Old objective"))
-  modelSwitchStatus = 500
-  modelSwitchGate = new Promise<void>((resolve) => (releaseModelSwitch = resolve))
-  const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
-  try {
-    await focusComposer(screen)
-    // Starting a variant selection leaves an explicit switch in flight for this Session.
-    await screen.input.typeText("/variants")
-    await submit(screen)
-    await waitFor(() => screen.frame().includes("Select variant"), "the variant dialog")
-    screen.input.pressKey("ARROW_DOWN")
-    screen.input.pressEnter()
-    await waitFor(() => modelSwitchStarted, "the in-flight selection")
-
-    await screen.input.typeText("/goal replace the migration plan")
-    await submit(screen)
-    await Bun.sleep(100)
-    // The paid synthesis must not run on the old model while the selection is unresolved.
-    expect(autonomySets).toEqual([])
-
-    releaseModelSwitch?.()
-    await waitFor(() => screen.frame().includes("Warning"), "the failed selection warning")
-    // A failed selection starts no goal request and keeps the draft.
-    expect(autonomySets).toEqual([])
-    expect(screen.frame()).toContain("replace the migration plan")
-    expect(promptRequests).toEqual([])
-  } finally {
-    releaseModelSwitch?.()
-    modelSwitchGate = undefined
-    releaseModelSwitch = undefined
-    await screen.dispose()
-  }
-}, 30_000)
-
-test("replaces the goal after a pending selection settles successfully", async () => {
-  resetFixture(goalState("active", "Old objective"))
-  modelSwitchStatus = 204
-  modelSwitchGate = new Promise<void>((resolve) => (releaseModelSwitch = resolve))
   const screen = await renderScreen({ width: 100, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
     await focusComposer(screen)
@@ -315,21 +269,16 @@ test("replaces the goal after a pending selection settles successfully", async (
     await waitFor(() => screen.frame().includes("Select variant"), "the variant dialog")
     screen.input.pressKey("ARROW_DOWN")
     screen.input.pressEnter()
-    await waitFor(() => modelSwitchStarted, "the in-flight selection")
+    await waitFor(() => screen.frame().includes("Message YCoding…"), "the composer after selection")
+    expect(modelSwitchStarted).toBe(false)
 
     await screen.input.typeText("/goal replace the migration plan")
     await submit(screen)
-    await Bun.sleep(100)
-    expect(autonomySets).toEqual([])
-
-    releaseModelSwitch?.()
-    await waitFor(() => autonomySets.length > 0, "the goal replacement after the selection")
+    await waitFor(() => autonomySets.length > 0, "the goal replacement")
     expect(autonomySets).toEqual([{ goal: "replace the migration plan" }])
+    expect(modelSwitchStarted).toBe(false)
     expect(promptRequests).toEqual([])
   } finally {
-    releaseModelSwitch?.()
-    modelSwitchGate = undefined
-    releaseModelSwitch = undefined
     await screen.dispose()
   }
 }, 30_000)

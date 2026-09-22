@@ -1637,19 +1637,6 @@ export function Prompt(props: PromptProps) {
         agentID = "default"
       }
     }
-    // A pending explicit selection owns the next target. Await it before capturing this
-    // submission, or the draft would be admitted on the stale preference and then switch back. A
-    // failed selection admits nothing and keeps the draft and attachments.
-    const pendingError = await awaitPendingSelection()
-    if (pendingError) {
-      toast.show({
-        title: "Model switch needs attention",
-        message: errorMessage(pendingError),
-        variant: "warning",
-      })
-      finishOperation(currentOperation.id, { message: "Model switch failed · draft retained", error: true })
-      return false
-    }
     const fixedModel = btwSession()?.model
     let selectedModel = fixedModel
       ? { providerID: fixedModel.providerID, modelID: fixedModel.id }
@@ -2040,6 +2027,7 @@ export function Prompt(props: PromptProps) {
         return false
       }
       if (pendingEditorSelection) editor.markSelectionSent()
+      local.model.commitPending(sessionID, submission.payload.model)
     }
     history.append({
       ...submission.payload.history,
@@ -2232,20 +2220,6 @@ export function Prompt(props: PromptProps) {
   }
 
   /**
-   * Waits for any in-flight explicit selection for this Session and reports its failure. A caller
-   * that captures a model target must not proceed on the stale preference, and a failed selection
-   * must not silently continue into admission or paid goal synthesis.
-   */
-  async function awaitPendingSelection(): Promise<unknown | undefined> {
-    const pending = props.sessionID ? local.model.pending(props.sessionID)?.promise : undefined
-    if (!pending) return undefined
-    return pending.then(
-      () => undefined,
-      (error: unknown) => error,
-    )
-  }
-
-  /**
    * One `/goal` contract for both the composer and the palette command. Explicit text always
    * replaces the objective, even while one is active; the bare form stops, resumes the retained
    * objective without recalculation, or asks for one. A failed calculation keeps the draft and
@@ -2301,20 +2275,6 @@ export function Prompt(props: PromptProps) {
       clearPrompt()
       DialogSessionGoal.show(dialog, sessionID, undefined, (state) => props.onAutonomyUpdated?.(sessionID, state))
       return true
-    }
-    // Explicit replacement synthesizes through the model, so it must run on the model the user
-    // selected. Bare stop/resume performs no calculation and needs no wait. A failed pending
-    // selection keeps the draft and starts no request.
-    if (action.type === "replace") {
-      const pendingError = await awaitPendingSelection()
-      if (pendingError) {
-        toast.show({
-          title: "Model switch needs attention",
-          message: errorMessage(pendingError),
-          variant: "warning",
-        })
-        return false
-      }
     }
     try {
       const payload =
