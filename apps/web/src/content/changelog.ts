@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.4",
+    date: "2026-09-22",
+    title: "Custom OpenAI-compatible endpoints and chat/responses selection",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "A Custom OpenAI-compatible endpoint action in the command palette and a /custom-endpoint slash command register a custom base URL with a chat or responses selection and an optional provider id and API key, written to the configuration file." },
+      { tag: "Added", text: "OpenAI-compatible endpoints select their request surface in configuration via providers.<id>.settings.api or a per-model providers.<id>.models.<id>.api, where the configuration value overrides the catalog and the source default and the model entry overrides the provider setting." },
+      { tag: "Fixed", text: "Resolve a Session that selects the none model variant to its base model instead of reporting the variant as unavailable." },
+    ],
+  },
+  {
     version: "0.6.3",
     date: "2026-09-22",
     title: "Toggle Daybreak security access per Session",
