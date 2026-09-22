@@ -45,7 +45,7 @@ test("retained submission retry is an explicit conditional Prompt command", asyn
   expect(prompt).toContain('name: "prompt.retry"')
   expect(prompt).toMatch(/\.\.\.\(retry\(\)\s*\?/)
   expect(prompt).toContain("enabled: true")
-  expect(prompt).toContain("Previous send is unresolved · Retry or discard it before sending this draft")
+  expect(prompt).not.toContain("Previous send is unresolved")
   expect(prompt).toContain('name: "prompt.retry.discard"')
 })
 

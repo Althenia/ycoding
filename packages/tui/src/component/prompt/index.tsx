@@ -320,7 +320,6 @@ export function Prompt(props: PromptProps) {
   })
   const [auto, setAuto] = createSignal<AutocompleteRef>()
   const [retry, setRetry] = createSignal<SessionSubmissionRetry<PromptSubmissionPayload>>()
-  const [retryMode, setRetryMode] = createSignal<"exact" | "replaceable">()
   const [operation, setOperation] = createSignal<PromptOperation>()
   const [feedback, setFeedback] = createSignal<PromptFeedback>()
   const [missingTemporaryAttachments, setMissingTemporaryAttachments] = createSignal<string[]>([])
@@ -1294,7 +1293,6 @@ export function Prompt(props: PromptProps) {
               enabled: true,
               run: () => {
                 setRetry(undefined)
-                setRetryMode(undefined)
                 setFeedback({ message: "Previous submission recovery discarded" })
                 dialog.clear()
               },
@@ -1732,18 +1730,6 @@ export function Prompt(props: PromptProps) {
     const key = submissionKey(props.sessionID, payload)
     let retained = retry()
     if (retained && retained.key !== key) {
-      if (retryMode() !== "replaceable") {
-        setFeedback({
-          message: "Previous send is unresolved · Retry or discard it before sending this draft",
-          error: true,
-        })
-        toast.show({
-          message: "Retry the previous submission with its stable ID, or explicitly discard its recovery state.",
-          variant: "error",
-          duration: 5000,
-        })
-        return false
-      }
       const old = retained.payload.history
       if (
         old.text.trim() ||
@@ -1754,12 +1740,10 @@ export function Prompt(props: PromptProps) {
       )
         stash.push({ prompt: old })
       setRetry(undefined)
-      setRetryMode(undefined)
       retained = undefined
     }
     const submission = retainSessionSubmission(retained, key, metadata?.skills.length ?? 0, payload, props.sessionID)
     setRetry(submission)
-    setRetryMode("exact")
     const submittedRevision = draftRevision
     const sessionID = submission.sessionID
     let session = data.session.get(sessionID)
@@ -2028,7 +2012,6 @@ export function Prompt(props: PromptProps) {
         (error) => ({ error, phase }) as const,
       )
       if ("error" in result) {
-        setRetryMode(result.phase === "skill" ? "replaceable" : "exact")
         const hasAttachments = (submission.payload.files?.length ?? 0) > 0
         const message =
           result.phase === "skill"
@@ -2047,7 +2030,6 @@ export function Prompt(props: PromptProps) {
         return false
       }
       if (result.result.wakeError !== undefined) {
-        setRetryMode("exact")
         finishOperation(currentOperation.id, {
           message: "Prompt admitted but the wake failed · retry keeps the same prompt ID",
           error: true,
@@ -2067,7 +2049,6 @@ export function Prompt(props: PromptProps) {
       mode: currentMode,
     })
     setRetry(undefined)
-    setRetryMode(undefined)
     setFeedback(undefined)
     if (draftRevision === submittedRevision) {
       input.extmarks.clear()

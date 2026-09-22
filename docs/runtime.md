@@ -207,7 +207,7 @@ A terminal paste transfers text only, so an image on the host clipboard is never
 
 Missing temporary clipboard images block the first send with re-paste/remove guidance. A second explicit Enter, or `Remove unavailable attachment and send`, removes the missing attachment and sends the retained text. Clipboard subprocesses are bounded and cancellable; temporary image files are uniquely owned and released after managed attachment receipts are retained.
 
-Admission and wake are separate. An unresolved admission or failed wake retains the original Session, prompt, and skill identities and any managed attachment receipts for exact retry. `Retry previous submission` restores the retained input; a changed draft cannot silently replace an unresolved send. `Discard previous submission recovery` discards local recovery state, not a durable admitted prompt. Skill activation failure prevents prompt admission and allows an intentional changed next prompt after that pre-admission attempt settles.
+Admission and wake are separate. An unresolved admission or failed wake retains the original Session, prompt, and skill identities and any managed attachment receipts for exact retry of the unchanged draft. `Retry previous submission` restores the retained input. A changed draft replaces the unresolved send: the previous draft is stashed and local recovery state is discarded, then the changed draft is admitted with fresh identities. `Discard previous submission recovery` discards local recovery state, not a durable admitted prompt. Skill activation failure prevents prompt admission and allows an intentional changed next prompt after that pre-admission attempt settles.
 
 ### Durable runtime observations
 

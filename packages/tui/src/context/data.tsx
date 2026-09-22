@@ -1603,7 +1603,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
     }
 
     const result = {
-      on: client.event.on,
+      on: client.event.on ?? (() => () => {}),
       listen: client.event.listen,
       session: {
         list() {
