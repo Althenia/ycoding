@@ -8,7 +8,7 @@ type BtwSessionApi = {
   create(input: {
     parentID: string
     agent: string
-    model: { providerID: string; id: string; variant?: string }
+    model?: { providerID: string; id: string; variant?: string }
   }): Promise<SessionInfo>
   synthetic(input: {
     sessionID: string
@@ -38,10 +38,14 @@ export async function openBtwSession(input: {
   api: BtwSessionApi
   parentID: string
   messages: readonly SessionMessageInfo[]
-  model: { providerID: string; id: string; variant?: string }
+  model?: { providerID: string; id: string; variant?: string }
   text?: string
 }) {
-  const session = await input.api.create({ parentID: input.parentID, agent: "btw", model: input.model })
+  const session = await input.api.create({
+    parentID: input.parentID,
+    agent: "btw",
+    ...(input.model ? { model: input.model } : {}),
+  })
   await input.api.synthetic({
     sessionID: session.id,
     text: rawParentSlice(input.messages),

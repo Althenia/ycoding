@@ -48,6 +48,33 @@ function frame(app: Awaited<ReturnType<typeof testRender>>) {
 }
 
 describe("transcript row residency", () => {
+  test("allocates no lines or child context for a hidden goal tool", async () => {
+    const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
+      id: "msg_hidden_goal",
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "openai", id: "gpt-5.6" },
+      content: [{
+        type: "tool",
+        id: "call_hidden_goal",
+        name: "goal",
+        state: { status: "completed", input: { action: "get" }, content: [], structured: {} },
+        time: { created: 1, ran: 1, completed: 2 },
+      }],
+      time: { created: 1, completed: 2 },
+    }
+    const app = await renderTranscript(
+      { type: "part", ref: { messageID: message.id, partID: "call_hidden_goal" } },
+      () => message,
+    )
+    try {
+      expect(frame(app)).toBe("before\nafter")
+      expect(message.content).toHaveLength(1)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("does not render a completed duplicate Skill tool part", async () => {
     const message: Extract<SessionMessageInfo, { type: "assistant" }> = {
       id: "msg_duplicate_skill",

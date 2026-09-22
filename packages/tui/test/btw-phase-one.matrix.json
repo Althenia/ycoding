@@ -12,16 +12,16 @@
   "cases": [
     {
       "id": "CMP-001",
-      "title": "BTW alone mounts one ordinary composer in collapsed and expanded layouts",
+      "title": "BTW alone mounts one ordinary composer without a delegated-work picker",
       "family": "composer",
       "layer": "integration",
       "risk": "high",
       "variant": "regression",
       "covers": ["composer.btw-conversation"],
       "preconditions": ["root, ordinary child, and BTW child fixtures are hydrated"],
-      "stimulus": ["render each Session route", "toggle the BTW expanded composer"],
+      "stimulus": ["render each Session route", "attempt to open the BTW delegated-work picker"],
       "oracles": [
-        {"type": "render", "expected": "root is unchanged, ordinary child has no ordinary composer, and BTW has exactly one composer in each layout"},
+        {"type": "render", "expected": "root is unchanged, ordinary child has no ordinary composer, and BTW keeps exactly one composer with no delegated-work picker"},
         {"type": "state", "expected": "BTW draft remains owned by the single focused composer"}
       ],
       "negative": ["ordinary managed child does not gain a composer", "BTW does not mount duplicate prompts"],

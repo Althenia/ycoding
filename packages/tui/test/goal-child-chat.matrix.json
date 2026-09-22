@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "feature": "Goal steers and distinct child chat surfaces",
+  "scope": "change",
+  "changed_capabilities": ["goal.steer-display", "subagent.todo-display", "btw.chat-layout", "btw.return-navigation"],
+  "required_families": ["rendering", "subagent", "keyboard"],
+  "cases": [
+    {
+      "id": "KB-001",
+      "title": "BTW returns to main with an unsent draft using mouse or leader shortcut",
+      "family": "keyboard",
+      "layer": "integration",
+      "risk": "high",
+      "variant": "regression",
+      "covers": ["btw.return-navigation"],
+      "preconditions": ["BTW composer focused with a draft"],
+      "stimulus": ["click Back to main or press leader followed by up"],
+      "oracles": [
+        { "type": "render", "expected": "main transcript replaces BTW and draft remains available" },
+        { "type": "side_effect", "expected": "no prompt or interrupt request" }
+      ],
+      "negative": ["navigation does not submit or discard the draft"],
+      "determinism": ["fixed HTTP fixtures and input events; wait for rendered parent identity"],
+      "cleanup": ["dispose renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "RND-001",
+      "title": "goal steer renders generated text with synthetic provenance",
+      "family": "rendering",
+      "layer": "integration",
+      "risk": "medium",
+      "variant": "regression",
+      "covers": ["goal.steer-display"],
+      "preconditions": ["resident goal synthetic message"],
+      "stimulus": ["open main Session"],
+      "oracles": [{ "type": "render", "expected": "Goal · steer block shows generated text" }],
+      "negative": ["generic description does not replace generated text"],
+      "determinism": ["fixed HTTP fixtures and viewport"],
+      "cleanup": ["dispose renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "SUB-001",
+      "title": "child todos hydrate and update while the parent rail stays hidden",
+      "family": "subagent",
+      "layer": "integration",
+      "risk": "medium",
+      "variant": "edge",
+      "covers": ["subagent.todo-display"],
+      "preconditions": ["child has completed, active and pending todos"],
+      "stimulus": ["open child at 80 columns", "emit completed todo list"],
+      "oracles": [{ "type": "render", "expected": "all tasks and current markers render; open count reaches zero" }],
+      "negative": ["ordinary child gains no conversation composer"],
+      "determinism": ["fixed fixtures; wait for event subscription and rendered predicate"],
+      "cleanup": ["dispose renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    },
+    {
+      "id": "RND-002",
+      "title": "BTW chat distinguishes snapshot context from delegated work at narrow and wide widths",
+      "family": "rendering",
+      "layer": "integration",
+      "risk": "medium",
+      "variant": "edge",
+      "covers": ["btw.chat-layout"],
+      "preconditions": ["BTW child and immediate parent hydrated"],
+      "stimulus": ["render at 80 and 160 columns", "attempt to expand delegated-work picker"],
+      "oracles": [
+        {
+          "type": "render",
+          "expected": "BTW identity, read-only snapshot context, back navigation and export hint render with one composer"
+        },
+        { "type": "side_effect", "expected": "opening side chat sends no prompt" }
+      ],
+      "negative": ["no subagent count, sibling navigation, economics or picker"],
+      "determinism": ["fixed HTTP fixtures and viewports"],
+      "cleanup": ["dispose renderer and fixture server"],
+      "platforms": ["in-memory-renderer"]
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import type { SessionCacheDiagnostics, SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import type { SessionCacheDiagnostics, SessionOrchestrationTask } from "@ycoding-ai/client"
 import { createMemo, For, Show, createEffect, createSignal, onMount, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
 import { TextAttributes, ScrollBoxRenderable } from "@opentui/core"
@@ -85,26 +85,6 @@ export function entriesFromTasks(
       model: formatSubagentModel(task.model),
       startedAt: task.time.created,
       current: task.sessionID === currentSessionID,
-    }))
-}
-
-export function entriesFromBtwSessions(sessions: ReadonlyArray<SessionInfo>, currentSessionID: string): SubagentEntry[] {
-  return sessions
-    .filter((session) => session.agent === "btw")
-    .toSorted((left, right) => {
-      const created = left.time.created - right.time.created
-      if (created !== 0) return created
-      return left.id.localeCompare(right.id)
-    })
-    .map((session) => ({
-      sessionID: session.id,
-      agent: "BTW",
-      title: session.title,
-      status: "completed",
-      model: formatSubagentModel(session.model),
-      startedAt: session.time.created,
-      current: session.id === currentSessionID,
-      awaitingInput: false,
     }))
 }
 

@@ -81,6 +81,8 @@ import {
 import { SubagentSiblingSwitcher } from "./subagent-sibling-switcher"
 import { SubagentEconomicsSurface } from "./subagent-economics"
 import { SubagentAnswerComposer, SubagentBlockedSurface } from "./subagent-blocked"
+import { BtwContext, BtwFooter } from "./btw"
+import { SubagentTodos } from "./subagent-todos"
 import { filetype } from "../../util/filetype"
 import parsers from "../../parsers-config"
 import { errorMessage } from "../../util/error"
@@ -525,23 +527,17 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   })
   const parentID = createMemo(() => session()?.parentID)
   const btw = createMemo(() => Boolean(session()?.parentID && session()?.agent === "btw"))
+  const subagent = createMemo(() => Boolean(parentID() && !btw()))
   const parent = createMemo(() => (parentID() ? data.session.get(parentID()!) : undefined))
   const siblings = createMemo(() => {
     const parent = parentID()
-    if (!parent) return []
-    const tasks = data.session.subagent.page(parent)?.data ?? []
-    if (session()?.agent === "btw") return tasks
-    // include btw child sessions created via session.create for navigation
-    const btw = data.session
-      .list()
-      .filter((s) => s.parentID === parent && s.agent === "btw")
-      .map((s) => ({ sessionID: s.id, agent: s.agent, state: "running" as const, title: s.title })) as unknown as typeof tasks
-    return [...tasks, ...btw]
+    if (!parent || !subagent()) return []
+    return data.session.subagent.page(parent)?.data ?? []
   })
   const currentTask = createMemo(() => siblings().find((task) => task.sessionID === route.sessionID))
   createEffect(
     on([() => session()?.id, parentID, () => client.connection.status()], ([sessionID, parent, status]) => {
-      if (!sessionID || !parent || status !== "connected") return
+      if (!sessionID || !parent || !subagent() || status !== "connected") return
       void hydrateSubagentPage({
         pagination: data.session.subagent,
         parentID: parent,
@@ -565,7 +561,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   }
   const assistantIdentity = createMemo(() => {
     if (!session()?.parentID) return { label: "YCODING", subagent: false }
-    if (session()?.agent === "btw") return { label: "BTW SIDE CHAT", subagent: true }
+    if (btw()) return { label: "BTW SIDE CHAT", subagent: false }
     return {
       label: `${(currentTask()?.agent ?? session()?.title ?? "Subagent").toUpperCase()} SUBAGENT`,
       subagent: true,
@@ -1334,6 +1330,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       title: "Toggle subagent picker",
       id: "session.child.first",
       group: "Session",
+      enabled: !btw(),
       run: () => {
         if (disabled() || composer.open || (session()?.parentID && !btw())) {
           setComposer("open", false)
@@ -1365,7 +1362,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       id: "session.child.next",
       group: "Session",
       palette: undefined,
-      enabled: !!session()?.parentID,
+      enabled: subagent(),
       run: () => {
         navigateSibling(1)
       },
@@ -1375,7 +1372,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
       id: "session.child.previous",
       group: "Session",
       palette: undefined,
-      enabled: !!session()?.parentID,
+      enabled: subagent(),
       run: () => {
         navigateSibling(-1)
       },
@@ -1438,14 +1435,18 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         pendingModel={pendingHeaderModel()}
         pendingVariant={pendingHeaderVariant()}
         state={headerState()}
-        subagent={!!session()?.parentID}
+        subagent={subagent()}
+        sideChat={btw()}
       />
       <box flexDirection="row" flexGrow={1} minHeight={0}>
         <box flexGrow={1} minHeight={0}>
           <Show when={session()}>
             <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} gap={1}>
-              <Show when={session()?.parentID}>
+              <Show when={subagent()}>
                 <SubagentSiblingSwitcher />
+              </Show>
+              <Show when={btw() && parentID()}>
+                {(id) => <BtwContext parentID={id()} />}
               </Show>
               <Show when={hiddenCount() > 0}>
                 <box paddingLeft={1} flexShrink={0}>
@@ -1517,6 +1518,9 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   )}
                 </For>
                 <BackgroundToolHint messages={messages()} />
+                <Show when={subagent()}>
+                  <SubagentTodos sessionID={route.sessionID} />
+                </Show>
                 <Show when={session()?.revert?.messageID}>
                   <RevertMessage
                     count={
@@ -1555,13 +1559,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                   </box>
                 )}
               </Show>
-              <Composer
+              <Show when={!btw()}><Composer
                 sessionID={route.sessionID}
                 open={composer.open}
                 defaultTab={composer.tab}
                 onClose={() => setComposer("open", false)}
                 prompt={composer.open && !disabled() ? sessionPrompt() : undefined}
-              />
+              /></Show>
               <Switch>
                 <Match when={blockedQuestion()}>
                   <SubagentAnswerComposer sessionID={route.sessionID} branch={branch()} />
@@ -1588,7 +1592,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
                 <Match when={session()?.parentID && !btw()}>{null}</Match>
                 <Match when={!disabled() && !composer.open}>{sessionPrompt()}</Match>
               </Switch>
-              <Show when={session()?.parentID && !blockedQuestion()}>
+              <Show when={subagent() && !blockedQuestion()}>
                 <SubagentEconomicsSurface economics={economics()} />
               </Show>
             </box>
@@ -1615,12 +1619,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
           </Switch>
         </Show>
       </box>
-      <Show
-        when={session()?.parentID}
-        fallback={<Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} />}
-      >
-        <SubagentFooter />
-      </Show>
+      <Switch>
+        <Match when={btw() && parentID()}>
+          {(id) => <BtwFooter sessionID={route.sessionID} parentID={id()} />}
+        </Match>
+        <Match when={subagent()}><SubagentFooter /></Match>
+        <Match when={true}><Footer branch={branch()} sessionID={route.sessionID} autonomy={autonomy()} /></Match>
+      </Switch>
       </context.Provider>
     </Show>
   )
@@ -2244,6 +2249,7 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   const metadata = () => (props.message.type === "synthetic" ? props.message.metadata : undefined)
   const source = () => stringValue(metadata()?.source)
   const contextSource = () => stringValue(props.message.metadata?.contextSource)
+  const goalSteer = () => props.message.type === "synthetic" && recordValue(metadata()?.autonomy)?.goal === true
   const subagentNotification = () => source() === "subagent_notification"
   const completion = () => source() === "subagent" || source() === "shell"
   const state = () => stringValue(metadata()?.state)
@@ -2275,6 +2281,14 @@ function SessionNoticeMessageV2(props: { message: SessionMessageInfo }) {
   }
   return (
     <Switch>
+      <Match when={goalSteer()}>
+        <box paddingLeft={1} paddingRight={1} paddingBottom={1} border={["top"]} borderColor={themeV2.border.default}>
+          <text fg={themeV2.text.feedback.info.default}><b>Goal · steer</b></text>
+          <text fg={themeV2.text.default} wrapMode="word">
+            {props.message.type === "synthetic" ? props.message.text : ""}
+          </text>
+        </box>
+      </Match>
       <Match when={subagentNotification()}>
         <SessionToolActivityRow
           tool="subagent"
@@ -4522,6 +4536,7 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 }
 
 function transcriptToolPartVisible(part: SessionMessageAssistantTool) {
+  if (part.name === "goal") return false
   return (
     part.name !== "skill" ||
     part.state.status !== "completed" ||

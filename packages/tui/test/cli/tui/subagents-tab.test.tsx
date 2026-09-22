@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test"
 import { BoxRenderable, type Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
-import type { SessionInfo, SessionOrchestrationTask } from "@ycoding-ai/client"
+import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 import { createEffect } from "solid-js"
 import { ClientProvider } from "../../../src/context/client"
 import { DataProvider } from "../../../src/context/data"
@@ -76,50 +76,6 @@ test("formats provider, model, and optional variant", () => {
   expect(module.formatSubagentModel(undefined)).toBeUndefined()
   expect(module.formatSubagentCacheHit(undefined)).toBe("—")
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
-})
-
-test("lists BTW children in stable creation order with independent model labels", () => {
-  const sessions: SessionInfo[] = [
-    {
-      id: "ses_btw_second",
-      parentID: "ses_parent",
-      agent: "btw",
-      title: "Second question",
-      projectID: "project",
-      location: { directory: "/workspace" },
-      model: { providerID: "anthropic", id: "claude-sonnet", variant: "default" },
-      cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      time: { created: 2, updated: 2 },
-    },
-    {
-      id: "ses_btw_first",
-      parentID: "ses_parent",
-      agent: "btw",
-      title: "First question",
-      projectID: "project",
-      location: { directory: "/workspace" },
-      model: { providerID: "openai", id: "gpt-5.6", variant: "high" },
-      cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-      time: { created: 1, updated: 1 },
-    },
-  ]
-
-  expect(module.entriesFromBtwSessions(sessions, "ses_btw_second")).toEqual([
-    expect.objectContaining({
-      sessionID: "ses_btw_first",
-      agent: "BTW",
-      model: "openai/gpt-5.6#high",
-      current: false,
-    }),
-    expect.objectContaining({
-      sessionID: "ses_btw_second",
-      agent: "BTW",
-      model: "anthropic/claude-sonnet#default",
-      current: true,
-    }),
-  ])
 })
 
 test("sections active tasks before inactive tasks and sorts each section deterministically", () => {

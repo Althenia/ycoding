@@ -155,7 +155,7 @@ export function sessionRetryHeaderState(
 }
 
 export function Header(
-  props: SessionHeaderIdentity & { state: SessionHeaderState; focused?: SessionHeaderSegmentKey; subagent?: boolean },
+  props: SessionHeaderIdentity & { state: SessionHeaderState; focused?: SessionHeaderSegmentKey; subagent?: boolean; sideChat?: boolean },
 ) {
   const { themeV2 } = useTheme()
   const dimensions = useTerminalDimensions()
@@ -202,7 +202,7 @@ export function Header(
   })
   const identity = createMemo(() => resolveIdentity(props))
   const pending = createMemo(() => {
-    if (props.subagent) return []
+    if (props.subagent || props.sideChat) return []
     return [
       pendingAgent(identity().agent, props.pendingAgent),
       pendingModelVariant(
@@ -275,7 +275,7 @@ export function Header(
         backgroundColor={themeV2.background.chrome}
       >
         <Show
-          when={props.subagent}
+          when={props.subagent || props.sideChat}
           fallback={
             <box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
               <BrandMark width={2} height={1} />
@@ -284,7 +284,7 @@ export function Header(
           }
         >
           <text fg={themeV2.text.feedback.info.default} wrapMode="none">
-            {getGlyph("subagent").glyph} subagent
+            {props.sideChat ? "BTW" : `${getGlyph("subagent").glyph} subagent`}
           </text>
         </Show>
         <text flexGrow={1} wrapMode="none">

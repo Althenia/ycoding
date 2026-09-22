@@ -2180,6 +2180,14 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         if (details.type === "server.connected") {
           const mutations = new Map<string, DataSessionStatus>()
           activeSnapshot = mutations
+          // Durable task state is broader than execution activity: waiting and cancelling children
+          // remain active while absent from the execution snapshot. Refresh every resident parent
+          // after reconnect instead of leaving its cached summary dependent on a running child.
+          void Promise.all(
+            Object.keys(store.session.subagent).map((parentID) =>
+              result.session.subagent.sync(parentID).catch(() => undefined),
+            ),
+          )
           void client.api.session
             .active()
             .then(async (active) => {

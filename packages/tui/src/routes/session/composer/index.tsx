@@ -8,6 +8,7 @@ import { useData } from "../../../context/data"
 import { groupSessionShells } from "../../../util/session"
 import { SubagentsTab } from "./subagents-tab"
 import { ShellTab } from "./shell-tab"
+import { SideChatsTab } from "./side-chats-tab"
 
 export interface ComposerHint {
   label: string
@@ -181,6 +182,7 @@ export function Composer(props: ComposerProps) {
               </Show>
             </box>
             <SubagentsTab sessionID={props.sessionID} />
+            <SideChatsTab sessionID={props.sessionID} />
             <ShellTab sessionID={props.sessionID} />
             <box flexDirection="row" flexShrink={0}>
               <For each={footerHints()}>

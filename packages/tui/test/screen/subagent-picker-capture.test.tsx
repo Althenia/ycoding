@@ -82,8 +82,9 @@ test("captures populated subagent picker states at reference terminal dimensions
       const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 45
       expectAt(lines, tabs, 3, "Subagents")
       expectAt(lines, tabs, 14, "2")
-      expectAt(lines, tabs, 19, "Shell")
-      expectAt(lines, tabs, 25, "3")
+      expectAt(lines, tabs, 19, "Side chats")
+      expectAt(lines, tabs, 33, "Shell")
+      expectAt(lines, tabs, 39, "3")
       const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13, 15, 16] : [50, 52, 54, 55]
       expectAt(lines, rows[0]!, 3, "? awaiting")
       expectAt(lines, rows[0]!, 19, "test-triage  · Tria")
