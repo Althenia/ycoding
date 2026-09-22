@@ -11,6 +11,7 @@ type DiscoveredModel = {
   readonly id: string
   readonly name?: string
   readonly capabilities?: { readonly tools?: boolean; readonly input?: string[]; readonly output?: string[] }
+  readonly limit?: { readonly context?: number; readonly input?: number; readonly output?: number }
   readonly variants?: Array<{
     readonly id: string
     readonly settings?: Record<string, unknown>
@@ -31,6 +32,7 @@ function parseModels(value: unknown): DiscoveredModel[] {
     const item = record(candidate)
     if (!item || typeof item.id !== "string" || !item.id) throw new Error("invalid OpenAI model record")
     const capabilities = record(item.capabilities)
+    const limit = record(item.limit)
     const variants = Array.isArray(item.variants)
       ? item.variants.flatMap((candidate) => {
           const variant = record(candidate)
@@ -58,6 +60,15 @@ function parseModels(value: unknown): DiscoveredModel[] {
               ...(Array.isArray(capabilities.output) && capabilities.output.every((item) => typeof item === "string")
                 ? { output: capabilities.output as string[] }
                 : {}),
+            },
+          }
+        : {}),
+      ...(limit
+        ? {
+            limit: {
+              ...(typeof limit.context === "number" ? { context: limit.context } : {}),
+              ...(typeof limit.input === "number" ? { input: limit.input } : {}),
+              ...(typeof limit.output === "number" ? { output: limit.output } : {}),
             },
           }
         : {}),
@@ -186,6 +197,7 @@ export const Plugin = define({
             if (discovered.name) model.name = discovered.name
             if (source?.family) model.family = source.family
             if (source?.limit) model.limit = { ...source.limit }
+            if (discovered.limit) model.limit = { ...model.limit, ...discovered.limit }
             if (source?.cost) model.cost = source.cost.map((cost) => ({ ...cost, cache: { ...cost.cache } }))
             model.capabilities = {
               tools: discovered.capabilities?.tools ?? source?.capabilities.tools ?? false,
