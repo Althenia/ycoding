@@ -13,6 +13,9 @@ const PROVIDER_ID = "openrouter"
 const OPENAI_MODEL_ID = "gpt-5.6"
 const OPENAI_PROVIDER_ID = "openai"
 const MCP_SERVER = "runtime-catalog"
+const GOAL_SYNTHESIS_TEXT = "Ship the safest database default decision"
+const GOAL_STEER_START = "User-proxy steer: begin with the safest database default"
+const GOAL_STEER_CONTINUED = "User-proxy steer: finish the task on the user's behalf"
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -362,9 +365,18 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         )
       }
 
-      const continuation = text.includes("Continue autonomously toward the active user goal.")
-      const proxy = text.includes("The assistant is waiting for user input.")
-      if (continuation && proxy && !text.includes("Goal completed:"))
+      if (text.includes("Goal synthesis request:"))
+        return new Response(streamResponse({ index, content: GOAL_SYNTHESIS_TEXT }), {
+          headers: { "content-type": "text/event-stream" },
+        })
+      if (text.includes("User-proxy steer request:")) {
+        const activeGoal = text.match(/Active goal: ([^\\"]+)/)?.[1]
+        const steer = text.includes("Phase: continue") ? GOAL_STEER_CONTINUED : GOAL_STEER_START
+        return new Response(streamResponse({ index, content: `${steer}. Goal: ${activeGoal ?? ""}` }), {
+          headers: { "content-type": "text/event-stream" },
+        })
+      }
+      if (text.includes(GOAL_STEER_CONTINUED) && !text.includes("Goal completed:"))
         return new Response(
           toolCallResponse({
             index,
@@ -378,13 +390,8 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
           { headers: { "content-type": "text/event-stream" } },
         )
       if (text.includes("runtime-smoke-subagent-block")) await sleep(5_000)
-      const content = continuation ? (proxy ? "Goal verified and complete." : "Which database should I use?") : index === 1 ? "First" : "Second"
       return new Response(
-        streamResponse({
-          index,
-          content,
-          ...(continuation ? { cached: 0, cacheWrite: 0, prompt: 200 } : {}),
-        }),
+        streamResponse({ index, content: index === 1 ? "First" : "Second" }),
         { headers: { "content-type": "text/event-stream" } },
       )
     },
@@ -753,15 +760,20 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (completedGoal.mode !== "normal") throw new Error(`Completed Goal did not return to normal mode: ${completedGoal.mode}`)
     if (completedGoal.goal?.iteration !== 1)
       throw new Error(`Expected one Goal continuation, got ${completedGoal.goal?.iteration ?? "missing"}`)
-    const continuation = requests.find((request) =>
-      request.text.includes("Continue autonomously toward the active user goal.") &&
-      request.text.includes("The assistant is waiting for user input."),
+    const steerRequest = requests.find(
+      (request) =>
+        request.text.includes("User-proxy steer request:") &&
+        request.text.includes("Phase: continue") &&
+        request.text.includes(`Active goal: ${canonicalGoal}`),
     )
-    if (!continuation) throw new Error("Goal mode did not issue a user-proxy continuation request")
-    if (!continuation.text.includes(`Goal: ${canonicalGoal}`))
-      throw new Error("Goal continuation omitted the canonical durable goal text")
-    if (!continuation.text.includes("Answer it on the user's behalf"))
-      throw new Error("Goal continuation did not include user-proxy instructions")
+    if (!steerRequest)
+      throw new Error("Goal mode did not generate a continuation user-proxy steer for the canonical goal")
+    const continuation = requests.find(
+      (request) =>
+        request.text.includes(`${GOAL_STEER_CONTINUED}. Goal: ${canonicalGoal}`) &&
+        !request.text.includes("User-proxy steer request:"),
+    )
+    if (!continuation) throw new Error("Goal mode did not issue a user-proxy steer continuation request")
 
     phase = "durable subagent orchestration"
     const subagentParent = await client.session.create({
