@@ -462,6 +462,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Resolve web release version
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.ref_name }}" == web-v* ]]; then
+            version="${{ github.ref_name }}"
+            version="${version#web-v}"
+          else
+            version="$(ls docs/releases/web/v*.md | sed 's#.*/web/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
+          fi
+          echo "WEB_VERSION=$version" >>"$GITHUB_ENV"
+          echo "WEB_RELEASE_TAG=web-v$version" >>"$GITHUB_ENV"
+
       - name: Create web GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
