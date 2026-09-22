@@ -89,6 +89,14 @@ bun run test:remote
 
 The web build writes `apps/web/dist` and includes the maintained installer and generated configuration Schema. Deployment requires configured sign-in credentials and the reviewed authentication-metadata migration; building does not deploy anything.
 
+## Release
+
+TUI and web share the **same version number**. Release notes live under `docs/releases/tui/` for the TUI package and `docs/releases/web/` for the web client; both use the same version filename (e.g. `docs/releases/tui/v0.6.4.md` and `docs/releases/web/v0.6.4.md`). Never add a `web-` prefix to web release notes.
+
+The `service` branch is the backend-sync branch: any backend change that affects TUI or web must be merged through `service` before landing on `main`. Do not branch `main` directly for backend-only changes.
+
+The release workflow (`release.yml`) triggers on `push` to tags `v*`, creates a GitHub release with notes from `docs/releases/v<version>.md`, and runs a separate `deploy-web` job that reads `apps/web/package.json` for the web version and creates a `web-<version>` GitHub release.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
