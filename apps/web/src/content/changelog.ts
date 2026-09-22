@@ -22,6 +22,18 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.3",
+    date: "2026-09-22",
+    title: "Toggle Daybreak security access per Session",
+    tags: ["Added", "Changed"],
+    changes: [
+      { tag: "Added", text: "A per-Session Daybreak toggle in the command palette and the /daybreak slash command with blue, red, or off arguments; without one it cycles off → blue → red → off and offers only the programs the active model advertises." },
+      { tag: "Added", text: "ChatGPT OAuth Sessions on a program-advertising model send access_programs.cyber to the Codex backend for reduced-refusal security work. API-key and custom-provider requests omit it, unadvertised models fail closed, and provider authorization still applies." },
+      { tag: "Changed", text: "Daybreak availability appears through the per-Session toggle instead of separate Daybreak Blue and Daybreak Red model-picker entries, keeping one entry per model in the list." },
+      { tag: "Changed", text: "Sessions that selected a removed daybreak model entry re-select the base model once." },
+    ],
+  },
+  {
     version: "0.6.2",
     date: "2026-09-22",
     title: "Usage reports and deliberate updates",
