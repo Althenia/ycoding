@@ -63,6 +63,13 @@ Use a short branch name of at most three words, separated by hyphens. Do not use
 
 Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 
+## Release practices
+
+- TUI and web releases share the **same version number**; never add a `web-` prefix to web release notes. Web release notes live under `docs/releases/web/` with the same version filename (e.g. `docs/releases/web/v0.6.4.md`).
+- Write release notes under `docs/releases/tui/` for the TUI package and under `docs/releases/web/` for the web client. Both use the same version string.
+- The release workflow (`release.yml`) triggers on `push` to tags `tui-v*` (TUI release) or `web-v*` (web release). TUI creates a `tui-v<version>` GitHub release; web creates a `web-v<version>` release and deploys to Cloudflare.
+- Do not add a `web-` prefix to web release notes filenames or content. The web release notes file is `docs/releases/web/<version>.md` (same version as TUI).
+
 ## Commits and PR titles
 
 Use conventional commit-style messages and PR titles: `type(scope): summary`.

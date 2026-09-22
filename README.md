@@ -89,6 +89,12 @@ bun run test:remote
 
 The web build writes `apps/web/dist` and includes the maintained installer and generated configuration Schema. Deployment requires configured sign-in credentials and the reviewed authentication-metadata migration; building does not deploy anything.
 
+## Release
+
+TUI and web share the **same version number**. Release notes live under `docs/releases/tui/` for the TUI package and `docs/releases/web/` for the web client; both use the same version filename (e.g. `docs/releases/tui/v0.6.4.md` and `docs/releases/web/v0.6.4.md`). Never add a `web-` prefix to web release notes.
+
+The release workflow (`release.yml`) triggers on `push` to tags `tui-v*` (TUI release) or `web-v*` (web release). TUI creates a `tui-v<version>` GitHub release; web creates a `web-v<version>` release and deploys to Cloudflare.
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
