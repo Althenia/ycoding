@@ -630,6 +630,7 @@ const layer = Layer.effect(
     const admitGoalContinuation = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       state: SessionAutonomy.State,
+      text: string,
     ) {
       const goal = state.goal
       if (!goal || goal.status !== "active") return state
@@ -637,8 +638,8 @@ const layer = Layer.effect(
       const startInput = SessionPending.Message.make({
         type: "synthetic",
         data: {
-          text: SessionAutonomy.continuationPrompt(goal),
-          description: "Autonomous goal start",
+          text,
+          description: "Goal · steer",
           metadata: { autonomy: { yolo: state.yolo, goal: true, iteration: goal.iteration } },
         },
         delivery: "steer",
@@ -805,6 +806,12 @@ const layer = Layer.effect(
             const snapshot = yield* autonomy.snapshot(input.sessionID).pipe(notFound)
             const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
             const synthesized = yield* goals.synthesize({ session, text: rawText })
+            const candidate = SessionAutonomy.makeGoal({
+              text: synthesized,
+              rawText,
+              maxNoProgress: input.maxNoProgress,
+            })
+            const steer = yield* goals.steer({ session, goal: candidate, phase: "start" })
             const applied = yield* autonomy
               .setGoalIfCurrent({
                 sessionID: input.sessionID,
@@ -816,15 +823,22 @@ const layer = Layer.effect(
               })
               .pipe(notFound)
             if (!applied.applied) return yield* new SessionGoal.Error({ code: "goal.stale_calculation" })
-            return yield* admitGoalContinuation(input.sessionID, applied.state)
+            return yield* admitGoalContinuation(input.sessionID, applied.state, steer)
           }
           if (goal === true) {
-            const current = yield* autonomy.get(input.sessionID).pipe(notFound)
-            if (!current.goal) return yield* new SessionGoal.Error({ code: "goal.no_retained_goal" })
+            const snapshot = yield* autonomy.snapshot(input.sessionID).pipe(notFound)
+            if (!snapshot.state.goal) return yield* new SessionGoal.Error({ code: "goal.no_retained_goal" })
+            const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+            const steer = yield* goals.steer({
+              session,
+              goal: { ...snapshot.state.goal, status: "active" },
+              phase: "start",
+            })
             const resumed = yield* autonomy
-              .set({ sessionID: input.sessionID, yolo, goal: true, maxNoProgress: input.maxNoProgress })
+              .resumeGoalIfCurrent({ sessionID: input.sessionID, expectedSequence: snapshot.sequence, yolo })
               .pipe(notFound)
-            return yield* admitGoalContinuation(input.sessionID, resumed)
+            if (!resumed.applied) return yield* new SessionGoal.Error({ code: "goal.stale_calculation" })
+            return yield* admitGoalContinuation(input.sessionID, resumed.state, steer)
           }
           return yield* autonomy
             .set({

@@ -270,7 +270,7 @@ const synthesizedGoal = "Keep the remote bridge honest across reconnects and res
 
 test("bridges authorized session operations against an isolated server", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-bridge-"))
-  const server = await startServer(directory, { provider: { text: synthesizedGoal, holdAfterFirst: true } })
+  const server = await startServer(directory, { provider: { text: synthesizedGoal, holdAfter: 2 } })
   const provider = server.provider
   if (provider === undefined) throw new Error("the isolated server must expose its provider stand-in")
   const sessionID = "ses_remote_bridge_integration"
@@ -349,8 +349,10 @@ test("bridges authorized session operations against an isolated server", async (
     // The model boundary is the loopback stand-in: it received the synthesis
     // request carrying the user's goal text, and the projected goal text is the
     // stand-in's completion rather than an echo of the request.
-    expect(provider.requests().length).toBeGreaterThan(0)
+    expect(provider.requests().length).toBeGreaterThanOrEqual(2)
     expect(JSON.stringify(provider.requests()[0])).toContain(goalRequest)
+    expect(JSON.stringify(provider.requests()[1])).toContain(`Active goal: ${synthesizedGoal}`)
+    expect(JSON.stringify(provider.requests()[1])).toContain("Phase: start")
     expect(goalSet.data.mode).toBe("normal")
     expect(goalSet.data.goal?.status).toBe("active")
     expect(goalSet.data.goal?.text).toBe(synthesizedGoal)

@@ -57,8 +57,11 @@ const client = Layer.mock(LLMClient.Service)({
     if (text.includes("empty output")) return Stream.make(LLMEvent.finish({ reason: "stop" }))
     if (text.includes("no settlement"))
       return Stream.make(LLMEvent.textDelta({ id: "goal", text: "Unsettled goal text." }))
+    const output = text.includes("User-proxy steer request:")
+      ? "Inspect the SQLite migration failure next and verify the focused suite.\n"
+      : "Repair the migration and verify the suite passes.\n"
     return Stream.make(
-      LLMEvent.textDelta({ id: "goal", text: "Repair the migration and verify the suite passes.\n" }),
+      LLMEvent.textDelta({ id: "goal", text: output }),
       LLMEvent.stepFinish({
         index: 0,
         reason: "stop",
@@ -156,6 +159,11 @@ const projects = Layer.succeed(
   }),
 )
 const synthesisCalls: string[] = []
+const steerCalls: Array<{
+  readonly goal: SessionAutonomy.Goal
+  readonly latestAssistantText?: string
+  readonly phase: "start" | "continue"
+}> = []
 const calculationEntered = Deferred.makeUnsafe<void>()
 const calculationRelease = Deferred.makeUnsafe<void>()
 const locations = Layer.effect(
@@ -175,7 +183,14 @@ const locations = Layer.effect(
             if (text === "Interrupt synthesis") return Effect.interrupt
             if (text === "Use the fallback")
               return Effect.fail(new SessionGoal.Error({ code: "goal.model_unavailable" }))
+            if (text === "Fail steer") return Effect.succeed("Steer failure objective")
             return Effect.succeed("Repair the migration and verify the suite passes.")
+          },
+          steer: (input) => {
+            steerCalls.push(input)
+            if (input.goal.text === "Steer failure objective")
+              return Effect.fail(new SessionGoal.Error({ code: "goal.calculation_failed" }))
+            return Effect.succeed("Inspect the migration failure next and run the focused checks.")
           },
         }),
       ) as unknown as Layer.Layer<LocationServices>,
@@ -329,6 +344,53 @@ it.effect("preserves conversation-aware goal synthesis", () =>
   }),
 )
 
+it.effect("generates a concise contextual user-proxy steer without changing the active goal", () =>
+  Effect.gen(function* () {
+    requests = []
+    modelAvailable = true
+    yield* configureGoalAgent
+    const sessionID = SessionV2.ID.make("ses_goal_steer")
+    yield* insertSession(sessionID)
+    yield* prompt(sessionID, "The project uses SQLite for durable state.")
+    const store = yield* SessionStore.Service
+    const session = yield* store
+      .get(sessionID)
+      .pipe(Effect.flatMap((item) => (item ? Effect.succeed(item) : Effect.die("session missing"))))
+    const goal: SessionAutonomy.Goal = {
+      text: "Repair the migration and verify the suite passes.",
+      rawText: "Fix the migration",
+      status: "active",
+      iteration: 2,
+      noProgress: 1,
+      maxNoProgress: 3,
+    }
+
+    expect(
+      yield* (yield* SessionGoal.Service).steer({
+        session,
+        goal,
+        phase: "continue",
+        latestAssistantText: "Which migration should I inspect next?",
+      }),
+    ).toBe("Inspect the SQLite migration failure next and verify the focused suite.")
+    expect(goal).toEqual({
+      text: "Repair the migration and verify the suite passes.",
+      rawText: "Fix the migration",
+      status: "active",
+      iteration: 2,
+      noProgress: 1,
+      maxNoProgress: 3,
+    })
+    expect(requests).toHaveLength(1)
+    const message = JSON.stringify(requests[0]?.messages)
+    expect(message).toContain("User-proxy steer request:")
+    expect(message).toContain("Active goal: Repair the migration and verify the suite passes.")
+    expect(message).toContain("Latest assistant response: Which migration should I inspect next?")
+    expect(message).toContain("The project uses SQLite for durable state.")
+    expect(message).not.toContain("Continue autonomously toward the active user goal.")
+  }),
+)
+
 it.effect("fails with goal.calculation_failed for provider failure or empty output", () =>
   Effect.gen(function* () {
     modelAvailable = true
@@ -409,6 +471,7 @@ setIt.effect(
       })
       yield* events.publish(SessionEvent.InputPromoted, { sessionID: created.id, inputID })
       const before = yield* session.context(created.id)
+      steerCalls.length = 0
 
       expect(yield* session.autonomy.set({ sessionID: created.id, goal: rawText })).toMatchObject({
         mode: "normal",
@@ -419,6 +482,20 @@ setIt.effect(
         },
       })
       expect(yield* session.context(created.id)).toEqual(before)
+      expect(steerCalls).toMatchObject([
+        {
+          goal: { text: "Repair the migration and verify the suite passes.", rawText, status: "active", iteration: 0 },
+          phase: "start",
+        },
+      ])
+      expect((yield* session.pending(created.id)).at(-1)).toMatchObject({
+        type: "synthetic",
+        data: {
+          text: "Inspect the migration failure next and run the focused checks.",
+          description: "Goal · steer",
+          metadata: { autonomy: { goal: true, iteration: 0 } },
+        },
+      })
 
       const failed = yield* session.autonomy
         .set({ sessionID: created.id, goal: "  Use the fallback  " })
@@ -428,6 +505,22 @@ setIt.effect(
         goal: { text: "Repair the migration and verify the suite passes.", rawText },
       })
     }),
+)
+
+setIt.effect("does not activate or admit a goal when user-proxy steer generation fails", () =>
+  Effect.gen(function* () {
+    const session = yield* SessionV2.Service
+    const created = yield* session.create({ location })
+    const before = yield* session.pending(created.id)
+
+    const failed = yield* session.autonomy
+      .set({ sessionID: created.id, goal: "Fail steer" })
+      .pipe(Effect.exit)
+
+    expect(failed._tag).toBe("Failure")
+    expect(yield* session.autonomy.get(created.id)).toEqual({ mode: "normal", yolo: 0 })
+    expect(yield* session.pending(created.id)).toEqual(before)
+  }),
 )
 
 setIt.effect("propagates goal synthesis interruption without storing a raw-text fallback", () =>
@@ -481,6 +574,7 @@ setIt.effect("R7 resumes the retained goal without synthesis and admits its cont
     const autonomy = yield* SessionAutonomy.Service
     const created = yield* session.create({ location })
     synthesisCalls.length = 0
+    steerCalls.length = 0
     yield* session.autonomy.set({ sessionID: created.id, goal: "Explicit objective" })
     yield* autonomy.report({ sessionID: created.id })
     yield* session.autonomy.set({ sessionID: created.id, goal: null })
@@ -488,9 +582,20 @@ setIt.effect("R7 resumes the retained goal without synthesis and admits its cont
     const resumed = yield* session.autonomy.set({ sessionID: created.id, goal: true })
     expect(resumed.goal).toMatchObject({ text: "Repair the migration and verify the suite passes.", rawText: "Explicit objective", status: "active", noProgress: 1 })
     expect(synthesisCalls).toEqual(["Explicit objective"])
+    expect(steerCalls).toMatchObject([
+      { goal: { text: "Repair the migration and verify the suite passes.", status: "active", iteration: 0 }, phase: "start" },
+      { goal: { text: "Repair the migration and verify the suite passes.", status: "active", iteration: 0 }, phase: "start" },
+    ])
     const pending = yield* session.pending(created.id)
     expect(pending).toHaveLength(before.length + 1)
-    expect(pending.at(-1)?.type).toBe("synthetic")
+    expect(pending.at(-1)).toMatchObject({
+      type: "synthetic",
+      data: {
+        text: "Inspect the migration failure next and run the focused checks.",
+        description: "Goal · steer",
+        metadata: { autonomy: { goal: true, iteration: 0 } },
+      },
+    })
   }),
 )
 

@@ -116,7 +116,11 @@ Requirements:
 
 Output only the title. For minimal or conversational input, still provide a meaningful title that reflects its intent or tone.`
 
-const PROMPT_GOAL = `Synthesize the user's current autonomous-work goal from the request and recent context. Include the intended outcome and observable completion condition.
+const PROMPT_GOAL = `Handle the task identified in the request using the recent conversation context.
+
+- For goal synthesis, preserve the user's authority and produce the current autonomous-work goal with its intended outcome and observable completion condition.
+- For a user-proxy steer, preserve the active goal exactly. Use the latest assistant response and context to direct the next useful action or answer a routine question with the safest reasonable default.
+- Never grant or imply human approval, permission, authorization, or confirmation. Do not weaken permission ceilings, guardrails, or required human review.
 
 Output exactly one concise imperative sentence, or two only when required for clarity. Do not use Markdown, a preamble, an explanation, or quotation marks.`
 

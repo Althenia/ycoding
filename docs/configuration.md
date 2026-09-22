@@ -517,7 +517,7 @@ When `openai_extended_retention` is true, supported pre-GPT-5.6 direct OpenAI re
 
 The default `local` title mode makes no provider request. Set `title` to `model` for model-generated titles; `title: "off"` leaves the initial generated Session title unchanged. Explicit `/goal <text>` calculation always uses a model, while resuming a retained goal does not recalculate it.
 
-Configure the goal pre-prompt with `agents.goal.system`. Select its model with `agents.goal.model` or `efficiency.helper_models.goal`; leave both unset to use the current Session model. For example:
+Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes objectives and generates context-aware synthetic steers for activation, resume, and continuation. Select its model with `agents.goal.model` or `efficiency.helper_models.goal`; leave both unset to use the current Session model. For example:
 
 ```jsonc
 {

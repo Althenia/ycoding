@@ -22,6 +22,7 @@ import { SessionTaskTable } from "./sql"
 import { and, eq, inArray } from "drizzle-orm"
 import { SessionOrchestration } from "@ycoding-ai/schema/session-orchestration"
 import { Shell } from "../shell"
+import { SessionGoal } from "./goal"
 
 export interface Interface {
   /** Snapshots active execution owned by this process. */
@@ -40,7 +41,10 @@ export interface Interface {
    * forwarded once after the last release, and explicit resumes wait for reserved transitions.
    * `awaitIdle` keeps observing only drain settlement.
    */
-  readonly withTransition: <A, E, R>(sessionID: SessionSchema.ID, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  readonly withTransition: <A, E, R>(
+    sessionID: SessionSchema.ID,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>
 }
 
 /** Routes execution from a Session ID to the runner owned by that Session's Location. */
@@ -78,10 +82,10 @@ export const layer = Layer.effect(
         Effect.asVoid,
       )
     const continuedGoal = Effect.fnUntraced(function* (sessionID: SessionSchema.ID) {
-      const state = yield* autonomy
-        .get(sessionID)
-        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(SessionAutonomy.defaultState)))
-      if (!state.goal || state.goal.status !== "active") return undefined
+      const snapshot = yield* autonomy
+        .snapshot(sessionID)
+        .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(undefined)))
+      if (!snapshot?.state.goal || snapshot.state.goal.status !== "active") return undefined
       const activeChild = yield* db
         .select({ sessionID: SessionTaskTable.session_id })
         .from(SessionTaskTable)
@@ -102,28 +106,39 @@ export const layer = Layer.effect(
         return (yield* shell.list()).some((info) => info.metadata.sessionID === sessionID)
       }).pipe(Effect.provide(locations.get(session.location)))
       if (activeShell) return undefined
-      const advanced = yield* autonomy.advance({ sessionID, progress: "" })
-      if (!advanced.goal || advanced.goal.status !== "active") return undefined
-      return { goal: advanced.goal, yolo: SessionAutonomy.yoloLevel(advanced) }
-    })
-
-    const admitGoalContinuation = Effect.fnUntraced(function* (
-      sessionID: SessionSchema.ID,
-      advanced: { readonly goal: SessionAutonomy.Goal; readonly yolo: number },
-    ) {
       const assistant = (yield* store.context(sessionID)).findLast((message) => message.type === "assistant")
       const latestAssistantText = assistant?.content
         .filter((part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text")
         .map((part) => part.text)
         .join("")
+      const goals = yield* SessionGoal.Service.pipe(Effect.provide(locations.get(session.location)))
+      const steer = yield* goals.steer({
+        session,
+        goal: snapshot.state.goal,
+        phase: "continue",
+        latestAssistantText,
+      })
+      const advanced = yield* autonomy.advanceIfCurrent({ sessionID, expectedSequence: snapshot.sequence })
+      if (!advanced.applied || !advanced.state.goal || advanced.state.goal.status !== "active") return undefined
+      return {
+        goal: advanced.state.goal,
+        yolo: SessionAutonomy.yoloLevel(advanced.state),
+        steer,
+      }
+    })
+
+    const admitGoalContinuation = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      advanced: { readonly goal: SessionAutonomy.Goal; readonly yolo: number; readonly steer: string },
+    ) {
       const id = SessionMessage.ID.make(
         `msg_goal_${Hash.sha256(`${sessionID}\0${advanced.goal.iteration}`).slice(0, 24)}`,
       )
       const input = SessionPending.Message.make({
         type: "synthetic",
         data: {
-          text: SessionAutonomy.continuationPrompt(advanced.goal, { latestAssistantText }),
-          description: "Autonomous goal continuation",
+          text: advanced.steer,
+          description: "Goal · steer",
           metadata: { autonomy: { yolo: advanced.yolo, goal: true, iteration: advanced.goal.iteration } },
         },
         delivery: "steer",

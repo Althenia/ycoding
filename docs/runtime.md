@@ -243,7 +243,7 @@ The user owns the objective. `/goal <text>` explicitly creates or replaces it, e
 
 Bare `/goal` and the goal toggle stop an active goal, resume a retained goal verbatim without recalculation, or request explicit objective text when none exists. Resume preserves the retained iteration and no-progress counters. A newly calculated replacement starts its own counters. Failed calculation preserves the prior goal and draft; it never silently activates raw text. A durable autonomy revision fences settlement so a stop or another autonomy change cannot be undone by a late result. Stop intent advances that fence even if no goal has yet been stored. Successful creation or resume admits a synthetic goal continuation rather than an ordinary user prompt.
 
-Each automatic goal continuation reads the latest projected assistant message. If its text asks for user input, the continuation includes that request and instructs the agent to answer on the user's behalf using the goal and safest reasonable default. A newer non-question response clears that context; an older question is not reused.
+Goal activation, resume, and automatic continuation use the hidden goal agent to generate a concise user-proxy steer from the active objective, recent Session history, and latest assistant response. Routine questions receive a context-aware direction using the safest reasonable default. Generated text retains synthetic autonomy provenance and does not grant human approval or bypass permission ceilings or guardrails. Helper failure or interruption admits no generic fallback; a stale autonomy revision cannot activate or advance the goal. Successful continuation advances the iteration only after steer generation.
 
 Terminal goal states are:
 

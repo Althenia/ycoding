@@ -13,6 +13,7 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionCompactionExecution } from "@ycoding-ai/core/session/compaction-execution"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
+import { SessionGoal } from "@ycoding-ai/core/session/goal"
 import { SessionRestart } from "@ycoding-ai/core/session/execution/restart"
 import { UserInterruptedError } from "@ycoding-ai/core/session/error"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
@@ -336,14 +337,25 @@ describe("SessionExecution lifecycle", () => {
       yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
 
       let drains = 0
+      const steers: Array<{ readonly latestAssistantText?: string; readonly goal: SessionAutonomy.Goal }> = []
       const scope = yield* Scope.make()
-      const context = yield* buildExecution(scope, () =>
-        Effect.gen(function* () {
-          drains += 1
-          const text = drains === 1 ? "Which database should I use?" : "The database is selected."
-          yield* recordAssistant(database, sessionID, drains, [{ type: "text", text }])
-          if (drains === 3) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
-        }),
+      const context = yield* buildExecution(
+        scope,
+        () =>
+          Effect.gen(function* () {
+            drains += 1
+            const text = drains === 1 ? "Which database should I use?" : "The database is selected."
+            yield* recordAssistant(database, sessionID, drains, [{ type: "text", text }])
+            if (drains === 3) yield* autonomy.stop(sessionID).pipe(Effect.orDie)
+          }),
+        undefined,
+        undefined,
+        undefined,
+        (input) =>
+          Effect.sync(() => {
+            steers.push(input)
+            return `Proxy steer for: ${input.latestAssistantText}`
+          }),
       )
       const execution = Context.get(context, SessionExecution.Service)
 
@@ -352,11 +364,84 @@ describe("SessionExecution lifecycle", () => {
 
       expect(drains).toBe(3)
       const continuations = yield* admittedInputTexts(database)
-      expect(continuations).toHaveLength(2)
-      expect(continuations[0]).toContain("The assistant is waiting for user input.")
-      expect(continuations[0]).toContain("Which database should I use?")
-      expect(continuations[1]).not.toContain("The assistant is waiting for user input.")
-      expect(continuations[1]).not.toContain("Which database should I use?")
+      expect(continuations).toEqual([
+        "Proxy steer for: Which database should I use?",
+        "Proxy steer for: The database is selected.",
+      ])
+      expect(steers.map((input) => input.latestAssistantText)).toEqual([
+        "Which database should I use?",
+        "The database is selected.",
+      ])
+      expect(steers.map((input) => input.goal)).toMatchObject([
+        { text: "Ship the fix", status: "active", iteration: 0 },
+        { text: "Ship the fix", status: "active", iteration: 1 },
+      ])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("leaves the active goal unchanged when continuation steer generation fails", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_goal_steer_failure")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(
+        scope,
+        () => recordAssistant(database, sessionID, 1, [{ type: "text", text: "Made progress." }]),
+        undefined,
+        undefined,
+        undefined,
+        () => Effect.fail(new SessionGoal.Error({ code: "goal.calculation_failed" })),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.resume(sessionID)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(yield* autonomy.get(sessionID)).toMatchObject({
+        goal: { text: "Ship the fix", status: "active", iteration: 0, noProgress: 0 },
+      })
+      expect(yield* admittedInputs(database)).toEqual([])
+      yield* Scope.close(scope, Exit.void)
+    }),
+  )
+
+  it.effect("does not admit a late steer after the user stops the goal during generation", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionV2.ID.make("ses_goal_stale_steer")
+      yield* seedSessions(database, [sessionID])
+      const autonomy = SessionAutonomy.make({ db: database.db })
+      yield* autonomy.setGoal({ sessionID, text: "Ship the fix" })
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+
+      const scope = yield* Scope.make()
+      const context = yield* buildExecution(
+        scope,
+        () => recordAssistant(database, sessionID, 1, [{ type: "text", text: "Made progress." }]),
+        undefined,
+        undefined,
+        undefined,
+        () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as("Late steer")),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+      const running = yield* execution.resume(sessionID).pipe(Effect.forkScoped)
+      yield* Deferred.await(entered)
+
+      yield* autonomy.stop(sessionID)
+      yield* Deferred.succeed(release, undefined)
+      yield* Fiber.join(running)
+      yield* execution.awaitIdle(sessionID)
+
+      expect(yield* autonomy.get(sessionID)).toMatchObject({
+        goal: { text: "Ship the fix", status: "stopped", iteration: 0 },
+      })
+      expect(yield* admittedInputs(database)).toEqual([])
       yield* Scope.close(scope, Exit.void)
     }),
   )
@@ -700,6 +785,12 @@ function buildExecution(
   observePublish?: (type: string) => Effect.Effect<void>,
   compactionExecution = noopCompactionExecution(),
   shells: Shell.Interface["list"] = () => Effect.succeed([]),
+  steer: (input: {
+    readonly session: SessionV2.Info
+    readonly goal: SessionAutonomy.Goal
+    readonly phase: "start" | "continue"
+    readonly latestAssistantText?: string
+  }) => Effect.Effect<string, SessionGoal.Error> = ({ goal }) => Effect.succeed(`Continue work on ${goal.text}`),
 ) {
   return Effect.gen(function* () {
     const database = yield* Database.Service
@@ -715,13 +806,20 @@ function buildExecution(
     const autonomy = SessionAutonomy.make({ db: database.db })
     const runner = Layer.succeed(SessionRunner.Service, SessionRunner.Service.of({ drain }))
     const shell = Layer.mock(Shell.Service, { list: shells })
+    const goals = Layer.succeed(
+      SessionGoal.Service,
+      SessionGoal.Service.of({
+        synthesize: () => Effect.die("unused"),
+        steer,
+      }),
+    )
     const locations = Layer.effect(
       LocationServiceMap.Service,
       LayerMap.make(
         () =>
           // The local execution test only needs the Session runner from the Location graph.
           // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
-          Layer.mergeAll(runner, shell) as unknown as Layer.Layer<LocationServices>,
+          Layer.mergeAll(runner, shell, goals) as unknown as Layer.Layer<LocationServices>,
       ),
     )
     return yield* Layer.buildWithScope(

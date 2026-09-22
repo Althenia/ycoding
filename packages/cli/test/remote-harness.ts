@@ -21,11 +21,10 @@ export type ProviderFixture = {
   /** The assistant text the stand-in returns. */
   readonly text: string
   /**
-   * Leaves every request after the first one open. The first completion (goal
-   * synthesis) still settles, so a caller can observe durable state without
-   * racing the autonomous loop the activation admits.
+   * Leaves requests after the specified count open, allowing goal synthesis and
+   * its initial steer to settle before inspecting the admitted autonomous work.
    */
-  readonly holdAfterFirst?: boolean
+  readonly holdAfter?: number
 }
 
 export type ProviderStandIn = {
@@ -126,13 +125,13 @@ async function startProviderStandIn(fixture: ProviderFixture) {
       if (!new URL(request.url).pathname.endsWith("/chat/completions"))
         return new Response("not found", { status: 404 })
       requests.push(await request.json())
-      const first = requests.length === 1
+      const heldRequest = fixture.holdAfter !== undefined && requests.length > fixture.holdAfter
       const encoder = new TextEncoder()
       const frames = [deltaChunk({ role: "assistant" }), deltaChunk({ content: fixture.text }), finishChunk("stop")]
       const stream = new ReadableStream({
         async start(controller) {
           for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
-          if (!first && fixture.holdAfterFirst === true)
+          if (heldRequest)
             await new Promise<void>((resolve) => {
               held.push(resolve)
             })

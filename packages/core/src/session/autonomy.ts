@@ -98,7 +98,10 @@ export interface Interface {
     sessionID: SessionSchema.ID
     mode: "normal" | "yolo"
   }) => Effect.Effect<State, NotFoundError>
-  readonly setYolo: (input: { sessionID: SessionSchema.ID; yolo: number | boolean }) => Effect.Effect<State, NotFoundError>
+  readonly setYolo: (input: {
+    sessionID: SessionSchema.ID
+    yolo: number | boolean
+  }) => Effect.Effect<State, NotFoundError>
   readonly setGoal: (input: {
     sessionID: SessionSchema.ID
     text: string
@@ -112,6 +115,11 @@ export interface Interface {
     text: string
     rawText?: string
     maxNoProgress?: number
+  }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
+  readonly resumeGoalIfCurrent: (input: {
+    sessionID: SessionSchema.ID
+    expectedSequence: number
+    yolo?: number | boolean
   }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
   readonly clearGoal: (sessionID: SessionSchema.ID) => Effect.Effect<State, NotFoundError>
   readonly set: (input: {
@@ -129,6 +137,10 @@ export interface Interface {
     progress: string
     completed?: boolean
   }) => Effect.Effect<State, NotFoundError>
+  readonly advanceIfCurrent: (input: {
+    sessionID: SessionSchema.ID
+    expectedSequence: number
+  }) => Effect.Effect<{ readonly state: State; readonly applied: boolean }, NotFoundError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/SessionAutonomy") {}
@@ -154,7 +166,11 @@ export const read = (value: unknown): State => {
         goal: maybe.goal as Goal,
       }
     }
-    return { mode: "normal", yolo: level as YoloLevel, ...(maybe.goal && typeof (maybe.goal as Goal).text === "string" ? { goal: maybe.goal as Goal } : {}) }
+    return {
+      mode: "normal",
+      yolo: level as YoloLevel,
+      ...(maybe.goal && typeof (maybe.goal as Goal).text === "string" ? { goal: maybe.goal as Goal } : {}),
+    }
   }
   if (value && typeof value === "object" && "mode" in (value as Record<string, unknown>)) {
     const maybe = value as { mode?: unknown; goal?: unknown }
@@ -167,37 +183,15 @@ export const read = (value: unknown): State => {
 
 export const AutomaticAnswer = "Continue with the safest reasonable default."
 
-export function requestsUserInput(value: string) {
-  const text = value.trim()
-  if (!text) return false
-  const tail = text.slice(-2_000)
-  if (/\?\s*$/.test(tail)) return true
-  return /(?:^|[\n.!?]\s*)(?:please\s+)?(?:choose|select|provide|confirm|clarify|decide)\b[^.!?]*[.!]?\s*$/i.test(tail)
-}
-
-export function continuationPrompt(goal: Goal, input: { readonly latestAssistantText?: string } = {}) {
-  const latestAssistantText = input.latestAssistantText?.trim()
-  const proxy =
-    latestAssistantText && requestsUserInput(latestAssistantText)
-      ? [
-          "The assistant is waiting for user input.",
-          `Latest assistant request: ${latestAssistantText.slice(-2_000)}`,
-          "Answer it on the user's behalf using the active goal, conversation context, and safest reasonable default before continuing.",
-        ]
-      : []
-  return [
-    "Continue autonomously toward the active user goal.",
-    `Goal: ${goal.text}`,
-    `Continuation: ${goal.iteration + 1}`,
-    ...proxy,
-    "Use the conversation and current repository state to choose the next useful action.",
-    "Answer routine blockers yourself using the safest reasonable default.",
-    "Only call goal report after you encounter a blocker, try to resolve it yourself, and still cannot make progress.",
-    "Do not call goal report for ordinary progress; each report consumes one no-progress retry attempt.",
-    "An active background subagent or shell is unfinished work, not automatic no progress; continue useful independent work or finish this iteration and wait for its automatic notification.",
-    "When the goal is actually achieved and verified, call goal complete. Completion remains your explicit decision.",
-    "Do not claim completion without verification evidence or the goal complete action.",
-  ].join("\n")
+export function makeGoal(input: { text: string; rawText?: string; maxNoProgress?: number }): Goal {
+  return {
+    text: input.text.trim(),
+    rawText: (input.rawText ?? input.text).trim(),
+    status: "active",
+    iteration: 0,
+    noProgress: 0,
+    maxNoProgress: Math.max(1, Math.trunc(input.maxNoProgress ?? 3)),
+  }
 }
 
 export function make(input: { db: Database.Interface["db"] }): Interface {
@@ -263,7 +257,9 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   const apply = (sessionID: SessionSchema.ID, transition: (state: State) => State | undefined) =>
     mutate(sessionID, transition).pipe(Effect.map((result) => result.state))
 
-  const walkEffective = (sessionID: SessionSchema.ID): Effect.Effect<{ yolo: number; goalActive: boolean }, NotFoundError> =>
+  const walkEffective = (
+    sessionID: SessionSchema.ID,
+  ): Effect.Effect<{ yolo: number; goalActive: boolean }, NotFoundError> =>
     load(sessionID).pipe(
       Effect.flatMap((state) => {
         const currentYolo = yoloLevel(state)
@@ -282,7 +278,9 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
                   yolo: Math.max(currentYolo, parent.yolo),
                   goalActive: currentGoal || parent.goalActive,
                 })),
-                Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed({ yolo: currentYolo, goalActive: currentGoal })),
+                Effect.catchTag("SessionAutonomy.NotFound", () =>
+                  Effect.succeed({ yolo: currentYolo, goalActive: currentGoal }),
+                ),
               )
             }),
           )
@@ -319,14 +317,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
   const goalState = (state: State, text: string, rawText: string | undefined, maxNoProgress: number): State => ({
     mode: "normal",
     yolo: state.yolo,
-    goal: {
-      text: text.trim(),
-      rawText: (rawText ?? text).trim(),
-      status: "active",
-      iteration: 0,
-      noProgress: 0,
-      maxNoProgress: Math.max(1, Math.trunc(maxNoProgress)),
-    },
+    goal: makeGoal({ text, rawText, maxNoProgress }),
   })
 
   const setGoal: Interface["setGoal"] = ({ sessionID, text, rawText, maxNoProgress = 3 }) =>
@@ -340,10 +331,29 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     rawText,
     maxNoProgress = 3,
   }) =>
-    mutate(sessionID, (state) => ({
-      ...goalState(state, text, rawText, maxNoProgress),
-      yolo: yolo === undefined ? state.yolo : normalizeYolo(yolo) as YoloLevel,
-    }), expectedSequence)
+    mutate(
+      sessionID,
+      (state) => ({
+        ...goalState(state, text, rawText, maxNoProgress),
+        yolo: yolo === undefined ? state.yolo : (normalizeYolo(yolo) as YoloLevel),
+      }),
+      expectedSequence,
+    )
+
+  const resumeGoalIfCurrent: Interface["resumeGoalIfCurrent"] = ({ sessionID, expectedSequence, yolo }) =>
+    mutate(
+      sessionID,
+      (state) => {
+        if (!state.goal) return undefined
+        return {
+          ...state,
+          mode: "normal",
+          yolo: yolo === undefined ? state.yolo : (normalizeYolo(yolo) as YoloLevel),
+          goal: { ...state.goal, status: "active" as const },
+        }
+      },
+      expectedSequence,
+    )
 
   const clearGoal: Interface["clearGoal"] = (sessionID) =>
     apply(sessionID, (state) => {
@@ -382,19 +392,11 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         } else {
           const trimmed = goal.trim()
           if (!trimmed) return next
-          const isSameActive =
-            next.goal?.status === "active" && (next.goal.rawText ?? next.goal.text) === trimmed
+          const isSameActive = next.goal?.status === "active" && (next.goal.rawText ?? next.goal.text) === trimmed
           if (isSameActive && yolo === undefined) return changed ? next : undefined
           next = {
             ...next,
-            goal: {
-              text: trimmed,
-              rawText: (rawText ?? trimmed).trim(),
-              status: "active",
-              iteration: 0,
-              noProgress: 0,
-              maxNoProgress: Math.max(1, Math.trunc(maxNoProgress ?? 3)),
-            },
+            goal: makeGoal({ text: trimmed, rawText, maxNoProgress }),
           }
           changed = true
         }
@@ -415,6 +417,7 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
     setYolo,
     setGoal,
     setGoalIfCurrent,
+    resumeGoalIfCurrent,
     clearGoal,
     set,
     stop: (sessionID) => clearGoal(sessionID),
@@ -447,6 +450,16 @@ export function make(input: { db: Database.Interface["db"] }): Interface {
         if (completed) return { ...state, goal: { ...goal, status: "completed" as const } }
         return { ...state, goal: { ...goal, iteration: goal.iteration + 1 } }
       }),
+    advanceIfCurrent: ({ sessionID, expectedSequence }) =>
+      mutate(
+        sessionID,
+        (state) => {
+          const goal = state.goal
+          if (!goal || goal.status !== "active") return undefined
+          return { ...state, goal: { ...goal, iteration: goal.iteration + 1 } }
+        },
+        expectedSequence,
+      ),
   }
 }
 

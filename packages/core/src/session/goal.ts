@@ -11,8 +11,10 @@ import { llmClient } from "../effect/app-node-platform"
 import { EventV2 } from "../event"
 import { Money } from "@ycoding-ai/schema/money"
 import { SessionEvent } from "./event"
+import { SessionAutonomy } from "./autonomy"
 import { SessionHelperPolicy } from "./helper-policy"
 import { SessionHistory } from "./history"
+import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionRunnerCache } from "./runner/cache"
@@ -53,20 +55,30 @@ type Dependencies = {
 
 export interface Interface {
   readonly synthesize: (input: { session: SessionSchema.Info; text: string }) => Effect.Effect<string, Error>
+  readonly steer: (input: {
+    session: SessionSchema.Info
+    goal: SessionAutonomy.Goal
+    phase: "start" | "continue"
+    latestAssistantText?: string
+  }) => Effect.Effect<string, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/SessionGoal") {}
 
 const make = (dependencies: Dependencies) => {
-  const synthesize = Effect.fn("SessionGoal.synthesize")(function* (
+  const generate = Effect.fn("SessionGoal.generate")(function* (
     db: Database.Interface["db"],
-    input: Parameters<Interface["synthesize"]>[0],
+    input: {
+      readonly session: SessionSchema.Info
+      readonly request: string | ((history: ReadonlyArray<SessionMessage.Info>) => string)
+    },
   ) {
     const agent = yield* dependencies.agents.get(AgentV2.ID.make("goal"))
     if (!agent) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
     const resolved = yield* dependencies.helpers.resolveModel(input.session, "goal", agent)
     if (!resolved) return yield* Effect.fail(new Error({ code: "goal.model_unavailable" }))
     const history = yield* SessionHistory.load(db, input.session.id)
+    const requestText = typeof input.request === "string" ? input.request : input.request(history)
     const context = history
       .slice(-12)
       .flatMap((message) => {
@@ -86,11 +98,14 @@ const make = (dependencies: Dependencies) => {
       .slice(-MAX_CONTEXT_CHARS)
     const baseRequest = LLM.request({
       model: resolved.model,
-      http: { headers: SessionModelHeaders.make(input.session, { ...dependencies.headers, providerID: resolved.ref.providerID }) },
+      http: {
+        headers: SessionModelHeaders.make(input.session, {
+          ...dependencies.headers,
+          providerID: resolved.ref.providerID,
+        }),
+      },
       system: agent.system,
-      messages: [
-        Message.user(["Recent conversation context:", context || "(none)", "", "User request:", input.text].join("\n")),
-      ],
+      messages: [Message.user(["Recent conversation context:", context || "(none)", "", requestText].join("\n"))],
       tools: [],
     })
     const namespaceInput = {
@@ -199,7 +214,36 @@ const make = (dependencies: Dependencies) => {
     if (!synthesized) return yield* Effect.fail(new Error({ code: "goal.calculation_failed" }))
     return synthesized
   })
-  return { synthesize }
+  const synthesize = Effect.fn("SessionGoal.synthesize")(
+    (db: Database.Interface["db"], input: Parameters<Interface["synthesize"]>[0]) =>
+      generate(db, { session: input.session, request: `Goal synthesis request:\n${input.text}` }),
+  )
+  const steer = Effect.fn("SessionGoal.steer")(
+    (db: Database.Interface["db"], input: Parameters<Interface["steer"]>[0]) =>
+      generate(db, {
+        session: input.session,
+        request: (history) => {
+          const assistant = history.findLast((message) => message.type === "assistant")
+          const latestAssistantText =
+            input.latestAssistantText ??
+            assistant?.content
+              .filter(
+                (part): part is Extract<(typeof assistant.content)[number], { type: "text" }> => part.type === "text",
+              )
+              .map((part) => part.text)
+              .join("")
+          return [
+            "User-proxy steer request:",
+            `Active goal: ${input.goal.text}`,
+            `Phase: ${input.phase}`,
+            `Current iteration: ${input.goal.iteration}`,
+            `Latest assistant response: ${latestAssistantText?.trim().slice(-2_000) || "(none)"}`,
+            "Preserve the active goal and produce only the next concise user-proxy steer.",
+          ].join("\n")
+        },
+      }),
+  )
+  return { synthesize, steer }
 }
 
 export const layer = (options?: SessionModelHeaders.Options) =>
@@ -219,6 +263,14 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         synthesize: (input) =>
           goal
             .synthesize(database.db, input)
+            .pipe(
+              Effect.catchTag("Session.MessageDecodeError", () =>
+                Effect.fail(new Error({ code: "goal.calculation_failed" })),
+              ),
+            ),
+        steer: (input) =>
+          goal
+            .steer(database.db, input)
             .pipe(
               Effect.catchTag("Session.MessageDecodeError", () =>
                 Effect.fail(new Error({ code: "goal.calculation_failed" })),

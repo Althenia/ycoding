@@ -371,6 +371,8 @@ describe("AgentV2", () => {
       expect(compaction.system).toContain("skill")
       expect(compaction.system).toContain("Do not answer the conversation")
       expect(goal.system).toContain("observable completion condition")
+      expect(goal.system).toContain("user-proxy steer")
+      expect(goal.system).toContain("Never grant or imply human approval")
       expect(goal.system).toContain("Output exactly one concise imperative sentence")
       expect(summary.system).toContain("two or three first-person sentences")
       expect(summary.system).toContain("preserve it verbatim")
