@@ -813,6 +813,13 @@ Model entries support:
 - `disabled`;
 - `limit.context`, `limit.input`, and `limit.output`.
 
+A provider with `catalog.source: "openai-models"` discovers models from its authenticated
+`GET <baseURL>/models` endpoint. Discovered records may publish `name`, `capabilities`,
+`limit`, and `variants`; those values are imported directly and override matching standard
+catalog metadata for that provider model. This lets self-hosted OpenAI-compatible endpoints
+report their real context/input/output limits and named request variants without duplicating
+every model in YCoding configuration.
+
 OpenCode Zen and OpenCode Go remain external provider identities. Their provider IDs, URLs, credentials, and model selectors are not renamed to YCoding.
 
 ## Formatter, LSP, attachment, and output settings
