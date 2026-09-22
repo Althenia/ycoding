@@ -296,9 +296,11 @@ Subagents are durable child sessions.
 
 ### Built-in agents
 
-Every Location activates the maintained built-in catalog. The default selectable primary agent is `god`; omitting a configured primary selection resolves `god`. The selectable primary built-ins are `TLDR`, `architech`, `god`, and `yangi`. The maintained task subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`.
+Every Location activates the maintained built-in catalog. The default selectable primary agent is `god`; omitting a configured primary selection resolves `god`. The selectable primary built-ins are `GSD`, `architech`, `god`, and `yangi`. The maintained task subagents are `occam`, `omoikane`, `wittgenstein`, and `zeus`.
 
-`god`, `architech`, `TLDR`, and `yangi` use the `build` permission defaults. `occam`, `omoikane`, `wittgenstein`, and `zeus` use the `general` subagent permission defaults. All eight execution agents explicitly allow `shell:*`; these profiles do not change the read-only `btw` advisor or the hidden `compaction`, `title`, `goal`, and `summary` utility agents.
+`god`, `architech`, `GSD`, and `yangi` use the `build` permission defaults. `occam`, `omoikane`, `wittgenstein`, and `zeus` use the `general` subagent permission defaults. All eight agents explicitly allow `shell:*`; these profiles do not change the read-only `btw` advisor or the hidden `compaction`, `title`, `goal`, and `summary` utility agents.
+
+`GSD` (Get shit done) has an orchestration-only prompt contract. It owns scoping, dependency decisions, worker assignments, evidence review, and acceptance; it delegates implementation, file changes, experiments, integration edits, and build/test execution. Ready independent tasks run in parallel within configured resource limits and a maximum of five direct workers. Each mutable resource has one writer; real dependencies and approvals remain gates. Workers must use repository standards, TDD for executable behavior, and the smallest complete solution. Completion requires verified evidence and affected checks, not worker status alone. This role is expressed through its instructions, not a separate tool-permission sandbox.
 
 `btw` remains a visible read-only advisor. The hidden `compaction`, `title`, `goal`, and `summary` agents remain internal helpers. `build`, `plan`, `explore`, and `general` are not built-ins, and the disabled source definitions `analyze` and `brainstorm` are not registered.
 

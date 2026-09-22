@@ -8,7 +8,7 @@ import { Effect } from "effect"
 import { AgentV2 } from "../agent"
 import { Global } from "../global"
 import { PermissionV2 } from "../permission"
-import tldrContent from "./agent/TLDR.md" with { type: "text" }
+import gsdContent from "./agent/GSD.md" with { type: "text" }
 import architechContent from "./agent/architech.md" with { type: "text" }
 import godContent from "./agent/god.md" with { type: "text" }
 import occamContent from "./agent/occam.md" with { type: "text" }
@@ -23,13 +23,13 @@ const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
 const builtIns = () =>
   [
     {
-      id: "TLDR",
+      id: "GSD",
       description:
-        "Aggressively lazy but competent builder that refuses unnecessary work, silently finishes the smallest correct solution, and answers briefly.",
+        "Get shit done: orchestration-only delivery through parallel delegation, repository standards, TDD, and the smallest complete solution.",
       mode: "primary",
       temperature: 0.1,
       color: "#95a5a6",
-      system: sourceSystem(tldrContent, "primary"),
+      system: sourceSystem(gsdContent, "primary"),
     },
     {
       id: "architech",

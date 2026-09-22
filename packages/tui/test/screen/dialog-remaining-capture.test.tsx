@@ -222,6 +222,10 @@ async function capture(dialogState: (typeof states)[number], viewport: (typeof v
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(viewport.width)
     const frame = rows.join("\n")
     expect(frame).toContain(dialogState.settle)
+    if (dialogState.name === "select-agent") {
+      expect(frame).toContain("GSD")
+      expect(frame).not.toContain("TLDR")
+    }
     if ("evidence" in dialogState) expect(frame).toContain(dialogState.evidence)
     const design = designChecks[dialogState.name]
     if (design) {
@@ -276,6 +280,7 @@ const sessions = [
 const messages = [{ id: "msg_audit", type: "user" as const, text: "Concrete timeline message", time: { created: 1 } }, { id: "msg_review", type: "user" as const, text: "Concrete fork boundary", time: { created: 2 } }]
 const agents = [
   { id: "build", description: "Default primary agent" },
+  { id: "GSD", description: "Get shit done: orchestration-only delivery" },
   { id: "plan", description: "Planning and analysis" },
   { id: "analyze", description: "Code analysis and review" },
   { id: "brainstorm", description: "Ideation and design" },

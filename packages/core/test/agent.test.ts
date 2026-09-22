@@ -161,7 +161,7 @@ describe("AgentV2", () => {
       const agents = yield* agent.list()
       expect(agents[0]?.id).toBe(AgentV2.ID.make("god"))
       expect(agents.map((item) => String(item.id)).sort()).toEqual([
-        "TLDR",
+        "GSD",
         "architech",
         "btw",
         "compaction",
@@ -183,13 +183,13 @@ describe("AgentV2", () => {
       expect(yield* agent.get(AgentV2.ID.make("general"))).toBeUndefined()
       expect(yield* agent.get(AgentV2.ID.make("analyze"))).toBeUndefined()
       expect(yield* agent.get(AgentV2.ID.make("brainstorm"))).toBeUndefined()
-      for (const id of ["TLDR", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
+      for (const id of ["GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
         const item = agents.find((agent) => String(agent.id) === id)
         if (!item) throw new Error(`expected built-in agent ${id}`)
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
         expect(PermissionV2.evaluate("shell", "git status", item.permissions).effect).toBe("allow")
       }
-      for (const id of ["TLDR", "architech", "god", "yangi"]) {
+      for (const id of ["GSD", "architech", "god", "yangi"]) {
         const item = agents.find((agent) => String(agent.id) === id)
         if (!item) throw new Error(`expected build-equivalent agent ${id}`)
         expect(PermissionV2.evaluate("edit", "README.md", item.permissions).effect).toBe("allow")
@@ -204,6 +204,30 @@ describe("AgentV2", () => {
         expect(PermissionV2.evaluate("plan_enter", "*", item.permissions).effect).toBe("deny")
         expect(PermissionV2.evaluate("subagent", "*", item.permissions).effect).toBe("deny")
       }
+    }),
+  )
+
+  it.effect("replaces TLDR with the GSD orchestration-only delivery contract", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      expect(yield* agent.get(AgentV2.ID.make("TLDR"))).toBeUndefined()
+      const gsd = yield* agent.resolve(AgentV2.ID.make("GSD"))
+      expect(gsd).toMatchObject({ id: "GSD", name: "GSD", mode: "primary", hidden: false })
+      if (!gsd) throw new Error("expected the GSD primary agent")
+      expect(gsd.system).toContain("You are GSD (Get shit done), an orchestration-only delivery lead.")
+      expect(gsd.system).toContain("Do not implement, edit files, or run build/test commands yourself.")
+      expect(gsd.system).toContain("Start every ready independent task in parallel")
+      expect(gsd.system).toContain("Assign one writer per file or mutable resource")
+      expect(gsd.system).toContain("Require TDD for executable behavior")
+      expect(gsd.system).toContain("Never overengineer")
+      expect(gsd.system).toContain("repository standards and guidelines")
+      expect(gsd.system).toContain("Verify child evidence")
+      expect(PermissionV2.evaluate("subagent", "occam", gsd.permissions).effect).toBe("allow")
+      expect(yield* agent.resolve()).toMatchObject({ id: "god" })
     }),
   )
 
@@ -282,7 +306,7 @@ describe("AgentV2", () => {
         ),
       )
 
-      for (const id of ["TLDR", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
+      for (const id of ["GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein", "zeus"]) {
         const item = yield* agent.get(AgentV2.ID.make(id))
         if (!item?.system) throw new Error(`expected built-in agent ${id} with a system prompt`)
         expect(item.system).toContain(

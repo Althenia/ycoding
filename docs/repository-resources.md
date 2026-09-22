@@ -195,6 +195,8 @@ The body is stored as `system`.
 
 An omitted mode preserves a built-in mode or uses the runtime default for a new agent.
 
+The maintained primary catalog includes `GSD`, `architech`, `god`, and `yangi`; `god` is the default. `GSD` (Get shit done) delegates implementation and validation to workers under an orchestration-only prompt contract, with parallel independent work, repository standards, TDD, and verified completion. See [Built-in agents](./runtime.md#built-in-agents) for roles and permission boundaries. Configure `{"default_agent": "GSD"}` in JSON to select it by default.
+
 ## Commands
 
 Commands can be declared in JSON or Markdown files.
