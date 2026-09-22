@@ -15,6 +15,8 @@ Use these names for YCoding-owned surfaces:
 | HTTP location headers | `x-ycoding-directory`, `x-ycoding-workspace` |
 | Terminal title prefix | `YC` |
 
+Local OAuth callback pages show the YCoding name and canonical mark from `assets/brand/ycoding-mark.svg` in success, error, and pending states. The inline branding requires no external assets. Shared UI mark, splash, and wordmark exports use the maintained YCoding brand geometry with theme-aware foreground colors.
+
 ## External provider exception
 
 OpenCode Zen and OpenCode Go are external model-provider identities. Their provider IDs, URLs, API-key environment variable, integration labels, and provider-specific OAuth identifiers remain unchanged where required to connect to that provider.
