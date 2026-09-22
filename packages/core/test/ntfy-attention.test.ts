@@ -17,6 +17,8 @@ import { ProjectV2 } from "@ycoding-ai/core/project"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionAutonomy } from "@ycoding-ai/core/session/autonomy"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
+import { SessionGenerate } from "@ycoding-ai/core/session/generate"
+import { SessionGenerateNode } from "@ycoding-ai/core/session/generate-node"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 
@@ -42,6 +44,7 @@ const settle = Effect.forEach(Array.from({ length: 4 }), () => Effect.yieldNow, 
 const make = (input: {
   readonly config?: (sessionID: string) => { enabled?: boolean; topic?: string } | undefined
   readonly permission?: (sessionID: string) => "allow" | "ask" | "deny"
+  readonly generate?: (sessionID: string, prompt: string) => Effect.Effect<string, unknown>
   readonly parentID?: (sessionID: string) => string | undefined
   readonly goal?: (sessionID: string) => GoalStatus | undefined
   readonly notified?: (sessionID: string, startedAt?: number) => boolean
@@ -51,6 +54,8 @@ const make = (input: {
     send: (_sessionID: string, topic: string, message: string) => NtfyAttention.post(http, topic, message),
     settings: (sessionID: string) => Effect.sync(() => input.config?.(sessionID)),
     authorize: (sessionID: string) => Effect.sync(() => input.permission?.(sessionID) ?? "allow"),
+    generate: (sessionID: string, prompt: string) =>
+      input.generate?.(sessionID, prompt) ?? Effect.succeed("Generated session update"),
     session: (sessionID: string) =>
       Effect.sync(() => ({ parentID: input.parentID?.(sessionID) }) as { readonly parentID?: string }),
     goal: (sessionID: string) => Effect.sync(() => input.goal?.(sessionID)),
@@ -148,12 +153,23 @@ describe("NtfyAttention", () => {
       run(
         Effect.gen(function* () {
           reset()
-          const attention = make({ config: () => ({ enabled: true, topic: "attention" }) })
+          let generatedPrompt = ""
+          const attention = make({
+            config: () => ({ enabled: true, topic: "attention" }),
+            generate: (sessionID, prompt) =>
+              Effect.sync(() => {
+                expect(sessionID).toBe("ses_root")
+                generatedPrompt = prompt
+                return "Generated session update"
+              }),
+          })
           yield* attention.notify(asked("permission"))
           yield* settle
           expect(requests).toHaveLength(1)
           expect(requests[0]?.url).toBe("https://ntfy.sh/attention")
-          expect(requests[0]?.body).toBe("Permission needs input")
+          expect(requests[0]?.body).toBe("Generated session update")
+          expect(generatedPrompt).toContain("latest assistant response")
+          expect(generatedPrompt).toContain("Attention trigger: Permission needs input")
         }),
       ))
 
@@ -164,7 +180,7 @@ describe("NtfyAttention", () => {
           const attention = make({ config: () => ({ enabled: true, topic: "attention" }) })
           yield* attention.notify(asked("guardrail", "grq-hard"))
           yield* settle
-          expect(requests.map((item) => item.body)).toEqual(["Guardrail approval needed"])
+          expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
         }),
       ))
 
@@ -209,7 +225,7 @@ describe("NtfyAttention", () => {
         Effect.scoped(
           Effect.gen(function* () {
             reset()
-            const effects: Array<"allow" | "ask" | "deny"> = ["ask", "deny", "allow"]
+            const effects: Array<"allow" | "ask" | "deny"> = ["ask", "deny", "allow", "allow"]
             const attention = make({
               config: () => ({ enabled: true, topic: "attention" }),
               permission: () => effects.shift() ?? "deny",
@@ -218,7 +234,75 @@ describe("NtfyAttention", () => {
             yield* attention.notify(asked("permission", "req-deny"))
             yield* attention.notify(asked("permission", "req-allow"))
             yield* Effect.yieldNow
-            expect(requests.map((item) => item.body)).toEqual(["Permission needs input"])
+            expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
+          }),
+        ),
+      ))
+
+    test("generates only after authorization and rechecks authorization before sending", () =>
+      run(
+        Effect.scoped(
+          Effect.gen(function* () {
+            reset()
+            const generationStarted = yield* Deferred.make<void>()
+            const generated = yield* Deferred.make<string>()
+            const permissions: Array<"allow" | "deny"> = ["allow", "deny"]
+            let generations = 0
+            const attention = make({
+              config: () => ({ enabled: true, topic: "attention" }),
+              permission: () => permissions.shift() ?? "deny",
+              generate: () =>
+                Effect.gen(function* () {
+                  generations += 1
+                  yield* Deferred.succeed(generationStarted, undefined)
+                  return yield* Deferred.await(generated)
+                }),
+            })
+            yield* attention.notify(asked("question"))
+            yield* Deferred.await(generationStarted)
+            expect(generations).toBe(1)
+            yield* Deferred.succeed(generated, "Generated question update")
+            yield* settle
+            expect(requests).toEqual([])
+          }),
+        ),
+      ))
+
+    test("skips delivery without a static fallback when generation is unavailable", () =>
+      run(
+        Effect.gen(function* () {
+          reset()
+          const attention = make({
+            config: () => ({ enabled: true, topic: "attention" }),
+            generate: () => Effect.fail("unavailable"),
+          })
+          yield* attention.notify(settled("failed"))
+          yield* settle
+          expect(requests).toEqual([])
+        }),
+      ))
+
+    test("suppresses a generated request notification resolved while generation is pending", () =>
+      run(
+        Effect.scoped(
+          Effect.gen(function* () {
+            reset()
+            const generationStarted = yield* Deferred.make<void>()
+            const generated = yield* Deferred.make<string>()
+            const attention = make({
+              config: () => ({ enabled: true, topic: "attention" }),
+              generate: () =>
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(generationStarted, undefined)
+                  return yield* Deferred.await(generated)
+                }),
+            })
+            yield* attention.notify(asked("permission"))
+            yield* Deferred.await(generationStarted)
+            yield* attention.notify(resolved("permission"))
+            yield* Deferred.succeed(generated, "Permission input is needed")
+            yield* settle
+            expect(requests).toEqual([])
           }),
         ),
       ))
@@ -247,7 +331,7 @@ describe("NtfyAttention", () => {
           yield* attention.notify(settled("succeeded", "ses_a"))
           yield* attention.notify(settled("succeeded", "ses_b"))
           yield* settle
-          expect(requests.map((item) => item.body)).toEqual(["Session done", "Session done"])
+          expect(requests.map((item) => item.body)).toEqual(["Generated session update", "Generated session update"])
         }),
       ))
 
@@ -268,7 +352,40 @@ describe("NtfyAttention", () => {
             expect(requests).toEqual([])
             yield* Deferred.succeed(checkpoint, undefined)
             yield* settle
-            expect(requests.map((item) => item.body)).toEqual(["Session done"])
+            expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
+          }),
+        ),
+      ))
+
+    test("suppresses a generated terminal notification when a successor execution starts", () =>
+      run(
+        Effect.scoped(
+          Effect.gen(function* () {
+            reset()
+            const generationStarted = yield* Deferred.make<void>()
+            const firstGenerated = yield* Deferred.make<string>()
+            let generations = 0
+            const attention = make({
+              config: () => ({ enabled: true, topic: "attention" }),
+              generate: () => {
+                generations += 1
+                if (generations > 1) return Effect.succeed("Current execution finished")
+                return Deferred.succeed(generationStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(firstGenerated)),
+                )
+              },
+            })
+            yield* attention.notify(started())
+            yield* attention.notify(settled("succeeded"))
+            yield* Deferred.await(generationStarted)
+            yield* attention.notify(started())
+            yield* Deferred.succeed(firstGenerated, "Stale execution finished")
+            yield* settle
+            expect(requests).toEqual([])
+
+            yield* attention.notify(settled("succeeded"))
+            yield* settle
+            expect(requests.map((item) => item.body)).toEqual(["Current execution finished"])
           }),
         ),
       ))
@@ -290,7 +407,7 @@ describe("NtfyAttention", () => {
           goal = "stopped"
           yield* attention.notify(settled("succeeded"))
           yield* settle
-          expect(requests.map((item) => item.body)).toEqual(["Goal stopped"])
+          expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
         }),
       ))
 
@@ -306,7 +423,7 @@ describe("NtfyAttention", () => {
             yield* attention.notify(started())
             yield* attention.notify(settled("succeeded"))
             yield* Effect.yieldNow
-            expect(requests.map((item) => item.body)).toEqual(["Session done"])
+            expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
           }),
         ),
       ))
@@ -384,6 +501,9 @@ describe("NtfyAttention", () => {
     const permission = Layer.mock(PermissionV2.Service, {
       evaluateEffective: () => Effect.succeed("allow"),
     })
+    const generate = Layer.mock(SessionGenerate.Service, {
+      generate: () => Effect.succeed("Generated goal update"),
+    })
     const config = Layer.mock(Config.Service, {
       entries: () =>
         Effect.succeed([
@@ -400,6 +520,7 @@ describe("NtfyAttention", () => {
         [SessionAutonomy.node, autonomy],
         [Config.node, config],
         [PermissionV2.node, permission],
+        [SessionGenerateNode.node, generate],
         [LayerNodePlatform.httpClient, Layer.succeed(HttpClient.HttpClient, http)],
       ],
     )
@@ -415,7 +536,7 @@ describe("NtfyAttention", () => {
           yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
           yield* Effect.sleep("600 millis")
           expect(requests.filter((item) => item.url === "https://ntfy.sh/attention").map((item) => item.body)).toEqual([
-            "Goal exhausted",
+            "Generated goal update",
           ])
         }).pipe(Effect.provide(layer)),
       ),

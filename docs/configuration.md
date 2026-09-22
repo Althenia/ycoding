@@ -258,6 +258,8 @@ One process-global attention observer receives lifecycle events and resolves eac
 
 Global MCP forms are local-only attention: the TUI may use its configured desktop notification and sound, but they do not create a remote ntfy post or a new permission authority. An ntfy post is an external HTTP attention message, not a TUI desktop notification or sound.
 
+Automatic lifecycle notifications make a transient model request using current Session context to explain the outcome or required attention. The generated plain-text message is bounded to 200 characters and sanitized before delivery. Generation failure or invalid output skips the post; there is no static fallback. The observer rechecks configuration, permission, and request/execution liveness after generation. Explicit `ntfy` tool calls send the agent-supplied message through their existing permission path.
+
 ### Field defaults and nested Schema contract
 
 The field reference below expands the overview. `unset` means the field is optional in Schema and has no default specified here.

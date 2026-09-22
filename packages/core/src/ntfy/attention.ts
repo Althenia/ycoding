@@ -13,8 +13,10 @@ import { PermissionV2 } from "../permission"
 import { QuestionV2 } from "../question"
 import { SessionAutonomy } from "../session/autonomy"
 import { SessionEvent } from "../session/event"
+import { SessionGenerate } from "../session/generate"
 import { SessionSchema } from "../session/schema"
 import { SessionStore } from "../session/store"
+import { NtfyMessage } from "./message"
 
 const CHECKPOINT = Effect.sleep("500 millis")
 export const resource = "https://ntfy.sh/*"
@@ -103,6 +105,7 @@ export interface Dependencies {
   readonly send: (sessionID: string, topic: string, message: string) => Effect.Effect<void, unknown, Scope.Scope>
   readonly settings: (sessionID: string) => Effect.Effect<Settings | undefined, never, Scope.Scope>
   readonly authorize: (sessionID: string) => Effect.Effect<"allow" | "ask" | "deny", never, Scope.Scope>
+  readonly generate: (sessionID: string, prompt: string) => Effect.Effect<string, unknown, Scope.Scope>
   readonly session: (sessionID: string) => Effect.Effect<{ readonly parentID?: string } | undefined>
   readonly goal: (sessionID: string) => Effect.Effect<GoalStatus | undefined>
   readonly notified: (sessionID: string, startedAt?: number) => Effect.Effect<boolean>
@@ -126,18 +129,33 @@ export function make(dependencies: Dependencies) {
   const deliver = Effect.fn("NtfyAttention.deliver")(function* (
     sessionID: string,
     decision: Extract<Decision, { readonly notify: true }>,
+    live: () => boolean,
   ) {
-    if (delivered.has(decision.episode)) return
+    if (!live() || delivered.has(decision.episode)) return
     delivered.add(decision.episode)
     const configured = topic(yield* dependencies.settings(sessionID))
     if (!configured) return
     if ((yield* dependencies.authorize(sessionID)) !== "allow") return
+    const generated = yield* dependencies.generate(sessionID, NtfyMessage.prompt(decision.message)).pipe(
+      Effect.map((message) => ({ type: "generated" as const, message: NtfyMessage.sanitize(message) })),
+      Effect.catch(() => Effect.succeed({ type: "unavailable" as const })),
+    )
+    if (generated.type === "unavailable") {
+      yield* Effect.logWarning("Skipped automatic ntfy attention message", { category: "generation_unavailable" })
+      return
+    }
+    if (!generated.message) {
+      yield* Effect.logWarning("Skipped automatic ntfy attention message", { category: "generation_invalid" })
+      return
+    }
+    if (!live()) return
+    const currentTopic = topic(yield* dependencies.settings(sessionID))
+    if (!currentTopic || (yield* dependencies.authorize(sessionID)) !== "allow" || !live()) return
     yield* dependencies
-      .send(sessionID, configured, decision.message)
+      .send(sessionID, currentTopic, generated.message)
       .pipe(
         Effect.catch(() =>
-          Effect.logWarning("Failed to deliver ntfy attention message").pipe(
-            Effect.annotateLogs({ episode: decision.episode }),
+          Effect.logWarning("Failed to deliver ntfy attention message", { category: "transport_failed" }).pipe(
             Effect.asVoid,
           ),
         ),
@@ -156,15 +174,20 @@ export function make(dependencies: Dependencies) {
     const finalGoalStatus = yield* dependencies.goal(episode.sessionID)
     if (terminals.get(episode.sessionID) !== episode || episode.state !== "waiting" || episode.version !== version)
       return
-    episode.state = "terminal"
     if (event.type === "settled" && event.outcome === "succeeded") {
-      if (yield* dependencies.notified(episode.sessionID, episode.startedAt)) return
+      if (yield* dependencies.notified(episode.sessionID, episode.startedAt)) {
+        episode.state = "terminal"
+        return
+      }
     }
     const decision = decide(event, {
       parentID: session?.parentID,
       goalStatus: episode.initialGoalStatus === "active" ? finalGoalStatus : undefined,
     })
-    if (decision.notify) yield* deliver(episode.sessionID, decision)
+    const live = () =>
+      terminals.get(episode.sessionID) === episode && episode.state === "waiting" && episode.version === version
+    if (decision.notify) yield* deliver(episode.sessionID, decision, live)
+    if (live()) episode.state = "terminal"
   })
 
   const terminal = Effect.fn("NtfyAttention.terminal")(function* (
@@ -202,7 +225,9 @@ export function make(dependencies: Dependencies) {
       return checkpoint.pipe(
         Effect.andThen(
           Effect.suspend(() =>
-            requests.get(decision.episode) === request ? deliver(event.sessionID, decision) : Effect.void,
+            requests.get(decision.episode) === request
+              ? deliver(event.sessionID, decision, () => requests.get(decision.episode) === request)
+              : Effect.void,
           ),
         ),
         Effect.forkScoped({ startImmediately: true }),
@@ -216,6 +241,7 @@ export function make(dependencies: Dependencies) {
           current.state = "active"
           current.startedAt = event.at
           current.version += 1
+          delivered.delete(terminalEpisode(event.sessionID))
           return Effect.void
         }
       }
@@ -312,6 +338,7 @@ export const lifecycleLayer = Layer.effectDiscard(
       return {
         config: Context.get(context, Config.Service),
         delivery: Context.get(context, Delivery),
+        generate: Context.get(context, SessionGenerate.Service),
         permission: Context.get(context, PermissionV2.Service),
       }
     })
@@ -336,6 +363,15 @@ export const lifecycleLayer = Layer.effectDiscard(
                   .evaluateEffective({ sessionID, action: "ntfy", resource })
                   .pipe(Effect.catchTag("Session.NotFoundError", () => Effect.succeed("deny" as const)))
               : Effect.succeed("deny" as const),
+          ),
+        ),
+      generate: (sessionID, prompt) =>
+        services(sessionID).pipe(
+          Effect.flatMap(
+            (value): Effect.Effect<string, unknown> =>
+              value && Schema.is(SessionSchema.ID)(sessionID)
+                ? value.generate.generate({ sessionID, prompt }).pipe(Effect.mapError((error): unknown => error))
+                : Effect.fail("generation_unavailable" as const),
           ),
         ),
       session: (sessionID) =>

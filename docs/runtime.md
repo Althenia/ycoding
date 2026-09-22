@@ -282,6 +282,8 @@ The built-in TUI attention lifecycle keeps routine child completion and settleme
 
 Core runs the remote ntfy lifecycle through one process-global observer. For each Session event it resolves the owning Location, then reads that Location's ntfy configuration, effective permission, and HTTP delivery service. The observer waits 500 ms before eligible delivery and requires an already-effective `allow`; it does not prompt for `ask`. A completed explicit ntfy tool call after an execution starts suppresses that execution's automatic successful-terminal post only. It does not suppress other attention categories or define general notification deduplication.
 
+Eligible automatic ntfy messages use transient generation from the current Session context and latest assistant response. Output is bounded to 200 characters, stripped of terminal controls, and sanitized for recognizable secrets, paths, URLs, contact details, and identifiers. Empty output and explicit claims of human approval are rejected. Generation failure skips delivery without a static fallback. Configuration, permission, and attention-episode liveness are checked again before posting; a resolved request or successor execution suppresses a stale generated message.
+
 Permission and guardrail choices keep their labels on fixed terminal rows during keyboard navigation and mouse hover. Selection changes the highlight without moving labels or surrounding content; approval and rejection semantics are unchanged.
 
 A Session view surfaces the pending permission and form prompts of its own Session and that Session's descendants. A root view therefore covers the whole family, while a subagent chat still shows prompts raised by the subagent and its own children instead of blocking invisibly behind them.
