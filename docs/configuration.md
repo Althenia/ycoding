@@ -321,6 +321,7 @@ The field reference below expands the overview. `unset` means the field is optio
 | `providers.<id>.name`, `.package`                                                       | string                                                                                                          | unset                           | Provider identity/implementation override.                                                                                                                                        |
 | `providers.<id>.env`                                                                    | string[]                                                                                                        | unset                           | Credential variable names; never place credential values in config.                                                                                                               |
 | `providers.<id>.settings`, `.headers`, `.body`                                          | JSON record, string record, JSON record                                                                         | unset                           | Provider request overlays.                                                                                                                                                        |
+| `providers.<id>.catalog.source`                                                        | `openai-models`                                                                                                 | unset                           | Optional model catalog discovery for a configured provider.                                                                                                                     |
 | `providers.<id>.models.<id>.modelID`, `.family`, `.name`, `.package`                    | model ID, model family, string, string                                                                          | unset                           | Model identity.                                                                                                                                                                   |
 | model `.settings`, `.headers`, `.body`                                                  | JSON record, string record, JSON record                                                                         | unset                           | Model request overlays.                                                                                                                                                           |
 | model `.capabilities.tools`                                                             | boolean                                                                                                         | unset                           | Tool-call declaration.                                                                                                                                                            |
@@ -789,6 +790,17 @@ Provider entries support:
 - package override in `package`;
 - request `settings`, `headers`, and `body` overlays;
 - named `models`.
+
+The TUI's `/connect` menu includes a Custom OpenAI-compatible endpoint option. Its dialog writes a provider into the existing global
+`ycoding.json` or `ycoding.jsonc` (preferring JSON when both exist), or creates `ycoding.json`
+when neither exists. It preserves unrelated provider fields and model entries, and allows an
+optional `openai-models` catalog source plus model entries with required IDs and optional names,
+families, API types, and disabled flags. API keys are stored as named integration credential
+profiles; the provider config refers to that integration so model requests resolve the active
+profile. Existing profiles can be selected and activated from the dialog. When profile-backed model
+discovery uses the endpoint, its URL must use HTTPS or loopback HTTP, contain no embedded URL
+credentials, and not redirect; config-key and header-based catalog discovery keeps its existing
+behavior.
 
 ### Provider profiles
 

@@ -59,12 +59,12 @@ export function connectionSummary(integration: IntegrationInfo) {
     .join(", ")
 }
 
-export function DialogIntegration(props: { onConnected?: OnIntegrationConnected } = {}) {
+export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void } = {}) {
   const data = useData()
   const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
-  const options = createMemo(() =>
-    integrationOptions(data.location.integration.list() ?? []).map((integration) => {
+  const options = createMemo(() => {
+    const integrations = integrationOptions(data.location.integration.list() ?? []).map((integration) => {
       const methods = connectMethods(integration)
       const connected = integration.connections.length > 0
       const category = integration.id in INTEGRATION_PRIORITY ? "Popular" : "Services"
@@ -89,8 +89,16 @@ export function DialogIntegration(props: { onConnected?: OnIntegrationConnected 
             ? manageConnections(integration, methods, dialog, props.onConnected)
             : selectMethod(integration, methods, dialog, props.onConnected),
       }
-    }),
-  )
+    })
+    if (!props.onCustomEndpoint) return integrations
+    return [...integrations, {
+      title: "Custom OpenAI-compatible endpoint",
+      value: "custom-openai-endpoint",
+      description: "Configure an OpenAI-compatible provider",
+      category: "Services",
+      onSelect: props.onCustomEndpoint,
+    }]
+  })
 
   return (
     <DialogSelect

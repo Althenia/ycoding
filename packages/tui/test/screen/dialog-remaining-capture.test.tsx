@@ -6,6 +6,7 @@ import path from "node:path"
 import { createEffect, onMount, type JSX } from "solid-js"
 import { DialogAgent } from "../../src/component/dialog-agent"
 import { DialogConfig } from "../../src/component/dialog-config"
+import { DialogCustomEndpoint } from "../../src/component/dialog-custom-endpoint"
 import { DialogDebug } from "../../src/component/dialog-debug"
 import { DialogIntegration, DialogIntegrationMethods } from "../../src/component/dialog-integration"
 import { DialogMcp } from "../../src/component/dialog-mcp"
@@ -109,6 +110,34 @@ const states = [
   { name: "run-skill", settle: "Scoped Go implementation", evidence: "Penpot UX/UI work", view: () => <DialogSkill onSelect={() => {}} /> },
   { name: "debug", settle: "Renderer stats", evidence: "Console", view: () => <DialogDebug /> },
 ] as const
+
+test("the Connect integration menu opens the custom endpoint dialog", async () => {
+  let opened = false
+  function Connect() {
+    const dialog = useDialog()
+    return (
+      <DialogIntegration
+        onCustomEndpoint={() => {
+          opened = true
+          dialog.replace(() => <DialogCustomEndpoint onComplete={() => dialog.clear()} />)
+        }}
+      />
+    )
+  }
+
+  const app = await testRender(() => <DialogProviders><Connect /></DialogProviders>, { width: 100, height: 35, kittyKeyboard: true, useMouse: true })
+  app.renderer.start()
+  await app.waitForFrame((frame) => frame.includes("Connect a service"))
+  await app.mockInput.typeText("Custom OpenAI-compatible endpoint")
+  await app.waitForFrame((frame) => frame.includes("Configure an OpenAI-compatible provider"))
+  const rows = app.captureCharFrame().split("\n")
+  const optionRow = rows.findIndex((row) => row.includes("Configure an OpenAI-compatible provider"))
+  await app.mockMouse.click(rows[optionRow]!.indexOf("Custom OpenAI-compatible endpoint") + 1, optionRow)
+  expect(opened).toBe(true)
+  await app.waitForFrame((frame) => frame.includes("Custom OpenAI-Compatible Endpoint"))
+  expect(app.captureCharFrame()).toContain("Endpoint URL")
+  app.renderer.destroy()
+})
 
 const designChecks: Partial<Record<(typeof states)[number]["name"], { title: string; row: number; column: number; text: string }>> = {
   "mcp-servers": { title: "MCP servers", row: 7, column: 6, text: "agentmemory" },

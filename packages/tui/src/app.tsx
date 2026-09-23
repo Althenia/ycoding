@@ -87,48 +87,11 @@ import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-wi
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat, errorMessage } from "./util/error"
 import { writeHeapSnapshot } from "node:v8"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
-import path from "path"
-import { parse, modify, applyEdits, type ParseError } from "jsonc-parser"
+import { saveCustomEndpoint } from "./custom-endpoint-save"
 
 const themePerformance = DevTools.register({ id: "theme-performance", title: "Theme performance" })
 
 registerYCodingSpinner()
-
-async function writeCustomEndpoint(result: { baseURL: string; api: "chat" | "responses"; provider?: string; apiKey?: string }) {
-  const configDir = Global.Path.config
-  const configFiles = ["ycoding.json", "ycoding.jsonc"]
-  const configPath = configFiles.find((f) => path.join(configDir, f))
-  if (!configPath) return
-
-  const fullPath = path.join(configDir, configPath)
-  const text = await readFile(fullPath, "utf-8").catch(() => "{}")
-  const errors: ParseError[] = []
-  const current = parse(text, errors, { allowTrailingComma: true })
-  if (errors.length) return
-
-  const providerID = result.provider || "custom-openai"
-  const providerSettings: Record<string, unknown> = {
-    baseURL: result.baseURL,
-    api: result.api,
-  }
-
-  if (result.apiKey) {
-    providerSettings.apiKey = result.apiKey
-  }
-
-  const providerConfig: Record<string, unknown> = {
-    settings: providerSettings,
-    models: {},
-  }
-
-  const edits = modify(text, ["providers", providerID], providerConfig, {
-    formattingOptions: { tabSize: 2, insertSpaces: true },
-  })
-  const updated = applyEdits(text, edits)
-  await mkdir(path.dirname(fullPath), { recursive: true })
-  await writeFile(fullPath, updated)
-}
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -808,23 +771,46 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
           dialog.replace(() => (
             <DialogIntegration
               onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
-            />
-          ))
-        },
-        category: "Integration",
-      },
-      {
-        name: "provider.custom-endpoint",
-        title: "Custom OpenAI-compatible endpoint",
-        slash: { name: "custom-endpoint" },
-        run: () => {
-          dialog.replace(() => (
-            <DialogCustomEndpoint
-              onComplete={(result) => {
-                dialog.clear()
-                void writeCustomEndpoint(result)
-              }}
-              onCancel={() => dialog.clear()}
+              onCustomEndpoint={() => dialog.replace(() => (
+                <DialogCustomEndpoint
+                  providerOptions={(data.location.integration.list() ?? []).map((integration) => ({
+                    id: integration.id,
+                    name: integration.name,
+                    profiles: integration.connections.flatMap((connection) => connection.type === "credential"
+                      ? [{ id: connection.id, label: connection.label, active: connection.active }]
+                      : []),
+                  }))}
+                  onComplete={(result) => {
+                    dialog.clear()
+                    const current = data.location.default()
+                    const locationRef = { directory: current.directory, workspace: current.workspaceID }
+                    void saveCustomEndpoint(Global.Path.config, result, {
+                      syncRegistration: () => data.location.integration.sync(),
+                      registered: (providerID) => (data.location.integration.list() ?? []).some(
+                        (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),
+                      ),
+                      connectKey: ({ integrationID, key, label }) => client.api.integration.connect.key({
+                        integrationID,
+                        location: locationRef,
+                        key,
+                        label,
+                      }),
+                      activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),
+                      refresh: () => Promise.all([
+                        data.location.integration.sync(),
+                        data.location.model.sync(),
+                        data.location.provider.sync(),
+                      ]),
+                    })
+                      .then(({ credentialConnected }) => toast.show({ variant: "success", message: credentialConnected
+                        ? "Custom endpoint saved and credential profile connected"
+                        : "Custom endpoint saved to YCoding config",
+                      }))
+                      .catch(toast.error)
+                  }}
+                  onCancel={() => dialog.clear()}
+                />
+              ))}
             />
           ))
         },
