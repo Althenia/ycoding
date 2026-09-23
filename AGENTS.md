@@ -66,6 +66,7 @@ Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 ## Release practices
 
 - TUI and web share one release version and one nonempty note at `docs/releases/v<version>.md`.
+- When preparing a release, add its user-facing changes to `apps/web/src/content/changelog.ts` in newest-first order and update the changelog test; include every version since the last listed release using its `docs/releases/v<version>.md` note as evidence.
 - The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies both surfaces, deploys web to Cloudflare after required checks, and creates one TUI GitHub Release with the note and native assets only after deployment succeeds. Configure `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret for deployment. Manual runs prepare assets without publishing or deploying.
 
 ## Commits and PR titles

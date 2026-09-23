@@ -22,6 +22,57 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.10",
+    date: "2026-09-23",
+    title: "Wait for Runpod Serverless jobs",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Wait for queued or running Runpod Serverless Ollama and vLLM jobs to finish instead of interrupting the response. Poll the existing job without resubmitting the prompt." },
+    ],
+  },
+  {
+    version: "0.6.9",
+    date: "2026-09-23",
+    title: "Runpod instruction order and endpoint choices",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Keep Runpod Ollama instruction updates in their chronological positions without sending a system message after conversation history." },
+      { tag: "Fixed", text: "Highlight the selected Runpod worker and OpenAI-compatible endpoint options with readable filled backgrounds instead of appended selection labels." },
+    ],
+  },
+  {
+    version: "0.6.8",
+    date: "2026-09-23",
+    title: "Runpod endpoint profiles and readable dialogs",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Add Runpod Serverless vLLM and Ollama Jobs endpoints from /connect, with separate endpoint model entries and named API-key profiles." },
+      { tag: "Fixed", text: "Make endpoint dialog actions and choices readable in dark and light themes, focus fields with the mouse, and keep long provider suggestions inside the dialog." },
+      { tag: "Fixed", text: "Report vLLM cached prompt tokens when the worker supplies them without treating missing cache usage as zero." },
+    ],
+  },
+  {
+    version: "0.6.7",
+    date: "2026-09-23",
+    title: "Connect custom endpoints and Runpod workers",
+    tags: ["Added", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Configure a custom OpenAI-compatible endpoint from the TUI's /connect menu, including models, Chat or Responses API selection, optional model discovery, and named credential profiles." },
+      { tag: "Added", text: "Connect to Runpod Serverless Jobs endpoints using the Ollama or vLLM worker route." },
+      { tag: "Added", text: "Mark verified normal-Session work complete with the local task_complete tool to request a TUI completion alert without configuring remote notifications." },
+      { tag: "Fixed", text: "Keep ordinary successful idle, unfinished child tasks, and root-owned background shells from producing premature completion alerts. Completed goals alert after work settles; pending human requests, failures, and terminal goal outcomes retain their attention alerts." },
+    ],
+  },
+  {
+    version: "0.6.6",
+    date: "2026-09-23",
+    title: "See active and inactive workers together",
+    tags: ["Changed"],
+    changes: [
+      { tag: "Changed", text: "Show active and terminal workers together in the team composer under ACTIVE and INACTIVE, removing the separate Idle tab. Terminal workers remain visible with elapsed time settled at their task update time." },
+    ],
+  },
+  {
     version: "0.6.5",
     date: "2026-09-23",
     title: "Sharper prompts and clearer subagent status",
