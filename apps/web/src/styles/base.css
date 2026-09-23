@@ -813,7 +813,8 @@ kbd {
   align-items: center;
   min-block-size: var(--yc-control-h);
   padding: 0 var(--yc-space-3);
-  border-radius: var(--yc-radius-md);
+  border-radius: 0;
+  border-block-end: 2px solid transparent;
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
@@ -829,7 +830,8 @@ kbd {
 
 .nav__link--active {
   color: var(--yc-green-strong);
-  background: var(--yc-green-soft);
+  background: transparent;
+  border-block-end-color: var(--yc-green-strong);
 }
 
 @media (min-width: 768px) {

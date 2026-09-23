@@ -1,6 +1,5 @@
 import { For, Show, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
-import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
 
 /**
@@ -26,7 +25,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
 
   return (
     <div class="composer">
-      <For each={remote.state().mutations}>
+      <For each={remote.state().mutations.filter((mutation) => mutation.sessionID === props.sessionID)}>
         {(mutation) => (
           <div class={`mutation mutation--${mutation.state}`} role="status">
             <span class="mutation__label">{mutation.label}</span>
@@ -71,17 +70,24 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
           />
         </label>
         <div class="composer__controls">
-          <CustomSelect
-            class="composer__delivery"
-            label="Delivery"
-            value={delivery()}
-            placeholder="Steer now"
-            options={[
-              { value: "steer", label: "Steer now", detail: "Apply at the next safe boundary" },
-              { value: "queue", label: "Queue until idle", detail: "Wait until the Session is idle" },
-            ]}
-            onChange={(value) => setDelivery(value === "queue" ? "queue" : "steer")}
-          />
+          <div class="composer__delivery" role="group" aria-label="Delivery">
+            <button
+              type="button"
+              class={`composer__delivery-option${delivery() === "steer" ? " composer__delivery-option--active" : ""}`}
+              aria-pressed={delivery() === "steer"}
+              onClick={() => setDelivery("steer")}
+            >
+              Steer
+            </button>
+            <button
+              type="button"
+              class={`composer__delivery-option${delivery() === "queue" ? " composer__delivery-option--active" : ""}`}
+              aria-pressed={delivery() === "queue"}
+              onClick={() => setDelivery("queue")}
+            >
+              Queue
+            </button>
+          </div>
           <Show when={props.running}>
             <button
               type="button"

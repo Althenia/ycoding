@@ -9,7 +9,7 @@ import {
   queueRowView,
   reportedEvents,
   sessionChips,
-  showsSessionRow,
+  remoteSurfaceComposition,
   summarizeSession,
 } from "./shell"
 
@@ -39,19 +39,13 @@ const view = (patch: Partial<SessionView> = {}): SessionView => ({
   ...patch,
 })
 
-describe("selected session row", () => {
-  test("keeps its own row on the surfaces that carry the workspace", () => {
-    expect(showsSessionRow("/remote", true)).toBe(true)
-    expect(showsSessionRow("/remote/sessions", true)).toBe(true)
-    expect(showsSessionRow("/remote/activity", true)).toBe(true)
-  })
-
-  test("is absent for settings, which names itself in the page head alone", () => {
-    expect(showsSessionRow("/remote/settings", true)).toBe(false)
-  })
-
-  test("is absent without a selected session", () => {
-    expect(showsSessionRow("/remote", false)).toBe(false)
+describe("screen-specific workspace composition", () => {
+  test("keeps the session rail and composer only on a selected conversation", () => {
+    expect(remoteSurfaceComposition("/remote", true)).toEqual({ showSessionRail: true, showComposer: true })
+    expect(remoteSurfaceComposition("/remote", false)).toEqual({ showSessionRail: false, showComposer: false })
+    expect(remoteSurfaceComposition("/remote/sessions", true)).toEqual({ showSessionRail: false, showComposer: false })
+    expect(remoteSurfaceComposition("/remote/activity", true)).toEqual({ showSessionRail: false, showComposer: false })
+    expect(remoteSurfaceComposition("/remote/settings", true)).toEqual({ showSessionRail: false, showComposer: false })
   })
 })
 
@@ -273,13 +267,13 @@ describe("waiting for a decision", () => {
     expect(awaitsApproval(view({ id: "ses_other", requests: [permission] }), "ses_a")).toBe(false)
   })
 
-  test("adds the attention chip after the reported status without changing it", () => {
+  test("puts the pending approval first so compact session rows cannot hide it", () => {
     const chips = sessionChips(
       session({ running: true }),
       view({ requests: [permission], autonomy: { mode: "normal", yolo: 2 } }),
     )
-    expect(chips.map((chip) => chip.label)).toEqual(["Running", "Standard", "Guardrails enforced", "Waiting for approval"])
-    expect(chips.at(-1)?.tone).toBe("attention")
+    expect(chips.map((chip) => chip.label)).toEqual(["Waiting for approval", "Running", "Standard", "Guardrails enforced"])
+    expect(chips[0]?.tone).toBe("attention")
   })
 
   test("keeps the unloaded session's chips exactly as the device reported them", () => {

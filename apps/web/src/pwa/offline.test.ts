@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   BLOCKED_PATH_PREFIXES,
+  CACHE_NAME,
   OFFLINE_FALLBACK_URL,
   PRECACHE_URLS,
   isBlockedPath,
@@ -11,6 +12,9 @@ import {
 const origin = "https://ycoding.althenia.app"
 
 describe("precache list", () => {
+  test("replaces the cached shell when publishing the redesigned offline page", () => {
+    expect(CACHE_NAME).toBe("ycoding-web-shell-v2")
+  })
   test("contains only same-origin static shell paths", () => {
     expect(PRECACHE_URLS.length).toBeGreaterThan(0)
     for (const url of PRECACHE_URLS) {
@@ -25,6 +29,27 @@ describe("precache list", () => {
     expect(PRECACHE_URLS).toContain("/")
     expect(PRECACHE_URLS).toContain(OFFLINE_FALLBACK_URL)
     expect(PRECACHE_URLS).toContain("/manifest.webmanifest")
+  })
+})
+
+describe("offline fallback document", () => {
+  test("provides the offline status, public navigation and a safe connection retry without scripts", async () => {
+    const html = await Bun.file(new URL("../../public/offline.html", import.meta.url)).text()
+    expect(html).toContain('aria-label="Public navigation"')
+    expect(html).toContain('aria-labelledby="offline-title"')
+    expect(html).toContain('<h1 id="offline-title">You are offline</h1>')
+    expect(html).toMatch(/<a[^>]*href="\/remote"[^>]*>\s*Retry\s*<\/a>/)
+    expect(html).toContain('href="/docs"')
+    expect(html).toContain('href="/changelog"')
+    expect(html).toContain("Nothing is queued or sent while offline.")
+    expect(html).not.toMatch(/<script|<form|https?:\/\//)
+  })
+
+  test("uses the approved corner scale on the standalone offline card and controls", async () => {
+    const html = await Bun.file(new URL("../../public/offline.html", import.meta.url)).text()
+    expect(html).toMatch(/main\s*\{[^}]*border-radius:\s*10px/s)
+    expect(html).toMatch(/\.offline-icon\s*\{[^}]*border-radius:\s*6px/s)
+    expect(html).toMatch(/\.retry\s*\{[^}]*border-radius:\s*10px/s)
   })
 })
 

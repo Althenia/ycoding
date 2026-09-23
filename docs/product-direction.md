@@ -97,6 +97,8 @@ Remote control requires an authenticated user, an authenticated enrolled device,
 
 The responsive layout reflows at desktop, tablet, and mobile breakpoints. Light and dark themes, keyboard-accessible approvals, bounded tool/terminal output, and an accessible composer are required on each surface. Offline mode never queues remote mutations.
 
+The cached offline page provides Home, Documentation, and Changelog navigation and a **Retry** link to `/remote`. It follows the browser's light or dark color preference. Service-worker caching is limited to the public static shell; API, authentication, and WebSocket traffic is excluded. Activating a new shell-cache version removes the prior shell cache. An install prompt alone does not establish native PWA installation or standalone launch; those remain browser- and platform-managed operations.
+
 Remote questions use the runtime's native Forms. The workspace renders string, multiselect, number, integer, boolean, and external-step fields, preserves defaults and conditional visibility, and submits typed answers or explicit cancellation. External steps expose HTTP(S) links and require acknowledgement. Only pending Forms owned by the selected Session can be answered; the local runtime validates every answer.
 
 The device picker lists online, active enrollments. An account refresh that reports the selected machine offline preserves its name and reconnect action rather than switching to another machine. Settings retains offline and revoked enrollments and exposes notification preferences as five event categories with independent workspace and desktop channels.

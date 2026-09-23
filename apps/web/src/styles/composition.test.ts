@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { declarationsWhere, readStylesheet, widthThreshold, type Stylesheet } from "./css-rules"
 
 /**
- * The approved responsive and motion contract
- * (`.aphrodite/redesign-audit/specs/responsive.toon`, `specs/motion.toon`).
+ * Shared responsive and motion invariants. Source-matched browser comparisons
+ * independently verify the displayed Stitch screen compositions.
  *
  * What responds is composition: how many columns a surface has, which rails exist,
  * the inline gutter step, and the display type step. Control height, hit area, body
@@ -19,6 +19,36 @@ const SURFACE_FILES = ["base.css", "site.css", "docs.css", "remote.css"] as cons
 const STYLESHEETS = [...SURFACE_FILES, "tokens.css"] as const
 
 describe("responsive contract", () => {
+  test("uses compact underlined navigation instead of filled rounded tabs", async () => {
+    const sheet = await readStylesheet("base.css")
+    expect(base(sheet, ".nav__link")).toMatchObject({
+      "border-radius": "0",
+      "border-block-end": "2px solid transparent",
+    })
+    expect(base(sheet, ".nav__link--active")).toMatchObject({
+      background: "transparent",
+      "border-block-end-color": "var(--yc-green-strong)",
+    })
+  })
+
+  test("uses the shared medium radius for public interactive and raised surfaces", async () => {
+    const site = await readStylesheet("site.css")
+    const docs = await readStylesheet("docs.css")
+    for (const selector of [".marketing .button", ".marketing .card", ".marketing .code-block", ".marketing .input"]) {
+      expect(declarationsWhere(site, (rule) => rule.header.includes(selector))["border-radius"]).toBe("var(--yc-radius-md)")
+    }
+    for (const selector of [
+      ".docs-bar__nav-toggle",
+      ".docs-search-trigger",
+      ".docs--index .doc-section",
+      ".docs--index .card",
+      ".docs--article .code-block",
+      ".releases--timeline .release",
+    ]) {
+      expect(declarationsWhere(docs, (rule) => rule.header.includes(selector))["border-radius"]).toBe("var(--yc-radius-md)")
+    }
+  })
+
   test("uses only the declared breakpoints in every stylesheet", async () => {
     for (const name of STYLESHEETS) {
       const sheet = await readStylesheet(name)
@@ -62,10 +92,8 @@ describe("responsive contract", () => {
       { min: 640, tracks: 2 },
       { min: 1280, tracks: 4 },
     ])
-    expect(columnSteps(site, ".footer__grid")).toEqual([
-      { min: 640, tracks: 2 },
-      { min: 1024, tracks: 4 },
-    ])
+    expect(site.rules.filter((rule) => rule.header.includes(".footer__grid"))).toEqual([])
+    expect(base(site, ".footer__compact")).toMatchObject({ display: "flex", "flex-wrap": "wrap" })
     expect(columnSteps(site, ".install")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
@@ -90,14 +118,16 @@ describe("responsive contract", () => {
     expect(hiddenBelow(docs, ".docs-bar__title", 1024)).toBe(true)
   })
 
-  test("returns the remote rails at 768 and 1280 and hides the compact navigation above 768", async () => {
+  test("adds only the selected conversation rail at 768 and keeps other screens full-width", async () => {
     const remote = await readStylesheet("remote.css")
-    expect(columnSteps(remote, ".workspace")).toEqual([
-      { min: 768, tracks: 2 },
-      { min: 1280, tracks: 3 },
-    ])
-    expect(shownFrom(remote, ".workspace__rail", 768)).toBe(true)
-    expect(shownFrom(remote, ".workspace__activity", 1280)).toBe(true)
+    expect(columnSteps(remote, ".workspace")).toEqual([])
+    expect(columnSteps(remote, ".app--conversation.app--selected .workspace")).toEqual([{ min: 768, tracks: 2 }])
+    expect(shownFrom(remote, ".app--conversation.app--selected .workspace__rail", 768)).toBe(true)
+    for (const screen of ["sessions", "activity", "settings", "empty"]) {
+      expect(declarationsWhere(remote, (rule) =>
+        rule.header.split(",").map((selector) => selector.trim()).includes(`.app--${screen} .workspace__main`),
+      )["grid-column"]).toBe("1 / -1")
+    }
     expect(shownFrom(remote, ".bottom-nav", 0)).toBe(true)
     expect(hiddenAbove(remote, ".bottom-nav", 768)).toBe(true)
     expect(columnSteps(remote, ".defs__row")).toEqual([{ min: 1024, tracks: 2 }])

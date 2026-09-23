@@ -34,6 +34,7 @@ import {
   withShellOutputFetch,
   withShellOutputPage,
   type FileChangeView,
+  type PendingRequestView,
   type RemoteMessageView,
   type SessionAutonomyView,
   type SessionView,
@@ -51,6 +52,8 @@ import type { RemoteConnectionState } from "./view-model"
 export type SessionInfoView = {
   readonly id: string
   readonly title: string
+  readonly projectID?: string
+  readonly directory?: string
   readonly agent?: string
   readonly model?: ModelRefView
   readonly modelLabel?: string
@@ -208,6 +211,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
    * issued is newer, so it is re-applied over the read instead of being replaced by it.
    */
   let fileChangeRead: { readonly sessionID: string; readonly live: FileChangeView[] } | undefined
+  const requestReads = new Set<{ readonly sessionID: string; readonly live: { readonly event: unknown; readonly at: number }[] }>()
   let cancelBatch: (() => void) | undefined
   let queued: { readonly sessionID: string; readonly event: unknown }[] = []
   /** Last published transport status, so only a live connection can report a drop. */
@@ -272,9 +276,18 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // raises nothing, and the snapshot paths below never call this loop.
       const category = notificationCategory(item.event)
       if (category !== undefined) delivery.deliver(category)
-      const next = applySessionEvent(view, item.event, now())
+      const at = now()
+      const next = applySessionEvent(view, item.event, at)
       unhandled += next.unhandledEvents - view.unhandledEvents
       view = sequence.seq === undefined ? next : { ...next, watermark: sequence.seq }
+      const type = typeof item.event === "object" && item.event !== null ? Reflect.get(item.event, "type") : undefined
+      if (type === "permission.v2.asked" || type === "permission.v2.replied" ||
+        type === "guardrail.asked" || type === "guardrail.replied" ||
+        type === "form.created" || type === "form.replied" || type === "form.cancelled") {
+        for (const read of requestReads) {
+          if (read.sessionID === item.sessionID) read.live.push({ event: item.event, at })
+        }
+      }
       if (fileChangeRead !== undefined && fileChangeRead.sessionID === item.sessionID) {
         const change = readFileChangeEvent(item.event)
         if (change !== undefined) fileChangeRead.live.push(change)
@@ -434,7 +447,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const active = transport
     if (!active) return
     const pending = { sessionID, live: [] as FileChangeView[] }
+    const requestsDuringRead = { sessionID, live: [] as { readonly event: unknown; readonly at: number }[] }
     fileChangeRead = pending
+    requestReads.add(requestsDuringRead)
     try {
       const [autonomy, permissions, guardrails, forms, changes] = await Promise.all([
         active.request("session.autonomy.get", { sessionID }),
@@ -447,11 +462,14 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const view = state.view
       if (!view) return
       const requests = [
-        ...(permissions.status === "ok" ? readPermissionRequests(permissions.value, now()) : []),
-        ...(guardrails.status === "ok" ? readGuardrailRequests(guardrails.value, now()) : []),
-        ...(forms.status === "ok" ? readFormRequests(forms.value, now()).filter((request) => request.form.sessionID === sessionID) : []),
+        ...(permissions.status === "ok" ? readPermissionRequests(permissions.value, now()) : view.requests.filter((request) => request.kind === "permission")),
+        ...(guardrails.status === "ok" ? readGuardrailRequests(guardrails.value, now()) : view.requests.filter((request) => request.kind === "guardrail")),
+        ...(forms.status === "ok" ? readFormRequests(forms.value, now()).filter((request) => request.form.sessionID === sessionID) : view.requests.filter((request) => request.kind === "form")),
       ]
-      const withRequests = replaceRequests(view, requests)
+      const withRequests = replaceRequests(view, requestsDuringRead.live.reduce<readonly PendingRequestView[]>(
+        (current, item) => applySessionEvent({ ...view, requests: current }, item.event, item.at).requests,
+        requests,
+      ))
       // The ledger read is authoritative except for records that arrived while it was
       // pending: those describe a later instant than the read does.
       const withChanges =
@@ -474,6 +492,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       })
     } finally {
       if (fileChangeRead === pending) fileChangeRead = undefined
+      requestReads.delete(requestsDuringRead)
     }
   }
 
@@ -611,7 +630,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // other failed read remain connection errors, not a claim about device reachability.
       if (listed.status === "failed" && listed.error.code === "agent_unavailable") {
         setState({ connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") }, sessions: [] })
+        return
       }
+      setState({ connection: { kind: "error", message: describeOutcome(listed, "Session list") } })
       return
     }
     const running = activeStatus.status === "ok" ? readActiveSessions(activeStatus.value) : undefined
@@ -623,7 +644,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       return info ? [info] : []
     })
     setState({
-      ...(state.connection.kind === "offline" ? { connection: connectionFor(active.status(), state.activeDeviceID) } : {}),
+      ...(state.connection.kind === "offline" || state.connection.kind === "error"
+        ? { connection: connectionFor(active.status(), state.activeDeviceID) }
+        : {}),
       sessions,
       advertised: sessions.map((session) => session.id),
     })
@@ -1123,10 +1146,15 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
   const id = typeof record.id === "string" && record.id.length > 0 ? record.id : undefined
   if (id === undefined) return undefined
   const time = typeof record.time === "object" && record.time !== null ? (record.time as Record<string, unknown>) : {}
+  const location = typeof record.location === "object" && record.location !== null
+    ? record.location as Record<string, unknown>
+    : {}
   const model = readModelRef(record.model)
   return {
     id,
     title: typeof record.title === "string" && record.title.length > 0 ? record.title : id,
+    ...(typeof record.projectID === "string" && record.projectID.length > 0 ? { projectID: record.projectID } : {}),
+    ...(typeof location.directory === "string" && location.directory.length > 0 ? { directory: location.directory } : {}),
     ...(typeof record.agent === "string" ? { agent: record.agent } : {}),
     ...(model === undefined ? {} : { model, modelLabel: modelLabel(model) }),
     updatedAt: typeof time.updated === "number" ? time.updated : 0,

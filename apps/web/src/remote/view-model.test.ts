@@ -12,6 +12,7 @@ import {
   sessionAvailabilityView,
   sessionStateChips,
   shellOutputPaging,
+  sessionProjectLabel,
   summarizeConnection,
   type AccountReadState,
   type RemoteConnectionState,
@@ -121,13 +122,13 @@ describe("sessionStateChips", () => {
     expect(labels).not.toContain("Goal")
   })
 
-  test("surfaces goal, yolo level, agent, and model when present", () => {
+  test("keeps session state chips separate from agent and model metadata", () => {
     const labels = sessionStateChips(
       session({ autonomy: "yolo", yoloLevel: 3, agent: "god", model: "openai/gpt-5", status: "running" }),
     ).map((chip) => chip.label)
     expect(labels).toContain("YOLO 3")
-    expect(labels).toContain("god")
-    expect(labels).toContain("openai/gpt-5")
+    expect(labels).not.toContain("god")
+    expect(labels).not.toContain("openai/gpt-5")
     expect(labels).toContain("Running")
     expect(sessionStateChips(session({ autonomy: "goal" })).map((chip) => chip.label)).toContain("Goal")
   })
@@ -141,6 +142,18 @@ describe("sessionStateChips", () => {
   test("omits unknown fields instead of inventing values", () => {
     const labels = sessionStateChips({ id: "session-2", title: "Untitled", status: "idle" }).map((chip) => chip.label)
     expect(labels).toEqual([])
+  })
+})
+
+describe("sessionProjectLabel", () => {
+  test("uses the basename of the reported directory without inventing a project name", () => {
+    expect(sessionProjectLabel({ projectID: "prj_auth", directory: "/work/ycoding-engine/auth" })).toBe("auth")
+    expect(sessionProjectLabel({ projectID: "prj_auth", directory: "/work/ycoding-engine/auth/" })).toBe("auth")
+  })
+
+  test("falls back only to reported identity", () => {
+    expect(sessionProjectLabel({ projectID: "prj_auth" })).toBe("prj_auth")
+    expect(sessionProjectLabel({})).toBe("Not reported")
   })
 })
 

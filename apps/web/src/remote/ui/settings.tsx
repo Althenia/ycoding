@@ -1,6 +1,5 @@
 import { For, Show, createSignal, type JSX } from "solid-js"
 import { Icon } from "../../ui/icon"
-import { CustomSelect } from "../../ui/custom-select"
 import { useTheme } from "../../theme/theme-store"
 import type { ThemePreference } from "../../theme/theme"
 import type { SessionView } from "../projection"
@@ -25,9 +24,16 @@ import {
 } from "../preferences"
 
 const themeOptions: readonly { readonly id: ThemePreference; readonly label: string }[] = [
+  { id: "system", label: "System" },
   { id: "light", label: "Light" },
   { id: "dark", label: "Dark" },
-  { id: "system", label: "System" },
+]
+
+const autonomyOptions = [
+  { level: 0 as const, label: "Standard", detail: "Manual questions and approval requests." },
+  { level: 1 as const, label: "YOLO 1", detail: "Automatically answers questions." },
+  { level: 2 as const, label: "YOLO 2", detail: "Answers questions and approves tool permissions." },
+  { level: 3 as const, label: "YOLO 3", detail: "Also approves ordinary guardrail reviews." },
 ]
 
 function permissionDescription(): string {
@@ -84,10 +90,13 @@ export function AccountSettings(): JSX.Element {
       title="Account"
       hint="This workspace reaches your machines with the account this browser is signed in with."
     >
-      <div class="defs">
+      <div class="account-card">
         <div class="defs__row">
           <span class="defs__key">Account</span>
-          <span class="defs__value">{signedIn() ? "Signed in" : detail()}</span>
+          <span class="defs__value">
+            <strong>{signedIn() ? state().owner?.id : detail()}</strong>
+            <Show when={signedIn()}><span class="chip">Signed in</span></Show>
+          </span>
         </div>
         <Show when={expiry()}>
           {(label) => (
@@ -148,21 +157,35 @@ export function DeviceSettings(): JSX.Element {
           : "A machine appears here after the CLI enrolls it with a one-use code."
       }
     >
+      <p class="device-access-note">
+        <Icon name="shield" size={16} />
+        All existing and future Sessions are accessible while this device is connected.
+      </p>
       <Show when={state().devices.length > 0}>
-        <div class="list">
+        <div class="device-table" role="table" aria-label="Registered devices">
+          <div class="device-table__head" role="row">
+            <span role="columnheader">Device name</span>
+            <span role="columnheader">Registration</span>
+            <span role="columnheader">Connection</span>
+            <span role="columnheader">Last seen</span>
+            <span role="columnheader">Action</span>
+          </div>
           <For each={state().devices}>
             {(device) => (
-              <div class="device">
-                <div class="device__body">
+              <div class="device" role="row">
+                <div class="device__body" role="cell">
                   <span class="device__name">{device.name}</span>
-                  <span class="device__meta">
-                    <span class={`status-dot status-dot--${device.status === "active" && device.online ? "online" : "offline"}`} aria-hidden="true" />
-                    {device.status === "revoked" ? "Revoked" : device.online ? "Enrolled · online" : "Enrolled · offline"}
-                    {device.lastSeenAt === undefined ? "" : ` · last seen ${new Date(device.lastSeenAt).toLocaleString()}`}
-                  </span>
                 </div>
+                <span class="device__registration" role="cell">{device.status === "revoked" ? "Revoked" : "Enrolled"}</span>
+                <span class="device__connection" role="cell">
+                  <span class={`status-dot status-dot--${device.status === "active" && device.online ? "online" : "offline"}`} aria-hidden="true" />
+                  {device.status === "revoked" ? "Disconnected" : device.online ? "Online" : "Offline"}
+                </span>
+                <span class="device__last-seen" role="cell">
+                  {device.lastSeenAt === undefined ? "Not reported" : new Date(device.lastSeenAt).toLocaleString()}
+                </span>
                 <Show when={device.status === "active"}>
-                  <span class="device__action">
+                  <span class="device__action" role="cell">
                     <button
                       type="button"
                       class="button button--danger button--small"
@@ -278,7 +301,7 @@ export function AppearanceSettings(): JSX.Element {
       title="Appearance"
       hint="Light, dark, or system. The choice is stored in this browser and applied before the first paint."
     >
-      <div class="list">
+      <div class="list appearance-segments">
         <div class="list__row">
           <span class="list__label" id="theme-label">
             Theme
@@ -317,24 +340,23 @@ export function AutonomySettings(): JSX.Element {
   return (
     <Section id="autonomy-settings" category="Autonomy" title="Autonomy" hint={autonomyHint(view())}>
       <Show when={view() !== undefined}>
+        <p class="settings__hint settings__guardrail-note">Hard guardrail reviews always require a human decision, even at level 3.</p>
         <div class="defs">
-          <div class="defs__row">
-            <span class="defs__key">Autonomy level</span>
-            <span class="defs__value">
-              <CustomSelect
-                class="autonomy-select"
-                label="Autonomy level"
-                value={String(autonomy()?.yolo ?? 0)}
-                placeholder="Standard"
-                options={[
-                  { value: "0", label: "Standard", detail: "Manual questions and approvals" },
-                  { value: "1", label: "YOLO 1", detail: "Automatically answers questions" },
-                  { value: "2", label: "YOLO 2", detail: "Answers questions and approves permissions" },
-                  { value: "3", label: "YOLO 3", detail: "Also approves ordinary guardrail reviews" },
-                ]}
-                onChange={(value) => void remote.store.setYolo(level(value))}
-              />
-            </span>
+          <div class="autonomy-choices" role="radiogroup" aria-label="Autonomy level">
+            <For each={autonomyOptions}>
+              {(option) => (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={(autonomy()?.yolo ?? 0) === option.level}
+                  class={`autonomy-choice${(autonomy()?.yolo ?? 0) === option.level ? " autonomy-choice--active" : ""}`}
+                  onClick={() => void remote.store.setYolo(option.level)}
+                >
+                  <strong>{option.label}</strong>
+                  <span>{option.detail}</span>
+                </button>
+              )}
+            </For>
           </div>
           <div class="defs__row">
             <span class="defs__key">Goal</span>
@@ -366,7 +388,6 @@ export function AutonomySettings(): JSX.Element {
             </span>
           </div>
         </div>
-        <p class="settings__hint">Hard guardrail reviews always require a human decision, even at level 3.</p>
       </Show>
     </Section>
   )
@@ -466,11 +487,4 @@ function autonomyHint(view: SessionView | undefined): string {
   if (autonomy.mode === "goal") return `Goal active: ${autonomy.goal?.text ?? ""}`
   if (autonomy.yolo === 0) return "Standard mode: every review and question waits for you."
   return `YOLO ${autonomy.yolo}: levels 1-3 answer questions, permissions, then ordinary guardrail reviews.`
-}
-
-function level(value: string): 0 | 1 | 2 | 3 {
-  if (value === "1") return 1
-  if (value === "2") return 2
-  if (value === "3") return 3
-  return 0
 }

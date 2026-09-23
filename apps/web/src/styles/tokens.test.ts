@@ -2,10 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { declarationsWhere, readStylesheet, widthThreshold, type Declarations, type Stylesheet } from "./css-rules"
 
 /**
- * The approved token contract (`.aphrodite/redesign-audit/specs/tokens.toon`,
- * revision 3) as the executable form the implementation must ship. The names are
- * the interface; the values are the ones the contrast, layout, and motion checks
- * were measured against, so a drift in either is a contract change.
+ * The approved design-system tokens in `.aphrodite/redesign-audit/specs/tokens.toon`.
  *
  * The two layers the contract separates:
  *

@@ -8,6 +8,7 @@
  * run without a hosted relay or credentials.
  */
 import { render } from "solid-js/web"
+import { onMount } from "solid-js"
 import { RouterProvider } from "../src/router/router"
 import { ThemeProvider } from "../src/theme/theme-store"
 import { RemoteProvider } from "../src/remote/context"
@@ -21,6 +22,7 @@ import type {
   RemoteTransportStatus,
 } from "../src/remote/transport"
 import type { RemoteDeviceInfo, RemoteOperation } from "@ycoding-ai/remote"
+import { stitchRemoteScenario } from "./stitch-remote-data"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/site.css"
@@ -43,19 +45,23 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+const stitchScenario = stitchRemoteScenario(accountParams)
 /** `?account=pending|signedout|unavailable` plus `?accountDelay=<ms>` for a slow answer. */
-const accountMode = accountParams.get("account") ?? "ok"
+const accountMode = stitchScenario?.account ?? accountParams.get("account") ?? "ok"
 const accountDelayMs = Number(accountParams.get("accountDelay") ?? 0)
 /** `?connection=offline` selects a signed-in device whose open relay has no local agent. */
-const connectionMode = accountParams.get("connection") ?? "open"
+const connectionMode = stitchScenario?.connection ?? accountParams.get("connection") ?? "open"
 /** `?form=all` adds every native field kind for browser verification. */
 const formMode = accountParams.get("form") ?? "question"
 /** Delays native Form settlement so the browser can observe disabled duplicate controls. */
 const formDelayMs = Number(accountParams.get("formDelay") ?? 0)
 /** `?formOutcome=unknown` leaves the native Form mutation unresolved without replay. */
 const formOutcome = accountParams.get("formOutcome")
+const promptOutcome = accountParams.get("promptOutcome")
 const deviceMode = accountParams.get("devices")
-const emptyBackend = accountParams.get("sessions") === "empty"
+const emptyBackend = stitchScenario?.emptyBackend ?? accountParams.get("sessions") === "empty"
+if (stitchScenario !== undefined) localStorage.setItem("ycoding.theme", stitchScenario.theme)
+if (stitchScenario !== undefined) devices = stitchScenario.devices
 if (deviceMode === "none") devices = []
 if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
 if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))
@@ -67,7 +73,7 @@ const syntheticHttp: RemoteHttp = {
     if (accountMode === "signedout") return { ok: false, status: 401, message: "unauthorized", kind: "http" }
     if (accountMode === "unavailable")
       return { ok: false, status: 200, message: "The response was not an API document", kind: "unexpected-body" }
-    return ok({ user: { id: "user_fixture" }, session: { expiresAt: Date.now() + 86_400_000 }, devices })
+    return ok({ user: { id: stitchScenario?.accountID ?? "user_fixture" }, session: { expiresAt: Date.now() + 86_400_000 }, devices })
   },
   devices: async () => ok(devices),
   createEnrollment: async () =>
@@ -81,11 +87,12 @@ const syntheticHttp: RemoteHttp = {
   logout: async () => ok(undefined),
 }
 
-const sessions = [
-  { id: sessionID, title: "Stream remote output safely", agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
+const defaultSessions = [
+  { id: sessionID, title: "Stream remote output safely", projectID: "prj_stitch", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
 ]
+const sessions = stitchScenario?.sessions ?? defaultSessions
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
 
@@ -113,7 +120,7 @@ const byteLength = (text: string) => new TextEncoder().encode(text).length
  */
 const unbrokenCommand = `printf REMOTE_DENIAL_MUST_NOT_RUN_${"0123456789abcdef".repeat(8)}`
 
-const messages = [
+const defaultMessages = [
   { id: "msg_user", type: "user", text: "Refactor the session sync and run the targeted tests.", time: { created: ago(40), consumed: ago(39) } },
   {
     id: "msg_assistant",
@@ -286,6 +293,7 @@ const messages = [
     time: { created: ago(2), completed: ago(2) },
   },
 ]
+const messages = stitchScenario?.messages ?? defaultMessages
 
 const permission = { id: "per_fixture", sessionID, action: "shell", resources: ["bun test *"], metadata: {} }
 const guardrail = {
@@ -299,6 +307,8 @@ const guardrail = {
   standard: true,
   hardReview: true,
 }
+const permissions = stitchScenario?.permissions ?? [permission]
+const guardrails = stitchScenario?.guardrails ?? [guardrail]
 const form = {
   id: "frm_fixture",
   sessionID,
@@ -359,6 +369,7 @@ type Fixture = {
   readonly drop: () => void
   readonly stream: () => void
   readonly formRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
+  readonly mutationRequests: () => readonly { readonly operation: string; readonly input: Readonly<Record<string, unknown>> | undefined }[]
 }
 
 function createFixtureStore(): Fixture {
@@ -367,6 +378,7 @@ function createFixtureStore(): Fixture {
   let streamed = false
   let liveReads = 0
   const formRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
+  const mutationRequests: { operation: string; input: Readonly<Record<string, unknown>> | undefined }[] = []
   /** Requests this synthetic agent has already answered; a later list read omits them. */
   const answered = new Set<string>()
   const unreplied = <T extends { readonly id: string }>(requests: readonly T[]) => requests.filter((request) => !answered.has(request.id))
@@ -414,6 +426,9 @@ function createFixtureStore(): Fixture {
     operation: RemoteOperation,
     input?: Readonly<Record<string, unknown>>,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
+    if (operation === "session.prompt" || operation === "session.autonomy.set") {
+      mutationRequests.push({ operation, input })
+    }
     if (connectionMode === "offline" && (operation === "session.list" || operation === "session.active")) {
       return { status: "failed", error: { code: "agent_unavailable", message: "No local agent is connected" } }
     }
@@ -434,7 +449,7 @@ function createFixtureStore(): Fixture {
       return {
         status: "ok",
         value: {
-          data: {
+          data: stitchScenario?.autonomy ?? {
             mode: "normal",
             yolo: 2,
             goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 },
@@ -442,9 +457,14 @@ function createFixtureStore(): Fixture {
         },
       }
     }
-    if (operation === "session.permission.list") return { status: "ok", value: { data: unreplied([permission]) } }
-    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: unreplied([guardrail]) } }
-    if (operation === "session.form.list") return { status: "ok", value: formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form]) }
+    if (operation === "session.permission.list") return { status: "ok", value: { data: unreplied(permissions) } }
+    if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: unreplied(guardrails) } }
+    if (operation === "session.form.list") return {
+      status: "ok",
+      value: stitchScenario === undefined
+        ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
+        : unreplied(stitchScenario.forms),
+    }
     if (
       operation === "session.permission.reply" ||
       operation === "session.guardrail.reply" ||
@@ -462,7 +482,9 @@ function createFixtureStore(): Fixture {
       if (formID !== undefined && formDelayMs > 0) return new Promise((resolve) => setTimeout(() => resolve({ status: "ok", value: null }), formDelayMs))
       return { status: "ok", value: null }
     }
-    if (operation === "session.prompt") return { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
+    if (operation === "session.prompt") return promptOutcome === "unknown"
+      ? { status: "unknown", error: { code: "outcome_unknown", message: "Synthetic unknown prompt outcome" } }
+      : { status: "ok", value: { data: { ...input, admittedSeq: 43 } } }
     if (operation === "session.shell.output") return shellOutputPage(input)
     if (operation === "session.goal.set" || operation === "session.goal.stop" || operation === "session.autonomy.set") {
       return { status: "ok", value: { data: { mode: "normal", yolo: typeof input?.yolo === "number" ? input.yolo : 2 } } }
@@ -529,7 +551,7 @@ function createFixtureStore(): Fixture {
     }
   }
 
-  return { store, drop, stream, formRequests: () => formRequests }
+  return { store, drop, stream, formRequests: () => formRequests, mutationRequests: () => mutationRequests }
 }
 
 const fixture = createFixtureStore()
@@ -653,6 +675,10 @@ function remoteFormReport() {
   }
 }
 
+function remoteMutationReport() {
+  return fixture.mutationRequests()
+}
+
 ;(window as typeof window & { remoteShellOutputReport?: typeof remoteShellOutputReport }).remoteShellOutputReport =
   remoteShellOutputReport
 
@@ -660,11 +686,31 @@ function remoteFormReport() {
   remoteOverflowReport
 
 ;(window as typeof window & { remoteFormReport?: typeof remoteFormReport }).remoteFormReport = remoteFormReport
+;(window as typeof window & { remoteMutationReport?: typeof remoteMutationReport }).remoteMutationReport = remoteMutationReport
 
-const fixtureView = new URLSearchParams(window.location.search).get("view") ?? "chat"
+const fixtureView = stitchScenario?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
 
 function FixturePage() {
+  onMount(() => {
+    if (stitchScenario?.openControl === undefined) return
+    let attempts = 0
+    const open = () => {
+      attempts += 1
+      if (stitchScenario.openControl === "device") {
+        const button = document.querySelector<HTMLButtonElement>('[aria-label="Device"]')
+        if (button !== null && !button.disabled) button.click()
+        if ((button !== null && !button.disabled) || attempts === 40) clearInterval(timer)
+        return
+      }
+      const button = [...document.querySelectorAll<HTMLButtonElement>("button")]
+        .find((button) => button.textContent?.includes("Create enrollment code"))
+      if (button !== undefined) button.click()
+      if (button !== undefined || attempts === 40) clearInterval(timer)
+    }
+    const timer = setInterval(open, 50)
+    open()
+  })
   return (
     <div class="fixture">
       <p class="fixture__banner" role="status">

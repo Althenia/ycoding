@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal, type JSX } from "solid-js"
 import { Link } from "../router/router"
-import { RELEASES, releaseYears, type ChangeTag } from "../content/changelog"
+import { RELEASES, releaseYears, type ChangeEntry, type ChangeTag } from "../content/changelog"
 import { DOC_INDEX } from "../content/docs/registry"
 import { DocsShell } from "./docs"
 
@@ -38,9 +38,10 @@ export function ChangelogPage(): JSX.Element {
       crumbLabel="Changelog"
       navLabel="Filters"
       rail={filters}
+      class="docs--changelog"
     >
       <Show when={releases().length > 0} fallback={<p class="prose">No releases match these filters.</p>}>
-        <ol class="releases">
+        <ol class="releases releases--timeline">
           <For each={releases()}>
             {(release) => (
               <li class="release" id={release.version}>
@@ -52,19 +53,10 @@ export function ChangelogPage(): JSX.Element {
                   <ChangeTags tags={release.tags} />
                 </div>
                 <div class="release__changes">
-                  <div class="release__change">
-                    <h3>{release.title}</h3>
-                    <ul>
-                      <For each={release.changes}>
-                        {(change) => (
-                          <li>
-                            <span class={`tag tag--${change.tag.toLowerCase()}`}>{change.tag}</span>
-                            <span>{change.text}</span>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </div>
+                  <h3>{release.title}</h3>
+                  <For each={release.tags}>
+                    {(tag) => <ReleaseChangeGroup tag={tag} changes={release.changes.filter((change) => change.tag === tag)} />}
+                  </For>
                 </div>
               </li>
             )}
@@ -80,6 +72,19 @@ export function ChangelogPage(): JSX.Element {
         </Link>
       </p>
     </DocsShell>
+  )
+}
+
+function ReleaseChangeGroup(props: { readonly tag: ChangeTag; readonly changes: readonly ChangeEntry[] }): JSX.Element {
+  return (
+    <section class="release__change">
+      <h4>
+        <span class={`tag tag--${props.tag.toLowerCase()}`}>{props.tag}</span>
+      </h4>
+      <ul>
+        <For each={props.changes}>{(change) => <li>{change.text}</li>}</For>
+      </ul>
+    </section>
   )
 }
 
@@ -100,7 +105,7 @@ function Filters(props: {
   readonly onTag: (value: ChangeTag | "all") => void
 }): JSX.Element {
   return (
-    <div class="filters">
+    <div class="filters filters--release">
       <fieldset class="filters__group">
         <legend>Year</legend>
         <button
