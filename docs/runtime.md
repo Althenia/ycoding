@@ -469,7 +469,9 @@ Caching is split into distinct concerns:
 - project artifact reuse, which is not a provider prompt cache.
 
 Runpod Jobs requests through the native vLLM/Ollama routes retain the ordered
-model-visible prompt but send no OpenAI prompt-cache controls. vLLM prefix
+model-visible prompt but send no OpenAI prompt-cache controls. Ollama places
+the initial system instruction first and lowers chronological instruction updates
+to escaped user text in place. vLLM prefix
 caching is worker-owned; its cache-read tokens are reported only when the
 worker returns `usage.prompt_tokens_details.cached_tokens`. An absent count
 remains unreported. Ollama's model storage and Runpod's model-download caching

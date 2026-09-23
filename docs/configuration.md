@@ -800,7 +800,7 @@ profiles; the provider config refers to that integration so model requests resol
 profile. Existing profiles can be selected and activated from the dialog. When profile-backed model
 discovery uses the endpoint, its URL must use HTTPS or loopback HTTP, contain no embedded URL
 credentials, and not redirect; config-key and header-based catalog discovery keeps its existing
-behavior.
+behavior. The dialog highlights the selected catalog source and API type with a filled background.
 
 ### Provider profiles
 
@@ -847,7 +847,8 @@ every model in YCoding configuration.
 
 Select **Runpod Serverless endpoint** from `/connect` to add each Jobs endpoint as a
 separate provider ID. Enter its endpoint-root URL, choose the `vllm` or `ollama`
-worker, and add the served model ID. For vLLM, use the exact name served by the
+worker, and add the served model ID. The dialog highlights the selected worker
+with a filled background. For vLLM, use the exact name served by the
 worker (including any served-name override); for Ollama, the model entry labels
 the worker-configured model. Enable tool calling for the entry only when the
 deployed model and worker support it. Name the endpoint's credential profile and
@@ -912,7 +913,9 @@ numbers are illustrative, not discovered by the adapter.
 Both worker types send non-streaming text chat through `POST /runsync` and yield
 output only when the job completes. Ollama uses `input.messages` and `input.options`,
 supports automatic function tools when the deployed model supports them, and uses
-the worker-configured `HF_MODEL`/`OLLAMA_MODEL`. vLLM uses its generic
+the worker-configured `HF_MODEL`/`OLLAMA_MODEL`. It sends the initial system
+instruction first and represents later instruction updates as escaped user text
+in their chronological positions. vLLM uses its generic
 `input.route: "/v1/chat/completions"` proxy and an OpenAI Chat request body:
 model name, messages, tool definitions, tool-call history, tool results, and
 generation options. It parses vLLM's non-streaming Chat completion response and

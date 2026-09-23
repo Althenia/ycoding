@@ -159,9 +159,18 @@ test("renders Runpod worker selection and submits a served model", async () => {
   expect(app.captureCharFrame()).toContain("vllm")
   expect(app.captureCharFrame()).toContain("ollama")
   expect(app.captureCharFrame()).not.toContain("openai-models")
+  const initial = app.captureSpans().lines.flatMap((line) => line.spans)
+  expect(initial.find((item) => item.text.includes("vllm"))!.text).toBe("vllm")
+  const selectedBg = initial.find((item) => item.text.includes("vllm"))!.bg.toInts()
+  const inactiveBg = initial.find((item) => item.text.includes("ollama"))!.bg.toInts()
   await Bun.sleep(20)
   await app.mockInput.typeText("https://api.runpod.ai/v2/endpoint123")
   app.mockInput.pressKey("w", { ctrl: true })
+  await app.renderOnce()
+  const switched = app.captureSpans().lines.flatMap((line) => line.spans)
+  expect(switched.find((item) => item.text.includes("ollama"))!.text).toBe("ollama")
+  expect(switched.find((item) => item.text.includes("ollama"))!.bg.toInts()).toEqual(selectedBg)
+  expect(switched.find((item) => item.text.includes("vllm"))!.bg.toInts()).toEqual(inactiveBg)
   app.mockInput.pressKey("n", { ctrl: true })
   await Bun.sleep(10)
   await app.mockInput.typeText("org/served-model")
@@ -239,6 +248,41 @@ test("OpenAI provider field accepts a click and Tab advances to the API key", as
   }
 })
 
+test("OpenAI endpoint choices show the active background after selection", async () => {
+  const config = createTuiResolvedConfig()
+  const app = await testRender(() => (
+    <TestTuiContexts><ConfigProvider config={config}><ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
+      <ToastProvider><Keymap.Provider config={config}><DialogProvider>
+        <DialogCustomEndpoint />
+      </DialogProvider></Keymap.Provider></ToastProvider>
+    </ThemeProvider></ConfigProvider></TestTuiContexts>
+  ), { width: 100, height: 50, kittyKeyboard: true })
+  try {
+    app.renderer.start()
+    await app.waitForFrame((frame) => frame.includes("Chat"))
+    const initial = app.captureSpans().lines.flatMap((line) => line.spans)
+    expect(initial.find((item) => item.text.includes("none"))!.text).toBe("none")
+    expect(initial.find((item) => item.text.includes("Chat"))!.text).toBe("Chat")
+    const catalogBg = initial.find((item) => item.text.includes("none"))!.bg.toInts()
+    const apiBg = initial.find((item) => item.text.includes("Chat"))!.bg.toInts()
+    app.mockInput.pressKey("o", { ctrl: true })
+    await app.renderOnce()
+    const catalogSpans = app.captureSpans().lines.flatMap((line) => line.spans)
+    expect(catalogSpans.find((item) => item.text.includes("openai-models"))!.text).toBe("openai-models")
+    expect(catalogSpans.find((item) => item.text.includes("openai-models"))!.bg.toInts()).toEqual(catalogBg)
+    await app.renderOnce()
+    const lines = app.captureCharFrame().split("\n")
+    const row = lines.findIndex((line) => line.includes("Responses"))
+    await app.mockMouse.click(lines[row]!.indexOf("Responses") + 2, row)
+    await app.renderOnce()
+    const apiSpans = app.captureSpans().lines.flatMap((line) => line.spans)
+    expect(apiSpans.find((item) => item.text.includes("Responses"))!.text).toBe("Responses")
+    expect(apiSpans.find((item) => item.text.includes("Responses"))!.bg.toInts()).toEqual(apiBg)
+  } finally {
+    app.renderer.destroy()
+  }
+})
+
 test("endpoint choices and actions stay readable in dark and light themes", async () => {
   const luminance = (color: number[]) => [color[0]!, color[1]!, color[2]!]
     .map((channel) => channel / 255)
@@ -261,7 +305,17 @@ test("endpoint choices and actions stay readable in dark and light themes", asyn
         expect(span, `${mode}/${kind}: ${label} must render`).toBeDefined()
         const foreground = luminance(span!.fg.toInts())
         const background = luminance(span!.bg.toInts())
-        expect((Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05), `${mode}/${kind}: ${label} contrast`).toBeGreaterThanOrEqual(4.5)
+        expect((Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05), `${mode}/${kind}: ${label} contrast, fg=${span!.fg.toInts()}, bg=${span!.bg.toInts()}`).toBeGreaterThanOrEqual(4.5)
+      }
+      for (const [selected, inactive] of kind === "runpod" ? [["vllm", "ollama"]] : [["none", "openai-models"], ["Chat", "Responses"]]) {
+        const spans = app.captureSpans().lines.flatMap((line) => line.spans)
+        const activeBg = spans.find((item) => item.text.includes(selected))!.bg.toInts()
+        const inactiveBg = spans.find((item) => item.text.includes(inactive))!.bg.toInts()
+        const activeLuminance = luminance(activeBg)
+        const inactiveLuminance = luminance(inactiveBg)
+        expect((Math.max(activeLuminance, inactiveLuminance) + 0.05) / (Math.min(activeLuminance, inactiveLuminance) + 0.05),
+          `${mode}/${kind}: ${selected} background must visibly differ from ${inactive}; got ${activeBg} and ${inactiveBg}`,
+        ).toBeGreaterThanOrEqual(2)
       }
     } finally {
       app.renderer.destroy()

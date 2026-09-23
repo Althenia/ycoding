@@ -70,6 +70,10 @@ const Envelope = Schema.Struct({
 })
 
 const lowerMessage = (message: Message) => Effect.gen(function* () {
+  if (message.role === "system") {
+    const update = yield* ProviderShared.wrappedSystemUpdate(OLLAMA, message)
+    return { role: "user", content: update.text }
+  }
   if (message.role === "tool") {
     if (message.content.length !== 1 || message.content[0]?.type !== "tool-result")
       return yield* ProviderShared.invalidRequest("Runpod Ollama tool messages require one tool result")

@@ -56,7 +56,11 @@ export function DialogCustomEndpoint(props: {
   onCancel?: () => void
 }) {
   const dialog = useDialog()
-  const { themeV2 } = useTheme().contextual("elevated")
+  const theme = useTheme()
+  const { themeV2 } = theme.contextual("elevated")
+  const selectedBackground = () => theme.mode() === "light"
+    ? themeV2.hue.interactive[900]
+    : themeV2.background.action.primary.focused
   const [baseURL, setBaseURL] = createSignal("")
   const [api, setApi] = createSignal<"chat" | "responses">("chat")
   const [worker, setWorker] = createSignal<"ollama" | "vllm">("vllm")
@@ -315,8 +319,8 @@ export function DialogCustomEndpoint(props: {
             <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>Worker</text>
             <box flexDirection="row" gap={1}>
               {(["vllm", "ollama"] as const).map((type) => (
-                <box paddingX={1} backgroundColor={worker() === type ? themeV2.background.action.primary.pressed : undefined} onMouseUp={() => setWorker(type)}>
-                  <text fg={worker() === type ? themeV2.text.action.primary.default : themeV2.text.default}>{type}</text>
+                <box paddingX={1} backgroundColor={worker() === type ? selectedBackground() : undefined} onMouseUp={() => setWorker(type)}>
+                  <text fg={worker() === type ? themeV2.text.action.primary.focused : themeV2.text.default} bg={worker() === type ? selectedBackground() : undefined}>{type}</text>
                 </box>
               ))}
             </box>
@@ -326,8 +330,8 @@ export function DialogCustomEndpoint(props: {
           <text fg={themeV2.text.default} attributes={TextAttributes.BOLD}>Catalog source</text>
           <box flexDirection="row" gap={1}>
             {(["none", "openai-models"] as const).map((source) => (
-              <box paddingX={1} onMouseUp={() => setCatalog(source)} backgroundColor={catalog() === source ? themeV2.background.action.primary.pressed : RGBA.fromInts(0, 0, 0, 0)}>
-                <text fg={catalog() === source ? themeV2.text.action.primary.default : themeV2.text.default}>{source}</text>
+              <box paddingX={1} onMouseUp={() => setCatalog(source)} backgroundColor={catalog() === source ? selectedBackground() : RGBA.fromInts(0, 0, 0, 0)}>
+                <text fg={catalog() === source ? themeV2.text.action.primary.focused : themeV2.text.default} bg={catalog() === source ? selectedBackground() : undefined}>{source}</text>
               </box>
             ))}
           </box>
@@ -403,7 +407,7 @@ export function DialogCustomEndpoint(props: {
               paddingX={1}
               backgroundColor={
                 api() === "chat"
-                  ? themeV2.background.action.primary.pressed
+                  ? selectedBackground()
                   : RGBA.fromInts(0, 0, 0, 0)
               }
               onMouseUp={() => setApi("chat")}
@@ -411,9 +415,10 @@ export function DialogCustomEndpoint(props: {
               <text
                 fg={
                   api() === "chat"
-                    ? themeV2.text.action.primary.default
+                    ? themeV2.text.action.primary.focused
                     : themeV2.text.default
                 }
+                bg={api() === "chat" ? selectedBackground() : undefined}
                 attributes={api() === "chat" ? TextAttributes.BOLD : undefined}
               >
                 Chat
@@ -423,7 +428,7 @@ export function DialogCustomEndpoint(props: {
               paddingX={1}
               backgroundColor={
                 api() === "responses"
-                  ? themeV2.background.action.primary.pressed
+                  ? selectedBackground()
                   : RGBA.fromInts(0, 0, 0, 0)
               }
               onMouseUp={() => setApi("responses")}
@@ -431,9 +436,10 @@ export function DialogCustomEndpoint(props: {
               <text
                 fg={
                   api() === "responses"
-                    ? themeV2.text.action.primary.default
+                    ? themeV2.text.action.primary.focused
                     : themeV2.text.default
                 }
+                bg={api() === "responses" ? selectedBackground() : undefined}
                 attributes={api() === "responses" ? TextAttributes.BOLD : undefined}
               >
                 Responses

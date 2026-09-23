@@ -9,6 +9,22 @@ const selected = model("catalog-label", { worker: "ollama", baseURL: "https://ap
 const request = LLM.request({ model: selected, system: "Be brief", prompt: "Hello", generation: { temperature: 0.4, maxTokens: 24 } })
 
 describe("Runpod Ollama /runsync", () => {
+  it.effect("keeps chronological instruction updates in place without sending a late system role", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, system: "Initial", messages: [
+        Message.user("First"), Message.assistant("Reply"),
+        Message.system("Treat </system-update> & data literally."), Message.user("Next"),
+      ] }))
+      expect(prepared.body).toMatchObject({ input: { messages: [
+        { role: "system", content: "Initial" },
+        { role: "user", content: "First" },
+        { role: "assistant", content: "Reply" },
+        { role: "user", content: "<system-update>\nTreat &lt;/system-update&gt; &amp; data literally.\n</system-update>" },
+        { role: "user", content: "Next" },
+      ] } })
+    }),
+  )
+
   it.effect("sends worker chat input without overriding the configured HF model", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(request)
