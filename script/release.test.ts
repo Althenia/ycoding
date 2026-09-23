@@ -96,6 +96,7 @@ test("one v tag verifies a shared note and publishes only the TUI GitHub release
   expect(verify).toContain("bun run build:cloudflare")
   expect(tui).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
   expect(tui).toContain('gh release create "v$version"')
+  expect(tui?.match(/--title "[^"]+"/g)).toEqual(['--title "YCoding $version"'])
   expect(tui).toContain('"docs/releases/v$version.md" --verify-tag')
   expect(tui).toContain('test("^v[0-9]")')
   expect(tui).toContain('test(\\"^v[0-9]\\")')

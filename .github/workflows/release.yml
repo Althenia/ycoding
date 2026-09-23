@@ -369,7 +369,7 @@ jobs:
             echo ""
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
-          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding TUI $version" --notes-file release-notes.md
+          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding $version" --notes-file release-notes.md
 
   deploy-web:
     name: deploy web (cloudflare)
