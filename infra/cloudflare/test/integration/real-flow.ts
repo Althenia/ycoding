@@ -830,19 +830,22 @@ try {
         largestEventChars: Math.max(0, ...events.map((event) => JSON.stringify(event).length)),
       })}`,
     )
-    const deadline = Date.now() + 30_000
-    for (;;) {
-      const listed = await probeRequest("session.guardrail.request.list", { sessionID: guardSessionID })
-      if (listed.status === "ok" && isRecord(listed.value) && Array.isArray(listed.value.data)) {
-        const matching = listed.value.data.filter(
-          (row) => isRecord(row) && typeof row.id === "string" && JSON.stringify(row.resources ?? []).includes(command),
-        )
-        if (matching.length > 0) return matching.at(-1) as Record<string, unknown>
-      }
-      if (Date.now() >= deadline)
-        throw new Error(`Real-flow check failed: no guardrail review was raised (${label})`)
-      await Bun.sleep(200)
-    }
+    await waitFor(async () => {
+      const localList = await local.guardrailRequestList(guardSessionID, { directory: workspace })
+      return Array.isArray(localList) && localList.some(
+        (row) => isRecord(row) && JSON.stringify(row.resources ?? []).includes(command),
+      ) ? true : undefined
+    }, 30_000, `no guardrail review was raised (${label})`)
+    const listed = await probeRequest("session.guardrail.request.list", { sessionID: guardSessionID })
+    if (listed.status !== "ok" || !isRecord(listed.value) || !Array.isArray(listed.value.data))
+      throw new Error(`Real-flow check failed: guardrail review list (${label}): ${JSON.stringify(listed)}`)
+    const matching = listed.value.data.filter(
+      (row): row is Record<string, unknown> =>
+        isRecord(row) && typeof row.id === "string" && JSON.stringify(row.resources ?? []).includes(command),
+    )
+    const review = matching.at(-1)
+    if (!review) throw new Error(`Real-flow check failed: guardrail review (${label}) was absent from the relay list`)
+    return review
   }
 
   const replyGuardrail = (requestID: string, reply: "once" | "always" | "reject") =>
@@ -861,15 +864,14 @@ try {
   }
 
   const guardSessionIdle = async () => {
-    const active = await probeRequest("session.active")
-    if (active.status !== "ok" || !isRecord(active.value) || !isRecord(active.value.data)) return false
-    return !(guardSessionID in active.value.data)
+    const active = await local.activeSessions()
+    return isRecord(active) && !(guardSessionID in active)
   }
 
   const guardrailPending = async (requestID: string) => {
-    const listed = await probeRequest("session.guardrail.request.list", { sessionID: guardSessionID })
-    if (listed.status !== "ok" || !isRecord(listed.value) || !Array.isArray(listed.value.data)) return undefined
-    return listed.value.data.some((row) => isRecord(row) && row.id === requestID)
+    const listed = await local.guardrailRequestList(guardSessionID, { directory: workspace })
+    if (!Array.isArray(listed)) return undefined
+    return listed.some((row) => isRecord(row) && row.id === requestID)
   }
 
   const status = await probeRequest("session.guardrail.status", { sessionID: guardSessionID })
@@ -969,7 +971,7 @@ try {
     sessionID,
     input: { id: "msg_real_flow_interrupt", text: "hold the stream open" },
   })
-  expect(executing.status === "ok", `interrupt prompt failed: ${JSON.stringify(executing)}`)
+  expect(executing.status === "ok", `interrupt prompt failed: ${JSON.stringify({ executing, probeStatuses: probeStatuses.slice(-6) })}`)
   await waitFor(
     () => (events.filter((entry) => JSON.stringify(entry).includes(providerText)).length >= 2 ? true : undefined),
     30_000,
