@@ -9,6 +9,7 @@ import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { LayerNodePlatform } from "@ycoding-ai/core/effect/app-node-platform"
 import { EventV2 } from "@ycoding-ai/core/event"
+import { Form } from "@ycoding-ai/core/form"
 import { LocationServiceMap } from "@ycoding-ai/core/location-service-map"
 import { Location } from "@ycoding-ai/core/location"
 import { NtfyAttention, type GoalStatus, type RequestKind } from "@ycoding-ai/core/ntfy/attention"
@@ -48,6 +49,8 @@ const make = (input: {
   readonly parentID?: (sessionID: string) => string | undefined
   readonly goal?: (sessionID: string) => GoalStatus | undefined
   readonly notified?: (sessionID: string, startedAt?: number) => boolean
+  readonly unfinished?: (sessionID: string) => boolean
+  readonly runningShell?: (sessionID: string) => boolean
   readonly checkpoint?: Effect.Effect<void>
 }) => {
   const dependencies = {
@@ -61,6 +64,8 @@ const make = (input: {
     goal: (sessionID: string) => Effect.sync(() => input.goal?.(sessionID)),
     notified: (sessionID: string, startedAt?: number) =>
       Effect.sync(() => input.notified?.(sessionID, startedAt) ?? false),
+    unfinished: (sessionID: string) => Effect.sync(() => input.unfinished?.(sessionID) ?? false),
+    runningShell: (sessionID: string) => Effect.sync(() => input.runningShell?.(sessionID) ?? false),
     checkpoint: input.checkpoint ?? Effect.void,
   }
   return NtfyAttention.make(dependencies)
@@ -95,8 +100,8 @@ describe("NtfyAttention", () => {
       expect(NtfyAttention.decide(settled("succeeded"), { goalStatus: "active" }).notify).toBe(false)
     })
 
-    test("notifies for verified normal completion and terminal goal settlement", () => {
-      expect(NtfyAttention.decide(settled("succeeded"), {})).toMatchObject({ notify: true, message: "Session done" })
+    test("normal idle is not verified completion; terminal goal settlement still alerts", () => {
+      expect(NtfyAttention.decide(settled("succeeded"), {}).notify).toBe(false)
       expect(NtfyAttention.decide(settled("succeeded"), { goalStatus: "completed" })).toMatchObject({ notify: true })
       expect(NtfyAttention.decide(settled("succeeded"), { goalStatus: "exhausted" })).toMatchObject({
         notify: true,
@@ -181,6 +186,58 @@ describe("NtfyAttention", () => {
           yield* attention.notify(asked("guardrail", "grq-hard"))
           yield* settle
           expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
+        }),
+      ))
+
+    test("keeps root settlement silent while a child is active", () =>
+      run(
+        Effect.gen(function* () {
+          reset()
+          const attention = make({
+            config: () => ({ enabled: true, topic: "attention" }),
+            parentID: (sessionID) => (sessionID === "ses_child" ? "ses_root" : undefined),
+          })
+          yield* attention.notify(started())
+          yield* attention.notify(started("ses_child"))
+          yield* attention.notify(settled("succeeded"))
+          yield* settle
+          expect(requests).toEqual([])
+        }),
+      ))
+
+    test("does not post a completed goal while child work is unfinished", () =>
+      run(
+        Effect.gen(function* () {
+          reset()
+          let goal: GoalStatus = "active"
+          const attention = make({
+            config: () => ({ enabled: true, topic: "attention" }),
+            goal: () => goal,
+            unfinished: () => true,
+          })
+          yield* attention.notify(started())
+          goal = "completed"
+          yield* attention.notify(settled("succeeded"))
+          yield* settle
+          expect(requests).toEqual([])
+        }),
+      ))
+
+    test("does not post a completed goal while its background shell is running", () =>
+      run(
+        Effect.gen(function* () {
+          reset()
+          let goal: GoalStatus = "active"
+          const attention = make({
+            config: () => ({ enabled: true, topic: "attention" }),
+            goal: () => goal,
+            runningShell: () => true,
+          })
+          yield* attention.notify(started())
+          goal = "completed"
+          yield* attention.notify(settled("succeeded"))
+          yield* settle
+          expect(requests).toEqual([])
         }),
       ))
 
@@ -327,9 +384,9 @@ describe("NtfyAttention", () => {
         Effect.gen(function* () {
           reset()
           const attention = make({ config: () => ({ enabled: true, topic: "attention" }) })
-          yield* attention.notify(settled("succeeded", "ses_a"))
-          yield* attention.notify(settled("succeeded", "ses_a"))
-          yield* attention.notify(settled("succeeded", "ses_b"))
+          yield* attention.notify(settled("failed", "ses_a"))
+          yield* attention.notify(settled("failed", "ses_a"))
+          yield* attention.notify(settled("failed", "ses_b"))
           yield* settle
           expect(requests.map((item) => item.body)).toEqual(["Generated session update", "Generated session update"])
         }),
@@ -346,9 +403,9 @@ describe("NtfyAttention", () => {
               checkpoint: Deferred.await(checkpoint),
             })
             yield* attention.notify(started())
-            yield* attention.notify(settled("succeeded"))
+            yield* attention.notify(settled("failed"))
             yield* attention.notify(started())
-            yield* attention.notify(settled("succeeded"))
+            yield* attention.notify(settled("failed"))
             expect(requests).toEqual([])
             yield* Deferred.succeed(checkpoint, undefined)
             yield* settle
@@ -376,14 +433,14 @@ describe("NtfyAttention", () => {
               },
             })
             yield* attention.notify(started())
-            yield* attention.notify(settled("succeeded"))
+            yield* attention.notify(settled("failed"))
             yield* Deferred.await(generationStarted)
             yield* attention.notify(started())
             yield* Deferred.succeed(firstGenerated, "Stale execution finished")
             yield* settle
             expect(requests).toEqual([])
 
-            yield* attention.notify(settled("succeeded"))
+            yield* attention.notify(settled("failed"))
             yield* settle
             expect(requests.map((item) => item.body)).toEqual(["Current execution finished"])
           }),
@@ -404,7 +461,7 @@ describe("NtfyAttention", () => {
           yield* settle
           expect(requests).toEqual([])
           yield* attention.notify(started())
-          goal = "stopped"
+          goal = "completed"
           yield* attention.notify(settled("succeeded"))
           yield* settle
           expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
@@ -416,10 +473,16 @@ describe("NtfyAttention", () => {
         Effect.scoped(
           Effect.gen(function* () {
             reset()
+            let goal: NtfyAttention.GoalStatus = "active"
             const attention = make({
               config: () => ({ enabled: true, topic: "attention" }),
-              goal: () => "exhausted",
+              goal: () => goal,
             })
+            yield* attention.notify(started())
+            goal = "exhausted"
+            yield* attention.notify(settled("succeeded"))
+            yield* Effect.yieldNow
+            expect(requests.map((item) => item.body)).toEqual(["Generated session update"])
             yield* attention.notify(started())
             yield* attention.notify(settled("succeeded"))
             yield* Effect.yieldNow
@@ -532,7 +595,17 @@ describe("NtfyAttention", () => {
           const locations = yield* LocationServiceMap.Service
           yield* events.publish(SessionEvent.Execution.Started, { sessionID })
           yield* locations.contextEffect(ref)
-          goal = "exhausted"
+          yield* events.publish(Form.Event.Created, {
+            form: {
+              id: Form.ID.create("frm_global_attention"),
+              sessionID: "global",
+              title: "Input requested",
+              fields: [{ key: "approval", type: "external", url: "https://example.com" }],
+            },
+          })
+          yield* Effect.sleep("600 millis")
+          expect(requests.filter((item) => item.url === "https://ntfy.sh/attention")).toEqual([])
+          goal = "completed"
           yield* events.publish(SessionEvent.Execution.Succeeded, { sessionID })
           yield* Effect.sleep("600 millis")
           expect(requests.filter((item) => item.url === "https://ntfy.sh/attention").map((item) => item.body)).toEqual([

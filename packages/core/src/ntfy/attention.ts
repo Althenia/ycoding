@@ -1,9 +1,11 @@
 export * as NtfyAttention from "./attention"
 
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { and, count, eq, inArray } from "drizzle-orm"
 import { Context, DateTime, Effect, Layer, Option, Schema, Scope, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Config } from "../config"
+import { Database } from "../database/database"
 import { makeLocationNode } from "../effect/app-node"
 import { LayerNodePlatform } from "../effect/app-node-platform"
 import { EventV2 } from "../event"
@@ -12,10 +14,12 @@ import { LocationServiceMap } from "../location-service-map"
 import { PermissionV2 } from "../permission"
 import { QuestionV2 } from "../question"
 import { SessionAutonomy } from "../session/autonomy"
+import { SessionTaskTable } from "../session/sql"
 import { SessionEvent } from "../session/event"
 import { SessionGenerate } from "../session/generate"
 import { SessionSchema } from "../session/schema"
 import { SessionStore } from "../session/store"
+import { Shell } from "../shell"
 import { NtfyMessage } from "./message"
 
 const CHECKPOINT = Effect.sleep("500 millis")
@@ -79,8 +83,9 @@ export function decide(event: AttentionEvent, context: Context = {}): Decision {
     return { notify: true, message: "Goal exhausted", episode: terminalEpisode(event.sessionID) }
   if (context.goalStatus === "stopped")
     return { notify: true, message: "Goal stopped", episode: terminalEpisode(event.sessionID) }
-  if (context.goalStatus === "active") return { notify: false }
-  return { notify: true, message: "Session done", episode: terminalEpisode(event.sessionID) }
+  if (context.goalStatus === "completed")
+    return { notify: true, message: "Session done", episode: terminalEpisode(event.sessionID) }
+  return { notify: false }
 }
 
 export type Settings = { readonly enabled?: boolean; readonly topic?: string }
@@ -109,6 +114,8 @@ export interface Dependencies {
   readonly session: (sessionID: string) => Effect.Effect<{ readonly parentID?: string } | undefined>
   readonly goal: (sessionID: string) => Effect.Effect<GoalStatus | undefined>
   readonly notified: (sessionID: string, startedAt?: number) => Effect.Effect<boolean>
+  readonly unfinished: (sessionID: string) => Effect.Effect<boolean>
+  readonly runningShell: (sessionID: string) => Effect.Effect<boolean, never, Scope.Scope>
   readonly checkpoint?: Effect.Effect<void>
 }
 
@@ -184,6 +191,12 @@ export function make(dependencies: Dependencies) {
       parentID: session?.parentID,
       goalStatus: episode.initialGoalStatus === "active" ? finalGoalStatus : undefined,
     })
+    if (decision.notify && episode.initialGoalStatus === "active" && finalGoalStatus === "completed") {
+      if ((yield* dependencies.unfinished(episode.sessionID)) || (yield* dependencies.runningShell(episode.sessionID))) {
+        episode.state = "terminal"
+        return
+      }
+    }
     const live = () =>
       terminals.get(episode.sessionID) === episode && episode.state === "waiting" && episode.version === version
     if (decision.notify) yield* deliver(episode.sessionID, decision, live)
@@ -329,6 +342,7 @@ export const lifecycleLayer = Layer.effectDiscard(
     const locations = yield* LocationServiceMap.Service
     const sessions = Option.getOrUndefined(yield* Effect.serviceOption(SessionStore.Service))
     const autonomy = Option.getOrUndefined(yield* Effect.serviceOption(SessionAutonomy.Service))
+    const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
     if (!events || !sessions || !autonomy) return
     const services = Effect.fnUntraced(function* (sessionID: string) {
       if (!Schema.is(SessionSchema.ID)(sessionID)) return undefined
@@ -340,6 +354,7 @@ export const lifecycleLayer = Layer.effectDiscard(
         delivery: Context.get(context, Delivery),
         generate: Context.get(context, SessionGenerate.Service),
         permission: Context.get(context, PermissionV2.Service),
+        shell: Context.get(context, Shell.Service),
       }
     })
     const attention = make({
@@ -390,6 +405,36 @@ export const lifecycleLayer = Layer.effectDiscard(
               Effect.catch(() => Effect.succeed(false)),
             )
           : Effect.succeed(false),
+      unfinished: (sessionID) =>
+        database && Schema.is(SessionSchema.ID)(sessionID)
+          ? database.db
+              .select({ active: count() })
+              .from(SessionTaskTable)
+              .where(
+                and(
+                  eq(SessionTaskTable.parent_id, sessionID),
+                  inArray(SessionTaskTable.state, ["starting", "running", "waiting", "cancelling"]),
+                ),
+              )
+              .get()
+              .pipe(
+                Effect.map((row) => (row?.active ?? 0) > 0),
+                Effect.catch(() => Effect.succeed(true)),
+              )
+          : Effect.succeed(true),
+      runningShell: (sessionID) =>
+        services(sessionID).pipe(
+          Effect.flatMap((value) =>
+            value
+              ? value.shell.list().pipe(
+                  Effect.map((shells) =>
+                    shells.some((shell) => shell.status === "running" && shell.metadata.sessionID === sessionID),
+                  ),
+                )
+              : Effect.succeed(true),
+          ),
+          Effect.catch(() => Effect.succeed(true)),
+        ),
     })
     const dispatch = (event: EventV2.SubscribePayload<typeof Events>) => {
       const input = (() => {

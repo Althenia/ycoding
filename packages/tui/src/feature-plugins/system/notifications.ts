@@ -22,6 +22,8 @@ type TerminalEpisode = {
   readonly sessionID: string
   readonly initial: Promise<SessionAutonomyState | undefined>
   state: "active" | "waiting" | "terminal"
+  readonly completionCalls: Set<string>
+  completed: boolean
   controller?: AbortController
 }
 
@@ -157,6 +159,8 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
           sessionID,
           initial: context.client.session.autonomy.get({ sessionID }).catch(() => undefined),
           state: "active",
+          completionCalls: new Set(),
+          completed: false,
         }
         terminals.set(sessionID, episode)
         return episode
@@ -193,10 +197,27 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
             .catch(() => undefined),
         ])
         if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
-        episode.controller = undefined
-        episode.state = "terminal"
         if (!session || !initial || !final) return
         if (session.parentID || final.goal?.status === "active") return
+        if (initial.goal?.status !== "active" && !episode.completed) return
+        const work = await Promise.all([
+          context.client.session.subagent.list({ parentID: episode.sessionID }, { signal: controller.signal }),
+          context.client.shell.list(
+            {
+              location: { directory: session.location.directory, workspace: session.location.workspaceID },
+            },
+            { signal: controller.signal },
+          ),
+        ]).then(
+          (value) => value,
+          () => undefined,
+        )
+        if (disposed || terminals.get(episode.sessionID) !== episode || episode.controller !== controller) return
+        episode.controller = undefined
+        episode.state = "terminal"
+        if (!work || work[0].summary.active > 0) return
+        if (work[1].data.some((shell) => shell.status === "running" && shell.metadata.sessionID === episode.sessionID))
+          return
         const output =
           initial.goal?.status === "active"
             ? goalNotification(final)
@@ -281,8 +302,30 @@ export function createNotifications(scheduleAttention: Schedule = schedule) {
         ),
         context.data.on("session.execution.started", (event) => {
           const current = terminals.get(event.data.sessionID)
-          if (current?.state === "active" || current?.state === "waiting") return
+          if (current?.state === "active" || current?.state === "waiting") {
+            if (current.state === "waiting") {
+              current.controller?.abort()
+              current.controller = undefined
+              current.state = "active"
+            }
+            current.completionCalls.clear()
+            current.completed = false
+            return
+          }
           createTerminal(event.data.sessionID)
+        }),
+        context.data.on("session.tool.input.started", (event) => {
+          if (event.data.name !== "task_complete") return
+          const episode = terminals.get(event.data.sessionID)
+          if (episode?.state === "active") episode.completionCalls.add(event.data.callID)
+        }),
+        context.data.on("session.tool.success", (event) => {
+          const episode = terminals.get(event.data.sessionID)
+          if (episode?.state !== "active" || !episode.completionCalls.delete(event.data.callID)) return
+          episode.completed = true
+        }),
+        context.data.on("session.tool.failed", (event) => {
+          terminals.get(event.data.sessionID)?.completionCalls.delete(event.data.callID)
         }),
         context.data.on("session.execution.succeeded", (event) => succeed(event.data.sessionID)),
         context.data.on("session.execution.failed", (event) => {

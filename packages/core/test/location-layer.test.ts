@@ -564,6 +564,7 @@ describe("LocationServiceMap", () => {
                 "subagent",
                 "subagent_control",
                 "subagent_report",
+                "task_complete",
                 "todowrite",
                 "webfetch",
                 "websearch",

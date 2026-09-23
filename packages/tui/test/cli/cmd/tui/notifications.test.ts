@@ -17,6 +17,17 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
   const questions = new Map<string, ReturnType<typeof question>>()
   const permissions = new Map<string, ReturnType<typeof permission>>()
   const guardrails = new Map<string, ReturnType<typeof guardrail>>()
+  const shells: Array<{
+    id: string
+    status: "running"
+    command: string
+    cwd: string
+    shell: string
+    file: string
+    metadata: { sessionID: string }
+    time: { started: number }
+  }> = []
+  let activeSubagents = 0
   const autonomy = new Map<string, SessionAutonomyState>()
   const waits = new Map<string, PromiseWithResolvers<void>>()
   let notificationAttempts = 0
@@ -57,6 +68,12 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
       // The harness supplies only client methods exercised by this plugin.
       // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
       client: {
+        shell: {
+          list: async (input: { location?: { directory: string } }) => {
+            if (input?.location?.directory !== "/workspace") throw new Error("Expected Session Location")
+            return { data: shells, location: { directory: "/workspace" } }
+          },
+        },
         form: {
           list: async ({ sessionID }: { sessionID: string }) =>
             Array.from(forms.values()).filter((item) => item.sessionID === sessionID),
@@ -82,6 +99,16 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
           },
         },
         session: {
+          subagent: {
+            list: async (input: { parentID: string }) => {
+              if (input.parentID !== "session") throw new Error("Expected root Session")
+              return {
+                data: [],
+                summary: { total: activeSubagents, active: activeSubagents, running: activeSubagents, waiting: 0 },
+                cursor: {},
+              }
+            },
+          },
           get: async ({ sessionID }: { sessionID: string }) => sessions[sessionID],
           wait: async ({ sessionID }: { sessionID: string }) => waits.get(sessionID)?.promise,
           autonomy: {
@@ -117,6 +144,10 @@ async function setup(options: { rejectFirstNotification?: boolean } = {}) {
 
   return {
     notifications,
+    shells,
+    setActiveSubagents(value: number) {
+      activeSubagents = value
+    },
     autonomy,
     waits,
     scheduled,
@@ -213,6 +244,28 @@ function executionSucceeded(id: string, sessionID = "session"): YCodingEvent {
     durable: durable(sessionID),
     data: { sessionID },
   }
+}
+
+function completedTask(callID = "call-complete", sessionID = "session"): [
+  Extract<YCodingEvent, { type: "session.tool.input.started" }>,
+  Extract<YCodingEvent, { type: "session.tool.success" }>,
+] {
+  return [
+    {
+      id: `${callID}-started`,
+      created: 0,
+      type: "session.tool.input.started",
+      durable: durable(sessionID),
+      data: { sessionID, assistantMessageID: "msg_completion", callID, name: "task_complete" },
+    },
+    {
+      id: `${callID}-success`,
+      created: 0,
+      type: "session.tool.success",
+      durable: durable(sessionID),
+      data: { sessionID, assistantMessageID: "msg_completion", callID, structured: {}, content: [], executed: false },
+    },
+  ]
 }
 
 function executionFailed(id: string, sessionID = "session"): YCodingEvent {
@@ -364,13 +417,14 @@ describe("internal notifications TUI plugin", () => {
     harness.waits.set("session", idle)
 
     harness.emit(executionStarted("event-1"))
+    completedTask().forEach((event) => harness.emit(event))
     harness.emit(executionSucceeded("event-2"))
 
     expect(harness.notifications).toEqual([])
 
     idle.resolve()
     await idle.promise
-    for (const _ of Array.from({ length: 8 })) await Promise.resolve()
+    await settle()
 
     expect(harness.notifications).toEqual([
       {
@@ -399,6 +453,119 @@ describe("internal notifications TUI plugin", () => {
     await settle()
 
     expect(harness.notifications).toEqual([])
+  })
+
+  test("keeps root settlement silent while a child is active", async () => {
+    const harness = await setup()
+    const rootIdle = Promise.withResolvers<void>()
+    const childIdle = Promise.withResolvers<void>()
+    harness.waits.set("session", rootIdle)
+    harness.waits.set("subagent", childIdle)
+
+    harness.emit(executionStarted("root-start"))
+    harness.emit(executionStarted("child-start", "subagent"))
+    harness.setActiveSubagents(1)
+    completedTask().forEach((event) => harness.emit(event))
+    harness.emit(executionSucceeded("root-success"))
+    rootIdle.resolve()
+    await rootIdle.promise
+    await settle()
+
+    expect(harness.notifications).toEqual([])
+    childIdle.resolve()
+    await harness.cleanup()
+  })
+
+  test("keeps root settlement silent when a child is active after reconnect", async () => {
+    const harness = await setup()
+    harness.setActiveSubagents(1)
+    harness.emit(executionStarted("root-start"))
+    completedTask().forEach((event) => harness.emit(event))
+    harness.emit(executionSucceeded("root-success"))
+    await settle()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("stays silent at ordinary idle without explicit completion", async () => {
+    const harness = await setup()
+    harness.emit(executionStarted("root-start"))
+    harness.emit(executionSucceeded("root-idle"))
+    await settle()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("remote ntfy delivery is not a local completion marker", async () => {
+    const harness = await setup()
+    harness.emit(executionStarted("root-start"))
+    harness.emit({
+      ...completedTask("call-remote")[0],
+      data: { sessionID: "session", assistantMessageID: "msg_completion", callID: "call-remote", name: "ntfy" },
+    })
+    harness.emit(completedTask("call-remote")[1])
+    harness.emit(executionSucceeded("root-success"))
+    await settle()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("does not treat an unfinished or another Session's completion call as root completion", async () => {
+    const harness = await setup()
+    harness.emit(executionStarted("root-start"))
+    harness.emit(completedTask("call-unfinished")[0])
+    completedTask("call-child", "subagent").forEach((event) => harness.emit(event))
+    harness.emit(executionSucceeded("root-idle"))
+    await settle()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("keeps explicit completion silent while a background shell is running", async () => {
+    const harness = await setup()
+    harness.shells.push({
+      id: "sh_running",
+      status: "running",
+      command: "work",
+      cwd: "/workspace",
+      shell: "sh",
+      file: "/workspace/output",
+      metadata: { sessionID: "session" },
+      time: { started: 1 },
+    })
+    harness.emit(executionStarted("root-start"))
+    completedTask().forEach((event) => harness.emit(event))
+    harness.emit(executionSucceeded("root-success"))
+    await settle()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("does not let another Session's shell suppress explicit completion", async () => {
+    const harness = await setup()
+    harness.shells.push({
+      id: "sh_other",
+      status: "running",
+      command: "work",
+      cwd: "/workspace",
+      shell: "sh",
+      file: "/workspace/output",
+      metadata: { sessionID: "abort" },
+      time: { started: 1 },
+    })
+    harness.emit(executionStarted("root-start"))
+    completedTask().forEach((event) => harness.emit(event))
+    harness.emit(executionSucceeded("root-success"))
+    await settle()
+    expect(harness.notifications).toEqual([
+      { title: "Demo session", message: "Session done", notification: { when: "blurred" }, sound: { name: "done", when: "always" } },
+    ])
+  })
+
+  test("alerts once for explicit completed work after root settlement", async () => {
+    const harness = await setup()
+    harness.emit(executionStarted("root-start"))
+    completedTask().forEach((event) => harness.emit(event))
+    harness.emit(executionSucceeded("root-success"))
+    await settle()
+    expect(harness.notifications).toEqual([
+      { title: "Demo session", message: "Session done", notification: { when: "blurred" }, sound: { name: "done", when: "always" } },
+    ])
   })
 
   test("keeps active goal settlement silent and alerts once when the goal completes", async () => {
@@ -434,6 +601,7 @@ describe("internal notifications TUI plugin", () => {
       goal: { text: "Earlier task", status: "exhausted", iteration: 2, noProgress: 2, maxNoProgress: 2 },
     })
     harness.emit(executionStarted("event-1"))
+    completedTask().forEach((event) => harness.emit(event))
     harness.emit(executionSucceeded("event-2"))
     await settle()
     expect(harness.notifications).toEqual([
@@ -600,6 +768,47 @@ describe("internal notifications TUI plugin", () => {
     expect(harness.notifications).toEqual([titledFormNotification, questionNotification, permissionNotification])
   })
 
+  test("ignores auto-resolved question", async () => {
+    const harness = await setup()
+    harness.autonomy.set("session", { mode: "normal", yolo: 1 })
+    harness.emit({ id: "asked", created: 0, type: "question.v2.asked", data: question("question-1") })
+    harness.emit({
+      id: "answered",
+      created: 0,
+      type: "question.v2.replied",
+      data: { sessionID: "session", requestID: "question-1", answers: [] },
+    })
+    await harness.flush()
+    expect(harness.notifications).toEqual([])
+  })
+
+  test("alerts for hard guardrail at YOLO 3", async () => {
+    const harness = await setup()
+    harness.autonomy.set("session", { mode: "normal", yolo: 3 })
+    harness.emit({
+      id: "asked",
+      created: 0,
+      type: "guardrail.asked",
+      data: { ...guardrail("hard-1"), standard: false, hardReview: true },
+    })
+    await harness.flush()
+    expect(harness.notifications).toEqual([guardrailNotification])
+  })
+
+  test("ignores an auto-approved ordinary guardrail at YOLO 3", async () => {
+    const harness = await setup()
+    harness.autonomy.set("session", { mode: "normal", yolo: 3 })
+    harness.emit({ id: "asked", created: 0, type: "guardrail.asked", data: guardrail("ordinary-1") })
+    harness.emit({
+      id: "approved",
+      created: 0,
+      type: "guardrail.replied",
+      data: { rootSessionID: "session", sessionID: "session", requestID: "ordinary-1", reply: "once" },
+    })
+    await harness.flush()
+    expect(harness.notifications).toEqual([])
+  })
+
   test("notifies for global forms once the TUI can render them", async () => {
     const harness = await setup()
 
@@ -657,6 +866,7 @@ describe("internal notifications TUI plugin", () => {
 
     harness.emit(executionSucceeded("event-1"))
     harness.emit(executionStarted("event-2"))
+    completedTask().forEach((event) => harness.emit(event))
     harness.emit(executionSucceeded("event-3"))
     for (const _ of Array.from({ length: 12 })) await Promise.resolve()
 

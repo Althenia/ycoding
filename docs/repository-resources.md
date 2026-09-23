@@ -55,6 +55,8 @@ The built-in `memory` tool stores explicit folder-scoped knowledge outside repos
 
 ## Built-in ntfy attention notifications
 
+The provider-visible `task_complete` tool records an explicit local completion signal after the agent verifies its work. It has no input, remote configuration, HTTP request, or external permission; its successful durable tool call can trigger the TUI completion alert after root settlement if no child task or root-owned background shell remains active. Do not call it for idle, partial results, or routine progress. The remote `ntfy` tool is a separate optional delivery path.
+
 The built-in provider-visible `ntfy` tool is configured in the Location's runtime configuration; it is not a repository resource file. Configure it as:
 
 ```jsonc

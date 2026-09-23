@@ -60,6 +60,7 @@ import { SubagentReportTool } from "../tool/subagent-report";
 import { TodoWriteTool } from "../tool/todowrite";
 import { GoalTool } from "../tool/goal";
 import { NtfyTool } from "../tool/ntfy";
+import { TaskCompleteTool } from "../tool/task-complete";
 import { MemoryTool } from "../tool/memory";
 import { ProjectArtifactTool } from "../tool/project-artifact";
 import { ProjectArtifactStore } from "../project-artifact";
@@ -198,6 +199,7 @@ const pre = [
   TodoWriteTool.Plugin,
   ProjectArtifactTool.Plugin,
   NtfyTool.Plugin,
+  TaskCompleteTool.Plugin,
   MemoryTool.Plugin,
   WebFetchTool.Plugin,
   WebSearchTool.Plugin,
