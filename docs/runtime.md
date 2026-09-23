@@ -475,7 +475,10 @@ to escaped user text in place. vLLM prefix
 caching is worker-owned; its cache-read tokens are reported only when the
 worker returns `usage.prompt_tokens_details.cached_tokens`. An absent count
 remains unreported. Ollama's model storage and Runpod's model-download caching
-do not imply prompt-cache telemetry.
+do not imply prompt-cache telemetry. Each Runpod Ollama `prompt_eval_count`
+measures that request's evaluated input context. The Session records each step's
+usage, while the compaction gate compares the latest step's context measurement
+against the model limit rather than summing contexts from earlier steps.
 
 ### OpenAI
 

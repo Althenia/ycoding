@@ -1,7 +1,11 @@
 import { Effect, Schema, Stream } from "effect"
+import * as Option from "effect/Option"
+import { HttpClientRequest } from "effect/unstable/http"
 import { Route } from "../route/client"
 import { Endpoint } from "../route/endpoint"
 import { Protocol } from "../route/protocol"
+import { HttpTransport } from "../route/transport"
+import { RequestExecutor } from "../route/executor"
 import { LLMEvent, Usage, type LLMError, type LLMRequest, type Message } from "../schema"
 import { Lifecycle } from "./utils/lifecycle"
 import { ProviderShared } from "./shared"
@@ -64,6 +68,7 @@ const VLLMResponse = Schema.Struct({
   })),
 })
 const Envelope = Schema.Struct({
+  id: Schema.optional(Schema.String),
   status: Schema.String,
   output: Schema.optional(Schema.Unknown),
   error: Schema.optional(Schema.Unknown),
@@ -241,16 +246,49 @@ const framing = { id: "json", frame: (bytes: Stream.Stream<Uint8Array, LLMError>
   Stream.decodeText(), Stream.runFold(() => "", (body, chunk) => body + chunk),
 )) }
 
+const jobsTransport = <Body>() => {
+  const http = HttpTransport.httpJson<Body, string>({ framing })
+  return {
+    id: "runpod-jobs",
+    prepare: http.prepare,
+    frames: (prepared: HttpTransport.HttpPrepared<string>, request: LLMRequest, runtime: Parameters<typeof http.frames>[2]) =>
+      Stream.fromEffect(Effect.gen(function* () {
+        const first = yield* http.frames(prepared, request, runtime).pipe(Stream.runHead)
+        if (Option.isNone(first)) return yield* ProviderShared.eventError("runpod", "Missing job response")
+        const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Envelope))
+        const initial = yield* decode(first.value).pipe(Effect.mapError(() => ProviderShared.eventError("runpod", "Invalid job response")))
+        if (initial.status !== "IN_QUEUE" && initial.status !== "IN_PROGRESS") return first.value
+        if (!initial.id) return yield* ProviderShared.eventError("runpod", "Unfinished job has no id")
+        const url = new URL(prepared.request.url)
+        url.pathname = `${url.pathname.slice(0, -"/runsync".length)}/status/${encodeURIComponent(initial.id)}`
+        url.search = ""
+        const poll = (): Effect.Effect<string, LLMError> => Effect.gen(function* () {
+          yield* Effect.sleep("1 second")
+          const response = yield* RequestExecutor.withFreshConnectionEffect(runtime.http.execute(
+            HttpClientRequest.get(url.toString()).pipe(HttpClientRequest.setHeaders(prepared.request.headers)),
+          ))
+          const body = yield* response.text.pipe(Effect.mapError((error) => ProviderShared.streamReadError("runpod", error)))
+          const job = yield* decode(body).pipe(Effect.mapError(() => ProviderShared.eventError("runpod", "Invalid job response")))
+          if (job.id !== undefined && job.id !== initial.id)
+            return yield* ProviderShared.eventError("runpod", "Status response belongs to another job")
+          if (job.status !== "IN_QUEUE" && job.status !== "IN_PROGRESS") return body
+          return yield* Effect.suspend(poll)
+        })
+        return yield* poll()
+      })),
+  }
+}
+
 export const ollamaRoute = Route.make({
   id: OLLAMA,
   protocol: ollamaProtocol,
   endpoint: Endpoint.path("/runsync"),
-  framing,
+  transport: jobsTransport<Schema.Schema.Type<typeof OllamaBody>>(),
 })
 
 export const vllmRoute = Route.make({
   id: VLLM,
   protocol: vllmProtocol,
   endpoint: Endpoint.path("/runsync"),
-  framing,
+  transport: jobsTransport<Schema.Schema.Type<typeof VLLMBody>>(),
 })

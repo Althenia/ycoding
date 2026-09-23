@@ -920,10 +920,10 @@ in their chronological positions. vLLM uses its generic
 model name, messages, tool definitions, tool-call history, tool results, and
 generation options. It parses vLLM's non-streaming Chat completion response and
 normalizes tool calls and usage. Ollama does not support required/named tool choice;
-structured output, media, and streaming are unsupported in this adapter. An unfinished
-`/runsync` job (including a Runpod synchronous timeout) is reported as a provider
-error; the adapter does not poll `/status` or automatically replay it. Allow
-enough endpoint execution time for cold starts.
+structured output, media, and streaming are unsupported in this adapter. When
+`/runsync` returns `IN_QUEUE` or `IN_PROGRESS`, the adapter polls
+`GET /status/<job-id>` once per second until the job completes or fails; it
+does not resubmit the prompt. Interrupting the Session stops the wait.
 
 The Jobs routes send no OpenAI prompt-cache options. vLLM's automatic prefix
 cache is configured on the worker, not through this client; YCoding reports

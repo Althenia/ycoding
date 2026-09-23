@@ -39,6 +39,9 @@ describe("Runpod Ollama /runsync", () => {
         "step-start", "text-start", "text-delta", "text-end", "step-finish", "finish",
       ])
       expect(Array.from(events).find((event) => event.type === "text-delta")).toMatchObject({ text: "Hi" })
+      expect(Array.from(events).find((event) => event.type === "finish")).toMatchObject({ usage: {
+        inputTokens: 5, outputTokens: 2, totalTokens: 7,
+      } })
     }).pipe(Effect.provide(dynamicResponse(({ request, text, respond }) => {
       expect(request.url).toBe("https://api.runpod.ai/v2/endpoint/runsync")
       expect(request.headers.authorization).toBe("Bearer fixture-key")
@@ -75,11 +78,46 @@ describe("Runpod Ollama /runsync", () => {
     }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "FAILED", error: "Worker failed" })))),
   )
 
-  it.effect("reports nonterminal jobs without a successful finish", () =>
+  it.live("waits through queued and running jobs and reads the completed result", () =>
     Effect.gen(function* () {
-      const pending = yield* LLMClient.stream(request).pipe(Stream.runCollect)
-      expect(Array.from(pending)).toMatchObject([{ type: "provider-error", message: "Runpod job IN_QUEUE" }])
-    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "IN_QUEUE", id: "job_1" })))),
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "text-delta")).toMatchObject({ text: "Eventually" })
+      expect(events.at(-1)?.type).toBe("finish")
+    }).pipe(Effect.provide((() => {
+      let polls = 0
+      return dynamicResponse(({ request, respond }) => {
+        if (request.method === "POST") return Effect.succeed(respond(JSON.stringify({ status: "IN_QUEUE", id: "job_1" })))
+        expect(request.url).toBe("https://api.runpod.ai/v2/endpoint/status/job_1")
+        expect(request.headers.authorization).toBe("Bearer fixture-key")
+        polls++
+        return Effect.succeed(respond(JSON.stringify(polls === 1
+          ? { status: "IN_PROGRESS", id: "job_1" }
+          : { status: "COMPLETED", id: "job_1", output: [{ message: { role: "assistant", content: "Eventually" }, done: true }] })))
+      })
+    })())),
+  )
+
+  it.effect("rejects an unfinished job without an id instead of resubmitting it", () =>
+    Effect.gen(function* () {
+      const failure = yield* LLMClient.stream(request).pipe(Stream.runCollect, Effect.flip)
+      expect(failure.reason).toMatchObject({ _tag: "InvalidProviderOutput", message: "Unfinished job has no id" })
+    }).pipe(Effect.provide(dynamicResponse(({ request, respond }) => {
+      expect(request.method).toBe("POST")
+      return Effect.succeed(respond(JSON.stringify({ status: "IN_QUEUE" })))
+    }))),
+  )
+
+  it.live("surfaces a job failure after waiting without a successful finish", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events).toMatchObject([{ type: "provider-error", message: "Worker timed out" }])
+      expect(events.some((event) => event.type === "finish")).toBe(false)
+    }).pipe(Effect.provide(dynamicResponse(({ request, respond }) => {
+      const job = request.method === "POST"
+        ? { status: "IN_PROGRESS", id: "job_3" }
+        : { status: "FAILED", id: "job_3", error: "Worker timed out" }
+      return Effect.succeed(respond(JSON.stringify(job)))
+    }))),
   )
 
   it.effect("reports a completed job containing the worker's error output", () =>
@@ -185,12 +223,18 @@ describe("Runpod vLLM /runsync", () => {
     }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "FAILED", error: "Worker failed" })))),
   )
 
-  it.effect("reports unfinished vLLM jobs and structured worker errors", () =>
+  it.live("waits for a queued vLLM job", () =>
     Effect.gen(function* () {
-      const pending = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
-      expect(pending).toMatchObject([{ type: "provider-error", message: "Runpod job IN_QUEUE" }])
-      expect(pending.some((event) => event.type === "finish")).toBe(false)
-    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "IN_QUEUE" })))),
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "text-delta")).toMatchObject({ text: "Ready" })
+      expect(events.at(-1)?.type).toBe("finish")
+    }).pipe(Effect.provide(dynamicResponse(({ request, respond }) => {
+      if (request.method === "POST") return Effect.succeed(respond(JSON.stringify({ status: "IN_QUEUE", id: "job_2" })))
+      expect(request.url).toBe("https://api.runpod.ai/v2/endpoint/status/job_2")
+      return Effect.succeed(respond(JSON.stringify({ status: "COMPLETED", output: [{ choices: [
+        { message: { role: "assistant", content: "Ready" }, finish_reason: "stop" },
+      ] }] })))
+    }))),
   )
 
   it.effect("reports the worker's structured output error without a finish", () =>
