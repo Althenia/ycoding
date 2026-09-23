@@ -23,6 +23,7 @@ export interface Client {
     params?: Readonly<Record<string, unknown>>,
     sessionId?: string,
     signal?: AbortSignal,
+    timeoutMs?: number,
   ) => Promise<unknown>
   readonly subscribe: (listener: (event: Event) => void) => () => void
   readonly closed: Promise<void>
@@ -103,7 +104,7 @@ export function connect(readable: Readable, writable: Writable, commandTimeoutMs
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    send: (method, params = {}, sessionId, signal) => {
+    send: (method, params = {}, sessionId, signal, timeoutMs = commandTimeoutMs) => {
       if (settled) return Promise.reject(new Error("Chrome control pipe is closed"))
       if (signal?.aborted) return Promise.reject(abortError())
       return new Promise((resolve, reject) => {
@@ -114,7 +115,7 @@ export function connect(readable: Readable, writable: Writable, commandTimeoutMs
           pending.delete(id)
           if (entry.abort) entry.abort()
           reject(new Error(`Chrome command timed out: ${method}`))
-        }, commandTimeoutMs)
+        }, timeoutMs)
         timer.unref()
         const onAbort = () => {
           const entry = pending.get(id)

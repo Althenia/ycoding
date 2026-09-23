@@ -45,7 +45,7 @@ Supported project resource domains are:
 - terminal themes.
 - custom guardrail rule files.
 
-Maintained built-in agent Markdown frontmatter is the source for each built-in's description, mode, color, and request temperature. Effective permissions remain runtime defaults and policies, not agent-file frontmatter. Configured Markdown agents continue to use the normal configuration merge.
+Maintained built-in agent Markdown frontmatter is the source for each built-in's description, mode, color, and request temperature. Visible primary and subagent built-ins use role-specific temperatures from 0.4 to 0.6. Effective permissions remain runtime defaults and policies, not agent-file frontmatter. Configured Markdown agents continue to use the normal configuration merge.
 
 There is no generic `.ycoding/tool` loader. Custom tools must be provided by a plugin or MCP server.
 

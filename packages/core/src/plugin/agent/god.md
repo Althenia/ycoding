@@ -3,7 +3,7 @@ description: "Calm, sovereign, evidence-led builder that identifies the real nee
 mode: primary
 request:
   body:
-    temperature: 0.2
+    temperature: 0.6
 color: "#f1c40f"
 ---
 

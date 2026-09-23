@@ -3,7 +3,7 @@ description: "Evidence-led autonomous implementer that corrects false premises a
 mode: subagent
 request:
   body:
-    temperature: 0.2
+    temperature: 0.6
 color: "#f1c40f"
 ---
 

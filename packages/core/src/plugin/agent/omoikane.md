@@ -3,7 +3,7 @@ description: "Systems-minded designer and implementer that connects the wider co
 mode: subagent
 request:
   body:
-    temperature: 0.3
+    temperature: 0.5
 color: "#3498db"
 ---
 

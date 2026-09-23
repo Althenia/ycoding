@@ -154,7 +154,7 @@ async function launchChrome(
   const abort = () => child.kill("SIGTERM")
   signal.addEventListener("abort", abort, { once: true })
   try {
-    const version = record(await withTimeout(cdp.send("Browser.getVersion"), STARTUP_TIMEOUT_MS))
+    const version = record(await cdp.send("Browser.getVersion", {}, undefined, signal, STARTUP_TIMEOUT_MS))
     if (typeof version.product !== "string" || !version.product.startsWith(`Chrome/${SUPPORTED_MAJOR}.`))
       throw new Error({ message: "Installed Chrome changed during startup", phase: "predispatch" })
     return await configureRuntime(cdp, child, root, input, signal)
@@ -742,15 +742,6 @@ function delay(ms: number, signal?: AbortSignal) {
       { once: true },
     )
   })
-}
-
-function withTimeout<A>(promise: Promise<A>, ms: number) {
-  return Promise.race([
-    promise,
-    delay(ms).then(() => {
-      throw new globalThis.Error("Chrome startup timed out")
-    }),
-  ])
 }
 
 function onceExit(child: ReturnType<typeof spawn>) {

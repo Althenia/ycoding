@@ -53,6 +53,19 @@ describe("isolated Chrome private controller", () => {
     })
     timed.close()
   })
+
+  test("allows a slower Chrome startup response without extending ordinary command timeouts", async () => {
+    const readable = new PassThrough()
+    const writable = new PassThrough()
+    writable.on("data", (chunk: Buffer) => {
+      const request = JSON.parse(chunk.toString("utf8").split("\0")[0])
+      setTimeout(() => readable.write(`${JSON.stringify({ id: request.id, result: { product: "Chrome/152.0" } })}\0`), 25)
+    })
+    const cdp = connect(readable, writable, 10)
+    expect(await cdp.send("Browser.getVersion", {}, undefined, undefined, 50)).toEqual({ product: "Chrome/152.0" })
+    expect(await rejected(cdp.send("Page.captureScreenshot"))).toMatchObject({ message: "Chrome command timed out: Page.captureScreenshot" })
+    cdp.close()
+  })
 })
 
 async function waitFor(predicate: () => boolean, label: string) {

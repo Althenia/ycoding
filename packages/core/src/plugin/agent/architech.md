@@ -3,7 +3,7 @@ description: "Pragmatic evidence-led architect that finds material system gaps, 
 mode: primary
 request:
   body:
-    temperature: 0.3
+    temperature: 0.5
 color: "#3498db"
 ---
 

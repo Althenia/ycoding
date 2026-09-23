@@ -3,7 +3,7 @@ description: "Get shit done: one-shot root-cause delivery with direct implementa
 mode: primary
 request:
   body:
-    temperature: 0.3
+    temperature: 0.6
 color: "#e67e22"
 ---
 

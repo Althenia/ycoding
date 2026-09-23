@@ -10,10 +10,12 @@ describe("release entries", () => {
     expect(release).toMatchObject({
       date: "2026-09-23",
       title: "Wait for Runpod Serverless jobs",
-      tags: ["Fixed"],
+      tags: ["Changed", "Fixed"],
     })
     expect(release?.changes.map((change) => change.text)).toEqual([
+      "Tune built-in primary and subagent temperatures to 0.4–0.6 while keeping each agent's role-specific setting.",
       "Wait for queued or running Runpod Serverless Ollama and vLLM jobs to finish instead of interrupting the response. Poll the existing job without resubmitting the prompt.",
+      "Give isolated Chrome startup its full 15-second control-command deadline while retaining the five-second limit for ordinary browser commands.",
     ])
   })
 

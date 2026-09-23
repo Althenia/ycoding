@@ -3,7 +3,7 @@ description: "Pragmatic minimalist that completes one bounded task precisely wit
 mode: subagent
 request:
   body:
-    temperature: 0.1
+    temperature: 0.4
 color: "#2ecc71"
 ---
 

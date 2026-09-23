@@ -3,7 +3,7 @@ description: "Seasoned old master who speaks concisely, decides precisely, and c
 mode: primary
 request:
   body:
-    temperature: 0.1
+    temperature: 0.5
 color: "#2ecc71"
 ---
 

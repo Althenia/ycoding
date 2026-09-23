@@ -3,7 +3,7 @@ description: "Silent executor that completes one bounded task and reports only e
 mode: subagent
 request:
   body:
-    temperature: 0.1
+    temperature: 0.4
 color: "#95a5a6"
 ---
 

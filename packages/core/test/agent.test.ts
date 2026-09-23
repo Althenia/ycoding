@@ -250,14 +250,14 @@ describe("AgentV2", () => {
       )
 
       const catalog = [
-        ["GSD", "primary", 0.3, "#e67e22"],
-        ["architech", "primary", 0.3, "#3498db"],
-        ["god", "primary", 0.2, "#f1c40f"],
-        ["yangi", "primary", 0.1, "#2ecc71"],
-        ["occam", "subagent", 0.1, "#2ecc71"],
-        ["omoikane", "subagent", 0.3, "#3498db"],
-        ["wittgenstein", "subagent", 0.1, "#95a5a6"],
-        ["zeus", "subagent", 0.2, "#f1c40f"],
+        ["GSD", "primary", 0.6, "#e67e22"],
+        ["architech", "primary", 0.5, "#3498db"],
+        ["god", "primary", 0.6, "#f1c40f"],
+        ["yangi", "primary", 0.5, "#2ecc71"],
+        ["occam", "subagent", 0.4, "#2ecc71"],
+        ["omoikane", "subagent", 0.5, "#3498db"],
+        ["wittgenstein", "subagent", 0.4, "#95a5a6"],
+        ["zeus", "subagent", 0.6, "#f1c40f"],
       ] as const
       for (const [id, mode, temperature, color] of catalog) {
         const item = yield* agent.get(AgentV2.ID.make(id))
@@ -338,7 +338,7 @@ describe("AgentV2", () => {
         description:
           "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
         mode: "primary",
-        request: { body: { temperature: 0.2 } },
+        request: { body: { temperature: 0.6 } },
         color: "#f1c40f",
       })
       expect(god.permissions).toEqual([
@@ -363,7 +363,7 @@ describe("AgentV2", () => {
         description:
           "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
         mode: "subagent",
-        request: { body: { temperature: 0.2 } },
+        request: { body: { temperature: 0.6 } },
         color: "#f1c40f",
       })
       expect(PermissionV2.evaluate("shell", "git status", zeus.permissions).effect).toBe("allow")
