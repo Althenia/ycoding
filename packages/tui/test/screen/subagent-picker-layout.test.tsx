@@ -65,7 +65,16 @@ async function waitForFrameText(screen: { frame(): string }, text: string) {
   expect(screen.frame()).toContain(text)
 }
 
-test("keeps terminal tasks out of Subagents, orders the Idle tab last, and never resizes the composer", async () => {
+async function waitForRowChange(screen: { lines(): string[] }, text: string, previous: string) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const row = screen.lines().find((line) => line.includes(text))
+    if (row && row !== previous) return row
+    await Bun.sleep(20)
+  }
+  throw new Error(`Timed out waiting for ${text} row to change`)
+}
+
+test("shows active and terminal tasks in separate sections in Subagents without resizing the composer", async () => {
   const width = 220
   const screen = await renderScreen({ width, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
@@ -84,8 +93,8 @@ test("keeps terminal tasks out of Subagents, orders the Idle tab last, and never
     expect(open.height).toBe(closed.height)
     const frame = lines.join("\n")
     expect(frame).toContain("ACTIVE")
-    expect(frame).not.toContain("INACTIVE")
-    expect(frame).not.toContain("keymap-audit")
+    expect(frame).toContain("INACTIVE")
+    expect(frame).toContain("keymap-audit")
     const hints = lines.findIndex((line) => line.includes("Enter attach"))
     expect(hints).toBeGreaterThan(-1)
     expect(hints).toBeLessThan(open.rule)
@@ -94,13 +103,13 @@ test("keeps terminal tasks out of Subagents, orders the Idle tab last, and never
     expect(lines[hints]).not.toContain("r answer")
     expect(lines[hints]).toContain("Esc close")
 
-    // Subagents shows only live work; terminal tasks are reachable from the distinct Idle tab.
+    // Subagents shows live and terminal work without a separate Idle tab.
     const tabs = lines.findIndex((line) => line.includes("Subagents"))
     expect(tabs).toBeGreaterThan(-1)
     const tabLine = lines[tabs] ?? ""
     expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
     expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
-    expect(tabLine.indexOf("Side chats")).toBeLessThan(tabLine.indexOf("Idle"))
+    expect(tabLine).not.toContain("Idle")
     expect(lines[tabs]?.indexOf("Subagents")).toBe(3)
 
     // Defect 1: one row per task carrying state, agent, description and metadata together.
@@ -113,18 +122,8 @@ test("keeps terminal tasks out of Subagents, orders the Idle tab last, and never
     expect(lines[running + 1]).not.toContain("anthropic/")
     expect(lines[running]).not.toContain("completed")
 
-    const idleTab = tabLine.indexOf("Idle")
-    await screen.mouse.click(idleTab, tabs)
-    await waitForFrameText(screen, "completed")
-    const idleFrame = screen.frame()
-    expect(idleFrame).toContain("IDLE")
-    expect(idleFrame).toContain("completed       keymap-audit")
-    expect(idleFrame).not.toContain("running         zeus")
     const terminalRow = screen.lines().find((line) => line.includes("keymap-audit"))
     expect(terminalRow).toContain("1ms")
-    const idleHints = screen.lines().find((line) => line.includes("Enter attach"))
-    expect(idleHints).not.toContain("cancel")
-    expect(idleHints).not.toContain("answer")
     await Bun.sleep(1_100)
     expect(screen.lines().find((line) => line.includes("keymap-audit"))).toBe(terminalRow)
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(width)
@@ -138,7 +137,7 @@ test("keeps terminal tasks out of Subagents, orders the Idle tab last, and never
   }
 }, 120_000)
 
-test("pages past a full active top page to make terminal tasks reachable from Idle", async () => {
+test("pages past a full active top page to make terminal tasks reachable in INACTIVE", async () => {
   const activeTasks = Array.from({ length: 10 }, (_, index) => ({
     sessionID: `ses_picker_active_${index}`,
     parentID: sessionID,
@@ -180,20 +179,87 @@ test("pages past a full active top page to make terminal tasks reachable from Id
     await screen.mouse.click(3, prompt)
     screen.input.pressKey("ARROW_DOWN")
     await waitForFrameText(screen, "Active task 0")
-    const tabRow = screen.lines().findIndex((line) => line.includes("Subagents"))
-    const idleColumn = screen.lines()[tabRow]?.indexOf("Idle") ?? -1
-    expect(idleColumn).toBeGreaterThan(-1)
-    await screen.mouse.click(idleColumn, tabRow)
-
-    expect(screen.lines().some((line) => line.trim() === "No idle subagents")).toBe(false)
-    expect(screen.frame()).toContain("No idle tasks on this page")
+    expect(screen.frame()).toContain("ACTIVE")
+    expect(screen.frame()).not.toContain("INACTIVE")
+    expect(screen.frame()).not.toContain("Terminal task after top page")
     const olderRow = screen.lines().findIndex((line) => line.includes("+1 more"))
     expect(olderRow).toBeGreaterThan(-1)
     expect(screen.lines().find((line) => line.includes("⌃n older"))).toBeDefined()
     await screen.mouse.click((screen.lines()[olderRow] ?? "").indexOf("+1 more"), olderRow)
     await waitForFrameText(screen, "Terminal task after active page")
     expect(screen.frame()).toContain("completed")
-    expect(screen.frame()).toContain("IDLE")
+    expect(screen.frame()).toContain("INACTIVE")
+  } finally {
+    await screen.dispose()
+  }
+}, 120_000)
+
+test("freezes a completed task timer while other active task timers keep advancing", async () => {
+  const created = Date.now() - 5_000
+  const finishingTask = {
+    sessionID: "ses_picker_finishing",
+    parentID: sessionID,
+    description: "Finish timer test",
+    agent: "reviewer",
+    background: true,
+    state: "running",
+    revision: 1,
+    time: { created, updated: created },
+  }
+  const ongoingTask = {
+    sessionID: "ses_picker_ongoing",
+    parentID: sessionID,
+    description: "Keep timer running",
+    agent: "explore",
+    background: true,
+    state: "running",
+    revision: 1,
+    time: { created, updated: created },
+  }
+  const currentTasks = [finishingTask, ongoingTask]
+  const screen = await renderScreen({
+    width: 220,
+    height: 55,
+    args: { sessionID },
+    route: (url) => {
+      if (url.pathname === `/api/session/${sessionID}/subagent`) {
+        const active = currentTasks.filter((task) => task.state === "running").length
+        return json({
+          data: currentTasks,
+          summary: { total: 2, active, running: active, waiting: 0 },
+          cursor: {},
+        })
+      }
+      return route(url)
+    },
+    settle: "Message YCoding…",
+  })
+
+  try {
+    await screen.waitForEventStream()
+    screen.input.pressKey("ARROW_DOWN")
+    await waitForFrameText(screen, "Finish timer test")
+    const initial = screen.lines()
+    const initialOngoing = initial.find((line) => line.includes("Keep timer running"))
+    expect(initialOngoing).toBeDefined()
+
+    finishingTask.state = "completed"
+    finishingTask.revision = 2
+    finishingTask.time.updated = Date.now()
+    screen.events.emit({
+      id: "evt_picker_task_completed",
+      created: finishingTask.time.updated,
+      type: "session.task.updated",
+      durable: { aggregateID: finishingTask.sessionID, seq: 1, version: 1 },
+      data: { sessionID: finishingTask.sessionID, change: { type: "completed" } },
+    })
+    await waitForFrameText(screen, "completed       reviewer")
+    const completedRow = screen.lines().find((line) => line.includes("completed       reviewer"))
+    expect(completedRow).toContain("Finish timer test")
+
+    expect(initialOngoing).toBeDefined()
+    await waitForRowChange(screen, "Keep timer running", initialOngoing ?? "")
+    expect(screen.lines().find((line) => line.includes("completed       reviewer"))).toBe(completedRow)
   } finally {
     await screen.dispose()
   }

@@ -73,7 +73,7 @@ test("formats provider, model, and optional variant", () => {
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
 })
 
-test("sections active and idle tasks deterministically", () => {
+test("sections active and inactive tasks deterministically", () => {
   const tasks: SessionOrchestrationTask[] = [
     {
       sessionID: "ses_waiting",
@@ -174,10 +174,10 @@ test("sections active and idle tasks deterministically", () => {
   ])
   expect(module.subagentSections(entries)).toEqual([
     { label: "ACTIVE", entries: entries.slice(0, 3) },
-    { label: "IDLE", entries: entries.slice(3) },
+    { label: "INACTIVE", entries: entries.slice(3) },
   ])
   expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "ACTIVE", entries: entries.slice(0, 3) }])
-  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "IDLE", entries: entries.slice(3) }])
+  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "INACTIVE", entries: entries.slice(3) }])
   expect(entries.find((entry) => entry.sessionID === "ses_alpha")).toMatchObject({ startedAt: 2, endedAt: 3 })
   expect(module.formatSubagentEntryElapsed(entries.find((entry) => entry.sessionID === "ses_alpha")!, 99_000)).toBe("1ms")
   expect(module.subagentScrollIndex(entries, 0)).toBe(1)
@@ -492,18 +492,11 @@ test("renders section headings while keyboard navigation selects only task rows 
     await app.waitForFrame((frame) => frame.includes("ACTIVE") && frame.includes("running         reviewer"))
     const initial = app.captureCharFrame()
     expect(initial).toContain("ACTIVE")
-    expect(initial).not.toContain("IDLE\n")
-    expect(initial).not.toContain("Archive results")
+    expect(initial).toContain("INACTIVE")
+    expect(initial).toContain("Archive results")
     // Each task keeps its status, agent, description, and metadata on one bounded row.
     expect(initial).toContain("running         reviewer")
     expect(initial).toContain("· Review implementation")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("IDLE")
-    expect(app.captureCharFrame()).toContain("completed       general")
-    expect(app.captureCharFrame()).not.toContain("running         reviewer")
     reactivated = true
     events.emit({
       id: "evt_task_reactivated",
@@ -512,16 +505,10 @@ test("renders section headings while keyboard navigation selects only task rows 
       durable: { aggregateID: "ses_inactive_first", seq: 1, version: 1 },
       data: { sessionID: "ses_inactive_first", change: { type: "started" } },
     })
-    await app.waitForFrame((frame) => frame.includes("failed") && !frame.includes("Summarize findings"))
-    app.mockInput.pressKey("ARROW_LEFT")
-    app.mockInput.pressKey("ARROW_LEFT")
-    app.mockInput.pressKey("ARROW_LEFT")
-    await app.renderOnce()
+    await app.waitForFrame((frame) => frame.includes("running         general  · Summarize findings"))
     expect(app.captureCharFrame()).toContain("running         general  · Summarize findings")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    app.mockInput.pressKey("ARROW_RIGHT")
-    await app.renderOnce()
+    app.mockInput.pressKey("ARROW_DOWN")
+    app.mockInput.pressKey("ARROW_DOWN")
     app.mockInput.pressKey("ARROW_DOWN")
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("general  · Archive results")

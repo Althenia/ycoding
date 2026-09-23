@@ -99,7 +99,7 @@ export function subagentSections(entries: ReadonlyArray<SubagentEntry>) {
   const inactive = entries.filter((entry) => !isActiveSubagent(entry.status))
   return [
     ...(active.length > 0 ? [{ label: "ACTIVE", entries: active }] : []),
-    ...(inactive.length > 0 ? [{ label: "IDLE", entries: inactive }] : []),
+    ...(inactive.length > 0 ? [{ label: "INACTIVE", entries: inactive }] : []),
   ]
 }
 
@@ -193,7 +193,7 @@ export function SubagentMetadata(props: { model?: string; cacheHit?: string; ela
   )
 }
 
-export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
+export function SubagentsTab(props: { sessionID: string }) {
   const route = useRouteData("session")
   const data = useData()
   const client = useClient()
@@ -208,21 +208,21 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
   const page = createMemo(() => data.session.subagent.page(parentID()))
   const pager = createMemo(() => data.session.subagent.navigation(parentID()))
   const allEntries = createMemo(() => entriesFromTasks(page()?.data ?? [], route.sessionID))
-  const entries = createMemo(() => allEntries().filter((entry) => isActiveSubagent(entry.status) !== Boolean(props.idle)))
+  const entries = createMemo(() => allEntries())
   const sections = createMemo(() => subagentSections(entries()))
   const [now, setNow] = createSignal(Date.now())
 
   createEffect(() => {
-    if (!composer.active(props.idle ? "idle" : "subagents")) return
+    if (!composer.active("subagents")) return
     const id = parentID()
     void data.session.subagent.sync(id).catch((error) => console.error("Failed to load durable subagent tasks", error))
   })
   createEffect(() => {
-    if (!composer.active(props.idle ? "idle" : "subagents")) return
+    if (!composer.active("subagents")) return
     allEntries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
   })
   createEffect(() => {
-    if (dimensions().width < 100 || !composer.active(props.idle ? "idle" : "subagents") || !entries().some((entry) => entry.status === "running")) return
+    if (dimensions().width < 100 || !composer.active("subagents") || !entries().some((entry) => entry.status === "running")) return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -237,7 +237,7 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
   const selectedEntry = createMemo(() => entries()[selected()])
 
   createEffect(() => {
-    const active = composer.active(props.idle ? "idle" : "subagents")
+    const active = composer.active("subagents")
     if (!active) {
       if (wasActive) {
         selectedEntryID = ""
@@ -256,7 +256,7 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
     if (selectedIdx < 0 && list.length > 0) {
       const currentIdx = list.findIndex((entry) => entry.current)
       const next = currentIdx >= 0 ? currentIdx : 0
-      selectedEntryID = list[next]!.sessionID
+      selectedEntryID = list[next].sessionID
       setStore("selected", next)
       const scrollCurrentIntoView = () => scrollToIndex(next, true)
       scrollCurrentIntoView()
@@ -286,8 +286,8 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
 
   onMount(() => {
     const cleanup = composer.register({
-      id: props.idle ? "idle" : "subagents",
-      label: props.idle ? "Idle" : "Subagents",
+      id: "subagents",
+      label: "Subagents",
       hints: () => {
         const entry = selectedEntry()
         if (!entry)
@@ -316,7 +316,7 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
 
   Keymap.createLayer(() => ({
     mode: "composer",
-    enabled: () => composer.active(props.idle ? "idle" : "subagents"),
+    enabled: () => composer.active("subagents"),
     commands: [
       {
         id: "composer.subagent.up",
@@ -404,7 +404,7 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
   }))
 
   return (
-    <Show when={composer.active(props.idle ? "idle" : "subagents")}>
+    <Show when={composer.active("subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
         width="100%"
@@ -417,9 +417,7 @@ export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
           when={entries().length > 0}
           fallback={
             <text fg={themeV2.text.subdued}>
-              {pager().older || pager().newer
-                ? `No ${props.idle ? "idle tasks" : "active subagents"} on this page`
-                : `No ${props.idle ? "idle" : "active"} subagents`}
+              {pager().older || pager().newer ? "No subagents on this page" : "No subagents"}
             </text>
           }
         >

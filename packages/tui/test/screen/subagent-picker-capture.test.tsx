@@ -75,8 +75,8 @@ test("captures populated subagent picker states at reference terminal dimensions
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
       expect(lines.join("\n")).toContain("Subagents")
       expect(lines.join("\n")).toContain("ACTIVE")
-      expect(lines.join("\n")).not.toContain("INACTIVE")
-      expect(lines.join("\n")).not.toContain("keymap-audit")
+      expect(lines.join("\n")).toContain("INACTIVE")
+      expect(lines.join("\n")).toContain("keymap-audit")
       // Tabs retain the requested order, and each active task owns one row: the status column, the
       // agent, the description and the metadata share it, with the metadata flush against the
       // composer's right inset so no column can overlap or push another off the row.
@@ -86,7 +86,7 @@ test("captures populated subagent picker states at reference terminal dimensions
       const tabLine = lines[tabs] ?? ""
       expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
       expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
-      expect(tabLine.indexOf("Side chats")).toBeLessThan(tabLine.indexOf("Idle"))
+      expect(tabLine).not.toContain("Idle")
       const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13] : [50, 52]
       expectAt(lines, rows[0], 3, "? awaiting")
       expectAt(lines, rows[0], 19, "test-triage  · Tria")
@@ -105,26 +105,20 @@ test("captures populated subagent picker states at reference terminal dimensions
         expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
         // Only the awaiting task adds a second row, and it carries the question, never metadata.
         expectAt(lines, 51, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
-        expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length)
+        expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length + 2)
         expectAt(lines, 64, 3, "Enter attach")
         expectAt(lines, 64, 18, "↑↓ move")
         expectAt(lines, 64, 28, "⌃x k cancel")
         expectAt(lines, 64, 43, "r answer")
         expectAt(lines, 64, 54, "Esc close")
       }
-      await capture.showIdle()
-      const idleLines = capture.rows()
-      const terminalLines = idleLines.filter((line) => line.includes("keymap-audit") || line.includes("bench-run"))
-      expect(idleLines.join("\n")).toContain("IDLE")
-      expect(terminalLines).toHaveLength(2)
-      expect(terminalLines[0]).toContain("completed")
-      expect(terminalLines[1]).toContain("cancelled")
-      expect(terminalLines.join("\n")).not.toContain("20719d")
-      expect(idleLines.join("\n")).not.toContain("running")
-      const idleHints = idleLines.find((line) => line.includes("Enter attach")) ?? ""
-      expect(idleHints).not.toContain("cancel")
-      expect(idleHints).not.toContain("answer")
-      for (const line of idleLines) expect(line.length).toBeLessThanOrEqual(viewport.width)
+      const inactiveHeading = lines.findIndex((line) => line.includes("INACTIVE"))
+      const hints = lines.findIndex((line, index) => index > inactiveHeading && line.includes("Enter attach"))
+      const inactiveLines = lines.slice(inactiveHeading + 1, hints < 0 ? undefined : hints)
+      expect(inactiveHeading).toBeGreaterThan(-1)
+      expect(inactiveLines.some((line) => line.includes("completed       keymap-audit"))).toBe(true)
+      expect(inactiveLines.some((line) => line.includes("cancelled       bench-run"))).toBe(true)
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
       await Bun.write(path.resolve(import.meta.dir, `../../../../.aphrodite/renders/subagent-picker-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
     } finally {
       await capture.dispose()
@@ -212,13 +206,6 @@ async function boot(viewport: { width: number; height: number }) {
 
   return {
     frame: () => app.captureCharFrame(),
-    async showIdle() {
-      app.mockInput.pressKey("ARROW_RIGHT")
-      app.mockInput.pressKey("ARROW_RIGHT")
-      app.mockInput.pressKey("ARROW_RIGHT")
-      await app.renderOnce()
-      await waitFor(() => app.captureCharFrame(), "IDLE")
-    },
     rows: () => {
       const frame = app.captureCharFrame()
       return (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n")
