@@ -755,6 +755,17 @@ body:has(.app) {
   font-size: var(--yc-size-2xs);
 }
 
+.activity-row__view {
+  justify-self: start;
+  min-block-size: var(--yc-control-h);
+}
+
+.activity-row__patch {
+  grid-column: 1 / -1;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
 .activity-row__status {
   color: var(--yc-text-muted);
   font-size: var(--yc-size-2xs);

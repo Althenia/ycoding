@@ -8,6 +8,7 @@ import {
   toolShellID,
   type ActivityItem,
   type AssistantPart,
+  type FileChangeView,
   type PendingRequestView,
   type RemoteMessageView,
   type ShellOutputFetch,
@@ -364,19 +365,20 @@ export function RequestCard(props: { readonly request: () => PendingRequestView;
   )
 }
 
-export function ActivityRow(props: { readonly item: ActivityItem }): JSX.Element {
+export function ActivityRow(props: { readonly item: () => ActivityItem; readonly fileChange: () => FileChangeView | undefined }): JSX.Element {
+  const [expanded, setExpanded] = createSignal(false)
   return (
-    <li class={`activity-row activity-row--${props.item.kind}`}>
+    <li class={`activity-row activity-row--${props.item().kind}`}>
       <span class="activity-row__icon" aria-hidden="true">
         <Icon
           name={
-            props.item.kind === "terminal"
+            props.item().kind === "terminal"
               ? "terminal"
-              : props.item.kind === "file"
+              : props.item().kind === "file"
                 ? "file"
-                : props.item.kind === "approval"
+                : props.item().kind === "approval"
                   ? "shield"
-                  : props.item.kind === "status"
+                  : props.item().kind === "status"
                     ? "activity"
                     : "settings"
           }
@@ -384,12 +386,20 @@ export function ActivityRow(props: { readonly item: ActivityItem }): JSX.Element
         />
       </span>
       <span class="activity-row__body">
-        <span class="activity-row__title">{props.item.title}</span>
-        <Show when={props.item.detail}>
-          <span class="activity-row__detail">{props.item.detail}</span>
+        <span class="activity-row__title">{props.item().title}</span>
+        <Show when={props.item().detail}>
+          <span class="activity-row__detail">{props.item().detail}</span>
+        </Show>
+        <Show when={props.fileChange()}>
+          <button type="button" class="button button--ghost button--small activity-row__view" aria-expanded={expanded()} aria-label={`${expanded() ? "Hide" : "View"} diff for ${props.fileChange()?.path}`} onClick={() => setExpanded(!expanded())}>
+            {expanded() ? "Hide diff" : "View diff"}
+          </button>
         </Show>
       </span>
-      <span class="activity-row__status">{props.item.status}</span>
+      <span class="activity-row__status">{props.item().status}</span>
+      <Show when={expanded() && props.fileChange()}>
+        {(change) => <pre class="output activity-row__patch" tabindex="0"><code>{change().patch || "No patch recorded."}</code></pre>}
+      </Show>
     </li>
   )
 }

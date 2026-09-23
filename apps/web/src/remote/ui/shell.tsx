@@ -37,7 +37,6 @@ const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/setti
 
 export type RemoteView = (typeof views)[number]
 
-const sessionsSupport = "All sessions on the connected machine."
 const settingsSupport = "Account, devices, appearance, autonomy, and notifications for this workspace."
 
 export function RemoteShell(props: { readonly path: string }): JSX.Element {
@@ -896,6 +895,8 @@ function ActivityList(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const activity = () => reportedEvents(state().view)
+  const ids = createMemo(() => [...activity()].reverse().map((item) => item.id))
+  const item = (id: string) => activity().find((entry) => entry.id === id)!
   return (
     <Show
       when={state().view !== undefined}
@@ -916,7 +917,7 @@ function ActivityList(): JSX.Element {
         }
       >
         <ul class="activity">
-          <For each={[...activity()].reverse()}>{(item) => <ActivityRow item={item} />}</For>
+          <For each={ids()}>{(id) => <ActivityRow item={() => item(id)} fileChange={() => state().view?.fileChanges.find((change) => id === `file-${change.path}`)} />}</For>
         </ul>
         <p class="panel__note">
           {state().unhandledEvents === 0

@@ -27,6 +27,32 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("opens a recorded file patch in Activity without escaping the mobile viewport", async () => {
+    const page = await fixture("view=activity&files=recorded", 320, "src/remote/store.ts")
+    const button = await page.evaluate<boolean>(`[...document.querySelectorAll('.activity-row--file button')].some(button => button.textContent?.includes('View diff'))`)
+    expect(button).toBe(true)
+    expect(await page.evaluate<string>(`document.querySelector('.activity-row--file button')?.getAttribute('aria-label') ?? ''`)).toBe("View diff for src/remote/store.ts")
+    await page.evaluate(`document.querySelector('.activity-row--file button')?.click()`)
+    const expanded = await page.evaluate<{ readonly text: string; readonly injected: boolean; readonly pageOverflow: boolean; readonly localScroll: boolean }>(`(() => {
+      const row = document.querySelector('.activity-row--file')
+      const output = row?.querySelector('pre')
+      return {
+        text: output?.textContent ?? '',
+        injected: row?.querySelector('img') !== null,
+        pageOverflow: document.documentElement.scrollWidth > innerWidth,
+        localScroll: output instanceof HTMLElement && output.scrollWidth > output.clientWidth,
+      }
+    })()`)
+    expect(expanded.text).toContain('@@ -1 +1 @@')
+    expect(expanded.text).toContain('<img src=x onerror=alert(1)>')
+    expect(expanded.injected).toBe(false)
+    expect(expanded.pageOverflow).toBe(false)
+    expect(expanded.localScroll).toBe(true)
+    await page.evaluate(`document.querySelector('.fixture__controls button')?.click()`)
+    expect(await page.evaluate<boolean>(`document.querySelector('.activity-row--file button')?.getAttribute('aria-expanded') === 'true' && document.querySelector('.activity-row--file pre') !== null`)).toBe(true)
+    await page.close()
+  }, 30_000)
+
   test("keeps an unknown prompt retry and notice with its owning Session", async () => {
     const page = await fixture("view=chat&promptOutcome=unknown", 390, "Stream remote output safely")
     await page.evaluate(`(() => {

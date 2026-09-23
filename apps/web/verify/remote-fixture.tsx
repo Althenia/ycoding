@@ -465,6 +465,10 @@ function createFixtureStore(): Fixture {
         ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
         : unreplied(stitchScenario.forms),
     }
+    if (operation === "session.fileChange.list" && accountParams.get("files") === "recorded") return {
+      status: "ok",
+      value: { data: [{ path: "src/remote/store.ts", patch: `@@ -1 +1 @@\n-old\n+${"updated".repeat(80)}<img src=x onerror=alert(1)>`, additions: 1, deletions: 1 }] },
+    }
     if (
       operation === "session.permission.reply" ||
       operation === "session.guardrail.reply" ||
