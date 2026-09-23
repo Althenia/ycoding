@@ -845,6 +845,18 @@ every model in YCoding configuration.
 
 ### Runpod Serverless Jobs workers
 
+Select **Runpod Serverless endpoint** from `/connect` to add each Jobs endpoint as a
+separate provider ID. Enter its endpoint-root URL, choose the `vllm` or `ollama`
+worker, and add the served model ID. For vLLM, use the exact name served by the
+worker (including any served-name override); for Ollama, the model entry labels
+the worker-configured model. Enable tool calling for the entry only when the
+deployed model and worker support it. Name the endpoint's credential profile and
+enter a Runpod API key; additional profiles for that provider can be selected
+and activated through `/connect`. Give each endpoint a distinct provider ID to
+show all configured endpoint models in the model picker and switch between them
+without changing the endpoint configuration. Endpoint registration does not
+enumerate an account's deployments or discover model IDs automatically.
+
 For Runpod Serverless Jobs endpoints running `runpod-workers/worker-ollama` or
 `runpod-workers/worker-vllm`, select `@ycoding-ai/ai/providers/runpod` and
 set `settings.worker` explicitly to `ollama` or `vllm`. Set `settings.baseURL` to the
@@ -909,6 +921,12 @@ structured output, media, and streaming are unsupported in this adapter. An unfi
 `/runsync` job (including a Runpod synchronous timeout) is reported as a provider
 error; the adapter does not poll `/status` or automatically replay it. Allow
 enough endpoint execution time for cold starts.
+
+The Jobs routes send no OpenAI prompt-cache options. vLLM's automatic prefix
+cache is configured on the worker, not through this client; YCoding reports
+cached prompt tokens only when the worker includes `usage.prompt_tokens_details.cached_tokens`.
+Ollama's model store/keep-alive and Runpod's cached model downloads are distinct
+from prompt-prefix caching; Ollama worker responses do not report cache-hit tokens.
 
 OpenCode Zen and OpenCode Go remain external provider identities. Their provider IDs, URLs, credentials, and model selectors are not renamed to YCoding.
 

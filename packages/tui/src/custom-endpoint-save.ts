@@ -12,11 +12,12 @@ export async function saveCustomEndpoint(
     refresh: () => Promise<unknown>
   },
 ) {
-  const providerID = result.provider?.trim() || "custom-openai"
+  const providerID = result.provider?.trim() || (result.worker ? "runpod" : "custom-openai")
   await writeCustomEndpoint(configDir, {
     baseURL: result.baseURL,
     api: result.api,
     provider: providerID,
+    worker: result.worker,
     catalog: result.catalog,
     models: result.models,
   })

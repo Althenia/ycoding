@@ -60,6 +60,7 @@ const VLLMResponse = Schema.Struct({
     prompt_tokens: Schema.optional(Schema.Number),
     completion_tokens: Schema.optional(Schema.Number),
     total_tokens: Schema.optional(Schema.Number),
+    prompt_tokens_details: Schema.optional(Schema.NullOr(Schema.Struct({ cached_tokens: Schema.optional(Schema.Number) }))),
   })),
 })
 const Envelope = Schema.Struct({
@@ -213,7 +214,8 @@ const stepVLLM = (state: Lifecycle.State, envelope: Schema.Schema.Type<typeof En
   if (calls.length) Lifecycle.stepStart(closed, events)
   events.push(...calls)
   return [Lifecycle.finish(closed, events, { reason: calls.length || choice.finish_reason === "tool_calls" ? "tool-calls" : choice.finish_reason, usage: Usage.from({
-    inputTokens: response.usage?.prompt_tokens,
+    ...ProviderShared.normalizeInputUsage({ semantics: "inclusive-total", total: response.usage?.prompt_tokens,
+      cacheRead: response.usage?.prompt_tokens_details?.cached_tokens }),
     outputTokens: response.usage?.completion_tokens,
     totalTokens: response.usage?.total_tokens,
   }) }), events] as const

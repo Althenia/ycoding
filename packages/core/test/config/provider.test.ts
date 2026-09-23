@@ -10,6 +10,8 @@ import { ModelV2 } from "@ycoding-ai/core/model"
 import { PluginV2 } from "@ycoding-ai/core/plugin"
 import { PluginHost } from "@ycoding-ai/core/plugin/host"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
+import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
+import { LLM, LLMClient } from "@ycoding-ai/ai"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "../plugin/fixture"
 
@@ -58,6 +60,40 @@ const waitFor = Effect.fnUntraced(function* (condition: () => Effect.Effect<bool
 })
 
 describe("ConfigProviderPlugin.Plugin", () => {
+  it.effect("registers credential profiles for configured Runpod endpoints", () =>
+    Effect.gen(function* () {
+      const integrations = yield* Integration.Service
+      const catalog = yield* Catalog.Service
+      yield* addPlugin(Config.Service.of({ entries: () => Effect.succeed([new Config.Document({
+        type: "document",
+        info: decode({ providers: {
+          "runpod-a": { package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "ollama", baseURL: "https://api.runpod.ai/v2/a" }, models: { ollama: { capabilities: { tools: true } } } },
+          "runpod-b": { package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "vllm", baseURL: "https://api.runpod.ai/v2/b" }, models: { coder: { modelID: "org/coder", capabilities: { tools: true } } } },
+        } }),
+      })]) }))
+      for (const name of ["runpod-a", "runpod-b"]) {
+        const id = Integration.ID.make(name)
+        expect((yield* integrations.get(id))?.methods).toContainEqual({ type: "key", label: "API key" })
+        yield* integrations.connection.key({ integrationID: id, key: "first-key", label: "Work" })
+        yield* integrations.connection.key({ integrationID: id, key: "second-key", label: "Personal" })
+        expect((yield* integrations.get(id))?.connections.filter((connection) => connection.type === "credential").map((connection) => ({ label: connection.label, active: connection.active })))
+          .toEqual(expect.arrayContaining([{ label: "Work", active: false }, { label: "Personal", active: true }]))
+      }
+      for (const [provider, modelID, route, endpoint] of [
+        ["runpod-a", "ollama", "runpod-ollama", "https://api.runpod.ai/v2/a/runsync"],
+        ["runpod-b", "coder", "runpod-vllm", "https://api.runpod.ai/v2/b/runsync"],
+      ] as const) {
+        const entry = required(yield* catalog.model.get(ProviderV2.ID.make(provider), ModelV2.ID.make(modelID)))
+        expect(entry.capabilities.tools).toBe(true)
+        const connection = required(yield* integrations.connection.active(Integration.ID.make(provider)))
+        const selected = yield* SessionRunnerModel.fromCatalogModel(entry, yield* integrations.connection.resolve(connection))
+        expect(selected.route.id).toBe(route)
+        const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, prompt: "Hello" }))
+        expect(`${selected.route.endpoint.baseURL}/runsync`).toBe(endpoint)
+        if (route === "runpod-vllm") expect(prepared.body).toMatchObject({ input: { body: { model: "org/coder" } } })
+      }
+    }),
+  )
   it.effect("registers a key method for a configured compatible provider without env", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

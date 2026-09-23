@@ -17,6 +17,7 @@ describe("Runpod Ollama /runsync", () => {
         messages: [{ role: "system", content: "Be brief" }, { role: "user", content: "Hello" }],
         stream: false, options: { temperature: 0.4, num_predict: 24 },
       } })
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache")
       const events = yield* LLMClient.stream(request).pipe(Stream.runCollect)
       expect(Array.from(events).map((event) => event.type)).toEqual([
         "step-start", "text-start", "text-delta", "text-end", "step-finish", "finish",
@@ -124,16 +125,40 @@ describe("Runpod vLLM /runsync", () => {
         body: { model: "catalog-label", messages: [{ role: "system", content: "Be brief" }, { role: "user", content: "Hello" }],
           stream: false, temperature: 0.3, top_p: 0.8, top_k: 4, max_tokens: 24, seed: 7, stop: ["END"], frequency_penalty: 0.2, presence_penalty: 0.1 },
       } })
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_cache")
       const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
       expect(events.map((event) => event.type)).toEqual(["step-start", "text-start", "text-delta", "text-end", "step-finish", "finish"])
       expect(events.find((event) => event.type === "text-delta")).toMatchObject({ text: "Hello back" })
       expect(events.find((event) => event.type === "finish")).toMatchObject({ reason: "length", usage: { inputTokens: 5, outputTokens: 2, totalTokens: 7 } })
+      expect(events.find((event) => event.type === "finish")?.usage?.cacheReadInputTokens).toBeUndefined()
     }).pipe(Effect.provide(dynamicResponse(({ request, text, respond }) => {
       expect(request.url).toBe("https://api.runpod.ai/v2/endpoint/runsync")
       expect(request.headers.authorization).toBe("Bearer fixture-key")
       expect(JSON.parse(text).input.body.model).toBe("catalog-label")
       return Effect.succeed(respond(JSON.stringify({ status: "COMPLETED", output: [{ choices: [{ message: { role: "assistant", content: "Hello back" }, finish_reason: "length" }], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } }] })))
     }))),
+  )
+
+  it.effect("reports vLLM cached prompt tokens only when the worker reports them", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")).toMatchObject({ usage: {
+        inputTokens: 9, outputTokens: 2, cacheReadInputTokens: 4, nonCachedInputTokens: 5,
+      } })
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      choices: [{ message: { role: "assistant", content: "Hi" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 9, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 4 } },
+    }] })))),
+  )
+
+  it.effect("accepts a vLLM response with null optional prompt-cache details", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")?.usage?.cacheReadInputTokens).toBeUndefined()
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      choices: [{ message: { role: "assistant", content: "Hi" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, prompt_tokens_details: null },
+    }] })))),
   )
 
   it.effect("reports FAILED without successful finish", () =>

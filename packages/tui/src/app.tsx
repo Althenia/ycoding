@@ -768,9 +768,32 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
         suggested: !connected(),
         slash: { name: "connect" },
         run: () => {
+          const saveEndpoint = (result: Parameters<typeof saveCustomEndpoint>[1]) => {
+            dialog.clear()
+            const current = data.location.default()
+            const locationRef = { directory: current.directory, workspace: current.workspaceID }
+            void saveCustomEndpoint(Global.Path.config, result, {
+              syncRegistration: () => data.location.integration.sync(),
+              registered: (providerID) => (data.location.integration.list() ?? []).some(
+                (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),
+              ),
+              connectKey: ({ integrationID, key, label }) => client.api.integration.connect.key({ integrationID, location: locationRef, key, label }),
+              activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),
+              refresh: () => Promise.all([
+                data.location.integration.sync(), data.location.model.sync(), data.location.provider.sync(),
+              ]),
+            })
+              .then(({ credentialConnected }) => toast.show({ variant: "success", message: credentialConnected
+                ? "Endpoint saved and credential profile connected" : "Endpoint saved to YCoding config",
+              }))
+              .catch(toast.error)
+          }
           dialog.replace(() => (
             <DialogIntegration
               onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
+              onRunpodEndpoint={() => dialog.replace(() => (
+                <DialogCustomEndpoint kind="runpod" onComplete={saveEndpoint} />
+              ))}
               onCustomEndpoint={() => dialog.replace(() => (
                 <DialogCustomEndpoint
                   providerOptions={(data.location.integration.list() ?? []).map((integration) => ({
@@ -780,34 +803,7 @@ function App(props: { pair?: DialogPairCredentials; started: number }) {
                       ? [{ id: connection.id, label: connection.label, active: connection.active }]
                       : []),
                   }))}
-                  onComplete={(result) => {
-                    dialog.clear()
-                    const current = data.location.default()
-                    const locationRef = { directory: current.directory, workspace: current.workspaceID }
-                    void saveCustomEndpoint(Global.Path.config, result, {
-                      syncRegistration: () => data.location.integration.sync(),
-                      registered: (providerID) => (data.location.integration.list() ?? []).some(
-                        (integration) => integration.id === providerID && integration.methods.some((method) => method.type === "key"),
-                      ),
-                      connectKey: ({ integrationID, key, label }) => client.api.integration.connect.key({
-                        integrationID,
-                        location: locationRef,
-                        key,
-                        label,
-                      }),
-                      activate: (credentialID) => client.api.credential.activate({ credentialID, location: locationRef }),
-                      refresh: () => Promise.all([
-                        data.location.integration.sync(),
-                        data.location.model.sync(),
-                        data.location.provider.sync(),
-                      ]),
-                    })
-                      .then(({ credentialConnected }) => toast.show({ variant: "success", message: credentialConnected
-                        ? "Custom endpoint saved and credential profile connected"
-                        : "Custom endpoint saved to YCoding config",
-                      }))
-                      .catch(toast.error)
-                  }}
+                  onComplete={saveEndpoint}
                   onCancel={() => dialog.clear()}
                 />
               ))}

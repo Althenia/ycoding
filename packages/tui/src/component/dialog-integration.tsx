@@ -59,7 +59,7 @@ export function connectionSummary(integration: IntegrationInfo) {
     .join(", ")
 }
 
-export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void } = {}) {
+export function DialogIntegration(props: { onConnected?: OnIntegrationConnected; onCustomEndpoint?: () => void; onRunpodEndpoint?: () => void } = {}) {
   const data = useData()
   const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
@@ -91,7 +91,13 @@ export function DialogIntegration(props: { onConnected?: OnIntegrationConnected;
       }
     })
     if (!props.onCustomEndpoint) return integrations
-    return [...integrations, {
+    return [...integrations, ...(props.onRunpodEndpoint ? [{
+      title: "Runpod Serverless endpoint",
+      value: "runpod-endpoint",
+      description: "Connect a vLLM or Ollama Jobs endpoint",
+      category: "Services",
+      onSelect: props.onRunpodEndpoint,
+    }] : []), {
       title: "Custom OpenAI-compatible endpoint",
       value: "custom-openai-endpoint",
       description: "Configure an OpenAI-compatible provider",

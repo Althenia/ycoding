@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { parse } from "jsonc-parser"
@@ -109,4 +109,29 @@ test("merges only explicitly set model fields into an existing model", async () 
   const result = JSON.parse(await readFile(path.join(dir, "ycoding.json"), "utf8"))
   expect(result.providers.custom.models.model).toEqual({ name: "New name", family: "Old family", api: "responses", disabled: true, package: "kept" })
   expect(result.providers.custom.models["new-model"]).toEqual({ family: "reasoning", api: "responses", disabled: false })
+})
+
+test("writes separate Runpod Jobs endpoints and their served model IDs", async () => {
+  const dir = await directory()
+  await writeCustomEndpoint(dir, { baseURL: "https://api.runpod.ai/v2/ollama123", api: "chat", worker: "ollama", provider: "runpod-ollama", models: [{ id: "ollama-model" }] })
+  await writeCustomEndpoint(dir, { baseURL: "https://api.runpod.ai/v2/vllm456", api: "chat", worker: "vllm", provider: "runpod-vllm", models: [{ id: "my-vllm", modelID: "org/served-model", tools: true }] })
+  const providers = parse(await readFile(path.join(dir, "ycoding.json"), "utf8")).providers
+  expect(providers["runpod-ollama"]).toMatchObject({ package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "ollama", baseURL: "https://api.runpod.ai/v2/ollama123" }, models: { "ollama-model": {} } })
+  expect(providers["runpod-vllm"]).toMatchObject({ package: "@ycoding-ai/ai/providers/runpod", settings: { worker: "vllm", baseURL: "https://api.runpod.ai/v2/vllm456" }, models: { "my-vllm": { modelID: "org/served-model", capabilities: { tools: true } } } })
+})
+
+test("rejects a Runpod URL outside the Jobs endpoint root before writing credentials or config", async () => {
+  const dir = await directory()
+  await expect(writeCustomEndpoint(dir, { baseURL: "https://other.example/v2/endpoint", api: "chat", worker: "vllm" }))
+    .rejects.toThrow("Runpod Jobs endpoint")
+  await expect(access(path.join(dir, "ycoding.json"))).rejects.toMatchObject({ code: "ENOENT" })
+})
+
+test("does not replace an unrelated provider with a Runpod endpoint", async () => {
+  const dir = await directory()
+  const original = JSON.stringify({ providers: { shared: { package: "aisdk:@ai-sdk/openai-compatible" } } })
+  await writeFile(path.join(dir, "ycoding.json"), original)
+  await expect(writeCustomEndpoint(dir, { baseURL: "https://api.runpod.ai/v2/endpoint", api: "chat", worker: "vllm", provider: "shared" }))
+    .rejects.toThrow("different provider package")
+  expect(await readFile(path.join(dir, "ycoding.json"), "utf8")).toBe(original)
 })

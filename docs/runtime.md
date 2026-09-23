@@ -468,6 +468,13 @@ Caching is split into distinct concerns:
 - TUI diagnostics;
 - project artifact reuse, which is not a provider prompt cache.
 
+Runpod Jobs requests through the native vLLM/Ollama routes retain the ordered
+model-visible prompt but send no OpenAI prompt-cache controls. vLLM prefix
+caching is worker-owned; its cache-read tokens are reported only when the
+worker returns `usage.prompt_tokens_details.cached_tokens`. An absent count
+remains unreported. Ollama's model storage and Runpod's model-download caching
+do not imply prompt-cache telemetry.
+
 ### OpenAI
 
 For GPT-5.6 and later, direct public OpenAI Responses lowering supports `prompt_cache_options` and explicit `prompt_cache_breakpoint` fields on system, user, and local tool-result input blocks; assistant replay always remains unmarked `output_text`. Auto mode combines explicit stable-prefix markers with OpenAI's implicit latest-message marker; explicit mode disables the managed marker. Pre-5.6 public models use the compatible retention field. ChatGPT Codex requests are key-only for every model and emit no `prompt_cache_breakpoint`, `prompt_cache_options`, or `prompt_cache_retention`. Their cache, thread, and client-request identities use the stable prompt-cache key; the explicitly selected WebSocket route also uses it for process-local socket affinity. Request-shape tests do not establish live Codex reuse, which remains provider-controlled without a hit-rate guarantee. Direct OpenAI is Responses-only; OpenAI-compatible Chat remains available only for configured third-party deployments. Model family and route capability are gated independently because sending the wrong cache field can be rejected by the provider.

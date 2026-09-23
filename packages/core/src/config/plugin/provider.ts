@@ -172,7 +172,7 @@ export const Plugin = define({
         ),
       ))
       const compatible = new Set([...packages].flatMap(([id, name]) =>
-        name === "aisdk:@ai-sdk/openai-compatible" ? [id] : [],
+        name === "aisdk:@ai-sdk/openai-compatible" || name === "@ycoding-ai/ai/providers/runpod" ? [id] : [],
       ))
       const configuredIntegrations = new Set(
         [...compatible, ...files.flatMap((file) =>
