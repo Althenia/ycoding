@@ -51,6 +51,36 @@ const model = (packageName: string | undefined, options: ModelOptions = {}) =>
     limit: { context: 100, output: 20 },
   });
 
+describe("Runpod package resolution", () => {
+  it.effect("selects the native runsync route without using OpenAI-compatible chat", () =>
+    Effect.gen(function* () {
+      const selected = yield* SessionRunnerModel.fromCatalogModel(model("@ycoding-ai/ai/providers/runpod", {
+        settings: { worker: "ollama", baseURL: "https://api.runpod.ai/v2/fixture", apiKey: "fixture-key" },
+        body: {},
+      }))
+      expect(selected.route.id).toBe("runpod-ollama")
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, prompt: "Hello" }))
+      expect(prepared.body).toMatchObject({ input: { messages: [{ role: "user", content: "Hello" }], stream: false } })
+    }),
+  )
+
+  it.effect("selects native vLLM from the same package with an explicit worker setting", () =>
+    Effect.gen(function* () {
+      const selected = yield* SessionRunnerModel.fromCatalogModel(model("@ycoding-ai/ai/providers/runpod", {
+        settings: { worker: "vllm", baseURL: "https://api.runpod.ai/v2/fixture", apiKey: "fixture-key" }, body: {},
+      }))
+      expect(selected.route.id).toBe("runpod-vllm")
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, prompt: "Hello", tools: [
+        { name: "lookup", description: "Lookup", inputSchema: { type: "object" } },
+      ] }))
+      expect(prepared.body).toMatchObject({ input: { route: "/v1/chat/completions", method: "POST", body: {
+        model: "api-test-model", messages: [{ role: "user", content: "Hello" }], stream: false,
+        tools: [{ type: "function", function: { name: "lookup" } }],
+      } } })
+    }),
+  )
+})
+
 const sessionInfo = (id: string, daybreak?: SessionV2.Info["daybreak"]) =>
   SessionV2.Info.make({
     id: SessionV2.ID.make(id),

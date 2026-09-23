@@ -1,6 +1,7 @@
 export * as ConfigProviderPlugin from "./provider"
 
 import { define } from "@ycoding-ai/plugin/effect/plugin"
+import type { IntegrationDomain } from "@ycoding-ai/plugin/effect/integration"
 import { Money } from "@ycoding-ai/schema/money"
 import { Effect, Stream } from "effect"
 import { Config } from "../../config"
@@ -77,7 +78,11 @@ function parseModels(value: unknown): DiscoveredModel[] {
   })
 }
 
-const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (entries: readonly Config.Entry[]) {
+const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (
+  entries: readonly Config.Entry[],
+  connections: IntegrationDomain["connection"],
+  selectedID?: string,
+) {
   const configured = new Map<
     string,
     { settings: Record<string, unknown>; headers: Record<string, string>; source?: string }
@@ -95,24 +100,41 @@ const discover = Effect.fn("ConfigProviderPlugin.discover")(function* (entries: 
   }
   const result = new Map<string, DiscoveredModel[]>()
   yield* Effect.forEach(
-    [...configured.entries()].filter(([, provider]) => provider.source === "openai-models"),
+    [...configured.entries()].filter(([id, provider]) =>
+      provider.source === "openai-models" && (selectedID === undefined || id === selectedID)),
     ([id, provider]) =>
-      Effect.tryPromise({
-        try: async () => {
-          const baseURL = provider.settings.baseURL
-          if (typeof baseURL !== "string" || !baseURL) throw new Error("provider baseURL is required")
-          const headers = new Headers(provider.headers)
-          const apiKey = provider.settings.apiKey
-          if (!headers.has("authorization") && typeof apiKey === "string" && apiKey)
-            headers.set("authorization", `Bearer ${apiKey}`)
-          const response = await fetch(`${baseURL.replace(/\/$/, "")}/models`, {
-            headers,
-            signal: AbortSignal.timeout(5_000),
-          })
-          if (!response.ok) throw new Error(`model discovery failed with HTTP ${response.status}`)
-          result.set(id, parseModels(await response.json()))
-        },
-        catch: () => new Error("OpenAI model discovery failed"),
+      Effect.gen(function* () {
+        const connection = yield* connections.active(id)
+        const credential = connection ? yield* connections.resolve(connection) : undefined
+        const managed = connection?.type === "credential"
+        yield* Effect.tryPromise({
+          try: async () => {
+            const baseURL = provider.settings.baseURL
+            if (typeof baseURL !== "string" || !baseURL) throw new Error("provider baseURL is required")
+            const endpoint = `${baseURL.replace(/\/$/, "")}/models`
+            if (managed) {
+              const url = new URL(endpoint)
+              if (url.username || url.password) throw new Error("model discovery URL cannot contain credentials")
+              if (url.protocol !== "https:" &&
+                !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))
+                throw new Error("managed model discovery requires HTTPS or local HTTP")
+            }
+            const headers = new Headers(provider.headers)
+            const apiKey = provider.settings.apiKey
+            const selectedKey = credential?.type === "key" ? credential.key : credential?.access
+            if (selectedKey) headers.set("authorization", `Bearer ${selectedKey}`)
+            else if (!headers.has("authorization") && typeof apiKey === "string" && apiKey)
+              headers.set("authorization", `Bearer ${apiKey}`)
+            const response = await fetch(endpoint, {
+              headers,
+              ...(managed ? { redirect: "manual" as const } : {}),
+              signal: AbortSignal.timeout(5_000),
+            })
+            if (!response.ok) throw new Error(`model discovery failed with HTTP ${response.status}`)
+            result.set(id, parseModels(await response.json()))
+          },
+          catch: () => new Error("OpenAI model discovery failed"),
+        })
       }).pipe(
         Effect.catch(() =>
           Effect.logWarning("OpenAI model discovery failed", { providerID: id }).pipe(Effect.asVoid),
@@ -138,18 +160,26 @@ export const Plugin = define({
       set entries(value: readonly Config.Entry[]) {
         sharedEntries = value
       },
-      discovered: yield* discover(initial),
+      discovered: yield* discover(initial, ctx.integration.connection),
     }
     // Ensure this location starts with latest global entries (covers subagent locations created after a config change)
     loaded.entries = initial
     yield* ctx.integration.transform((integrations) => {
       const files = loaded.entries.filter((entry): entry is Config.Document => entry.type === "document")
+      const packages = new Map(files.flatMap((file) =>
+        Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
+          provider.package === undefined ? [] : [[id, provider.package] as const],
+        ),
+      ))
+      const compatible = new Set([...packages].flatMap(([id, name]) =>
+        name === "aisdk:@ai-sdk/openai-compatible" ? [id] : [],
+      ))
       const configuredIntegrations = new Set(
-        files.flatMap((file) =>
+        [...compatible, ...files.flatMap((file) =>
           Object.entries(file.info.providers ?? {}).flatMap(([id, provider]) =>
             provider.env === undefined ? [] : [id],
           ),
-        ),
+        )],
       )
       for (const file of files) {
         for (const [id, item] of Object.entries(file.info.providers ?? {})) {
@@ -163,6 +193,10 @@ export const Plugin = define({
               integrationID,
               method: { type: "env", names: [...item.env] },
             })
+          }
+          if (compatible.has(id) &&
+            !integrations.method.list(integrationID).some((method) => method.type === "key")) {
+            integrations.method.update({ integrationID, method: { type: "key", label: "API key" } })
           }
         }
       }
@@ -276,22 +310,33 @@ export const Plugin = define({
       }
     })
     yield* ctx.event.subscribe().pipe(
-      Stream.filter((event) => event.type === "config.updated"),
-      Stream.runForEach(() =>
-        config.entries().pipe(
-          Effect.tap((entries) =>
-            discover(entries).pipe(
-              Effect.tap((discovered) =>
-                Effect.sync(() => {
-                  loaded.entries = entries
-                  loaded.discovered = discovered
-                }),
+      Stream.filter((event) => event.type === "config.updated" ||
+        (event.type === "integration.connection.updated" && loaded.entries.some((entry) =>
+          entry.type === "document" && entry.info.providers?.[event.data.integrationID]?.catalog?.source === "openai-models"))),
+      Stream.runForEach((event) =>
+        event.type === "integration.connection.updated"
+          ? discover(loaded.entries, ctx.integration.connection, event.data.integrationID).pipe(
+              Effect.tap((discovered) => Effect.sync(() => {
+                loaded.discovered.delete(event.data.integrationID)
+                const models = discovered.get(event.data.integrationID)
+                if (models) loaded.discovered.set(event.data.integrationID, models)
+              })),
+              Effect.andThen(ctx.catalog.reload()),
+            )
+          : config.entries().pipe(
+              Effect.tap((entries) =>
+                discover(entries, ctx.integration.connection).pipe(
+                  Effect.tap((discovered) =>
+                    Effect.sync(() => {
+                      loaded.entries = entries
+                      loaded.discovered = discovered
+                    }),
+                  ),
+                ),
               ),
+              Effect.andThen(ctx.integration.reload()),
+              Effect.andThen(ctx.catalog.reload()),
             ),
-          ),
-          Effect.andThen(ctx.integration.reload()),
-          Effect.andThen(ctx.catalog.reload()),
-        ),
       ),
       Effect.forkScoped({ startImmediately: true }),
     )

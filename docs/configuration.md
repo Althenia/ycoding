@@ -843,6 +843,73 @@ catalog metadata for that provider model. This lets self-hosted OpenAI-compatibl
 report their real context/input/output limits and named request variants without duplicating
 every model in YCoding configuration.
 
+### Runpod Serverless Jobs workers
+
+For Runpod Serverless Jobs endpoints running `runpod-workers/worker-ollama` or
+`runpod-workers/worker-vllm`, select `@ycoding-ai/ai/providers/runpod` and
+set `settings.worker` explicitly to `ollama` or `vllm`. Set `settings.baseURL` to the
+endpoint root `https://api.runpod.ai/v2/<ENDPOINT_ID>` (not `/runsync`, `/openai/v1`,
+or a load-balancer URL). Supply `RUNPOD_API_KEY` in the process environment or
+configure `settings.apiKey`. Example for the Ollama worker:
+
+```jsonc
+{
+  "providers": {
+    "runpod": {
+      "package": "@ycoding-ai/ai/providers/runpod",
+      "settings": { "worker": "ollama", "baseURL": "https://api.runpod.ai/v2/<ENDPOINT_ID>" },
+      "models": {
+        "worker": {
+          "name": "Ollama worker",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+          "limit": { "context": 32768, "output": 4096 }
+        }
+      }
+    }
+  }
+}
+```
+
+For the vLLM worker, use the same package and endpoint-root format:
+
+```jsonc
+{
+  "providers": {
+    "runpod-vllm": {
+      "package": "@ycoding-ai/ai/providers/runpod",
+      "settings": { "worker": "vllm", "baseURL": "https://api.runpod.ai/v2/<ENDPOINT_ID>" },
+      "models": {
+        "worker": {
+          "modelID": "<SERVED_MODEL_NAME>",
+          "name": "vLLM worker",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] }
+        }
+      }
+    }
+  }
+}
+```
+
+Set `modelID` to the model name served by vLLM and set `capabilities.tools`
+according to the deployed model. Tool calling requires the worker's vLLM server
+to be configured for the model's tool format, including `ENABLE_AUTO_TOOL_CHOICE`
+and an appropriate `TOOL_CALL_PARSER` for automatic tool calls. Set model
+context/output limits to the deployed model's actual limits; the Ollama example
+numbers are illustrative, not discovered by the adapter.
+
+Both worker types send non-streaming text chat through `POST /runsync` and yield
+output only when the job completes. Ollama uses `input.messages` and `input.options`,
+supports automatic function tools when the deployed model supports them, and uses
+the worker-configured `HF_MODEL`/`OLLAMA_MODEL`. vLLM uses its generic
+`input.route: "/v1/chat/completions"` proxy and an OpenAI Chat request body:
+model name, messages, tool definitions, tool-call history, tool results, and
+generation options. It parses vLLM's non-streaming Chat completion response and
+normalizes tool calls and usage. Ollama does not support required/named tool choice;
+structured output, media, and streaming are unsupported in this adapter. An unfinished
+`/runsync` job (including a Runpod synchronous timeout) is reported as a provider
+error; the adapter does not poll `/status` or automatically replay it. Allow
+enough endpoint execution time for cold starts.
+
 OpenCode Zen and OpenCode Go remain external provider identities. Their provider IDs, URLs, credentials, and model selectors are not renamed to YCoding.
 
 ## Formatter, LSP, attachment, and output settings

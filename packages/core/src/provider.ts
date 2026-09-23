@@ -43,6 +43,7 @@ const builtins = new Map<string, () => Promise<unknown>>([
   ["@ycoding-ai/ai/providers/openai/responses", () => import("@ycoding-ai/ai/providers/openai/responses")],
   ["@ycoding-ai/ai/providers/openai-compatible", () => import("@ycoding-ai/ai/providers/openai-compatible")],
   ["@ycoding-ai/ai/providers/openrouter", () => import("@ycoding-ai/ai/providers/openrouter")],
+  ["@ycoding-ai/ai/providers/runpod", () => import("@ycoding-ai/ai/providers/runpod")],
   ["@ycoding-ai/ai/providers/xai", () => import("@ycoding-ai/ai/providers/xai")],
 ])
 
