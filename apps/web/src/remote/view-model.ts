@@ -203,6 +203,12 @@ export type SessionChip = {
   readonly tone: "neutral" | "attention" | "success"
 }
 
+export function sessionProjectLabel(session: { readonly projectID?: string; readonly directory?: string }): string {
+  const directory = session.directory?.replace(/[\\/]+$/, "")
+  if (directory !== undefined && directory.length > 0) return directory.split(/[\\/]/).at(-1) ?? directory
+  return session.projectID ?? "Not reported"
+}
+
 export function createUnavailableRemoteViewModel(
   reason: RemoteUnavailableReason = "not-configured",
 ): RemoteViewModel {
@@ -282,8 +288,6 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
 
   if (session.guardrailsEnforced === true) chips.push({ label: "Guardrails enforced", tone: "neutral" })
   if (session.guardrailsEnforced === false) chips.push({ label: "Guardrails auto", tone: "attention" })
-  if (session.agent) chips.push({ label: session.agent, tone: "neutral" })
-  if (session.model) chips.push({ label: session.model, tone: "neutral" })
   return chips
 }
 

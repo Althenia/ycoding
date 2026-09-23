@@ -1,9 +1,7 @@
 /**
  * YCoding design tokens.
  *
- * The executable form of `.aphrodite/redesign-audit/specs/tokens.toon`: names are
- * the interface, and every value below is the one the contrast, layout, and motion
- * checks were measured against.
+ * The executable design-system tokens in `.aphrodite/redesign-audit/specs/tokens.toon`.
  *
  * Two layers, deliberately kept apart:
  *

@@ -75,7 +75,8 @@ describe("built web output", () => {
     const response = await fetch(`${serverOrigin}/sw.js`)
     expect(response.status).toBe(200)
     const source = await response.text()
-    expect(source).toContain("ycoding-web-shell-v1")
+    expect(source).toContain("ycoding-web-shell-v2")
+    expect(source).not.toContain("ycoding-web-shell-v1")
     // The blocked-path policy ships with the worker, so it skips API, auth, and socket traffic.
     expect(source).toContain('"/api"')
     expect(source).toContain('"/auth"')
@@ -108,6 +109,8 @@ describe("built web output", () => {
     expect(css).toMatch(/\[data-theme=?["']?dark["']?\]/)
     // Mobile is the default composition: a single column until the tablet query.
     expect(css).toContain("grid-template-columns:minmax(0,1fr)")
-    expect(css).toContain(".workspace__rail,.workspace__activity{display:none")
+    expect(css).toContain(".workspace__rail{display:none")
+    expect(css).toContain(".app--conversation.app--selected.workspace{grid-template-columns:minmax(220px,256px)minmax(0,1fr)")
+    expect(css).not.toContain(".workspace__activity")
   })
 })

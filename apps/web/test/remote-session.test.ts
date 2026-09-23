@@ -189,7 +189,13 @@ describe("remote store integration", () => {
         const limit = typeof request.input?.limit === "number" ? request.input.limit : 200
         const data = Array.from({ length: Math.min(limit, count - offset) }, (_, index) => {
           const value = offset + index
-          return { id: `ses_${value}`, title: `Session ${value}`, time: { created: value, updated: value } }
+          return {
+            id: `ses_${value}`,
+            title: `Session ${value}`,
+            projectID: value % 2 === 0 ? "prj_api" : "prj_web",
+            location: { directory: value % 2 === 0 ? "/work/api" : "/work/web" },
+            time: { created: value, updated: value },
+          }
         })
         const next = offset + data.length < count ? String(offset + data.length) : undefined
         return { ok: true, value: { data, cursor: { next } } }
@@ -205,6 +211,11 @@ describe("remote store integration", () => {
       await waitFor(() => store.state().sessions.length === count)
       expect(store.state().sessions[0]?.id).toBe("ses_0")
       expect(store.state().sessions.at(-1)?.id).toBe("ses_1204")
+      expect(store.state().sessions.slice(0, 2)).toMatchObject([
+        { projectID: "prj_api", directory: "/work/api" },
+        { projectID: "prj_web", directory: "/work/web" },
+      ])
+      expect(store.state().sessions.at(-1)).toMatchObject({ projectID: "prj_api", directory: "/work/api" })
       expect(relay.requests.filter((request) => request.operation === "session.list")).toHaveLength(7)
     } finally {
       store.dispose()
@@ -318,20 +329,29 @@ describe("remote store integration", () => {
     }
   })
 
-  test("keeps an open device connected when its session list fails for another relay error", async () => {
+  test("reports a failed session list instead of presenting a connected empty backend", async () => {
+    let lists = 0
     const test = await harness({
-      handler: (request) =>
-        request.operation === "session.list"
-          ? { ok: false, code: "internal_error", message: "the agent rejected this read" }
-          : "default",
+      handler: (request) => {
+        if (request.operation !== "session.list") return "default"
+        lists += 1
+        return lists === 1 ? { ok: false, code: "internal_error", message: "the agent rejected this read" } : "default"
+      },
     })
     try {
       await test.store.load()
       await test.runUntil(() => test.store.state().transport.kind === "open")
       await Bun.sleep(30)
 
-      expect(test.store.state().connection).toEqual({ kind: "connected", deviceName: "dev_1" })
+      expect(test.store.state().connection).toEqual({
+        kind: "error",
+        message: "Session list: the agent rejected this read",
+      })
       expect(test.store.state().sessions).toEqual([])
+
+      test.store.connect("dev_1")
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+      expect(test.store.state().connection).toEqual({ kind: "connected", deviceName: "dev_1" })
     } finally {
       await test.stop()
     }
@@ -1443,6 +1463,59 @@ describe("remote store integration", () => {
       expect(test.store.state().view?.requests).toHaveLength(0)
     } finally {
       await test.stop()
+    }
+  })
+
+  test("reconciles live permission, hard-review, and Form changes over pending list reads", async () => {
+    const form = {
+      id: "frm_live",
+      sessionID: "ses_a",
+      title: "Question",
+      fields: [{ key: "q0", type: "string", title: "Which?" }],
+    }
+    const permission = { id: "per_live", action: "edit", resources: ["src/**"] }
+    const guardrail = {
+      id: "grq_live", sessionID: "ses_a", rootSessionID: "ses_a",
+      action: "rm -rf build", resources: ["build"], reason: "Human decision", hardReview: true,
+    }
+    for (const settling of [false, true]) {
+      let release: (() => void) | undefined
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      const test = await harness({
+        ...(settling ? { permissions: [permission], guardrailRequests: [guardrail], forms: [form] } : {}),
+        handler: async (request) => {
+          if (request.operation !== "session.form.list") return "default" as const
+          await gate
+          return "default" as const
+        },
+      })
+      try {
+        await test.store.load()
+        await waitFor(() => test.store.state().sessions.length > 0)
+        const selected = test.store.selectSession("ses_a")
+        await waitFor(() => test.relay.requests.some((request) => request.operation === "session.form.list"))
+        if (settling) {
+          test.relay.pushEvent("ses_a", { type: "permission.v2.replied", data: { requestID: permission.id, reply: "reject" } })
+          test.relay.pushEvent("ses_a", { type: "guardrail.replied", data: { requestID: guardrail.id, sessionID: "ses_a", rootSessionID: "ses_a", reply: "reject" } })
+          test.relay.pushEvent("ses_a", { type: "form.cancelled", data: { id: form.id, sessionID: "ses_a" } })
+        } else {
+          test.relay.pushEvent("ses_a", { type: "permission.v2.asked", data: permission })
+          test.relay.pushEvent("ses_a", { type: "guardrail.asked", data: guardrail })
+          test.relay.pushEvent("ses_a", { type: "form.created", data: { form } })
+        }
+        await test.flush()
+        const expected = settling ? [] : [permission.id, guardrail.id, form.id]
+        expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(expected)
+        release?.()
+        await selected
+        expect(test.store.state().view?.requests.map((request) => request.id)).toEqual(expected)
+        if (!settling) {
+          expect(test.store.state().view?.requests.find((request) => request.id === guardrail.id)).toMatchObject({ hardReview: true })
+        }
+      } finally {
+        release?.()
+        await test.stop()
+      }
     }
   })
 

@@ -20,6 +20,7 @@ import {
   connectionBanner,
   deviceAvailabilityView,
   sessionAvailabilityView,
+  sessionProjectLabel,
   sessionStateChips,
   summarizeConnection,
   type ConnectionTone,
@@ -36,7 +37,6 @@ const views = ["/remote", "/remote/sessions", "/remote/activity", "/remote/setti
 
 export type RemoteView = (typeof views)[number]
 
-const sessionsSupport = "All sessions on the connected machine."
 const settingsSupport = "Account, devices, appearance, autonomy, and notifications for this workspace."
 
 export function RemoteShell(props: { readonly path: string }): JSX.Element {
@@ -47,35 +47,34 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const state = () => remote.state()
   const view: RemoteView = views.find((entry) => entry === props.path) ?? "/remote"
   const activeSession = () => state().sessions.find((session) => session.id === state().activeSessionID)
-  const activeChips = (): readonly SessionChip[] => {
-    const session = activeSession()
-    return session === undefined ? [] : sessionChips(session, state().view)
-  }
-  const sessionRow = () => (showsSessionRow(view, activeSession() !== undefined) ? activeSession()?.title : undefined)
+  const selected = () => activeSession() !== undefined
+  const composition = () => remoteSurfaceComposition(view, selected())
+  const viewClass = view === "/remote" ? "conversation" : view.slice("/remote/".length)
 
   return (
-    <div class="app">
+    <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}`}>
       <RemoteHeader
         navOpen={navOpen()}
         activityOpen={activityOpen()}
         onOpenNav={() => setNavOpen(true)}
         onOpenActivity={() => setActivityOpen(true)}
-        sessionTitle={sessionRow()}
-        chips={activeChips()}
+        view={view}
       />
 
       <ConnectionStrip />
 
       <div class="workspace">
-        <aside class="workspace__rail" aria-label="Sessions">
-          <SessionPanel />
-        </aside>
+        <Show when={composition().showSessionRail}>
+          <aside class="workspace__rail" aria-label="Sessions">
+            <SessionPanel />
+          </aside>
+        </Show>
 
         <div class="workspace__main">
           <div class="workspace__scroll">
             <Notices />
             <Show when={view === "/remote"}>
-              <ConversationView title={activeSession()?.title ?? noSessionTitle} chips={activeChips()} />
+              <ConversationView title={activeSession()?.title ?? noSessionTitle} />
             </Show>
             <Show when={view === "/remote/sessions"}>
               <SessionsPage />
@@ -87,7 +86,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
               <SettingsPage />
             </Show>
           </div>
-          <Show when={view === "/remote"}>
+          <Show when={composition().showComposer}>
             <Composer
               sessionID={state().activeSessionID}
               running={state().view?.status === "running"}
@@ -96,9 +95,6 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
           </Show>
         </div>
 
-        <aside class="workspace__activity" aria-label="Activity and requests">
-          <ActivityPanel />
-        </aside>
       </div>
 
       <BottomNav view={view} />
@@ -118,14 +114,10 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   )
 }
 
-/**
- * A selected session keeps its own row under the bar row on the surfaces that carry the
- * workspace, so the session title and its state chips never compete with the device
- * control for one line. Settings names itself with the page head alone, and a surface
- * without a selected session renders the bar row alone.
- */
-export function showsSessionRow(path: string, hasSession: boolean): boolean {
-  return hasSession && path !== "/remote/settings"
+/** The rail and composer belong only to an active conversation, never every remote screen. */
+export function remoteSurfaceComposition(path: RemoteView, hasSession: boolean) {
+  const selectedConversation = path === "/remote" && hasSession
+  return { showSessionRail: selectedConversation, showComposer: selectedConversation }
 }
 
 export type ConnectionStripView = {
@@ -194,7 +186,7 @@ export function awaitsApproval(view: SessionView | undefined, sessionID: string)
 export function sessionChips(session: SessionInfoView, view: SessionView | undefined): readonly SessionChip[] {
   const chips = sessionStateChips(summarizeSession(session, view))
   if (!awaitsApproval(view, session.id)) return chips
-  return [...chips, { label: "Waiting for approval", tone: "attention" }]
+  return [{ label: "Waiting for approval", tone: "attention" }, ...chips]
 }
 
 /**
@@ -309,8 +301,7 @@ function RemoteHeader(props: {
   readonly activityOpen: boolean
   readonly onOpenNav: () => void
   readonly onOpenActivity: () => void
-  readonly sessionTitle?: string
-  readonly chips: readonly SessionChip[]
+  readonly view: RemoteView
 }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
@@ -323,7 +314,7 @@ function RemoteHeader(props: {
     )
   const selectableDevices = () => state().devices.filter((device) => device.status === "active" && device.online)
   return (
-    <header class="app-header">
+    <header class={`app-header app-header--${props.view === "/remote" ? "conversation" : props.view.slice("/remote/".length)}`}>
       <div class="app-header__inner">
         <button
           type="button"
@@ -338,16 +329,16 @@ function RemoteHeader(props: {
           <img class="brand__mark" src="/brand/ycoding-mark.svg" alt="YCoding" width={28} height={28} />
         </Link>
         <nav class="remote-nav" aria-label="Remote workspace">
-          <Link href="/remote/sessions" class="remote-nav__link">Sessions</Link>
-          <Link href="/remote" class="remote-nav__link">Conversation</Link>
-          <Link href="/remote/activity" class="remote-nav__link">Activity</Link>
-          <Link href="/remote/settings" class="remote-nav__link">Settings</Link>
+          <Link href="/remote/sessions" class={`remote-nav__link${props.view === "/remote/sessions" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/sessions" ? "page" : undefined}>Sessions</Link>
+          <Link href="/remote" class={`remote-nav__link${props.view === "/remote" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote" ? "page" : undefined}>Conversation</Link>
+          <Link href="/remote/activity" class={`remote-nav__link${props.view === "/remote/activity" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/activity" ? "page" : undefined}>Activity</Link>
+          <Link href="/remote/settings" class={`remote-nav__link${props.view === "/remote/settings" ? " remote-nav__link--active" : ""}`} ariaCurrent={props.view === "/remote/settings" ? "page" : undefined}>Settings</Link>
         </nav>
         <div class="remote-device">
           <CustomSelect
             class="remote-device__select"
             label="Device"
-            sheetTitle="Select active device"
+            sheetTitle="Select Active Device"
             value={state().activeDeviceID}
             placeholder={devices().placeholder}
             disabled={!devices().selectable}
@@ -382,16 +373,6 @@ function RemoteHeader(props: {
           </Link>
         </div>
       </div>
-      <Show when={props.sessionTitle !== undefined}>
-        <div class="remote-title">
-          <h1 class="remote-title__text">{props.sessionTitle}</h1>
-          <Show when={props.chips.length > 0}>
-            <div class="remote-title__chips">
-              <For each={props.chips}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
-            </div>
-          </Show>
-        </div>
-      </Show>
     </header>
   )
 }
@@ -404,7 +385,8 @@ function RemoteHeader(props: {
 function Notices(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
-  const unsettled = () => state().mutations.filter((mutation) => mutation.state === "unknown").length
+  const unsettled = () => state().mutations.filter((mutation) =>
+    mutation.state === "unknown" && mutation.sessionID === state().activeSessionID).length
   return (
     <>
       <Show when={state().notice}>
@@ -423,6 +405,25 @@ function Notices(): JSX.Element {
           </span>
         </p>
       </Show>
+      <For each={state().notifications}>
+        {(notification) => (
+          <div class="notice-strip" role="status">
+            <Icon name="bell" size={16} />
+            <span class="notice-strip__body">
+              <span class="notice-strip__title">{notification.title}</span>
+              <span>{notification.body}</span>
+            </span>
+            <button
+              type="button"
+              class="button button--ghost button--icon notice-strip__dismiss"
+              aria-label={`Dismiss ${notification.title}`}
+              onClick={() => remote.store.dismissNotification(notification.id)}
+            >
+              <Icon name="close" size={16} />
+            </button>
+          </div>
+        )}
+      </For>
     </>
   )
 }
@@ -551,21 +552,38 @@ function SessionRow(props: { readonly session: SessionInfoView; readonly onNavig
       <span class="session-row__body">
         <span class="session-row__title">{props.session.title}</span>
         <span class="session-row__meta">
+          <span title={props.session.directory}>{sessionProjectLabel(props.session)}</span>
           <span class="session-row__status">
-            <For each={chips()}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+            <For each={chips().slice(0, 1)}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
           </span>
-          <Show when={props.session.agent}>
-            <span>{props.session.agent}</span>
-          </Show>
-          <Show when={props.session.modelLabel}>
-            <span>{props.session.modelLabel}</span>
-          </Show>
-          <Show when={props.session.updatedAt > 0}>
-            <span>{new Date(props.session.updatedAt).toLocaleString()}</span>
-          </Show>
         </span>
       </span>
     </button>
+  )
+}
+
+function SessionSummaryRow(props: { readonly session: SessionInfoView }): JSX.Element {
+  const remote = useRemote()
+  const summary = () => summarizeSession(props.session, remote.state().view)
+  const chips = () => sessionChips(props.session, remote.state().view)
+  return (
+    <div class="sessions-table__row" role="row">
+      <span class="sessions-table__title" role="cell">
+        <button type="button" class="sessions-table__select" onClick={() => void remote.store.selectSession(props.session.id)}>
+          {props.session.title}
+        </button>
+      </span>
+      <span class="sessions-table__project" role="cell" title={props.session.directory}>
+        {sessionProjectLabel(props.session)}
+      </span>
+      <span class="sessions-table__status" role="cell">
+        <For each={chips().slice(0, 1)}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
+        <Show when={chips().length === 0}><Chip label="Idle" tone="neutral" /></Show>
+      </span>
+      <span class="sessions-table__updated" role="cell">
+        {summary().updatedAt === undefined ? "Not reported" : new Date(props.session.updatedAt).toLocaleString()}
+      </span>
+    </div>
   )
 }
 
@@ -611,12 +629,13 @@ function NoSessionsState(): JSX.Element {
   )
 }
 
-function ConversationView(props: { readonly title: string; readonly chips: readonly SessionChip[] }): JSX.Element {
+function ConversationView(props: { readonly title: string }): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const view = () => state().view
   const requests = () => view()?.requests ?? []
   const messages = () => view()?.messages ?? []
+  const selectedSession = () => state().sessions.find((session) => session.id === state().activeSessionID)
   const availability = () => state().activeDeviceID === undefined
     ? undefined
     : sessionAvailabilityView(state().connection, state().sessions.length)
@@ -644,17 +663,21 @@ function ConversationView(props: { readonly title: string; readonly chips: reado
         </>
       }
     >
-      <div class="page-head compact-head">
-        <div>
-          <h1 class="page-head__title">{props.title}</h1>
-          <Show when={props.chips.length > 0}>
-            <div class="remote-title__chips" style={{ "margin-block-start": "var(--yc-space-2)" }}>
-              <For each={props.chips}>{(chip) => <Chip label={chip.label} tone={chip.tone} />}</For>
-            </div>
-          </Show>
-        </div>
+      <div class="conversation-breadcrumb" aria-label="Selected workspace and session">
+        <span title={selectedSession()?.directory}>{sessionProjectLabel(selectedSession() ?? {})}</span>
+        <span aria-hidden="true">/</span>
+        <strong>{props.title}</strong>
+        <Show when={selectedSession()}>
+          {(session) => (
+            <span class="conversation-breadcrumb__status">
+              <For each={sessionChips(session(), view()).slice(0, 1)}>
+                {(chip) => <Chip label={chip.label} tone={chip.tone} />}
+              </For>
+            </span>
+          )}
+        </Show>
       </div>
-      <div class="pane">
+      <div class="pane conversation-pane">
         <Show when={requests().length > 0}>
           <div class="requests">
             <RequestCards requests={requests} activeSessionID={state().activeSessionID} />
@@ -712,13 +735,8 @@ function SessionsPage(): JSX.Element {
   const [filter, setFilter] = createSignal<SessionFilter>("all")
   const sessions = () => filterSessions(remote.state().sessions, query(), filter())
   return (
-    <div class="pane">
-      <div class="page-head" style={{ padding: "0 0 var(--yc-space-4)" }}>
-        <div>
-          <h1 class="page-head__title">Sessions</h1>
-          <p class="page-head__support">{sessionsSupport}</p>
-        </div>
-      </div>
+    <div class="pane sessions-page">
+      <h1 class="visually-hidden">Sessions</h1>
       <Show
         when={remote.state().sessions.length > 0}
         fallback={
@@ -727,13 +745,13 @@ function SessionsPage(): JSX.Element {
           </Show>
         }
       >
-        <div class="filter-bar" style={{ padding: "0" }}>
+        <div class="filter-bar">
           <label class="field" style={{ flex: "1" }}>
             <span class="visually-hidden">Filter sessions</span>
             <input
               class="input"
               type="search"
-              placeholder="Filter by title, agent, or model"
+              placeholder="Search sessions…"
               value={query()}
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
@@ -763,8 +781,16 @@ function SessionsPage(): JSX.Element {
             </div>
           }
         >
-          <div class="session-list">
-            <For each={sessions()}>{(session) => <SessionRow session={session} />}</For>
+          <div class="sessions-results">
+            <div class="sessions-table" role="table" aria-label="Sessions">
+              <div class="sessions-table__head" role="row">
+                <span role="columnheader">Title</span>
+                <span role="columnheader">Project</span>
+                <span role="columnheader">Status</span>
+                <span role="columnheader">Updated</span>
+              </div>
+              <For each={sessions()}>{(session) => <SessionSummaryRow session={session} />}</For>
+            </div>
           </div>
         </Show>
       </Show>
@@ -776,12 +802,17 @@ function ActivityPage(): JSX.Element {
   const remote = useRemote()
   const requests = () => remote.state().view?.requests ?? []
   return (
-    <div class="pane">
-      <div class="queue">
+    <div class="pane activity-page">
+      <div class="activity-page__events">
         <div class="queue__head">
-          <h1 class="page-head__title" style={{ "font-size": "var(--yc-size-xl)" }}>
-            Activity
-          </h1>
+          <h1 class="page-head__title">Reported events</h1>
+          <span class="panel__note">Chronological feed</span>
+        </div>
+        <ActivityList />
+      </div>
+      <div class="queue activity-page__decisions">
+        <div class="queue__head">
+          <h2 class="page-head__title">Pending decisions</h2>
           <Show when={requests().length > 0}>
             <span class="queue__count">{requestCount(requests().length)}</span>
           </Show>
@@ -791,8 +822,6 @@ function ActivityPage(): JSX.Element {
           <RequestCards requests={requests} activeSessionID={remote.state().activeSessionID} />
         </Show>
       </div>
-      <h3 style={{ "font-size": "var(--yc-size-md)", "margin-block-start": "var(--yc-space-6)" }}>Reported events</h3>
-      <ActivityList />
     </div>
   )
 }
@@ -866,6 +895,8 @@ function ActivityList(): JSX.Element {
   const remote = useRemote()
   const state = () => remote.state()
   const activity = () => reportedEvents(state().view)
+  const ids = createMemo(() => [...activity()].reverse().map((item) => item.id))
+  const item = (id: string) => activity().find((entry) => entry.id === id)!
   return (
     <Show
       when={state().view !== undefined}
@@ -886,7 +917,7 @@ function ActivityList(): JSX.Element {
         }
       >
         <ul class="activity">
-          <For each={[...activity()].reverse()}>{(item) => <ActivityRow item={item} />}</For>
+          <For each={ids()}>{(id) => <ActivityRow item={() => item(id)} fileChange={() => state().view?.fileChanges.find((change) => id === `file-${change.path}`)} />}</For>
         </ul>
         <p class="panel__note">
           {state().unhandledEvents === 0

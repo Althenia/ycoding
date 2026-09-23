@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import { Portal } from "solid-js/web"
+import { Icon } from "./icon"
 import "./custom-select.css"
 
 export type CustomSelectOption = {
@@ -156,7 +157,7 @@ export function CustomSelect(props: {
         onKeyDown={onKeyDown}
       >
         <span class="custom-select__value">{label()}</span>
-        <span class="custom-select__chevron" aria-hidden="true">⌄</span>
+        <Icon name="chevron-down" size={16} class="custom-select__chevron" />
       </button>
       <Show when={open()}>
         <Portal>

@@ -56,22 +56,28 @@ export function Link(props: {
   readonly children: JSX.Element
   readonly onClick?: () => void
   readonly ariaLabel?: string
+  readonly ariaCurrent?: "page"
   readonly role?: string
   readonly title?: string
 }) {
   const router = useRouter()
   const anchor: string = props.href
+  const navigate = (event: MouseEvent | KeyboardEvent) => {
+    if (anchor.startsWith("http") || anchor.startsWith("mailto:")) return
+    event.preventDefault()
+    props.onClick?.()
+    router.navigate(anchor)
+  }
   return (
     <a
       href={anchor}
       class={props.class}
       title={props.title}
       aria-label={props.ariaLabel}
-      onClick={(event) => {
-        if (anchor.startsWith("http") || anchor.startsWith("mailto:")) return
-        event.preventDefault()
-        props.onClick?.()
-        router.navigate(anchor)
+      aria-current={props.ariaCurrent}
+      onClick={navigate}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") navigate(event)
       }}
     >
       {props.children}

@@ -6,7 +6,7 @@ import { themePreferenceLabel } from "../theme/theme"
 import { shouldShowOfflineNotice, useOnlineStatus } from "./online"
 import { Modal } from "./modal"
 import { Icon } from "./icon"
-import { CodeBlock } from "./docs"
+import { CodeBlock, DocsSearch } from "./docs"
 
 export function BrandMark(props: { readonly compact?: boolean }): JSX.Element {
   return (
@@ -67,7 +67,7 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
       <header class="app-header">
         <div class="container app-header__inner">
           <Link href="/" class="brand">
-            <BrandMark />
+            <BrandMark compact />
           </Link>
           <nav class="nav" aria-label="Primary">
             <Link href="/" class={`nav__link${router.path() === "/" ? " nav__link--active" : ""}`}>
@@ -105,24 +105,44 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
       </header>
 
       <Show when={open()}>
-        <Modal class="overlay--sheet" label="Navigation" onClose={() => setOpen(false)}>
-          <nav class="docs-nav pane" aria-label="Site">
-            <Link href="/" class="docs-nav__link" onClick={() => setOpen(false)}>
-              Home
+        <Modal
+          class="overlay--sheet overlay--primary-nav"
+          label="Navigation"
+          header={
+            <Link href="/" class="primary-nav__brand" onClick={() => setOpen(false)}>
+              <BrandMark compact />
             </Link>
-            <Link href="/docs" class="docs-nav__link" onClick={() => setOpen(false)}>
-              Documentation
-            </Link>
-            <Link href="/changelog" class="docs-nav__link" onClick={() => setOpen(false)}>
-              Changelog
-            </Link>
-            <Link href="/remote" class="docs-nav__link" onClick={() => setOpen(false)}>
-              Remote workspace
-            </Link>
-            <a class="docs-nav__link" href={SITE.repositoryURL} rel="noreferrer noopener" target="_blank">
-              GitHub
-            </a>
-          </nav>
+          }
+          onClose={() => setOpen(false)}
+        >
+          <div class="primary-nav pane">
+            <nav class="docs-nav primary-nav__routes" aria-label="Site">
+              <Link href="/" class={`docs-nav__link${router.path() === "/" ? " docs-nav__link--active" : ""}`} onClick={() => setOpen(false)}>
+                Home
+              </Link>
+              <Link href="/docs" class={`docs-nav__link${inDocs() ? " docs-nav__link--active" : ""}`} onClick={() => setOpen(false)}>
+                Documentation
+              </Link>
+              <Link href="/changelog" class={`docs-nav__link${inChangelog() ? " docs-nav__link--active" : ""}`} onClick={() => setOpen(false)}>
+                Changelog
+              </Link>
+            </nav>
+            <nav class="primary-nav__aux" aria-label="Additional navigation">
+              <Link href="/remote" class="docs-nav__link" onClick={() => setOpen(false)}>
+                Remote workspace
+              </Link>
+              <a class="docs-nav__link" href={SITE.repositoryURL} rel="noreferrer noopener" target="_blank">
+                GitHub
+              </a>
+            </nav>
+            <div class="primary-nav__actions">
+              <Link href="/remote" class="button button--primary" onClick={() => setOpen(false)}>
+                Open workspace
+                <Icon name="chevron-right" size={16} />
+              </Link>
+              <DocsSearch onNavigate={() => setOpen(false)} />
+            </div>
+          </div>
         </Modal>
       </Show>
 
@@ -132,37 +152,29 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
 
       <footer class="site-footer">
         <div class="container">
-          <div class="footer__grid">
-            <div class="footer__brand">
-              <Link href="/" class="brand">
-                <BrandMark />
-              </Link>
-              <p class="footer__note">{SITE.description}</p>
-            </div>
-            <For each={SITE.footerColumns}>
-              {(column) => (
-                <div>
-                  <h2 class="footer__title">{column.title}</h2>
-                  <div class="footer__links">
-                    <For each={column.links}>
-                      {(link) =>
-                        link.href.startsWith("http") ? (
-                          <a href={link.href} rel="noreferrer noopener" target="_blank">
-                            {link.label}
-                          </a>
-                        ) : (
-                          <Link href={link.href}>{link.label}</Link>
-                        )
-                      }
-                    </For>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-          <div class="footer__legal">
+          <div class="footer__compact">
+            <Link href="/" class="brand">
+              <BrandMark compact />
+            </Link>
+            <nav class="footer__links" aria-label="Footer">
+              <Link href="/">Home</Link>
+              <For each={SITE.footerColumns}>
+                {(column) => (
+                  <For each={column.links}>
+                    {(link) =>
+                      link.href.startsWith("http") ? (
+                        <a href={link.href} rel="noreferrer noopener" target="_blank">
+                          {link.label}
+                        </a>
+                      ) : (
+                        <Link href={link.href}>{link.label}</Link>
+                      )
+                    }
+                  </For>
+                )}
+              </For>
+            </nav>
             <span>MIT licensed. Terminal-first, local execution.</span>
-            <span>{SITE.origin.replace("https://", "")}</span>
           </div>
         </div>
       </footer>
@@ -174,7 +186,7 @@ export function LandingPage(): JSX.Element {
   const router = useRouter()
   return (
     <>
-      <section class="hero">
+      <section class="hero hero--compact">
         <div class="container hero__content">
           <h1 class="hero__headline">{SITE.hero.headline}</h1>
           <p class="hero__support">{SITE.hero.support}</p>
@@ -220,16 +232,21 @@ export function LandingPage(): JSX.Element {
 export function NotFoundPage(): JSX.Element {
   return (
     <div class="not-found">
-      <p class="not-found__eyebrow">404</p>
-      <h1>That page does not exist.</h1>
-      <p class="prose">The link may be outdated, or the page may have moved into the documentation.</p>
-      <div class="not-found__actions">
-        <Link href="/docs" class="button button--primary">
-          Browse documentation
-        </Link>
-        <Link href="/" class="button button--secondary">
-          Go home
-        </Link>
+      <div class="not-found__card">
+        <p class="not-found__eyebrow">404 · NOT FOUND</p>
+        <div class="not-found__icon">
+          <Icon name="search" size={28} />
+        </div>
+        <h1>Page not found</h1>
+        <p class="prose">The requested page does not exist or may have moved into the documentation.</p>
+        <div class="not-found__actions">
+          <Link href="/docs" class="button button--primary">
+            Browse documentation
+          </Link>
+          <Link href="/" class="button button--secondary">
+            Go home
+          </Link>
+        </div>
       </div>
     </div>
   )

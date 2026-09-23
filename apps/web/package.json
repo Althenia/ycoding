@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "test": "bun test ./src",
     "test:integration": "bun test ./test",
+    "test:design": "bun test verify/design-contract.integration.test.ts src/styles/tokens.test.ts src/styles/composition.test.ts src/styles/contrast.test.ts src/styles/docs-overflow.test.ts",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {

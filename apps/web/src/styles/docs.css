@@ -216,6 +216,71 @@
   margin-block: var(--yc-space-3) var(--yc-space-6);
 }
 
+.docs--index .docs-article > h1 {
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.docs--article .docs-article > h1 {
+  font-size: 26px;
+  line-height: 32px;
+}
+
+.docs--changelog .docs-article > h1 {
+  font-size: 20px;
+  line-height: 28px;
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .docs--index .docs-article > h1 {
+    font-size: 20px;
+    line-height: 28px;
+  }
+
+  .docs--article .docs-article > h1 {
+    font-size: 24px;
+    line-height: 30px;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .docs--index [data-doc-group="configuration"] .card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 639px) {
+  .docs--index .docs-article > h1,
+  .docs--changelog .docs-article > h1 {
+    font-size: 16px;
+    line-height: 24px;
+  }
+
+  .docs--article .docs-article > h1 {
+    font-size: 22px;
+    line-height: 22px;
+  }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .overlay--docs-nav .overlay__surface {
+    inset-block-start: calc(var(--yc-header-h) + var(--yc-border-width));
+    inset-block-end: 0;
+    inset-inline-start: 0;
+    inset-inline-end: auto;
+    inline-size: 320px;
+    max-block-size: none;
+    border-radius: 0;
+    padding-block-end: 0;
+  }
+}
+
+@media (min-width: 768px) {
+  .overlay--docs-search .overlay__surface {
+    inline-size: min(620px, calc(100vw - 2 * var(--yc-gutter)));
+  }
+}
+
 .doc-section {
   display: grid;
   gap: var(--yc-space-4);
@@ -575,4 +640,195 @@
   border-radius: var(--yc-radius-pill);
   border-color: var(--yc-border-strong);
   background: var(--yc-surface-raised);
+}
+
+/* P10 is a topic index. Its grouped tiles are intentionally distinct from the
+   prose-and-steps article treatment used by P11 and the other documentation pages. */
+.docs--index .docs-article {
+  max-inline-size: none;
+}
+
+.docs--index .doc-section {
+  gap: var(--yc-space-3);
+  padding: var(--yc-space-5);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface);
+}
+
+.docs--index .doc-section + .doc-section {
+  margin-block-start: var(--yc-space-4);
+}
+
+.docs--index .doc-section h2 {
+  font-size: var(--yc-size-md);
+}
+
+.docs--index .card-grid {
+  gap: var(--yc-space-2);
+}
+
+.docs--index .card {
+  padding: var(--yc-space-3);
+  border-radius: 3px;
+}
+
+.docs--index .card__link {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.docs--index .card__text {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 1024px) {
+  .docs--index [data-doc-group="configuration"] .card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .docs--index [data-doc-group="get-started"] .card-grid,
+  .docs--index [data-doc-group="use"] .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .docs--index [data-doc-group="help"] .card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 639px) {
+  .docs--index [data-doc-group="configuration"] .card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .docs--index [data-doc-group="configuration"] .card {
+    padding: 0;
+  }
+
+  .docs--index [data-doc-group="configuration"] .card__link {
+    min-block-size: var(--yc-hit-min);
+    padding: var(--yc-space-2);
+  }
+
+  .docs--index [data-doc-group="configuration"] .card__text {
+    display: none;
+  }
+
+  .docs--index [data-doc-group]:not([data-doc-group="configuration"]) .card {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .docs--index [data-doc-group]:not([data-doc-group="configuration"]) .card__link {
+    min-block-size: var(--yc-hit-min);
+    padding: var(--yc-space-2) 0;
+  }
+}
+
+/* P11 reserves density for readable articles while keeping the rail and TOC at
+   their existing responsive thresholds. */
+.docs--article .docs-article {
+  max-inline-size: calc(var(--yc-measure) + var(--yc-gutter) * 2);
+  padding-block-end: var(--yc-space-10);
+}
+
+.docs--article .doc-section {
+  gap: var(--yc-space-3);
+  padding-block: var(--yc-space-6);
+}
+
+.docs-search-pane .search__results {
+  gap: 0;
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.docs-search-pane .search__result {
+  min-block-size: 0;
+  padding: var(--yc-space-3);
+  border-radius: 0;
+  border-inline: 0;
+  border-block: 0;
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.docs-search-pane .search__result--active {
+  border-inline-start: 3px solid var(--yc-green-strong);
+  padding-inline-start: calc(var(--yc-space-3) - 2px);
+}
+
+.releases--timeline {
+  gap: var(--yc-space-4);
+}
+
+.releases--timeline .release {
+  padding: var(--yc-space-5);
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface);
+}
+
+@media (min-width: 768px) {
+  .releases--timeline .release {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.release__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--yc-space-2) var(--yc-space-3);
+  padding-block-end: var(--yc-space-3);
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+}
+
+.release__tags {
+  margin-inline-start: auto;
+}
+
+.release__changes {
+  gap: var(--yc-space-4);
+}
+
+.release__change {
+  gap: var(--yc-space-2);
+  padding-block-start: var(--yc-space-3);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+}
+
+.release__change h4 {
+  line-height: 1;
+}
+
+.release__change li {
+  display: list-item;
+  margin-inline-start: var(--yc-space-4);
+  color: var(--yc-text-muted);
+  list-style: disc;
+}
+
+.filters--release {
+  gap: var(--yc-space-3);
+}
+
+.docs-bar__nav-toggle,
+.docs-search-trigger,
+.docs--index .doc-section,
+.docs--index .card,
+.docs--article .code-block,
+.docs--article .callout,
+.docs .filters__option,
+.releases--timeline .release {
+  border-radius: var(--yc-radius-md);
+}
+
+@media (max-width: 1023px) {
+  .filters--release .filters__group {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filters--release .filters__group legend {
+    grid-column: 1 / -1;
+  }
 }

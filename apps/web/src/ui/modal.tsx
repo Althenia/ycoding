@@ -20,6 +20,7 @@ import { Icon } from "./icon"
 export function Modal(props: {
   readonly class?: string
   readonly label: string
+  readonly header?: JSX.Element
   readonly onClose: () => void
   readonly children: JSX.Element
 }) {
@@ -40,7 +41,7 @@ export function Modal(props: {
     >
       <div class="overlay__surface">
         <div class="overlay__head">
-          <span class="overlay__title">{props.label}</span>
+          {props.header ?? <span class="overlay__title">{props.label}</span>}
           <button
             type="button"
             class="button button--ghost button--icon overlay__close"

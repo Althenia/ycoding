@@ -25,6 +25,7 @@
 }
 
 .custom-select__value {
+  flex: 1;
   min-inline-size: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -32,6 +33,7 @@
 }
 
 .custom-select__chevron {
+  flex: none;
   margin-inline-start: auto;
   color: var(--yc-text-muted);
   transition: rotate var(--yc-dur-quick) var(--yc-ease-standard);

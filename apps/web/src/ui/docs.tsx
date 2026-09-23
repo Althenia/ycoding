@@ -14,8 +14,8 @@ export function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Elemen
     <nav class="docs-nav" aria-label="Documentation">
       <For each={groups}>
         {(group) => (
-          <div class="docs-nav__group">
-            <p class="docs-nav__title">{group.group}</p>
+          <div class="docs-nav__group" data-doc-group={docGroupID(group.group)}>
+            <p class="docs-nav__title">{docGroupLabel(group.group)}</p>
             <For each={group.pages}>
               {(page) => (
                 <Link
@@ -202,15 +202,33 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
   const [query, setQuery] = createSignal("")
   const [active, setActive] = createSignal(0)
   const router = useRouter()
+  let trigger: HTMLButtonElement | undefined
   const hits = createMemo(() => searchDocs(query(), 8))
   const optionId = (index: number) => `docs-search-option-${index}`
+
+  const ownsShortcut = () => {
+    const openDialogs = document.querySelectorAll("dialog[open]")
+    const activeDialog = openDialogs.item(openDialogs.length - 1)
+    return activeDialog === trigger?.closest("dialog[open]")
+  }
+
+  const closeSearch = () => {
+    setOpen(false)
+    setTimeout(() => trigger?.focus())
+  }
 
   const keydown = (event: KeyboardEvent) => {
     const target = event.target
     const typing =
       target instanceof HTMLElement &&
       (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+    if (event.key === "Escape" && open()) {
+      event.preventDefault()
+      closeSearch()
+      return
+    }
     if ((event.key === "k" && (event.metaKey || event.ctrlKey)) || (event.key === "/" && !typing)) {
+      if (!ownsShortcut()) return
       event.preventDefault()
       setOpen(true)
       return
@@ -246,6 +264,7 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
   return (
     <>
       <button
+        ref={trigger}
         type="button"
         class="docs-search-trigger"
         aria-label="Search docs"
@@ -258,8 +277,8 @@ export function DocsSearch(props: { readonly onNavigate?: () => void }): JSX.Ele
         <kbd>/</kbd>
       </button>
       <Show when={open()}>
-        <Modal class="overlay--dialog" label="Search docs" onClose={() => setOpen(false)}>
-          <div class="pane">
+        <Modal class="overlay--dialog overlay--docs-search" label="Search docs" onClose={closeSearch}>
+          <div class="pane docs-search-pane">
             <label class="field" for="docs-search-field">
               <span class="visually-hidden">Search documentation</span>
               <input
@@ -326,13 +345,14 @@ export function DocsShell(props: {
   readonly navLabel: string
   readonly children: JSX.Element
   readonly rail?: JSX.Element
+  readonly class?: "docs--article" | "docs--changelog" | "docs--index"
 }): JSX.Element {
   const [navOpen, setNavOpen] = createSignal(false)
   // A surface without sections has nothing to put on this page, so it renders no
   // rail instead of an empty one.
-  const showToc = () => props.page.sections.length > 0
+  const showToc = () => props.class !== "docs--index" && props.page.sections.length > 0
   return (
-    <div class="docs">
+    <div class={`docs${props.class ? ` ${props.class}` : ""}`}>
       <div class="docs-bar">
         <div class="container docs-bar__inner">
           <button
@@ -379,7 +399,7 @@ export function DocsShell(props: {
         </Show>
       </div>
       <Show when={navOpen()}>
-        <Modal class="overlay--sheet" label={props.navLabel} onClose={() => setNavOpen(false)}>
+        <Modal class="overlay--sheet overlay--docs-nav" label={props.navLabel} onClose={() => setNavOpen(false)}>
           <div class="pane">
             <Show when={props.rail} fallback={<DocsNav onNavigate={() => setNavOpen(false)} />}>
               {props.rail}
@@ -393,19 +413,47 @@ export function DocsShell(props: {
 
 export function DocsIndexPage(): JSX.Element {
   return (
-    <DocsShell page={DOC_INDEX} title="Docs" crumbLabel="Docs" navLabel="Docs menu">
-      <For each={DOC_INDEX.sections}>
-        {(section, index) => <Section page={DOC_INDEX} section={section} index={index()} />}
-      </For>
+    <DocsShell page={DOC_INDEX} title="Docs" crumbLabel="Docs" navLabel="Docs menu" class="docs--index">
+      <div class="docs-topic-index">
+        <For each={docsByGroup()}>
+          {(group) => (
+            <section class="doc-section" data-doc-group={docGroupID(group.group)}>
+              <h2>{docGroupLabel(group.group)}</h2>
+              <ul class="card-grid">
+                <For each={group.pages}>
+                  {(page) => (
+                    <li class="card">
+                      <Link href={`/docs/${page.slug}`} class="card__link">
+                        <span class="card__title">{page.title}</span>
+                        <span class="card__text">{page.description}</span>
+                        <Icon name="chevron-right" size={16} />
+                      </Link>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </section>
+          )}
+        </For>
+      </div>
     </DocsShell>
   )
+}
+
+function docGroupID(group: string): string {
+  return group.toLowerCase().replaceAll(" ", "-")
+}
+
+function docGroupLabel(group: string): string {
+  if (group === "Get started") return "Getting started"
+  return group === "Use" ? "Usage" : group
 }
 
 export function DocsPage(props: { readonly slug: string }): JSX.Element {
   const page = () => findDocPage(props.slug)
   return (
     <Show when={page()} fallback={<DocsNotFound />}>
-      <DocsShell page={page()!} title="Docs" crumbLabel="Docs" navLabel="Docs menu">
+      <DocsShell page={page()!} title="Docs" crumbLabel="Docs" navLabel="Docs menu" class="docs--article">
         <For each={page()!.sections}>
           {(section, index) => <Section page={page()!} section={section} index={index()} />}
         </For>
