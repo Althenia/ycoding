@@ -3,22 +3,13 @@ name: release
 on:
   push:
     tags:
-      - tui-v*
-      - web-v*
+      - v*
   workflow_dispatch:
     inputs:
       version:
-        description: Release version without leading v (for example 0.1.3). Defaults to the newest docs/releases version file.
+        description: Release version without leading v (for example 0.7.0). Defaults to the newest docs/releases/v<version>.md file.
         required: false
         default: ""
-      target:
-        description: Release target
-        required: false
-        default: "tui"
-        type: choice
-        options:
-          - tui
-          - web
 
 concurrency:
   group: release
@@ -31,9 +22,9 @@ env:
   YCODING_CHANNEL: latest
 
 jobs:
-  verify-source-tui:
-    name: verify TUI release source
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/tui-v') }}
+  verify-source:
+    name: verify release source
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -55,11 +46,11 @@ jobs:
           set -euo pipefail
           if [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == tui-v* ]]; then
+          elif [[ "${{ github.ref_name }}" == v* ]]; then
             version="${{ github.ref_name }}"
-            version="${version#tui-v}"
+            version="${version#v}"
           else
-            version="$(ls docs/releases/tui/v*.md | sed 's#.*/tui/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
+            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
           fi
           printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
             || { echo "Invalid release version: $version" >&2; exit 1; }
@@ -69,7 +60,7 @@ jobs:
       - name: Verify release notes exist
         run: |
           set -euo pipefail
-          release_notes="docs/releases/tui/v$RELEASE_VERSION.md"
+          release_notes="docs/releases/v$RELEASE_VERSION.md"
           test -f "$release_notes" || { echo "Missing release notes: $release_notes" >&2; exit 1; }
           test -s "$release_notes" || { echo "Release notes are empty: $release_notes" >&2; exit 1; }
 
@@ -122,8 +113,8 @@ jobs:
 
   build:
     name: build ${{ matrix.target }}
-    needs: verify-source-tui
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/tui-v') }}
+    needs: verify-source
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     strategy:
       fail-fast: false
       matrix:
@@ -160,11 +151,11 @@ jobs:
           set -euo pipefail
           if [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == tui-v* ]]; then
+          elif [[ "${{ github.ref_name }}" == v* ]]; then
             version="${{ github.ref_name }}"
-            version="${version#tui-v}"
+            version="${version#v}"
           else
-            version="$(ls docs/releases/tui/v*.md | sed 's#.*/tui/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
+            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
           fi
           echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
           echo "YCODING_VERSION=$version" >>"$GITHUB_ENV"
@@ -221,7 +212,7 @@ jobs:
   isolated-browser-acceptance:
     name: isolated browser acceptance (darwin-arm64, Chrome 152)
     needs: build
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/tui-v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: macos-26
     timeout-minutes: 30
     steps:
@@ -271,7 +262,7 @@ jobs:
   package:
     name: package TUI release assets
     needs: [build, isolated-browser-acceptance]
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/tui-v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -285,11 +276,11 @@ jobs:
           set -euo pipefail
           if [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == tui-v* ]]; then
+          elif [[ "${{ github.ref_name }}" == v* ]]; then
             version="${{ github.ref_name }}"
-            version="${version#tui-v}"
+            version="${version#v}"
           else
-            version="$(ls docs/releases/tui/v*.md | sed 's#.*/tui/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
+            version="$(ls docs/releases/v*.md | sed 's#.*/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
           fi
           echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
 
@@ -333,8 +324,8 @@ jobs:
 
   release-tui:
     name: publish TUI release
-    needs: package
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/tui-v') }}
+    needs: deploy-web
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -349,7 +340,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ github.ref_name }}"
-          version="${version#tui-v}"
+          version="${version#v}"
           echo "RELEASE_VERSION=$version" >>"$GITHUB_ENV"
 
       - name: Download prepared release assets
@@ -365,138 +356,32 @@ jobs:
         run: |
           set -euo pipefail
           version="$RELEASE_VERSION"
-          export RELEASE_TAG="tui-v$version"
-          gh release view "tui-v$version" >/dev/null 2>&1 && {
-            echo "Release tui-v$version already exists"
+          export RELEASE_TAG="v$version"
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 && {
+            echo "Release $RELEASE_TAG already exists"
             exit 1
           }
-          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.RELEASE_TAG) | .tagName] | first // empty' 2>/dev/null || true)"
-          prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"tui-v$version\" and .draft == false) | .tag_name] | first // empty" 2>/dev/null || true)}"
-          range="${prev:+$prev...}tui-v$version"
+          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.RELEASE_TAG and (.tagName | test("^v[0-9]"))) | .tagName] | first // empty' 2>/dev/null || true)"
+          prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"$RELEASE_TAG\" and .draft == false and (.tag_name | test(\"^v[0-9]\"))) | .tag_name] | first // empty" 2>/dev/null || true)}"
+          range="${prev:+$prev...}$RELEASE_TAG"
           {
-            cat "docs/releases/tui/v$version.md"
+            cat "docs/releases/v$version.md"
             echo ""
             echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
           } > release-notes.md
-          gh release create "tui-v$version" release/* "docs/releases/tui/v$version.md" --verify-tag --title "YCoding TUI $version" --notes-file release-notes.md
-
-  verify-source-web:
-    name: verify web release source
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/web-v') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Checkout release source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify tag is reachable from main
-        if: github.event_name == 'push'
-        run: |
-          set -euo pipefail
-          git fetch --no-tags origin main:refs/remotes/origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-
-      - name: Resolve web release version
-        run: |
-          set -euo pipefail
-          if [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_name }}" == web-v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#web-v}"
-          else
-            version="$(ls docs/releases/web/v*.md | sed 's#.*/web/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          printf '%s\n' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$' \
-            || { echo "Invalid release version: $version" >&2; exit 1; }
-          echo "WEB_VERSION=$version" >>"$GITHUB_ENV"
-          echo "WEB_RELEASE_TAG=web-v$version" >>"$GITHUB_ENV"
-
-      - name: Verify release notes exist
-        run: |
-          set -euo pipefail
-          release_notes="docs/releases/web/v$WEB_VERSION.md"
-          test -f "$release_notes" || { echo "Missing release notes: $release_notes" >&2; exit 1; }
-          test -s "$release_notes" || { echo "Release notes are empty: $release_notes" >&2; exit 1; }
-
-      - name: Setup Bun
-        uses: ./.github/actions/setup-bun
-        with:
-          install-flags: --frozen-lockfile
-
-      - name: Check workspace and types
-        run: |
-          bun run check:ycoding-workspace
-          bun run check:ycoding-brand
-          bun run typecheck
-          bun run lint:effect-patterns
-
-      - name: Verify web application and relay
-        run: |
-          bun run test:web
-          bun run test:remote
-
-      - name: Build web application
-        run: bun run build:web
-
-      - name: Verify built web integration
-        run: bun run test:integration:web
-
-      - name: Verify Cloudflare Worker
-        run: |
-          bun run test:cloudflare
-          bun run build:cloudflare
+          gh release create "v$version" release/* "docs/releases/v$version.md" --verify-tag --title "YCoding TUI $version" --notes-file release-notes.md
 
   deploy-web:
     name: deploy web (cloudflare)
-    needs: verify-source-web
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/web-v') }}
+    needs: [verify-source, package]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    permissions:
-      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
-
-      - name: Resolve web release version
-        run: |
-          set -euo pipefail
-          if [[ "${{ github.ref_name }}" == web-v* ]]; then
-            version="${{ github.ref_name }}"
-            version="${version#web-v}"
-          else
-            version="$(ls docs/releases/web/v*.md | sed 's#.*/web/v##' | sed 's#\.md$##' | sort -V | tail -n 1)"
-          fi
-          echo "WEB_VERSION=$version" >>"$GITHUB_ENV"
-          echo "WEB_RELEASE_TAG=web-v$version" >>"$GITHUB_ENV"
-
-      - name: Create web GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          version="$WEB_VERSION"
-          tag="$WEB_RELEASE_TAG"
-          gh release view "$tag" >/dev/null 2>&1 && {
-            echo "Web release $tag already exists"
-            exit 1
-          }
-          prev="$(gh release list --limit 100 --json tagName --jq '[.[] | select(.tagName != env.tag) | .tagName] | first // empty' 2>/dev/null || true)"
-          prev="${prev:-$(gh api "repos/$GH_REPO/releases?per_page=100" --jq "[.[] | select(.tag_name != \"${tag}\" and .draft == false) | .tag_name] | first // empty" 2>/dev/null || true)}"
-          range="${prev:+$prev...}${tag}"
-          {
-            cat "docs/releases/web/v$version.md"
-            echo ""
-            echo "**Full Changelog**: https://github.com/Althenia/ycoding/compare/$range"
-          } > release-notes.md
-          gh release create "$tag" --verify-tag --title "YCoding Web $version" --notes-file release-notes.md
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -507,4 +392,9 @@ jobs:
         run: bun run build:web
 
       - name: Deploy to Cloudflare
-        run: bun run deploy:cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN" || { echo "Missing CLOUDFLARE_API_TOKEN Actions secret" >&2; exit 1; }
+          bun run deploy:cloudflare

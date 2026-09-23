@@ -65,9 +65,8 @@ Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 
 ## Release practices
 
-- TUI and web releases normally share the same version number. Use different version strings only when the user explicitly approves a release-policy exception. Web release notes live under `docs/releases/web/` with their own `v<version>.md` filename; never add a `web-` prefix to the notes filename or content.
-- Write release notes under `docs/releases/tui/v<version>.md` for the TUI package and `docs/releases/web/v<version>.md` for the web client, using each release's version string.
-- The release workflow (`release.yml`) triggers on `push` to tags `tui-v*` (TUI release) or `web-v*` (web release). TUI creates a `tui-v<version>` GitHub release; web creates a `web-v<version>` release and deploys to Cloudflare.
+- TUI and web share one release version and one nonempty note at `docs/releases/v<version>.md`.
+- The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies both surfaces, deploys web to Cloudflare after required checks, and creates one TUI GitHub Release with the note and native assets only after deployment succeeds. Configure `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret for deployment. Manual runs prepare assets without publishing or deploying.
 
 ## Commits and PR titles
 

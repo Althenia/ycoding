@@ -4,6 +4,24 @@ import { RELEASES, changeTagCounts } from "./changelog"
 const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
+  test("includes the latest TUI release at the top of the public changelog", () => {
+    const release = RELEASES.find((item) => item.version === "0.6.5")
+    expect(RELEASES[0]?.version).toBe("0.6.5")
+    expect(release).toMatchObject({
+      date: "2026-09-23",
+      title: "Sharper prompts and clearer subagent status",
+      tags: ["Changed", "Fixed"],
+    })
+    expect(release?.changes.map((change) => change.text)).toEqual([
+      "Show the active credential profile beside the agent in the session header when a provider has multiple credentials.",
+      "Rank mini prompt @ agent and reference matches together while preserving backend file-search order.",
+      "Keep rejected drafts editable and use a fresh prompt ID for corrected input; uncertain admission and wake retries reuse the exact prompt ID and managed attachments.",
+      "Separate completed, cancelled, failed, and lost subagents into the composer's Idle tab, keep their elapsed time frozen, and page through terminal tasks when they are not on the current page.",
+      "Update built-in agent guidance for bounded repository searches and refine GSD's orchestration instructions.",
+      "Drop stored mini model variants when a resolved model offers no variants, while retaining them until the model catalog resolves.",
+    ])
+  })
+
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
     expect(new Set(versions).size).toBe(versions.length)

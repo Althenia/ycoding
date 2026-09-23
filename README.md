@@ -91,9 +91,9 @@ The web build writes `apps/web/dist` and includes the maintained installer and g
 
 ## Release
 
-TUI and web share the **same version number**. Release notes live under `docs/releases/tui/` for the TUI package and `docs/releases/web/` for the web client; both use the same version filename (e.g. `docs/releases/tui/v0.6.4.md` and `docs/releases/web/v0.6.4.md`). Never add a `web-` prefix to web release notes.
+TUI and web ship together under one version. Write a single nonempty release note at `docs/releases/v<version>.md` (for example, `docs/releases/v0.6.5.md`).
 
-The release workflow (`release.yml`) triggers on `push` to tags `tui-v*` (TUI release) or `web-v*` (web release). TUI creates a `tui-v<version>` GitHub release; web creates a `web-v<version>` release and deploys to Cloudflare.
+The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies TUI artifacts and the web application, deploys the web build to Cloudflare after the required checks, then creates one TUI GitHub Release with native archives, checksums, and the shared note. Deployment requires the `CLOUDFLARE_API_TOKEN` GitHub Actions secret; if deployment fails, no GitHub Release is published. Manual workflow runs prepare artifacts without publishing or deploying.
 
 ## License
 

@@ -22,6 +22,20 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.6.5",
+    date: "2026-09-23",
+    title: "Sharper prompts and clearer subagent status",
+    tags: ["Changed", "Fixed"],
+    changes: [
+      { tag: "Changed", text: "Show the active credential profile beside the agent in the session header when a provider has multiple credentials." },
+      { tag: "Changed", text: "Rank mini prompt @ agent and reference matches together while preserving backend file-search order." },
+      { tag: "Fixed", text: "Keep rejected drafts editable and use a fresh prompt ID for corrected input; uncertain admission and wake retries reuse the exact prompt ID and managed attachments." },
+      { tag: "Changed", text: "Separate completed, cancelled, failed, and lost subagents into the composer's Idle tab, keep their elapsed time frozen, and page through terminal tasks when they are not on the current page." },
+      { tag: "Changed", text: "Update built-in agent guidance for bounded repository searches and refine GSD's orchestration instructions." },
+      { tag: "Fixed", text: "Drop stored mini model variants when a resolved model offers no variants, while retaining them until the model catalog resolves." },
+    ],
+  },
+  {
     version: "0.6.4",
     date: "2026-09-22",
     title: "Custom OpenAI-compatible endpoints and chat/responses selection",

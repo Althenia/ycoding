@@ -82,6 +82,70 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(workflow).toContain("needs: [build, isolated-browser-acceptance]")
 })
 
+test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {
+  const verify = workflow.split("\n  verify-source:")[1]?.split("\n  build:")[0]
+  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
+  expect(workflow).toContain("      - v*")
+  expect(workflow).not.toContain("      - tui-v*")
+  expect(workflow).not.toContain("      - web-v*")
+  expect(verify).toContain('release_notes="docs/releases/v$RELEASE_VERSION.md"')
+  expect(verify).toContain("bun run test:web")
+  expect(verify).toContain("bun run test:remote")
+  expect(verify).toContain("bun run test:integration:web")
+  expect(verify).toContain("bun run test:integration:remote")
+  expect(verify).toContain("bun run build:cloudflare")
+  expect(tui).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+  expect(tui).toContain('gh release create "v$version"')
+  expect(tui).toContain('"docs/releases/v$version.md" --verify-tag')
+  expect(tui).toContain('test("^v[0-9]")')
+  expect(tui).toContain('test(\\"^v[0-9]\\")')
+  expect(tui).toContain("contents: write")
+  expect((workflow.match(/gh release create /g) ?? []).length).toBe(1)
+})
+
+test("the first unified release has nonempty shared notes", async () => {
+  const notes = Bun.file(path.join(import.meta.dir, "../docs/releases/v0.6.5.md"))
+  expect(await notes.exists()).toBe(true)
+  expect((await notes.text()).trim()).toContain("# YCoding v0.6.5")
+})
+
+test("same v tag deploys web after the shared checks without GitHub write access", () => {
+  const deploy = workflow.split("\n  deploy-web:")[1]
+  expect(deploy).toContain("needs: [verify-source, package]")
+  expect(deploy).toContain("github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')")
+  expect(deploy).toContain("bun run build:web")
+  expect(deploy).toContain("bun run deploy:cloudflare")
+  expect(deploy?.indexOf("bun run build:web")).toBeLessThan(deploy?.indexOf("bun run deploy:cloudflare") ?? -1)
+  expect(deploy).not.toContain("gh release")
+  expect(deploy).not.toContain("GH_TOKEN:")
+  expect(deploy).not.toContain("contents: write")
+  expect(workflow).not.toContain("verify-source-web:")
+})
+
+test("GitHub Release publication waits for successful web deployment", () => {
+  const tui = workflow.split("\n  release-tui:")[1]?.split("\n  deploy-web:")[0]
+  expect(tui).toContain("needs: deploy-web")
+  expect(tui).toContain("github.event_name == 'push'")
+  expect(workflow.split("\n  deploy-web:")[1]).toContain("needs: [verify-source, package]")
+})
+
+test("Cloudflare deployment requires a scoped Actions token before Wrangler runs", () => {
+  const deploy = workflow.split("\n  deploy-web:")[1]
+  expect(deploy).toContain("CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}")
+  expect(deploy).toContain('test -n "$CLOUDFLARE_API_TOKEN"')
+  expect(deploy?.indexOf('test -n "$CLOUDFLARE_API_TOKEN"')).toBeLessThan(
+    deploy?.indexOf("bun run deploy:cloudflare") ?? -1,
+  )
+})
+
+test("manual release runs prepare assets without publishing or deploying", () => {
+  const prepare = workflow.split("\n  build:")[1]?.split("\n  release-tui:")[0]
+  expect(prepare).toContain("github.event_name == 'workflow_dispatch'")
+  expect(workflow).toContain("workflow_dispatch:")
+  expect(workflow.split("\n  release-tui:")[1]).toContain("github.event_name == 'push'")
+  expect(workflow.split("\n  deploy-web:")[1]).toContain("github.event_name == 'push'")
+})
+
 test("release workflow verifies the web application and relay before the Cloudflare build", () => {
   expect(workflow).toContain("bun run test:web")
   expect(workflow).toContain("bun run test:remote")

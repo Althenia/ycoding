@@ -85,7 +85,7 @@ OpenCode Zen and OpenCode Go remain named as such only because they are external
 
 ### 8. Documentation and distribution
 
-The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. The release workflow builds and smoke-tests native artifacts before publishing; a manual workflow run prepares artifacts without publishing a release. Each release ships its per-version notes at `docs/releases/v<version>.md`, which is also attached to the GitHub release.
+The terminal executable is distributed as native release archives with SHA-256 checksums. Source archives are provided by GitHub Releases. A `v<version>` tag verifies the TUI and web application, builds and smoke-tests native artifacts, deploys web to Cloudflare after required checks, and publishes one TUI GitHub Release only after deployment succeeds. Deployment requires a `CLOUDFLARE_API_TOKEN` GitHub Actions secret. A manual workflow run prepares artifacts without publishing or deploying. Each release ships one shared note at `docs/releases/v<version>.md`, which is also attached to the GitHub Release.
 
 The public web build publishes a landing page, curated user documentation, a changelog, the generated configuration JSON Schema, an example `ycoding.jsonc`, and the shell installer. Public content contains usage, configuration, and troubleshooting guidance, not engineering architecture, internal infrastructure, database schemas, or implementation plans.
 

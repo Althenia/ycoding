@@ -482,7 +482,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const server = Bun.spawn([binary, "serve", "--stdio", "--port", "0"], {
     stdin: "pipe",
     stdout: "pipe",
-    stderr: "pipe",
+    stderr: "inherit",
     env,
     cwd: project,
   })
@@ -493,6 +493,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     if (next.done) break
     readiness += new TextDecoder().decode(next.value)
   }
+  reader.releaseLock()
   const line = readiness.split("\n").map((value) => value.trim()).find(Boolean)
   if (!line) throw new Error("Runtime smoke server produced no readiness line")
   const ready = JSON.parse(line) as { url?: unknown }
@@ -505,6 +506,7 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   const client = YCoding.make({ baseUrl: ready.url, headers: clientHeaders })
 
   let phase = "integration readiness"
+  let summary: string | undefined
   try {
     await eventually(async () => {
       const result = await client.integration.list({ location: { directory: project } })
@@ -830,17 +832,27 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         throw new Error(`Provider request ${request.pathname} did not contain the stored bearer credential`)
     }
 
-    console.log(
-      `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`,
-    )
+    summary = `Runtime smoke passed: auth, archive=round-trip, yolo=round-trip, goal=${completedGoal.goal?.status}, subagent=${persistedSubagent.state}, cache-hit=${diagnostics.cache.hitRatio}, tool-requests=${toolSummary.logical}/${toolSummary.physical}, namespace=${stableNamespace}, openai-fallback=${openAISummary.fallback}`
   } catch (error) {
     throw new Error(`Runtime smoke failed during ${phase}`, { cause: error })
   } finally {
-    provider.stop(true)
-    server.kill()
-    await server.exited.catch(() => undefined)
-    await rm(root, { recursive: true, force: true })
+    await cleanupRuntimeSmoke(provider, server, root)
   }
+  console.log(summary)
 }
 
-await main()
+export async function cleanupRuntimeSmoke(
+  provider: { stop(closeActiveConnections: boolean): void | Promise<void> },
+  server: { stdin: { end(): void }; kill(): void; exited: Promise<number> },
+  root: string,
+) {
+  await provider.stop(true)
+  server.stdin.end()
+  if (!(await Promise.race([server.exited.then(() => true, () => true), Bun.sleep(5_000).then(() => false)]))) {
+    server.kill()
+  }
+  await server.exited.catch(() => undefined)
+  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
+
+if (import.meta.main) await main()
