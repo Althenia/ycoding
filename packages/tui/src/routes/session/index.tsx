@@ -532,6 +532,23 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const agent = local.agent.current()
     return agent?.name ?? (agent ? Locale.titlecase(agent.id) : undefined)
   })
+  // The active credential profile is the account a provider request resolves through, so the header
+  // names it beside the agent. A provider with a single credential keeps the plain `provider/model`
+  // label, and only the user-facing credential label is exposed — never a credential ID or token.
+  const headerProfile = createMemo(() => {
+    const model = session()?.model ?? headerMessage()?.model
+    if (!model) return undefined
+    const target = location()
+    const integrationID =
+      (data.location.provider.list(target) ?? []).find((provider) => provider.id === model.providerID)
+        ?.integrationID ?? model.providerID
+    const credentials = (data.location.integration.list(target) ?? [])
+      .filter((integration) => integration.id === integrationID)
+      .flatMap((integration) => integration.connections)
+      .filter((connection) => connection.type === "credential")
+    if (credentials.length <= 1) return undefined
+    return credentials.find((connection) => connection.active)?.label
+  })
   const parentID = createMemo(() => session()?.parentID)
   const btw = createMemo(() => Boolean(session()?.parentID && session()?.agent === "btw"))
   const subagent = createMemo(() => Boolean(parentID() && !btw()))
@@ -1458,6 +1475,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         branch={branch()}
         agent={headerAgent()}
         pendingAgent={pendingHeaderAgent()}
+        profile={headerProfile()}
         model={headerModel()}
         variant={headerVariant()}
         pendingModel={pendingHeaderModel()}

@@ -26,6 +26,7 @@ interface SubagentEntry {
   status: SessionOrchestrationTask["state"]
   model?: string
   startedAt?: number
+  endedAt?: number
   current: boolean
 }
 
@@ -63,6 +64,10 @@ export function formatSubagentElapsed(startedAt: number | undefined, now: number
   return Locale.duration(Math.max(0, now - startedAt))
 }
 
+export function formatSubagentEntryElapsed(entry: SubagentEntry, now: number) {
+  return formatSubagentElapsed(entry.startedAt, entry.endedAt ?? now)
+}
+
 export function entriesFromTasks(
   tasks: ReadonlyArray<SessionOrchestrationTask>,
   currentSessionID: string,
@@ -84,6 +89,7 @@ export function entriesFromTasks(
       status: task.state,
       model: formatSubagentModel(task.model),
       startedAt: task.time.created,
+      endedAt: isActiveSubagent(task.state) ? undefined : task.time.updated,
       current: task.sessionID === currentSessionID,
     }))
 }
@@ -93,7 +99,7 @@ export function subagentSections(entries: ReadonlyArray<SubagentEntry>) {
   const inactive = entries.filter((entry) => !isActiveSubagent(entry.status))
   return [
     ...(active.length > 0 ? [{ label: "ACTIVE", entries: active }] : []),
-    ...(inactive.length > 0 ? [{ label: "INACTIVE", entries: inactive }] : []),
+    ...(inactive.length > 0 ? [{ label: "IDLE", entries: inactive }] : []),
   ]
 }
 
@@ -187,7 +193,7 @@ export function SubagentMetadata(props: { model?: string; cacheHit?: string; ela
   )
 }
 
-export function SubagentsTab(props: { sessionID: string }) {
+export function SubagentsTab(props: { sessionID: string; idle?: boolean }) {
   const route = useRouteData("session")
   const data = useData()
   const client = useClient()
@@ -201,21 +207,22 @@ export function SubagentsTab(props: { sessionID: string }) {
   const parentID = createMemo(() => session()?.parentID ?? props.sessionID)
   const page = createMemo(() => data.session.subagent.page(parentID()))
   const pager = createMemo(() => data.session.subagent.navigation(parentID()))
-  const entries = createMemo(() => entriesFromTasks(page()?.data ?? [], route.sessionID))
+  const allEntries = createMemo(() => entriesFromTasks(page()?.data ?? [], route.sessionID))
+  const entries = createMemo(() => allEntries().filter((entry) => isActiveSubagent(entry.status) !== Boolean(props.idle)))
   const sections = createMemo(() => subagentSections(entries()))
   const [now, setNow] = createSignal(Date.now())
 
   createEffect(() => {
-    if (!composer.active("subagents")) return
+    if (!composer.active(props.idle ? "idle" : "subagents")) return
     const id = parentID()
     void data.session.subagent.sync(id).catch((error) => console.error("Failed to load durable subagent tasks", error))
   })
   createEffect(() => {
-    if (!composer.active("subagents")) return
-    entries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
+    if (!composer.active(props.idle ? "idle" : "subagents")) return
+    allEntries().forEach((entry) => void data.session.diagnostics.sync(entry.sessionID).catch(() => undefined))
   })
   createEffect(() => {
-    if (dimensions().width < 100 || !composer.active("subagents") || !entries().some((entry) => entry.status === "running")) return
+    if (dimensions().width < 100 || !composer.active(props.idle ? "idle" : "subagents") || !entries().some((entry) => entry.status === "running")) return
     const interval = setInterval(() => setNow(Date.now()), 1_000)
     onCleanup(() => clearInterval(interval))
   })
@@ -230,7 +237,7 @@ export function SubagentsTab(props: { sessionID: string }) {
   const selectedEntry = createMemo(() => entries()[selected()])
 
   createEffect(() => {
-    const active = composer.active("subagents")
+    const active = composer.active(props.idle ? "idle" : "subagents")
     if (!active) {
       if (wasActive) {
         selectedEntryID = ""
@@ -279,16 +286,21 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   onMount(() => {
     const cleanup = composer.register({
-      id: "subagents",
-      label: "Subagents",
+      id: props.idle ? "idle" : "subagents",
+      label: props.idle ? "Idle" : "Subagents",
       hints: () => {
         const entry = selectedEntry()
-        if (!entry) return []
+        if (!entry)
+          return [
+            ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
+            ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
+            ...(pager().older || pager().newer ? [{ label: "Esc", shortcut: "close" }] : []),
+          ]
         return [
           { label: "Enter", shortcut: "attach", gapAfter: 3 },
           { label: "↑↓", shortcut: "move", gapAfter: 3 },
-          { label: "⌃x k", shortcut: "cancel", gapAfter: 4 },
-          { label: "r", shortcut: "answer", gapAfter: 3 },
+          ...(canCancelSubagent(entry.status) ? [{ label: "⌃x k", shortcut: "cancel", gapAfter: 4 }] : []),
+          ...(entry.status === "waiting" && entry.awaitingInput ? [{ label: "r", shortcut: "answer", gapAfter: 3 }] : []),
           ...(pager().older ? [{ label: "⌃n", shortcut: "older", gapAfter: 3 }] : []),
           ...(pager().newer ? [{ label: "⌃p", shortcut: "newer", gapAfter: 3 }] : []),
           { label: "Esc", shortcut: "close" },
@@ -304,7 +316,7 @@ export function SubagentsTab(props: { sessionID: string }) {
 
   Keymap.createLayer(() => ({
     mode: "composer",
-    enabled: () => composer.active("subagents"),
+    enabled: () => composer.active(props.idle ? "idle" : "subagents"),
     commands: [
       {
         id: "composer.subagent.up",
@@ -392,7 +404,7 @@ export function SubagentsTab(props: { sessionID: string }) {
   }))
 
   return (
-    <Show when={composer.active("subagents")}>
+    <Show when={composer.active(props.idle ? "idle" : "subagents")}>
       <scrollbox
         scrollbarOptions={{ visible: false }}
         width="100%"
@@ -401,7 +413,16 @@ export function SubagentsTab(props: { sessionID: string }) {
         paddingTop={2}
         ref={(value: ScrollBoxRenderable) => (scroll = value)}
       >
-        <Show when={entries().length > 0} fallback={<text fg={themeV2.text.subdued}> No subagents</text>}>
+        <Show
+          when={entries().length > 0}
+          fallback={
+            <text fg={themeV2.text.subdued}>
+              {pager().older || pager().newer
+                ? `No ${props.idle ? "idle tasks" : "active subagents"} on this page`
+                : `No ${props.idle ? "idle" : "active"} subagents`}
+            </text>
+          }
+        >
           <For each={sections()}>
             {(section) => (
               <box flexDirection="column">
@@ -462,7 +483,7 @@ export function SubagentsTab(props: { sessionID: string }) {
                           <SubagentMetadata
                             model={entry.model}
                             cacheHit={formatSubagentCacheHit(data.session.diagnostics.get(entry.sessionID))}
-                            elapsed={formatSubagentElapsed(entry.startedAt, now())}
+                            elapsed={formatSubagentEntryElapsed(entry, now())}
                             status={entry.status === "running" ? "attached" : undefined}
                           />
                         </box>
@@ -480,20 +501,22 @@ export function SubagentsTab(props: { sessionID: string }) {
               </box>
             )}
           </For>
-          <Show when={pager().older || pager().newer}>
-            <box flexDirection="row" gap={3} paddingTop={1}>
-              <Show when={pager().newer}>
-                <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
-                  newer
-                </text>
-              </Show>
-              <Show when={pager().older}>
-                <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
-                  {page()?.position === "top" ? `+${Math.max(0, (page()?.summary.total ?? 0) - entries().length)} more` : "older"}
-                </text>
-              </Show>
-            </box>
-          </Show>
+        </Show>
+        <Show when={pager().older || pager().newer}>
+          <box flexDirection="row" gap={3} paddingTop={1}>
+            <Show when={pager().newer}>
+              <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadNewer(parentID())}>
+                newer
+              </text>
+            </Show>
+            <Show when={pager().older}>
+              <text fg={themeV2.text.action.primary.default} onMouseUp={() => void data.session.subagent.loadOlder(parentID())}>
+                {page()?.position === "top"
+                  ? `+${Math.max(0, (page()?.summary.total ?? 0) - (page()?.data.length ?? 0))} more`
+                  : "older"}
+              </text>
+            </Show>
+          </box>
         </Show>
       </scrollbox>
     </Show>

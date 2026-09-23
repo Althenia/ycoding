@@ -28,6 +28,21 @@ describe("run variant shared", () => {
     expect(resolveVariant(undefined, "missing", "low", ["low", "high"])).toBe("low")
   })
 
+  test("drops a stored variant when the model offers no variants at all", () => {
+    expect(resolveVariant(undefined, "high", "low", [])).toBeUndefined()
+    expect(resolveVariant(undefined, "high", undefined, [] as string[])).toBeUndefined()
+  })
+
+  test("keeps stored variants while the catalog has not resolved the model yet", () => {
+    expect(resolveVariant(undefined, "high", "low", undefined)).toBe("high")
+    expect(resolveVariant(undefined, undefined, "low", undefined)).toBe("low")
+  })
+
+  test("keeps an explicit cli variant even when the catalog has not resolved variants", () => {
+    expect(resolveVariant("max", undefined, undefined, undefined)).toBe("max")
+    expect(resolveVariant("max", undefined, undefined, [])).toBe("max")
+  })
+
   test("cycles through variants and back to default", () => {
     expect(cycleVariant(undefined, ["low", "high"])).toBe("low")
     expect(cycleVariant("default", ["low", "high"])).toBe("low")

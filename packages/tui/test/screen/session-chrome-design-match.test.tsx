@@ -1,5 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
+import { RGBA } from "@opentui/core"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { json } from "../fixture/tui-client"
 import { DESIGN_VIEWPORT, DESIGN_VIEWPORT_WIDE } from "../viewport"
@@ -160,9 +161,9 @@ async function expectComposerSurface(viewport: typeof DESIGN_VIEWPORT) {
 }
 
 /**
- * A provider with two stored profiles: the header must stay provider/model, and the Context rail
- * must carry the active profile above Provider. Every location-bearing endpoint answers with the
- * profile location so the client store keys this fixture separately from the shared one.
+ * A provider with two stored profiles: the header must name the active profile beside the agent,
+ * and the Context rail must not carry a Profile row. Every location-bearing endpoint answers with
+ * the profile location so the client store keys this fixture separately from the shared one.
  */
 function profileRoute(url: URL) {
   if (url.pathname === "/api/integration")
@@ -212,6 +213,25 @@ function profileRoute(url: URL) {
   return route(url)
 }
 
+/**
+ * The GSD built-in agent carries an explicit `#e67e22` colour. This fixture uses the shared location
+ * and only changes the agent catalogue and Session agent so the header must paint that loaded colour.
+ */
+const gsdSession = { ...session, agent: "GSD", title: "Chrome GSD colour" }
+
+function gsdRoute(url: URL) {
+  if (url.pathname === "/api/agent")
+    return json({
+      location,
+      data: [
+        { id: "GSD", name: "GSD", color: "#e67e22", request: { headers: {}, body: {} }, mode: "primary", hidden: false, permissions: [] },
+      ],
+    })
+  if (url.pathname === "/api/session") return json({ data: [gsdSession], cursor: {} })
+  if (url.pathname === `/api/session/${sessionID}`) return json({ data: gsdSession })
+  return route(url)
+}
+
 async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
   // Rail expansion is process-global and shared across Session remounts, so a neighbouring file's
   // collapse of CONTEXT would hide the row. Reset it so this assertion measures placement, not
@@ -225,28 +245,28 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
     settle: "Message YCoding…",
   })
   try {
-    // The Context section fills from its own diagnostics fetch, which can land after the composer
-    // settles. Wait for the rows to paint before measuring their order.
+    // The header reads the provider and integration caches after their own fetches land, which can
+    // happen after the composer settles. Wait for the profile to paint before measuring placement.
     const deadline = Date.now() + 10_000
     while (Date.now() < deadline) {
-      const painted = screen.frame()
-      if (painted.includes("Profile") && painted.includes("Provider")) break
+      if (screen.frame().includes("Work")) break
       await Bun.sleep(50)
     }
     const lines = screen.lines()
     const railStart = viewport.width - railWidth(viewport.width)
     const header = lines.find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
-    // The header names the model identity; credential identity lives in the rail.
-    expect(header).toContain("Build · anthropic/Claude Opus 5 · max")
-    expect(header).not.toContain("Work")
+    // The header names the active credential profile immediately after the agent and keeps the
+    // provider/model identity label intact.
+    expect(header).toContain("Build · Work · anthropic/Claude Opus 5 · max")
+    // Only the user-facing label is exposed; credential IDs, the inactive profile, and tokens never
+    // reach the header.
+    expect(screen.frame()).not.toContain("cred_")
+    expect(screen.frame()).not.toContain("Personal")
     const rail = lines.map((line) => line.slice(railStart))
-    const profileRow = rail.findIndex((line) => line.includes("Profile"))
-    const providerRow = rail.findIndex((line) => line.includes("Provider") && line.includes("anthropic"))
-    expect(providerRow, rail.join("|")).toBeGreaterThan(-1)
-    expect(profileRow).toBeGreaterThan(-1)
-    expect(profileRow).toBeLessThan(providerRow)
-    expect(rail[profileRow]).toContain("Work")
-    // A narrow terminal hides the rail; the header still must not resurrect the profile.
+    expect(rail.some((line) => line.includes("Profile"))).toBe(false)
+    expect(rail.some((line) => line.includes("Provider") && line.includes("anthropic"))).toBe(true)
+    // A narrow terminal hides the rail and the truncation ladder drops the profile whole below 100
+    // columns, so the identity run degrades to agent · model · variant without a stale profile.
     const narrow = await renderScreen({
       width: 80,
       height: 24,
@@ -258,6 +278,7 @@ async function expectProfilePlacement(viewport: typeof DESIGN_VIEWPORT) {
       const narrowHeader = narrow
         .lines()
         .find((line) => line.includes(`v${InstallationVersion}`) && line.includes("ready"))
+      expect(narrowHeader).toContain("Build · anthropic/Claude Opus 5 · max")
       expect(narrowHeader).not.toContain("Work")
       expect(narrow.lines().some((line) => line.includes("Profile"))).toBe(false)
     } finally {
@@ -275,8 +296,22 @@ describe("active-session chrome Penpot design match", () => {
     await expectComposerSurface(DESIGN_VIEWPORT)
     await expectComposerSurface(DESIGN_VIEWPORT_WIDE)
   }, 60_000)
-  test("names the active profile in the Context rail and not the header", async () => {
+  test("names the active profile after the agent in the header and not in the Context rail", async () => {
     await expectProfilePlacement(DESIGN_VIEWPORT)
     await expectProfilePlacement(DESIGN_VIEWPORT_WIDE)
   }, 120_000)
+  test("paints a loaded agent's configured colour on the header agent segment", async () => {
+    const screen = await renderScreen({
+      ...DESIGN_VIEWPORT,
+      args: { sessionID },
+      route: gsdRoute,
+      settle: "Message YCoding…",
+    })
+    try {
+      expect(screen.lines().some((line) => line.includes("GSD · anthropic/Claude Opus 5"))).toBe(true)
+      expect(screen.colorOf("GSD")).toEqual(RGBA.fromHex("#e67e22").toInts())
+    } finally {
+      await screen.dispose()
+    }
+  }, 60_000)
 })

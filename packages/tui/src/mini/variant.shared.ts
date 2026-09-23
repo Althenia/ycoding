@@ -36,9 +36,14 @@ export function pickVariant(model: RunInput["model"], input: RunSession | Sessio
   return sessionVariant(Array.isArray(input) ? createSession(input) : input, model)
 }
 
-function fitVariant(value: string | undefined, variants: string[]): string | undefined {
+// `undefined` means the catalog has not resolved this model yet, so a stored
+// value cannot be validated and is kept. An empty array means the catalog
+// resolved the model and it offers no variants, so any stored value is dropped.
+function fitVariant(value: string | undefined, variants: string[] | undefined): string | undefined {
   const normalized = normalizeModelVariant(value)
-  return normalized && (variants.length === 0 || variants.includes(normalized)) ? normalized : undefined
+  if (normalized === undefined) return undefined
+  if (variants === undefined) return normalized
+  return variants.includes(normalized) ? normalized : undefined
 }
 
 // Picks the active variant. CLI flag wins, then valid session history, then the
@@ -48,7 +53,7 @@ export function resolveVariant(
   input: string | undefined,
   session: string | undefined,
   saved: string | undefined,
-  variants: string[],
+  variants: string[] | undefined,
 ): string | undefined {
   if (input !== undefined) {
     return normalizeModelVariant(input)

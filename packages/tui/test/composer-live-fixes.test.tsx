@@ -47,6 +47,7 @@ const permission = {
 }
 let submittedPrompt: string | undefined
 let failNextPrompt = false
+let admissionFailure: (() => Response) | undefined
 let conflictNextPrompt = false
 let holdAdmissionUntilCancelled = false
 let admissionAbortObserved = false
@@ -132,11 +133,19 @@ async function route(url: URL, request: Request) {
     }
     if (conflictNextPrompt) {
       conflictNextPrompt = false
-      return json({ message: "Prompt message ID conflicts with an existing durable record" }, { status: 409 })
+      return json(
+        { _tag: "ConflictError", message: "Prompt message ID conflicts with an existing durable record" },
+        { status: 409 },
+      )
     }
     if (failNextPrompt) {
       failNextPrompt = false
       return json({ error: "simulated admission failure" }, { status: 500 })
+    }
+    if (admissionFailure) {
+      const response = admissionFailure()
+      admissionFailure = undefined
+      return response
     }
     if (body.resume && wakeGate) await wakeGate
     if (body.resume && failNextWake) {
@@ -357,6 +366,14 @@ async function waitForFrameText(screen: { frame(): string }, text: string) {
   expect(screen.frame()).toContain(text)
 }
 
+async function waitForPromptRequests(count: number) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (promptRequests.length >= count) return
+    await Bun.sleep(20)
+  }
+  expect(promptRequests).toHaveLength(count)
+}
+
 function composerRuleRow(lines: string[], contentRow: number) {
   return lines.findLastIndex((line, index) => index < contentRow && line.includes("─"))
 }
@@ -569,6 +586,7 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
     screen.input.pressEnter()
 
     await waitForFrameText(screen, "Prompt admitted · waking session…")
+    await waitForPromptRequests(2)
     expect(promptRequests).toHaveLength(2)
     expect(promptRequests[0]?.resume).toBe(false)
     expect(promptRequests[1]?.resume).toBe(true)
@@ -590,6 +608,101 @@ test("keeps the managed receipt and stable prompt ID when wake fails, then retri
     wakeGate = undefined
     releaseWake = undefined
     failNextWake = false
+    await screen.dispose()
+    await image.temporary.cleanup()
+  }
+}, 30_000)
+
+test("retains a rejected attachment and draft, reports the validation error, and allows a corrected next prompt", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-attachment-rejected-"))
+  const image = await materializeClipboardImage(root, async (file) => {
+    await Bun.write(file, "png")
+  })
+  promptRequests.length = 0
+  admissionFailure = () =>
+    json(
+      { _tag: "InvalidRequestError", field: "files", message: "Attachment exceeds the 20 MiB limit" },
+      { status: 400 },
+    )
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => image },
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText("")
+    await waitForFrameText(screen, "[Image 1]")
+    await screen.input.typeText("first attachment")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Attachment rejected · draft retained")
+    expect(screen.frame()).toContain("Attachment exceeds the 20 MiB limit")
+    expect(screen.frame()).toContain("[Image 1]")
+    expect(screen.frame()).toContain("first attachment")
+    expect(promptRequests).toHaveLength(1)
+    expect(await Bun.file(image.temporary.path).exists()).toBe(true)
+
+    // Correct the draft explicitly; a rejected admission must not pin the next prompt.
+    for (let index = 0; index < "first attachment".length; index++) screen.input.pressKey("BACKSPACE")
+    for (let index = 0; index < "[Image 1] ".length; index++) screen.input.pressKey("BACKSPACE")
+    await screen.input.typeText("next plain prompt")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+    expect(promptRequests.map((request) => request.text)).toEqual([
+      "[Image 1] first attachment",
+      "next plain prompt",
+      "next plain prompt",
+    ])
+    expect(promptRequests[1]?.files).toEqual([])
+    expect(promptRequests[1]?.id).not.toBe(promptRequests[0]?.id)
+  } finally {
+    admissionFailure = undefined
+    await screen.dispose()
+    await image.temporary.cleanup()
+  }
+}, 30_000)
+
+test("keeps an uncertain attachment admission intact for an exact retry instead of asking to remove it", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "ycoding-tui-attachment-uncertain-"))
+  const image = await materializeClipboardImage(root, async (file) => {
+    await Bun.write(file, "png")
+  })
+  promptRequests.length = 0
+  admissionFailure = () => json({ error: "upstream unavailable" }, { status: 503 })
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID },
+    route,
+    clipboard: { read: async () => image },
+    settle: "Message YCoding…",
+  })
+  try {
+    const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, promptRow)
+    await screen.input.pasteBracketedText("")
+    await waitForFrameText(screen, "[Image 1]")
+    await screen.input.typeText("uncertain image")
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Checking whether sent · retry keeps the same prompt ID")
+    expect(screen.frame()).toContain("[Image 1]")
+    expect(screen.frame()).not.toContain("An attachment could not be prepared or admitted")
+    expect(await Bun.file(image.temporary.path).exists()).toBe(true)
+    expect(promptRequests).toHaveLength(1)
+
+    screen.input.pressEnter()
+    await waitForFrameText(screen, "Message YCoding…")
+    expect(promptRequests).toHaveLength(3)
+    expect(new Set(promptRequests.map((request) => request.id)).size).toBe(1)
+    expect(promptRequests[1]?.files?.[0]?.uri).toStartWith("file:")
+    expect(promptRequests[2]?.files?.[0]?.uri).toStartWith("ycoding-attachment://sha256/")
+    expect(await Bun.file(image.temporary.path).exists()).toBe(false)
+  } finally {
+    admissionFailure = undefined
     await screen.dispose()
     await image.temporary.cleanup()
   }
@@ -652,7 +765,7 @@ test("never mints a fresh prompt ID after a durable conflict", async () => {
     await screen.mouse.click(3, promptRow)
     await screen.input.typeText("stable conflict retry")
     screen.input.pressEnter()
-    await waitForFrameText(screen, "Checking whether sent · retry keeps the same prompt ID")
+    await waitForFrameText(screen, "Prompt ID conflict · draft retained")
     expect(promptRequests).toHaveLength(1)
 
     screen.input.pressEnter()

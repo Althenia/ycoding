@@ -408,6 +408,46 @@ test("keeps the desired target until the matching prompt submission commits it",
   }
 }, 30_000)
 
+test("selecting a model with no variants does not inherit the prior model's stored variant", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "variant-no-catalog-variants",
+    order: [{ providerID: "google", modelID: "gemini-3-pro" }],
+    storedVariant: { "openai/gpt-5-2": "high" },
+  })
+  try {
+    await waitFor(() => screen.current()?.modelID === "claude-opus-5", "the session model")
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.modelID === "gemini-3-pro", "the desired model")
+    expect(screen.pendingTarget()).toEqual({ providerID: "google", modelID: "gemini-3-pro" })
+    expect(screen.variant()).toBeUndefined()
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("selecting a model that does not offer the stored variant value clears it", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "variant-unoffered",
+    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    storedVariant: { "openai/gpt-5-2": "max" },
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Select variant"))
+    expect(screen.variant()).toBeUndefined()
+    screen.app.mockInput.pressEscape()
+    await waitFor(() => screen.pendingTarget()?.modelID === "gpt-5-2", "the desired model")
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
+    expect(screen.variant()).toBeUndefined()
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
 test("the home screen commits the next-Session preference without a Session API call", async () => {
   switches.length = 0
   const screen = await renderPicker({

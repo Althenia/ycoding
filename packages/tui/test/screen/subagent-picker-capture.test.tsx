@@ -75,40 +75,34 @@ test("captures populated subagent picker states at reference terminal dimensions
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(viewport.width)
       expect(lines.join("\n")).toContain("Subagents")
       expect(lines.join("\n")).toContain("ACTIVE")
-      expect(lines.join("\n")).toContain("INACTIVE")
-      // Subagents leads the tab strip, and every task owns exactly one row: the status column, the
+      expect(lines.join("\n")).not.toContain("INACTIVE")
+      expect(lines.join("\n")).not.toContain("keymap-audit")
+      // Tabs retain the requested order, and each active task owns one row: the status column, the
       // agent, the description and the metadata share it, with the metadata flush against the
       // composer's right inset so no column can overlap or push another off the row.
       const tabs = viewport.height === NARROW_VIEWPORT.height ? 6 : 45
       expectAt(lines, tabs, 3, "Subagents")
       expectAt(lines, tabs, 14, "2")
-      expectAt(lines, tabs, 19, "Side chats")
-      expectAt(lines, tabs, 33, "Shell")
-      expectAt(lines, tabs, 39, "3")
-      const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13, 15, 16] : [50, 52, 54, 55]
-      expectAt(lines, rows[0]!, 3, "? awaiting")
-      expectAt(lines, rows[0]!, 19, "test-triage  · Tria")
-      expectAt(lines, rows[1]!, 3, "running")
-      expectAt(lines, rows[1]!, 19, "docs-sync  · Sync ")
-      expectAt(lines, rows[2]!, 3, "completed")
-      expectAt(lines, rows[2]!, 19, "keymap-audit  · Aud")
-      expectAt(lines, rows[3]!, 3, "cancelled")
-      expectAt(lines, rows[3]!, 19, "bench-run  · Bench")
+      const tabLine = lines[tabs] ?? ""
+      expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
+      expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
+      expect(tabLine.indexOf("Side chats")).toBeLessThan(tabLine.indexOf("Idle"))
+      const rows = viewport.height === NARROW_VIEWPORT.height ? [11, 13] : [50, 52]
+      expectAt(lines, rows[0], 3, "? awaiting")
+      expectAt(lines, rows[0], 19, "test-triage  · Tria")
+      expectAt(lines, rows[1], 3, "running")
+      expectAt(lines, rows[1], 19, "docs-sync  · Sync ")
       for (const row of rows) expect(lines[row]?.trimEnd().length).toBe(viewport.width - 5)
-      expect(lines[rows[0]!]).toContain("anthropic/claude-sonnet-5")
-      expect(lines[rows[1]!]).toContain("anthropic/claude-sonnet-5")
-      expect(lines[rows[2]!]).toContain("anthropic/claude-haiku-4-5")
-      expect(lines[rows[3]!]).toContain("anthropic/claude-sonnet-5")
+      expect(lines[rows[0]]).toContain("anthropic/claude-sonnet-5")
+      expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5")
       if (viewport.width === NARROW_VIEWPORT.width) {
         // Narrow terminals drop whole trailing fields instead of colliding.
         for (const row of rows) expect(lines[row]).not.toContain("% hit")
-        expect(lines[rows[1]!]).not.toContain("attached")
+        expect(lines[rows[1]]).not.toContain("attached")
       }
       if (viewport.width !== NARROW_VIEWPORT.width) {
-        expect(lines[rows[0]!]).toContain("anthropic/claude-sonnet-5 · 68% hit · ")
-        expect(lines[rows[1]!]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
-        expect(lines[rows[2]!]).toContain("anthropic/claude-haiku-4-5 · 81% hit · ")
-        expect(lines[rows[3]!]).toContain("anthropic/claude-sonnet-5 · — · ")
+        expect(lines[rows[0]]).toContain("anthropic/claude-sonnet-5 · 68% hit · ")
+        expect(lines[rows[1]]).toContain("anthropic/claude-sonnet-5 · attached · 74% hit · ")
         // Only the awaiting task adds a second row, and it carries the question, never metadata.
         expectAt(lines, 51, 19, "? Should I mark the pre-existing failures as expected, or fix them?")
         expect(lines.filter((line) => line.includes("anthropic/"))).toHaveLength(rows.length)
@@ -118,6 +112,19 @@ test("captures populated subagent picker states at reference terminal dimensions
         expectAt(lines, 64, 43, "r answer")
         expectAt(lines, 64, 54, "Esc close")
       }
+      await capture.showIdle()
+      const idleLines = capture.rows()
+      const terminalLines = idleLines.filter((line) => line.includes("keymap-audit") || line.includes("bench-run"))
+      expect(idleLines.join("\n")).toContain("IDLE")
+      expect(terminalLines).toHaveLength(2)
+      expect(terminalLines[0]).toContain("completed")
+      expect(terminalLines[1]).toContain("cancelled")
+      expect(terminalLines.join("\n")).not.toContain("20719d")
+      expect(idleLines.join("\n")).not.toContain("running")
+      const idleHints = idleLines.find((line) => line.includes("Enter attach")) ?? ""
+      expect(idleHints).not.toContain("cancel")
+      expect(idleHints).not.toContain("answer")
+      for (const line of idleLines) expect(line.length).toBeLessThanOrEqual(viewport.width)
       await Bun.write(path.resolve(import.meta.dir, `../../../../.aphrodite/renders/subagent-picker-${viewport.width}x${viewport.height}.txt`), lines.join("\n"))
     } finally {
       await capture.dispose()
@@ -205,6 +212,13 @@ async function boot(viewport: { width: number; height: number }) {
 
   return {
     frame: () => app.captureCharFrame(),
+    async showIdle() {
+      app.mockInput.pressKey("ARROW_RIGHT")
+      app.mockInput.pressKey("ARROW_RIGHT")
+      app.mockInput.pressKey("ARROW_RIGHT")
+      await app.renderOnce()
+      await waitFor(() => app.captureCharFrame(), "IDLE")
+    },
     rows: () => {
       const frame = app.captureCharFrame()
       return (frame.endsWith("\n") ? frame.slice(0, -1) : frame).split("\n")

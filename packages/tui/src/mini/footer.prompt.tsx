@@ -423,10 +423,14 @@ export function createPromptState(input: PromptInput): PromptState {
 
     const next = stripFileLineRange(query())
     if (mode() === "mention") {
+      // Agents and references share one fuzzysort key contract, so rank them in a single pass.
+      // Two separate passes discarded the relative score and surfaced a weak agent hit above an
+      // exact reference hit. Files stay in backend rank order and are never scored against them.
       return [
-        ...fuzzysort.go(next, agents(), { keys: ["value", "display", "description"] }).map((item) => item.obj),
+        ...fuzzysort
+          .go(next, [...agents(), ...references()], { keys: ["value", "display", "description"] })
+          .map((item) => item.obj),
         ...files(),
-        ...fuzzysort.go(next, references(), { keys: ["value", "display", "description"] }).map((item) => item.obj),
       ]
     }
 

@@ -23,10 +23,12 @@ import type {
   FooterSubagentState,
   FooterSubagentTab,
   FooterView,
+  RunAgent,
   RunCommand,
   RunInput,
   RunPrompt,
   RunProvider,
+  RunReference,
   RunTuiConfig,
   StreamCommit,
 } from "../../src/mini/types"
@@ -118,6 +120,8 @@ async function renderFooter(
     onSubmit?: (prompt: RunPrompt) => boolean
     view?: FooterView
     onFormReply?: (input: unknown) => void
+    agents?: RunAgent[]
+    references?: RunReference[]
   } = {},
 ) {
   const [view, setView] = createSignal<FooterView>(input.view ?? { type: "prompt" })
@@ -132,8 +136,8 @@ async function renderFooter(
         <RunFooterView
           directory={() => "/tmp"}
           findFiles={async () => []}
-          agents={() => []}
-          references={() => []}
+          agents={() => input.agents ?? []}
+          references={() => input.references ?? []}
           commands={() => input.commands ?? []}
           providers={() => input.providers}
           currentModel={() => input.currentModel}
@@ -847,6 +851,38 @@ test("direct footer submits slash autocomplete selections without dispatching sh
       { text: "/new ", parts: [] },
     ])
     expect(app.captureCharFrame()).toContain("/review")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("direct footer mention menu ranks an exact non-file match above a fuzzy prefix match", async () => {
+  const app = await renderFooter({
+    agents: [
+      { id: "docs-sync", name: "docs-sync", mode: "subagent", hidden: false },
+    ],
+    references: [
+      {
+        name: "docs",
+        path: "/tmp/docs",
+        description: "project docs",
+        source: { type: "local", path: "/tmp/docs" },
+      },
+    ],
+  })
+
+  try {
+    await app.renderOnce()
+    "@doc".split("").forEach((key) => app.mockInput.pressKey(key))
+    await app.renderOnce()
+
+    const rows = app.captureCharFrame().split("\n")
+    const agentRow = rows.findIndex((line) => line.includes("@docs-sync"))
+    const referenceRow = rows.findIndex((line) => line.includes("@docs") && !line.includes("@docs-sync"))
+
+    expect(agentRow).toBeGreaterThanOrEqual(0)
+    expect(referenceRow).toBeGreaterThanOrEqual(0)
+    expect(referenceRow).toBeLessThan(agentRow)
   } finally {
     app.cleanup()
   }

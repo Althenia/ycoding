@@ -66,6 +66,45 @@ describe("header truncation ladder", () => {
   test("omits segments the session has not resolved yet", () => {
     expect(headerSegments({ width: 160, agent: "Build" }).map((segment) => segment.key)).toEqual(["agent"])
   })
+
+  test("places the active profile immediately after the agent", () => {
+    expect(headerSegments({ ...identity, width: 160, profile: "Work" }).map((segment) => segment.key)).toEqual([
+      "path",
+      "branch",
+      "agent",
+      "profile",
+      "model",
+      "variant",
+    ])
+    expect(headerSegments({ ...identity, width: 160, profile: "Work" }).map((segment) => segment.label)).toEqual([
+      "~/Workspace/Personal/YCoding",
+      "main",
+      "Build",
+      "Work",
+      "anthropic/claude-opus-5",
+      "max",
+    ])
+  })
+
+  test("keeps the profile through the branch band", () => {
+    expect(headerSegments({ ...identity, width: 100, profile: "Work" }).map((segment) => segment.key)).toEqual([
+      "branch",
+      "agent",
+      "profile",
+      "model",
+      "variant",
+    ])
+  })
+
+  test("drops the profile whole below the branch band and when no provider profile is active", () => {
+    // Below 100 columns the ladder keeps only agent · model · variant, so a profile cannot survive.
+    expect(headerSegments({ ...identity, width: 80, profile: "Work" }).map((segment) => segment.key)).toEqual([
+      "agent",
+      "model",
+      "variant",
+    ])
+    expect(headerSegments({ ...identity, width: 160 }).map((segment) => segment.key)).not.toContain("profile")
+  })
 })
 
 describe("header status", () => {
@@ -177,11 +216,57 @@ test("labels provider-qualified models with the resolved name", () => {
 })
 
 test("keeps the header model label to provider and model only", () => {
-  // The active profile is credential identity, not model identity: the header names the model and
-  // the Context rail carries the profile above Provider.
+  // The active profile is credential identity, not model identity: the model label stays
+  // provider/model, and the profile renders as its own segment beside the agent.
   expect(headerModelLabel({ providerID: "openai", modelID: "gpt-5-6-terra", name: "GPT-5.6 Terra" })).toBe(
     "openai/GPT-5.6 Terra",
   )
+})
+
+describe("header profile segment", () => {
+  // The profile label must not be a substring of another segment, or position assertions would match
+  // the wrong segment ("Work" inside the path's "Workspace").
+  const profile = { ...identity, profile: "Studio" }
+
+  test("renders the active profile immediately after the agent", async () => {
+    const app = await renderHeader(160, { type: "ready" }, { identity: profile })
+    const frame = app.captureCharFrame()
+    expect(frame).toContain("Build · Studio · anthropic/claude-opus-5 · max")
+    const order = ["Build", "Studio", "anthropic/claude-opus-5", "max"]
+    const positions = order.map((label) => frame.indexOf(label))
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    app.renderer.destroy()
+  })
+
+  test("paints the profile in the subdued token beside the model identity", async () => {
+    const app = await renderHeader(160, { type: "ready" }, { identity: profile })
+    const theme = resolveThemeFile(DEFAULT_THEMES.ycoding, "dark", "ycoding")
+    const painted = app
+      .captureSpans()
+      .lines.flatMap((line) => line.spans)
+      .find((span) => span.text.includes("Studio"))
+
+    expect(painted?.fg.toInts()).toEqual(theme.text.subdued.toInts())
+    app.renderer.destroy()
+  })
+
+  test("drops the profile whole below the branch band without disturbing model or variant", async () => {
+    const app = await renderHeader(80, { type: "ready" }, { identity: profile })
+    const frame = app.captureCharFrame()
+    expect(frame).not.toContain("Studio")
+    expect(frame).toContain("claude-opus-5")
+    expect(frame).toContain("max")
+    app.renderer.destroy()
+  })
+
+  test("renders no profile when the provider stores only one credential", async () => {
+    const app = await renderHeader(160, { type: "ready" })
+    const line = app.captureCharFrame().split("\n")[1] ?? ""
+    // The identity run stays path · branch · agent · model · variant with no extra segment.
+    expect(line).toContain("Build · anthropic/claude-opus-5 · max")
+    expect(line.match(/·/g) ?? []).toHaveLength(4)
+    app.renderer.destroy()
+  })
 })
 
 function HeaderKeymap(props: Parameters<typeof Header>[0]) {

@@ -38,12 +38,19 @@ type SessionHeaderTimedState = Extract<
   { type: "working" } | { type: "thinking" } | { type: "tool-running" }
 >
 
-export type SessionHeaderSegmentKey = "path" | "branch" | "agent" | "model" | "variant"
+export type SessionHeaderSegmentKey = "path" | "branch" | "agent" | "profile" | "model" | "variant"
 
 export type SessionHeaderIdentity = {
   path?: string
   branch?: string
   agent?: string
+  /**
+   * The active credential profile for the current provider, named only when the provider stores
+   * more than one. It is credential identity, not model identity, so it sits beside the agent it
+   * runs as rather than inside the provider/model label. The label is user-facing; credential
+   * IDs and tokens never reach the header.
+   */
+  profile?: string
   model?: string
   variant?: string
   pendingAgent?: string
@@ -77,12 +84,16 @@ export function headerModelLabel(input: {
 export function headerSegments(input: SessionHeaderIdentity & { width: number }) {
   const path = input.width >= 120 ? truncatePath(input.path, input.width) : undefined
   const branch = input.width >= 100 ? input.branch : undefined
+  // A profile names the credential the provider resolves the request through, so it rides with the
+  // provider identity and drops whole at the same band as the branch rather than being shortened.
+  const profile = input.width >= 100 ? input.profile : undefined
   const model = input.width >= 120 ? input.model : shortModel(input.model)
   const variant = normalizeModelVariant(input.variant)
   const ordered: Array<[SessionHeaderSegmentKey, string | undefined]> = [
     ["path", path],
     ["branch", branch],
     ["agent", input.agent],
+    ["profile", profile],
     ["model", model],
     ["variant", variant],
   ]
@@ -217,6 +228,7 @@ export function Header(
       path: identity().path,
       branch: identity().branch,
       agent: identity().agent,
+      profile: identity().profile,
       model: identity().model,
       variant: identity().variant,
     }),
@@ -240,6 +252,9 @@ export function Header(
   const segmentColor = (key: SessionHeaderSegmentKey) => {
     if (key === "path") return themeV2.text.subdued
     if (key === "branch") return themeV2.text.feedback.info.default
+    // The profile is credential identity resolved elsewhere, like the model identity, so it stays
+    // secondary ink instead of competing with the agent's own configured colour.
+    if (key === "profile") return themeV2.text.subdued
     if (key === "model") return themeV2.text.subdued
     if (key === "variant") return themeV2.text.feedback.success.default
     // The agent carries its own configured colour, so the header names it the way every other

@@ -63,6 +63,10 @@ export function Composer(props: ComposerProps) {
     ),
   )
   const subagents = createMemo(() => data.session.subagent.summary(props.sessionID)?.active ?? 0)
+  const idleSubagents = createMemo(() => {
+    const summary = data.session.subagent.summary(props.sessionID)
+    return Math.max(0, (summary?.total ?? 0) - (summary?.active ?? 0))
+  })
 
   // Set active tab when opened
   let defaultTabApplied = false
@@ -170,6 +174,10 @@ export function Composer(props: ComposerProps) {
                             <box width={2} />
                             <text fg={themeV2.text.feedback.warning.default}>{subagents()}</text>
                           </Show>
+                          <Show when={tab.id === "idle"}>
+                            <box width={2} />
+                            <text fg={themeV2.text.subdued}>{idleSubagents()}</text>
+                          </Show>
                           <Show when={tab.id === "shell"}>
                             <box width={1} />
                             <text fg={themeV2.text.feedback.info.default}>{shells()}</text>
@@ -182,8 +190,9 @@ export function Composer(props: ComposerProps) {
               </Show>
             </box>
             <SubagentsTab sessionID={props.sessionID} />
-            <SideChatsTab sessionID={props.sessionID} />
             <ShellTab sessionID={props.sessionID} />
+            <SideChatsTab sessionID={props.sessionID} />
+            <SubagentsTab sessionID={props.sessionID} idle />
             <box flexDirection="row" flexShrink={0}>
               <For each={footerHints()}>
                 {(hint) => (

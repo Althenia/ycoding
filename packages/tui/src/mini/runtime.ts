@@ -435,7 +435,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
         state.history = [...resumed.history]
         state.model = next.model ?? resumed.model
         const resumedSavedVariant = state.model ? await input.host.preferences.resolveVariant(state.model) : undefined
-        state.activeVariant = resolveVariant(next.variant, resumed.variant, resumedSavedVariant, [])
+        state.activeVariant = resolveVariant(next.variant, resumed.variant, resumedSavedVariant, undefined)
         session.variant = state.activeVariant
         footer.event({ type: "history", history: resumed.history })
         footer.event({ type: "first", first: resumed.first })

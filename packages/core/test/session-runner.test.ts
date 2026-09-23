@@ -4085,6 +4085,55 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("executes and carries each of several identical repeated tool calls into the next request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Read the same thing repeatedly")
+
+      responses = [
+        reply.tool("call-repeat-1", "echo", { text: "same" }),
+        reply.tool("call-repeat-2", "echo", { text: "same" }),
+        reply.text("Saw both reads", "text-repeat-done"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      // Two distinct provider calls with byte-identical input must both execute; the
+      // runtime suppresses nothing, so a deliberate repeated read still reaches the tool.
+      expect(executions).toEqual(["same", "same"])
+      expect(requests).toHaveLength(3)
+      // The second request must carry the first result so the model can see what it read.
+      expect(requests[1]?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool-result",
+                id: "call-repeat-1",
+                result: { type: "text", value: "same" },
+              }),
+            ]),
+          }),
+        ]),
+      )
+      expect(requests[2]?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "tool",
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "tool-result",
+                id: "call-repeat-2",
+                result: { type: "text", value: "same" },
+              }),
+            ]),
+          }),
+        ]),
+      )
+    }),
+  )
+
   it.effect("joins concurrent resume calls into one active provider run", () =>
     Effect.gen(function* () {
       const session = yield* setup

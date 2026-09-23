@@ -1,4 +1,5 @@
 import { describe, expect } from "bun:test"
+import matter from "gray-matter"
 import { Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { AgentV2 } from "@ycoding-ai/core/agent"
@@ -226,8 +227,76 @@ describe("AgentV2", () => {
       expect(gsd.system).toContain("Never overengineer")
       expect(gsd.system).toContain("repository standards and guidelines")
       expect(gsd.system).toContain("Verify child evidence")
+      expect(gsd.color).toBe("#e67e22")
+      const source = yield* Effect.promise(() => Bun.file(new URL("../src/plugin/agent/GSD.md", import.meta.url)).text())
+      expect(source.match(/^color:\s*"(#[0-9a-fA-F]{6})"/m)?.[1]).toBe(gsd.color)
       expect(PermissionV2.evaluate("subagent", "occam", gsd.permissions).effect).toBe("allow")
       expect(yield* agent.resolve()).toMatchObject({ id: "god" })
+    }),
+  )
+
+  it.effect("loads each built-in's static metadata and prompt from its Markdown", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      const catalog = [
+        ["GSD", "primary", 0.3, "#e67e22"],
+        ["architech", "primary", 0.3, "#3498db"],
+        ["god", "primary", 0.2, "#f1c40f"],
+        ["yangi", "primary", 0.1, "#2ecc71"],
+        ["occam", "subagent", 0.1, "#2ecc71"],
+        ["omoikane", "subagent", 0.3, "#3498db"],
+        ["wittgenstein", "subagent", 0.1, "#95a5a6"],
+        ["zeus", "subagent", 0.2, "#f1c40f"],
+      ] as const
+      for (const [id, mode, temperature, color] of catalog) {
+        const item = yield* agent.get(AgentV2.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        const source = yield* Effect.promise(() =>
+          Bun.file(new URL(`../src/plugin/agent/${id}.md`, import.meta.url)).text(),
+        )
+        const markdown = matter(source)
+        expect(item).toMatchObject({ id, mode, color, request: { body: { temperature } } })
+        expect(markdown.data).toMatchObject({
+          description: item.description,
+          mode,
+          color,
+          request: { body: { temperature } },
+        })
+        expect(markdown.data.permissions).toBeUndefined()
+        expect(item.system.startsWith("YCoding is the terminal-first V2 runtime")).toBe(true)
+        expect(item.system.split(markdown.content.trim())).toHaveLength(2)
+        expect(PermissionV2.evaluate("read", ".env", item.permissions).effect).toBe("ask")
+        expect(PermissionV2.evaluate("read", ".env.example", item.permissions).effect).toBe("allow")
+        expect(PermissionV2.evaluate("external_directory", "/outside", item.permissions).effect).toBe("ask")
+        expect(PermissionV2.evaluate("plan_exit", "*", item.permissions).effect).toBe("deny")
+        expect(PermissionV2.evaluate("subagent", "zeus", item.permissions).effect).toBe(
+          mode === "primary" ? "allow" : "deny",
+        )
+      }
+    }),
+  )
+
+  it.effect("shares bounded-search guidance without duplicating GSD's instruction", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      const guidance =
+        "Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence."
+      for (const id of ["zeus", "GSD", "architech", "god", "yangi", "occam", "omoikane", "wittgenstein"]) {
+        const item = yield* agent.get(AgentV2.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        expect(item.system.split(guidance)).toHaveLength(2)
+        expect(item.system.indexOf(guidance)).toBeLessThan(item.system.indexOf("You are "))
+      }
+      const source = yield* Effect.promise(() => Bun.file(new URL("../src/plugin/agent/GSD.md", import.meta.url)).text())
+      expect(source).not.toContain("Never repeat a settled search or tool call without changed input")
     }),
   )
 

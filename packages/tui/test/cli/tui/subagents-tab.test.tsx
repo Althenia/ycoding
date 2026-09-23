@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { BoxRenderable, type Renderable, ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import type { SessionOrchestrationTask } from "@ycoding-ai/client"
 import { createEffect } from "solid-js"
@@ -10,16 +9,12 @@ import { Keymap } from "../../../src/context/keymap"
 import { LocationProvider } from "../../../src/context/location"
 import { RouteProvider, useRoute } from "../../../src/context/route"
 import { Composer } from "../../../src/routes/session/composer"
-import { createApi, createFetch, json } from "../../fixture/tui-client"
+import { ToastProvider } from "../../../src/ui/toast"
+import { createApi, createEventStream, createFetch, json } from "../../fixture/tui-client"
 import { TestTuiContexts } from "../../fixture/tui-environment"
 import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 const module = await import("../../../src/routes/session/composer/subagents-tab")
-
-function findScrollBox(root: Renderable): ScrollBoxRenderable | undefined {
-  if (root instanceof ScrollBoxRenderable) return root
-  return root.getChildren().map(findScrollBox).find(Boolean)
-}
 
 async function renderMetadata(input: {
   model?: string
@@ -78,7 +73,7 @@ test("formats provider, model, and optional variant", () => {
   expect(module.formatSubagentElapsed(0, 48_000)).toBe("48s")
 })
 
-test("sections active tasks before inactive tasks and sorts each section deterministically", () => {
+test("sections active and idle tasks deterministically", () => {
   const tasks: SessionOrchestrationTask[] = [
     {
       sessionID: "ses_waiting",
@@ -179,10 +174,12 @@ test("sections active tasks before inactive tasks and sorts each section determi
   ])
   expect(module.subagentSections(entries)).toEqual([
     { label: "ACTIVE", entries: entries.slice(0, 3) },
-    { label: "INACTIVE", entries: entries.slice(3) },
+    { label: "IDLE", entries: entries.slice(3) },
   ])
   expect(module.subagentSections(entries.slice(0, 3))).toEqual([{ label: "ACTIVE", entries: entries.slice(0, 3) }])
-  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "INACTIVE", entries: entries.slice(3) }])
+  expect(module.subagentSections(entries.slice(3))).toEqual([{ label: "IDLE", entries: entries.slice(3) }])
+  expect(entries.find((entry) => entry.sessionID === "ses_alpha")).toMatchObject({ startedAt: 2, endedAt: 3 })
+  expect(module.formatSubagentEntryElapsed(entries.find((entry) => entry.sessionID === "ses_alpha")!, 99_000)).toBe("1ms")
   expect(module.subagentScrollIndex(entries, 0)).toBe(1)
   expect(module.subagentScrollIndex(entries, 3)).toBe(6)
   expect(module.subagentScrollIndex(entries.slice(3), 0)).toBe(1)
@@ -431,15 +428,19 @@ test("renders section headings while keyboard navigation selects only task rows 
       time: { created: 1, updated: 1 },
     },
   ]
+  const events = createEventStream()
+  let reactivated = false
   const calls = createFetch((url) => {
     if (url.pathname === "/api/session/ses_parent/subagent")
       return json({
-        data: tasks,
-        summary: { total: tasks.length, active: 2, running: 1, waiting: 1 },
+        data: tasks.map((task) =>
+          reactivated && task.sessionID === "ses_inactive_first" ? { ...task, state: "running", revision: 2 } : task,
+        ),
+        summary: { total: tasks.length, active: reactivated ? 3 : 2, running: reactivated ? 2 : 1, waiting: 1 },
         cursor: {},
       })
     return undefined
-  })
+  }, events)
   const [{ ConfigProvider }, { ThemeProvider }] = await Promise.all([
     import("../../../src/config"),
     import("../../../src/context/theme"),
@@ -471,7 +472,9 @@ test("renders section headings while keyboard navigation selects only task rows 
                       }}
                     >
                       <RouteProbe />
-                      <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                      <ToastProvider>
+                        <Composer sessionID="ses_parent" open defaultTab="subagents" />
+                      </ToastProvider>
                     </RouteProvider>
                   </LocationProvider>
                 </DataProvider>
@@ -486,21 +489,39 @@ test("renders section headings while keyboard navigation selects only task rows 
   app.renderer.start()
 
   try {
-    await app.waitForFrame((frame) => frame.includes("ACTIVE") && frame.includes("INACTIVE"))
+    await app.waitForFrame((frame) => frame.includes("ACTIVE") && frame.includes("running         reviewer"))
     const initial = app.captureCharFrame()
     expect(initial).toContain("ACTIVE")
-    expect(initial).toContain("INACTIVE")
+    expect(initial).not.toContain("IDLE\n")
+    expect(initial).not.toContain("Archive results")
     // Each task keeps its status, agent, description, and metadata on one bounded row.
     expect(initial).toContain("running         reviewer")
-    expect(initial).toContain("completed       general")
     expect(initial).toContain("· Review implementation")
-    expect(initial).toContain("· Archive results")
-    const sectionRoots = findScrollBox(app.renderer.root)?.getChildren() ?? []
-    expect(sectionRoots).toHaveLength(2)
-    expect(sectionRoots.every((child) => child instanceof BoxRenderable)).toBe(true)
-
-    app.mockInput.pressKey("ARROW_DOWN")
-    app.mockInput.pressKey("ARROW_DOWN")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("IDLE")
+    expect(app.captureCharFrame()).toContain("completed       general")
+    expect(app.captureCharFrame()).not.toContain("running         reviewer")
+    reactivated = true
+    events.emit({
+      id: "evt_task_reactivated",
+      created: 3,
+      type: "session.task.updated",
+      durable: { aggregateID: "ses_inactive_first", seq: 1, version: 1 },
+      data: { sessionID: "ses_inactive_first", change: { type: "started" } },
+    })
+    await app.waitForFrame((frame) => frame.includes("failed") && !frame.includes("Summarize findings"))
+    app.mockInput.pressKey("ARROW_LEFT")
+    app.mockInput.pressKey("ARROW_LEFT")
+    app.mockInput.pressKey("ARROW_LEFT")
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("running         general  · Summarize findings")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    app.mockInput.pressKey("ARROW_RIGHT")
+    await app.renderOnce()
     app.mockInput.pressKey("ARROW_DOWN")
     await app.renderOnce()
     expect(app.captureCharFrame()).toContain("general  · Archive results")

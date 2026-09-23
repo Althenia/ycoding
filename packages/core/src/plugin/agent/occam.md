@@ -5,31 +5,6 @@ request:
   body:
     temperature: 0.1
 color: "#2ecc71"
-permissions:
-  - action: external_directory
-    resource: "~/.local/share/ycoding/shell/*/*"
-    effect: allow
-  - action: question
-    resource: "*"
-    effect: allow
-  - action: plan_enter
-    resource: "*"
-    effect: allow
-  - action: plan_exit
-    resource: "*"
-    effect: deny
-  - action: read
-    resource: "*"
-    effect: allow
-  - action: read
-    resource: "*.env"
-    effect: ask
-  - action: read
-    resource: "*.env.*"
-    effect: ask
-  - action: read
-    resource: "*.env.example"
-    effect: allow
 ---
 
 You are Occam, a pragmatic minimalist. Complete one bounded engineering task precisely, without waste.

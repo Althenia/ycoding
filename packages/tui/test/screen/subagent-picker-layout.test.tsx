@@ -65,7 +65,7 @@ async function waitForFrameText(screen: { frame(): string }, text: string) {
   expect(screen.frame()).toContain(text)
 }
 
-test("keeps every picker task on one row, orders Subagents before Shell, and never resizes the composer", async () => {
+test("keeps terminal tasks out of Subagents, orders the Idle tab last, and never resizes the composer", async () => {
   const width = 220
   const screen = await renderScreen({ width, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
   try {
@@ -84,19 +84,23 @@ test("keeps every picker task on one row, orders Subagents before Shell, and nev
     expect(open.height).toBe(closed.height)
     const frame = lines.join("\n")
     expect(frame).toContain("ACTIVE")
-    expect(frame).toContain("INACTIVE")
+    expect(frame).not.toContain("INACTIVE")
+    expect(frame).not.toContain("keymap-audit")
     const hints = lines.findIndex((line) => line.includes("Enter attach"))
     expect(hints).toBeGreaterThan(-1)
     expect(hints).toBeLessThan(open.rule)
     expect(lines[hints]).toContain("↑↓ move")
     expect(lines[hints]).toContain("⌃x k cancel")
-    expect(lines[hints]).toContain("r answer")
+    expect(lines[hints]).not.toContain("r answer")
     expect(lines[hints]).toContain("Esc close")
 
-    // Defect 2: Subagents leads the tab strip.
+    // Subagents shows only live work; terminal tasks are reachable from the distinct Idle tab.
     const tabs = lines.findIndex((line) => line.includes("Subagents"))
     expect(tabs).toBeGreaterThan(-1)
-    expect(lines[tabs]?.indexOf("Subagents")).toBeLessThan(lines[tabs]!.indexOf("Shell"))
+    const tabLine = lines[tabs] ?? ""
+    expect(tabLine.indexOf("Subagents")).toBeLessThan(tabLine.indexOf("Shell"))
+    expect(tabLine.indexOf("Shell")).toBeLessThan(tabLine.indexOf("Side chats"))
+    expect(tabLine.indexOf("Side chats")).toBeLessThan(tabLine.indexOf("Idle"))
     expect(lines[tabs]?.indexOf("Subagents")).toBe(3)
 
     // Defect 1: one row per task carrying state, agent, description and metadata together.
@@ -107,16 +111,89 @@ test("keeps every picker task on one row, orders Subagents before Shell, and nev
     expect(lines[running]).toContain("anthropic/claude-opus-5#high")
     expect(lines[running]).toContain("attached")
     expect(lines[running + 1]).not.toContain("anthropic/")
-    const completed = lines.findIndex((line) => line.includes("keymap-audit"))
-    expect(lines[completed]).toContain("completed")
-    expect(lines[completed]).toContain("anthropic/claude-haiku-4-5")
-    expect(lines[completed + 1]).not.toContain("anthropic/")
+    expect(lines[running]).not.toContain("completed")
+
+    const idleTab = tabLine.indexOf("Idle")
+    await screen.mouse.click(idleTab, tabs)
+    await waitForFrameText(screen, "completed")
+    const idleFrame = screen.frame()
+    expect(idleFrame).toContain("IDLE")
+    expect(idleFrame).toContain("completed       keymap-audit")
+    expect(idleFrame).not.toContain("running         zeus")
+    const terminalRow = screen.lines().find((line) => line.includes("keymap-audit"))
+    expect(terminalRow).toContain("1ms")
+    const idleHints = screen.lines().find((line) => line.includes("Enter attach"))
+    expect(idleHints).not.toContain("cancel")
+    expect(idleHints).not.toContain("answer")
+    await Bun.sleep(1_100)
+    expect(screen.lines().find((line) => line.includes("keymap-audit"))).toBe(terminalRow)
     for (const line of lines) expect(line.length).toBeLessThanOrEqual(width)
 
     screen.input.pressKey("ESCAPE")
     await waitForFrameText(screen, "Message YCoding…")
     await Bun.sleep(100)
     expect(composerBand(screen.lines()).height).toBe(closed.height)
+  } finally {
+    await screen.dispose()
+  }
+}, 120_000)
+
+test("pages past a full active top page to make terminal tasks reachable from Idle", async () => {
+  const activeTasks = Array.from({ length: 10 }, (_, index) => ({
+    sessionID: `ses_picker_active_${index}`,
+    parentID: sessionID,
+    description: `Active task ${index}`,
+    agent: "zeus",
+    background: true,
+    state: "running",
+    revision: 1,
+    time: { created: index + 1, updated: index + 2 },
+  }))
+  const terminalTask = {
+    sessionID: "ses_picker_terminal_after_top",
+    parentID: sessionID,
+    description: "Terminal task after active page",
+    agent: "reviewer",
+    background: true,
+    state: "completed",
+    revision: 1,
+    time: { created: 20, updated: 30 },
+  }
+  const screen = await renderScreen({
+    width: 100,
+    height: 40,
+    args: { sessionID },
+    route: (url) => {
+      if (url.pathname === `/api/session/${sessionID}/subagent`) {
+        if (url.searchParams.get("cursor") === "older-terminal")
+          return json({ data: [terminalTask], summary: { total: 11, active: 10, running: 10, waiting: 0 }, cursor: { previous: "top" } })
+        return json({ data: activeTasks, summary: { total: 11, active: 10, running: 10, waiting: 0 }, cursor: { next: "older-terminal" } })
+      }
+      if (url.pathname === `/api/session/${terminalTask.sessionID}/message`) return json({ data: [], cursor: {} })
+      return route(url)
+    },
+    settle: "Message YCoding…",
+  })
+
+  try {
+    const prompt = screen.lines().findIndex((line) => line.includes("Message YCoding…"))
+    await screen.mouse.click(3, prompt)
+    screen.input.pressKey("ARROW_DOWN")
+    await waitForFrameText(screen, "Active task 0")
+    const tabRow = screen.lines().findIndex((line) => line.includes("Subagents"))
+    const idleColumn = screen.lines()[tabRow]?.indexOf("Idle") ?? -1
+    expect(idleColumn).toBeGreaterThan(-1)
+    await screen.mouse.click(idleColumn, tabRow)
+
+    expect(screen.lines().some((line) => line.trim() === "No idle subagents")).toBe(false)
+    expect(screen.frame()).toContain("No idle tasks on this page")
+    const olderRow = screen.lines().findIndex((line) => line.includes("+1 more"))
+    expect(olderRow).toBeGreaterThan(-1)
+    expect(screen.lines().find((line) => line.includes("⌃n older"))).toBeDefined()
+    await screen.mouse.click((screen.lines()[olderRow] ?? "").indexOf("+1 more"), olderRow)
+    await waitForFrameText(screen, "Terminal task after active page")
+    expect(screen.frame()).toContain("completed")
+    expect(screen.frame()).toContain("IDLE")
   } finally {
     await screen.dispose()
   }

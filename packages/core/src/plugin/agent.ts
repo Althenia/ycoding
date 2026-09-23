@@ -4,8 +4,10 @@ export * as AgentPlugin from "./agent"
 
 import path from "path"
 import { define } from "@ycoding-ai/plugin/effect/plugin"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { AgentV2 } from "../agent"
+import { ConfigAgent } from "../config/agent"
+import { ConfigMarkdown } from "../config/markdown"
 import { Global } from "../global"
 import { PermissionV2 } from "../permission"
 import gsdContent from "./agent/GSD.md" with { type: "text" }
@@ -20,78 +22,39 @@ import zeusContent from "./agent/zeus.md" with { type: "text" }
 // Combined output files written by the Shell service, e.g. `<data>/shell/<projectID>/<shellID>.out`.
 // Whitelisted so agents can read a command's full captured output without an external-directory prompt.
 const SHELL_OUTPUT_GLOB = path.join(Global.Path.data, "shell", "*", "*")
+const BuiltInMetadata = Schema.Struct({
+  description: Schema.String.check(Schema.isNonEmpty()),
+  mode: Schema.Literals(["primary", "subagent"]),
+  color: ConfigAgent.Color,
+  request: Schema.Struct({
+    body: Schema.Struct({
+      temperature: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 2 })),
+    }),
+  }),
+})
 const builtIns = () =>
   [
-    {
-      id: "GSD",
-      description:
-        "Get shit done: orchestration-only delivery through parallel delegation, repository standards, TDD, and the smallest complete solution.",
-      mode: "primary",
-      temperature: 0.1,
-      color: "#95a5a6",
-      system: sourceSystem(gsdContent, "primary"),
-    },
-    {
-      id: "architech",
-      description:
-        "Pragmatic evidence-led architect that finds material system gaps, connects every relevant boundary, and implements sound trade-offs.",
-      mode: "primary",
-      temperature: 0.3,
-      color: "#3498db",
-      system: sourceSystem(architechContent, "primary"),
-    },
-    {
-      id: "god",
-      description:
-        "Calm, sovereign, evidence-led builder that identifies the real need, corrects false premises, and delivers exceptional work.",
-      mode: "primary",
-      temperature: 0.2,
-      color: "#f1c40f",
-      system: sourceSystem(godContent, "primary"),
-    },
-    {
-      id: "yangi",
-      description:
-        "Seasoned old master who speaks concisely, decides precisely, and completes engineering work without wasted motion.",
-      mode: "primary",
-      temperature: 0.1,
-      color: "#2ecc71",
-      system: sourceSystem(yangiContent, "primary"),
-    },
-    {
-      id: "occam",
-      description: "Pragmatic minimalist that completes one bounded task precisely with minimum waste.",
-      mode: "subagent",
-      temperature: 0.1,
-      color: "#2ecc71",
-      system: sourceSystem(occamContent, "subagent"),
-    },
-    {
-      id: "omoikane",
-      description: "Systems-minded designer and implementer that connects the wider context for one bounded task.",
-      mode: "subagent",
-      temperature: 0.3,
-      color: "#3498db",
-      system: sourceSystem(omoikaneContent, "subagent"),
-    },
-    {
-      id: "wittgenstein",
-      description: "Silent executor that completes one bounded task and reports only essential evidence.",
-      mode: "subagent",
-      temperature: 0.1,
-      color: "#95a5a6",
-      system: sourceSystem(wittgensteinContent, "subagent"),
-    },
-    {
-      id: "zeus",
-      description:
-        "Evidence-led autonomous implementer that corrects false premises and completes one bounded task with exceptional quality.",
-      mode: "subagent",
-      temperature: 0.2,
-      color: "#f1c40f",
-      system: sourceSystem(zeusContent, "subagent"),
-    },
-  ] as const
+    { id: "GSD", content: gsdContent },
+    { id: "architech", content: architechContent },
+    { id: "god", content: godContent },
+    { id: "yangi", content: yangiContent },
+    { id: "occam", content: occamContent },
+    { id: "omoikane", content: omoikaneContent },
+    { id: "wittgenstein", content: wittgensteinContent },
+    { id: "zeus", content: zeusContent },
+  ].map((item) => ({ id: item.id, ...sourceDefinition(item.content) }))
+
+function sourceDefinition(content: string) {
+  const markdown = ConfigMarkdown.parse(content)
+  const metadata = Schema.decodeUnknownSync(BuiltInMetadata)(markdown.data)
+  return {
+    description: metadata.description,
+    mode: metadata.mode,
+    temperature: metadata.request.body.temperature,
+    color: metadata.color,
+    system: sourceSystem(markdown.content, metadata.mode),
+  }
+}
 
 const PROMPT_COMPACTION = `Summarize only the supplied coding-session history for continued work.
 
@@ -146,6 +109,8 @@ For requests to change, build, or fix, make the requested in-scope local changes
 Require confirmation before external writes, purchases, destructive or irreversible actions, dependency changes, data or schema migrations, CI/CD changes, public-contract breaks, or material scope expansion.
 If your permission ceiling prevents asking for confirmation, do not act; report the blocker.
 
+Bound repository searches by scope and output; reuse settled results, pivot a missing broad search to a likely file, symbol, caller, or directory, and repeat reads only for changed inputs or new evidence.
+
 Keep prompts cache-stable within each per-model namespace; never invent provider cache semantics. Preserve provider quota and usage reporting, including Meta Llama thought content as 'reasoning'.`
 const SUBAGENT_NOTICE = "Subagents always run in the background and notify you when they finish. Do not poll them."
 // The user owns the durable objective; the agent manages status.
@@ -159,7 +124,7 @@ const SUBAGENT_CAPABILITIES = `Subagent controls:
 - Report the outcome, changed paths, exact checks, assumptions, and remaining risk with self-contained evidence.`
 
 function sourceSystem(content: string, mode: "primary" | "subagent") {
-  const base = content.slice(content.indexOf("\n---\n\n") + "\n---\n\n".length).trim()
+  const base = content.trim()
   const capabilities = mode === "primary" ? [SUBAGENT_NOTICE, MAINCHAT_CAPABILITIES] : [SUBAGENT_CAPABILITIES]
   return [YCODING_PROJECT_PROMPT, base, ...capabilities].join("\n\n")
 }

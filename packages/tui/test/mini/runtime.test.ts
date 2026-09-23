@@ -48,6 +48,95 @@ afterEach(() => {
 })
 
 describe("run interactive runtime", () => {
+  test("switching to a model without the saved variant displays and submits no stale variant", async () => {
+    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const footerFixture = createFooterApiFixture()
+    const api = footerFixture.api
+    const modelLoaded = defer<void>()
+    const promptReady = defer<void>()
+    let selectModel!: NonNullable<LifecycleInput["onModelSelect"]>
+    const submitted: Array<{ model: unknown; variant: string | undefined }> = []
+    const event = api.event.bind(api)
+    const onPrompt = api.onPrompt.bind(api)
+    api.onPrompt = (fn) => {
+      promptReady.resolve()
+      return onPrompt(fn)
+    }
+    api.event = (value) => {
+      event(value)
+      if (value.type === "model" && value.selection?.modelID === "model-a") modelLoaded.resolve()
+    }
+    const miniHost = host()
+    miniHost.preferences.resolveVariant = async (model) => (model?.modelID === "model-b" ? "high" : undefined)
+    stubCatalogLists(sdk, {
+      providers: [catalogProvider("test", "Test")],
+      models: [
+        catalogModel({ id: "model-a", providerID: "test", variants: ["high"] }),
+        catalogModel({ id: "model-b", providerID: "test" }),
+      ],
+    })
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: miniHost,
+        sdk,
+        directory: "/tmp",
+        target: async () => ({
+          sessionID: "ses-variant-switch",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model-a" },
+          variant: "high",
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model-a" },
+        variant: "high",
+        files: [],
+        thinking: false,
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          selectModel = input.onModelSelect!
+          return {
+            footer: api,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => ({
+            runPromptTurn: async (input) => {
+              submitted.push({ model: input.model, variant: input.variant })
+              api.close()
+            },
+            interruptActiveTurn: async () => {},
+            selectSubagent: () => {},
+            replayOnResize: async () => false,
+            close: async () => {},
+          }),
+          formatUnknownError: (error: unknown) => String(error),
+        }),
+      },
+    )
+
+    try {
+      await modelLoaded.promise
+      const selected = await selectModel({ providerID: "test", modelID: "model-b" })
+      expect(selected).toMatchObject({ modelLabel: "model-b · Test", variant: undefined })
+      await promptReady.promise
+      footerFixture.submit("use model b")
+      await task
+
+      expect(submitted).toEqual([{ model: { providerID: "test", modelID: "model-b" }, variant: undefined }])
+    } finally {
+      api.close()
+      await task
+    }
+  })
+
   test("routes form responses to their owners with global location and local settlement", async () => {
     const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
     const api = footer()
@@ -243,7 +332,7 @@ describe("run interactive runtime", () => {
           location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp" } },
           agent: "review",
           model: { providerID: "openai", modelID: "gpt-5" },
-          variant: "high",
+          variant: undefined,
           resume: true,
         }),
         agent: "build",

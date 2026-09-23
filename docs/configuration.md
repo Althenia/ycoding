@@ -798,11 +798,13 @@ provider. A profile is the stored credential's user-facing name. Connecting asks
 and re-using a name updates that profile instead of replacing the provider's credentials.
 
 Exactly one profile per provider is active. The active profile is the one a model request resolves,
-the one provider usage reports, and the one named in the Context sidebar above Provider and in the model selector; a
+the one provider usage reports, and the one named in the Session header and in the model selector; a
 provider with a single profile keeps the plain `provider/model` label. Switching the active profile
 does not remove the others, and removing the active profile promotes the remaining one.
 
-The Session header shows model identity without a profile suffix. Context displays the Profile row only for a provider with multiple stored profiles.
+The Session header names the active profile as its own segment immediately after the agent, keeping
+the plain `provider/model` label beside it. A provider with a single stored profile shows no profile
+segment. Context keeps the Provider and Model identity rows and never carries the profile.
 
 Model entries support:
 

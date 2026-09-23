@@ -1952,6 +1952,7 @@ export function Prompt(props: PromptProps) {
         }
       }
       let phase: "skill" | "admission" | "wake" = "admission"
+      let admittedReceipt = false
       const result = await submitPromptWithSkills({
         prompt: async (resume) => {
           if (resume && options?.steerNow && status() === "running") {
@@ -2005,6 +2006,7 @@ export function Prompt(props: PromptProps) {
           )
         },
         onAdmitted: async (admitted) => {
+          admittedReceipt = true
           await retainManagedAttachments(submission, projectedPromptInput(admitted.data).files)
         },
       }).then(
@@ -2012,19 +2014,38 @@ export function Prompt(props: PromptProps) {
         (error) => ({ error, phase }) as const,
       )
       if ("error" in result) {
-        const hasAttachments = (submission.payload.files?.length ?? 0) > 0
+        const rejected =
+          result.phase === "admission" &&
+          !admittedReceipt &&
+          typeof result.error === "object" &&
+          result.error !== null &&
+          "_tag" in result.error
+            ? result.error
+            : undefined
+        const attachmentRejected =
+          rejected?._tag === "InvalidRequestError" && "field" in rejected && rejected.field === "files"
         const message =
           result.phase === "skill"
             ? "Skill activation failed · draft retained"
-            : result.phase === "admission"
-              ? "Checking whether sent · retry keeps the same prompt ID"
-              : "Prompt admitted but the wake failed · retry keeps the same prompt ID"
+            : admittedReceipt && result.phase === "admission"
+              ? "Prompt admitted but attachment retention failed · draft retained"
+              : result.phase === "wake"
+                ? "Prompt admitted but the wake failed · retry keeps the same prompt ID"
+                : rejected?._tag === "ConflictError"
+                  ? "Prompt ID conflict · draft retained"
+                  : rejected?._tag === "InvalidRequestError"
+                    ? attachmentRejected
+                      ? "Attachment rejected · draft retained"
+                      : "Prompt rejected · draft retained"
+                    : "Checking whether sent · retry keeps the same prompt ID"
         finishOperation(currentOperation.id, { message, error: true })
         toast.show({
-          title: "Failed to send prompt or activate skill",
-          message: hasAttachments
-            ? "An attachment could not be prepared or admitted. Remove it or re-paste, then retry."
-            : errorMessage(result.error),
+          title: result.phase === "skill" ? "Failed to activate skill" : "Prompt needs attention",
+          message: attachmentRejected
+            ? `${errorMessage(result.error)}. Remove or re-paste the attachment before sending this draft again.`
+            : result.phase === "admission" && !rejected && !admittedReceipt
+              ? "Admission is unresolved. Retry this draft with the same prompt ID and attachments."
+              : errorMessage(result.error),
           variant: "error",
         })
         return false

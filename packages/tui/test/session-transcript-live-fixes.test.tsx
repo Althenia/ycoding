@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, mock, test } from "bun:test"
-import { MarkdownRenderable, ScrollBoxRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
+import { MarkdownRenderable, TextBufferRenderable, type Renderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type {
   SessionAutonomyState,
@@ -961,6 +961,9 @@ test("restores main-session tail and non-tail view across repeated subagent navi
     const promptRow = screen.lines().findIndex((line) => line.includes("Message YCoding"))
     if (promptRow !== -1) await screen.mouse.click(3, promptRow)
     screen.input.pressKey("ARROW_DOWN")
+    screen.input.pressKey("ARROW_RIGHT")
+    screen.input.pressKey("ARROW_RIGHT")
+    screen.input.pressKey("ARROW_RIGHT")
     await waitForFrame(screen.frame, "Inspect compacted history")
     screen.input.pressEnter()
     await waitForFrame(screen.frame, "CHILD SESSION TRANSCRIPT")
