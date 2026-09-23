@@ -5,23 +5,25 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
-    const release = RELEASES.find((item) => item.version === "0.6.10")
-    expect(RELEASES[0]?.version).toBe("0.6.10")
+    const release = RELEASES.find((item) => item.version === "0.7.0")
+    expect(RELEASES[0]?.version).toBe("0.7.0")
     expect(release).toMatchObject({
-      date: "2026-09-23",
-      title: "Wait for Runpod Serverless jobs",
-      tags: ["Changed", "Fixed"],
+      date: "2026-09-24",
+      title: "A clearer remote workspace",
+      tags: ["Added", "Changed", "Fixed"],
     })
     expect(release?.changes.map((change) => change.text)).toEqual([
-      "Tune built-in primary and subagent temperatures to 0.4–0.6 while keeping each agent's role-specific setting.",
-      "Wait for queued or running Runpod Serverless Ollama and vLLM jobs to finish instead of interrupting the response. Poll the existing job without resubmitting the prompt.",
-      "Give isolated Chrome startup its full 15-second control-command deadline while retaining the five-second limit for ordinary browser commands.",
+      "Open recorded file patches from remote Activity; long diffs scroll within their row.",
+      "Use a responsive remote workspace for Sessions, conversation, Activity, approvals, and Settings across phone, tablet, and desktop layouts.",
+      "Navigate refreshed landing, documentation, changelog, and offline pages in light and dark themes.",
+      "Keep the selected machine and reconnect action when an account refresh reports it offline.",
+      "Show a Session's project and directory only when the backend reports them.",
     ])
   })
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 6)).toEqual(["0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6", "0.6.5"])
+    expect(versions.slice(0, 7)).toEqual(["0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6", "0.6.5"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)

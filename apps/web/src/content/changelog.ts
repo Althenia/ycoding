@@ -22,6 +22,19 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.0",
+    date: "2026-09-24",
+    title: "A clearer remote workspace",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Open recorded file patches from remote Activity; long diffs scroll within their row." },
+      { tag: "Changed", text: "Use a responsive remote workspace for Sessions, conversation, Activity, approvals, and Settings across phone, tablet, and desktop layouts." },
+      { tag: "Changed", text: "Navigate refreshed landing, documentation, changelog, and offline pages in light and dark themes." },
+      { tag: "Fixed", text: "Keep the selected machine and reconnect action when an account refresh reports it offline." },
+      { tag: "Fixed", text: "Show a Session's project and directory only when the backend reports them." },
+    ],
+  },
+  {
     version: "0.6.10",
     date: "2026-09-23",
     title: "Wait for Runpod Serverless jobs",
