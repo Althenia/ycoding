@@ -152,6 +152,671 @@ describe("public Stitch fidelity", () => {
     await page.close()
   })
 
+  test("keeps the approved P09 mobile navigation and capability composition", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/"))
+    const layout = await page.evaluate<{
+      readonly navVisible: boolean
+      readonly headerActionVisible: boolean
+      readonly headerBottom: number
+      readonly headlineHeight: number
+      readonly supportSize: number
+      readonly supportHeight: number
+      readonly primaryActionTop: number
+      readonly codeTop: number
+      readonly firstFeatureTop: number
+      readonly featureHeights: readonly number[]
+      readonly overflowing: boolean
+    }>(`(() => {
+      const nav = document.querySelector('.marketing .nav')
+      const header = document.querySelector('.marketing .app-header')
+      const headerAction = document.querySelector('.marketing .app-header__cta a')
+      const headline = document.querySelector('.marketing .hero__headline')
+      const support = document.querySelector('.marketing .hero__support')
+      const primaryAction = document.querySelector('.marketing .hero__actions .button')
+      const code = document.querySelector('.marketing .hero .code-block')
+      const actionRect = headerAction?.getBoundingClientRect()
+      const features = [...document.querySelectorAll('.marketing .feature')]
+      if (!(nav instanceof HTMLElement) || !(header instanceof HTMLElement) || !(headline instanceof HTMLElement) || !(support instanceof HTMLElement) || !(primaryAction instanceof HTMLElement) || !(code instanceof HTMLElement) || features.length !== 4) throw new Error('P09 composition missing')
+      return {
+        navVisible: getComputedStyle(nav).display !== 'none',
+        headerActionVisible: headerAction instanceof HTMLElement && getComputedStyle(headerAction).display !== 'none' && !!actionRect && actionRect.top >= 0 && actionRect.bottom <= 60 && actionRect.right <= innerWidth && actionRect.height >= 44,
+        headerBottom: header.getBoundingClientRect().bottom,
+        headlineHeight: headline.getBoundingClientRect().height,
+        supportSize: parseFloat(getComputedStyle(support).fontSize),
+        supportHeight: support.getBoundingClientRect().height,
+        primaryActionTop: primaryAction.getBoundingClientRect().top,
+        codeTop: code.getBoundingClientRect().top,
+        firstFeatureTop: features[0].getBoundingClientRect().top,
+        featureHeights: features.map(feature => feature.getBoundingClientRect().height),
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.navVisible).toBe(true)
+    expect(layout.headerActionVisible).toBe(true)
+    expect(layout.headerBottom).toBeGreaterThanOrEqual(96)
+    expect(layout.headlineHeight).toBeGreaterThanOrEqual(64)
+    expect(layout.supportSize).toBe(14)
+    expect(layout.supportHeight).toBeLessThanOrEqual(24)
+    expect(layout.primaryActionTop).toBeGreaterThanOrEqual(245)
+    expect(layout.primaryActionTop).toBeLessThanOrEqual(255)
+    expect(layout.codeTop).toBeGreaterThanOrEqual(365)
+    expect(layout.codeTop).toBeLessThanOrEqual(375)
+    expect(layout.firstFeatureTop).toBeGreaterThanOrEqual(460)
+    expect(layout.firstFeatureTop).toBeLessThanOrEqual(510)
+    expect(Math.max(...layout.featureHeights)).toBeLessThanOrEqual(135)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("keeps P09 tablet capability cards compact with all four descriptions", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(768, 1024)
+    await page.navigate(url("/"))
+    const layout = await page.evaluate<{
+      readonly heights: readonly number[]
+      readonly descriptions: readonly string[]
+      readonly descriptionSize: number
+      readonly overflowing: boolean
+    }>(`(() => {
+      const features = [...document.querySelectorAll('.marketing .feature')]
+      const description = features[0]?.querySelector('.feature__text')
+      if (features.length !== 4 || !(description instanceof HTMLElement)) throw new Error('Tablet capabilities missing')
+      return {
+        heights: features.map(feature => feature.getBoundingClientRect().height),
+        descriptions: features.map(feature => feature.querySelector('.feature__text')?.textContent.trim() ?? ''),
+        descriptionSize: parseFloat(getComputedStyle(description).fontSize),
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(Math.max(...layout.heights)).toBeLessThanOrEqual(145)
+    expect(layout.descriptions.every(description => description.length > 0)).toBe(true)
+    expect(layout.descriptionSize).toBeGreaterThanOrEqual(14)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("keeps every P09 tablet footer link reachable in a compact wrap", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(768, 900)
+    await page.navigate(url("/"))
+    const footer = await page.evaluate<{
+      readonly height: number
+      readonly rows: number
+      readonly links: readonly string[]
+      readonly linkHeights: readonly number[]
+      readonly linkSize: number
+      readonly licenseVisible: boolean
+      readonly overflowing: boolean
+    }>(`(() => {
+      const footer = document.querySelector('.marketing .site-footer')
+      const links = [...document.querySelectorAll('.marketing .footer__compact .footer__links a')]
+      const license = document.querySelector('.marketing .footer__compact > span')
+      if (!(footer instanceof HTMLElement) || !(license instanceof HTMLElement) || links.length === 0) throw new Error('Marketing footer missing')
+      return {
+        height: footer.getBoundingClientRect().height,
+        rows: new Set(links.map(link => Math.round(link.getBoundingClientRect().top))).size,
+        links: links.map(link => link.getAttribute('href') ?? ''),
+        linkHeights: links.map(link => link.getBoundingClientRect().height),
+        linkSize: parseFloat(getComputedStyle(links[0]).fontSize),
+        licenseVisible: license.getBoundingClientRect().height > 0,
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(footer.height).toBeLessThanOrEqual(150)
+    expect(footer.rows).toBeLessThanOrEqual(3)
+    expect(footer.links).toHaveLength(13)
+    expect(footer.links).toContain("/remote")
+    expect(Math.min(...footer.linkHeights)).toBeGreaterThanOrEqual(44)
+    expect(footer.linkSize).toBeGreaterThanOrEqual(13)
+    expect(footer.licenseVisible).toBe(true)
+    expect(footer.overflowing).toBe(false)
+    await page.setViewport(390, 844)
+    const mobile = await page.evaluate<{ readonly linkHeights: readonly number[]; readonly overflowing: boolean }>(`(() => ({
+      linkHeights: [...document.querySelectorAll('.marketing .footer__compact .footer__links a')].map(link => link.getBoundingClientRect().height),
+      overflowing: document.documentElement.scrollWidth > innerWidth,
+    }))()`)
+    expect(mobile.linkHeights).toHaveLength(13)
+    expect(Math.min(...mobile.linkHeights)).toBeGreaterThanOrEqual(44)
+    expect(mobile.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("keeps P10 mobile topic groups compact without shrinking links", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/docs"))
+    const layout = await page.evaluate<{
+      readonly firstGroupTop: number
+      readonly firstGroupHeight: number
+      readonly linkHeights: readonly number[]
+      readonly overflowing: boolean
+    }>(`(() => {
+      const group = document.querySelector('.docs--index .docs-topic-index [data-doc-group="get-started"]')
+      if (!(group instanceof HTMLElement)) throw new Error('Getting started group missing')
+      return {
+        firstGroupTop: group.getBoundingClientRect().top,
+        firstGroupHeight: group.getBoundingClientRect().height,
+        linkHeights: [...group.querySelectorAll('.card__link')].map(link => link.getBoundingClientRect().height),
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.firstGroupTop).toBeLessThanOrEqual(360)
+    expect(layout.firstGroupHeight).toBeLessThanOrEqual(280)
+    expect(layout.linkHeights).toHaveLength(3)
+    expect(Math.min(...layout.linkHeights)).toBeGreaterThanOrEqual(44)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("keeps P10 tablet and desktop topic links compact without decorative rows", async () => {
+    const page = await requireBrowser().openPage()
+    for (const width of [768, 1440]) {
+      await page.setViewport(width, 900)
+      await page.navigate(url("/docs"))
+      const layout = await page.evaluate<{
+        readonly links: number
+        readonly visibleTitles: number
+        readonly visibleDescriptions: number
+        readonly decorativeIcons: number
+        readonly minLinkHeight: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const links = [...document.querySelectorAll('.docs--index .card__link')]
+        return {
+          links: links.length,
+          visibleTitles: links.filter(link => link.querySelector('.card__title')?.getBoundingClientRect().height > 0).length,
+          visibleDescriptions: links.filter(link => link.querySelector('.card__text')?.getBoundingClientRect().height > 0).length,
+          decorativeIcons: links.filter(link => { const icon = link.querySelector('svg'); return icon instanceof SVGElement && getComputedStyle(icon).display !== 'none' }).length,
+          minLinkHeight: Math.min(...links.map(link => link.getBoundingClientRect().height)),
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(layout.links).toBe(22)
+      expect(layout.visibleTitles).toBe(layout.links)
+      expect(layout.visibleDescriptions).toBe(layout.links)
+      expect(layout.decorativeIcons).toBe(0)
+      expect(layout.minLinkHeight).toBeGreaterThanOrEqual(44)
+      expect(layout.overflowing).toBe(false)
+    }
+    await page.close()
+  })
+
+  test("uses the available P10 index width without an empty desktop contents column", async () => {
+    const page = await requireBrowser().openPage()
+    for (const [width, left, minWidth] of [[390, 16, 354], [768, 24, 716], [1280, 288, 948], [1440, 288, 1100], [2048, 296, 1690]] as const) {
+      await page.setViewport(width, 900)
+      await page.navigate(url("/docs"))
+      const layout = await page.evaluate<{
+        readonly left: number
+        readonly width: number
+        readonly columns: number
+        readonly links: number
+        readonly minLinkHeight: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const group = document.querySelector('.docs--index .docs-topic-index [data-doc-group="get-started"]')
+        const shell = document.querySelector('.docs--index .docs-shell')
+        const links = [...document.querySelectorAll('.docs--index .doc-section .card__link')]
+        if (!(group instanceof HTMLElement) || !(shell instanceof HTMLElement) || links.length === 0) throw new Error('P10 index missing')
+        const rect = group.getBoundingClientRect()
+        return {
+          left: rect.left,
+          width: rect.width,
+          columns: getComputedStyle(shell).gridTemplateColumns.split(' ').length,
+          links: links.length,
+          minLinkHeight: Math.min(...links.map(link => link.getBoundingClientRect().height)),
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(layout.left).toBeGreaterThanOrEqual(left - 2)
+      expect(layout.left).toBeLessThanOrEqual(left + 2)
+      expect(layout.width).toBeGreaterThanOrEqual(minWidth)
+      expect(layout.columns).toBe(width >= 1024 ? 2 : 1)
+      expect(layout.links).toBe(22)
+      expect(layout.minLinkHeight).toBeGreaterThanOrEqual(44)
+      expect(layout.overflowing).toBe(false)
+    }
+    await page.close()
+  })
+
+  test("keeps P11 mobile article rhythm compact while retaining published guidance", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/docs/quickstart"))
+    const layout = await page.evaluate<{
+      readonly sectionPadding: number
+      readonly sectionHeadingSize: number
+      readonly guidanceVisible: boolean
+      readonly overflowing: boolean
+    }>(`(() => {
+      const section = document.querySelector('.docs--article .doc-section')
+      const heading = section?.querySelector('h2')
+      if (!(section instanceof HTMLElement) || !(heading instanceof HTMLElement)) throw new Error('Quickstart section missing')
+      return {
+        sectionPadding: parseFloat(getComputedStyle(section).paddingTop),
+        sectionHeadingSize: parseFloat(getComputedStyle(heading).fontSize),
+        guidanceVisible: document.querySelector('.docs-article')?.textContent?.includes('One direct run') === true,
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.sectionPadding).toBeLessThanOrEqual(16)
+    expect(layout.sectionHeadingSize).toBeLessThanOrEqual(18)
+    expect(layout.guidanceVisible).toBe(true)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("keeps P11 article details readable with compact mobile blocks", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/docs/quickstart"))
+    const layout = await page.evaluate<{
+      readonly ledeSize: number
+      readonly sectionPadding: readonly number[]
+      readonly codePadding: readonly number[]
+      readonly copyHeights: readonly number[]
+      readonly tableCellPadding: number
+      readonly sections: number
+      readonly overflowing: boolean
+    }>(`(() => {
+      const lede = document.querySelector('.docs--article .docs-article__lede')
+      const tableCell = document.querySelector('.docs--article .doc-table td')
+      if (!(lede instanceof HTMLElement) || !(tableCell instanceof HTMLElement)) throw new Error('Quickstart details missing')
+      return {
+        ledeSize: parseFloat(getComputedStyle(lede).fontSize),
+        sectionPadding: [...document.querySelectorAll('.docs--article .doc-section')].map(section => parseFloat(getComputedStyle(section).paddingTop)),
+        codePadding: [...document.querySelectorAll('.docs--article .code-block pre')].map(code => parseFloat(getComputedStyle(code).paddingTop)),
+        copyHeights: [...document.querySelectorAll('.docs--article .code-block__copy')].map(copy => copy.getBoundingClientRect().height),
+        tableCellPadding: parseFloat(getComputedStyle(tableCell).paddingTop),
+        sections: document.querySelectorAll('.docs--article .doc-section').length,
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.ledeSize).toBe(14)
+    expect(layout.sections).toBe(4)
+    expect(layout.sectionPadding.every(padding => padding <= 12)).toBe(true)
+    expect(layout.codePadding).toHaveLength(1)
+    expect(layout.codePadding.every(padding => padding <= 8)).toBe(true)
+    expect(layout.copyHeights).toHaveLength(1)
+    expect(layout.copyHeights.every(height => height >= 44)).toBe(true)
+    expect(layout.tableCellPadding).toBeLessThanOrEqual(8)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("shows P13 mobile change-type filters without losing the year filter", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/changelog"))
+    const before = await page.evaluate<{ readonly labels: readonly string[]; readonly heights: readonly number[]; readonly yearTrigger: boolean }>(`(() => {
+      const filters = [...document.querySelectorAll('.release__inline-filters button')]
+      const yearTrigger = document.querySelector('.docs--changelog .docs-bar__nav-toggle')
+      return {
+        labels: filters.map(button => button.textContent.trim()),
+        heights: filters.map(button => button.getBoundingClientRect().height),
+        yearTrigger: yearTrigger instanceof HTMLElement && getComputedStyle(yearTrigger).display !== 'none',
+      }
+    })()`)
+    expect(before.labels).toEqual(["All", "Added", "Changed", "Fixed"])
+    expect(Math.min(...before.heights)).toBeGreaterThanOrEqual(44)
+    expect(before.yearTrigger).toBe(true)
+    await page.evaluate<boolean>(`(() => { const added = [...document.querySelectorAll('.release__inline-filters button')].find(button => button.textContent.trim() === 'Added'); if (!(added instanceof HTMLButtonElement)) return false; added.click(); return true })()`)
+    const filtered = await page.evaluate<{ readonly pressed: boolean; readonly groups: readonly string[] }>(`(() => ({
+      pressed: document.querySelector('.release__inline-filters button:nth-of-type(2)')?.getAttribute('aria-pressed') === 'true',
+      groups: [...document.querySelectorAll('.release__change h4')].map(group => group.textContent.trim()),
+    }))()`)
+    expect(filtered.pressed).toBe(true)
+    expect(filtered.groups.length).toBeGreaterThan(0)
+    expect(filtered.groups.every(group => group === "Added")).toBe(true)
+    await page.close()
+  })
+
+  test("keeps the P13 mobile release stream compact without dropping notes", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/changelog"))
+    const layout = await page.evaluate<{
+      readonly ledeSize: number
+      readonly cardPadding: number
+      readonly groupGap: number
+      readonly notes: number
+      readonly releases: number
+      readonly overflowing: boolean
+    }>(`(() => {
+      const lede = document.querySelector('.docs--changelog .docs-article__lede')
+      const card = document.querySelector('.releases--timeline .release')
+      const groups = card?.querySelector('.release__changes')
+      if (!(lede instanceof HTMLElement) || !(card instanceof HTMLElement) || !(groups instanceof HTMLElement)) throw new Error('Changelog composition missing')
+      return {
+        ledeSize: parseFloat(getComputedStyle(lede).fontSize),
+        cardPadding: parseFloat(getComputedStyle(card).paddingTop),
+        groupGap: parseFloat(getComputedStyle(groups).rowGap),
+        notes: document.querySelectorAll('.release__change li').length,
+        releases: document.querySelectorAll('.releases--timeline .release').length,
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.ledeSize).toBeLessThanOrEqual(14)
+    expect(layout.cardPadding).toBeLessThanOrEqual(12)
+    expect(layout.groupGap).toBeLessThanOrEqual(8)
+    expect(layout.notes).toBeGreaterThan(0)
+    expect(layout.releases).toBeGreaterThan(0)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("uses the P13 compact tablet release rhythm with every note retained", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(768, 1024)
+    await page.navigate(url("/changelog"))
+    const layout = await page.evaluate<{
+      readonly ledeSize: number
+      readonly cardPadding: number
+      readonly groupGap: number
+      readonly noteCount: number
+      readonly groupCount: number
+      readonly filterHeight: number
+      readonly overflowing: boolean
+    }>(`(() => {
+      const cards = [...document.querySelectorAll('.releases--timeline .release')]
+      const lede = document.querySelector('.docs--changelog .docs-article__lede')
+      const filter = document.querySelector('.release__inline-filters button')
+      const groups = cards[0]?.querySelector('.release__changes')
+      if (!(cards[0] instanceof HTMLElement) || !(lede instanceof HTMLElement) || !(filter instanceof HTMLElement) || !(groups instanceof HTMLElement)) throw new Error('Tablet changelog missing')
+      return {
+        ledeSize: parseFloat(getComputedStyle(lede).fontSize),
+        cardPadding: parseFloat(getComputedStyle(cards[0]).paddingTop),
+        groupGap: parseFloat(getComputedStyle(groups).rowGap),
+        noteCount: document.querySelectorAll('.release__change li').length,
+        groupCount: document.querySelectorAll('.release__change').length,
+        filterHeight: filter.getBoundingClientRect().height,
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.ledeSize).toBeLessThanOrEqual(14)
+    expect(layout.cardPadding).toBeLessThanOrEqual(12)
+    expect(layout.groupGap).toBeLessThanOrEqual(8)
+    expect(layout.noteCount).toBeGreaterThan(0)
+    expect(layout.groupCount).toBeGreaterThan(0)
+    expect(layout.filterHeight).toBeGreaterThanOrEqual(44)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("uses the available P13 phone and tablet width without dropping release controls", async () => {
+    const page = await requireBrowser().openPage()
+    for (const [width, left, minWidth] of [[390, 16, 354], [768, 24, 716]] as const) {
+      await page.setViewport(width, 1024)
+      await page.navigate(url("/changelog"))
+      const layout = await page.evaluate<{
+        readonly left: number
+        readonly width: number
+        readonly filterCount: number
+        readonly minFilterHeight: number
+        readonly releases: number
+        readonly notes: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const card = document.querySelector('.docs--changelog .releases--timeline .release')
+        const filters = [...document.querySelectorAll('.docs--changelog .release__inline-filters button')]
+        if (!(card instanceof HTMLElement) || filters.length === 0) throw new Error('P13 release controls missing')
+        const rect = card.getBoundingClientRect()
+        return {
+          left: rect.left,
+          width: rect.width,
+          filterCount: filters.length,
+          minFilterHeight: Math.min(...filters.map(filter => filter.getBoundingClientRect().height)),
+          releases: document.querySelectorAll('.docs--changelog .releases--timeline .release').length,
+          notes: document.querySelectorAll('.docs--changelog .release__change li').length,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(layout.left).toBeGreaterThanOrEqual(left - 2)
+      expect(layout.left).toBeLessThanOrEqual(left + 2)
+      expect(layout.width).toBeGreaterThanOrEqual(minWidth)
+      expect(layout.filterCount).toBe(4)
+      expect(layout.minFilterHeight).toBeGreaterThanOrEqual(44)
+      expect(layout.releases).toBeGreaterThan(0)
+      expect(layout.notes).toBeGreaterThan(0)
+      expect(layout.overflowing).toBe(false)
+    }
+    await page.close()
+  })
+
+  test("uses the P13 desktop release width without reserving an empty contents rail", async () => {
+    const page = await requireBrowser().openPage()
+    for (const width of [1280, 1440, 2048] as const) {
+      await page.setViewport(width, 900)
+      await page.navigate(url("/changelog"))
+      const layout = await page.evaluate<{
+        readonly cardLeft: number
+        readonly cardWidth: number
+        readonly columns: number
+        readonly contentsRail: boolean
+        readonly filtersVisible: boolean
+        readonly notes: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const shell = document.querySelector('.docs--changelog .docs-shell')
+        const card = document.querySelector('.docs--changelog .releases--timeline .release')
+        const filters = document.querySelector('.docs--changelog .docs-shell__nav .filters--release')
+        if (!(shell instanceof HTMLElement) || !(card instanceof HTMLElement)) throw new Error('P13 desktop release layout missing')
+        const rect = card.getBoundingClientRect()
+        return {
+          cardLeft: rect.left,
+          cardWidth: rect.width,
+          columns: getComputedStyle(shell).gridTemplateColumns.split(' ').length,
+          contentsRail: shell.querySelector('.docs-shell__toc') !== null,
+          filtersVisible: filters instanceof HTMLElement && filters.getBoundingClientRect().height > 0,
+          notes: document.querySelectorAll('.docs--changelog .release__change li').length,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(layout.cardWidth).toBeGreaterThanOrEqual(760)
+      expect(layout.cardWidth).toBeLessThanOrEqual(776)
+      expect(layout.columns).toBe(2)
+      expect(layout.contentsRail).toBe(false)
+      expect(layout.filtersVisible).toBe(true)
+      expect(layout.notes).toBeGreaterThan(0)
+      expect(layout.overflowing).toBe(false)
+      if (width === 1440) {
+        expect(layout.cardLeft).toBeGreaterThanOrEqual(405)
+        expect(layout.cardLeft).toBeLessThanOrEqual(415)
+      }
+    }
+    await page.close()
+  })
+
+  test("fills the P14 offline mobile frame while retaining its navigation and retry", async () => {
+    const page = await requireBrowser().openPage()
+    for (const width of [320, 390]) {
+      await page.setViewport(width, 844)
+      await page.navigate(url("/offline.html"))
+      const layout = await page.evaluate<{
+        readonly cardWidth: number
+        readonly links: readonly string[]
+        readonly actionHeight: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const card = document.querySelector('.offline-card')
+        const action = card?.querySelector('.retry')
+        if (!(card instanceof HTMLElement) || !(action instanceof HTMLAnchorElement)) throw new Error('Offline panel missing')
+        return {
+          cardWidth: card.getBoundingClientRect().width,
+          links: [...document.querySelectorAll('a')].map(link => link.getAttribute('href') ?? ''),
+          actionHeight: action.getBoundingClientRect().height,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(layout.cardWidth).toBeGreaterThanOrEqual(width - 4)
+      expect(layout.links).toEqual(["/", "/", "/docs", "/changelog", "/remote"])
+      expect(layout.actionHeight).toBeGreaterThanOrEqual(44)
+      expect(layout.overflowing).toBe(false)
+    }
+    await page.close()
+  })
+
+  test("keeps P14 mobile not-found actions inside the approved full-width panel", async () => {
+    const page = await requireBrowser().openPage()
+    await page.setViewport(390, 844)
+    await page.navigate(url("/not-a-route"))
+    const layout = await page.evaluate<{
+      readonly cardWidth: number
+      readonly cardHeight: number
+      readonly iconTop: number
+      readonly firstActionTop: number
+      readonly workspaceLink: boolean
+      readonly actions: readonly number[]
+      readonly overflowing: boolean
+    }>(`(() => {
+      const card = document.querySelector('.not-found__card')
+      if (!(card instanceof HTMLElement)) throw new Error('404 card missing')
+      const icon = card.querySelector('.not-found__icon')
+      const firstAction = card.querySelector('.not-found__actions a')
+      if (!(icon instanceof HTMLElement) || !(firstAction instanceof HTMLElement)) throw new Error('404 actions missing')
+      return {
+        cardWidth: card.getBoundingClientRect().width,
+        cardHeight: card.getBoundingClientRect().height,
+        iconTop: icon.getBoundingClientRect().top - card.getBoundingClientRect().top,
+        firstActionTop: firstAction.getBoundingClientRect().top - card.getBoundingClientRect().top,
+        workspaceLink: card.querySelector('a[href="/remote"]') instanceof HTMLAnchorElement,
+        actions: [...card.querySelectorAll('a')].map(link => link.getBoundingClientRect().height),
+        overflowing: document.documentElement.scrollWidth > innerWidth,
+      }
+    })()`)
+    expect(layout.cardWidth).toBeGreaterThanOrEqual(386)
+    expect(layout.cardHeight).toBeGreaterThanOrEqual(450)
+    expect(layout.iconTop).toBeLessThanOrEqual(28)
+    expect(layout.firstActionTop).toBeGreaterThanOrEqual(270)
+    expect(layout.firstActionTop).toBeLessThanOrEqual(290)
+    expect(layout.workspaceLink).toBe(true)
+    expect(layout.actions).toHaveLength(3)
+    expect(Math.min(...layout.actions)).toBeGreaterThanOrEqual(44)
+    expect(layout.overflowing).toBe(false)
+    await page.close()
+  })
+
+  test("uses the P14 tablet and desktop panel widths without losing status actions", async () => {
+    const page = await requireBrowser().openPage()
+    for (const [width, expected] of [[768, 718], [1440, 671]] as const) {
+      await page.setViewport(width, 900)
+      await page.navigate(url("/not-a-route"))
+      const notFound = await page.evaluate<{ readonly width: number; readonly height: number; readonly links: readonly string[]; readonly overflowing: boolean }>(`(() => {
+        const card = document.querySelector('.not-found__card')
+        if (!(card instanceof HTMLElement)) throw new Error('Not-found panel missing')
+        return {
+          width: card.getBoundingClientRect().width,
+          height: card.getBoundingClientRect().height,
+          links: [...card.querySelectorAll('a')].map(link => link.getAttribute('href') ?? ''),
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(Math.abs(notFound.width - expected)).toBeLessThanOrEqual(3)
+      if (width === 1440) expect(Math.abs(notFound.height - 420)).toBeLessThanOrEqual(2)
+      expect(notFound.links).toEqual(["/docs", "/", "/remote"])
+      expect(notFound.overflowing).toBe(false)
+
+      await page.navigate(url("/offline.html"))
+      const offline = await page.evaluate<{ readonly width: number; readonly height: number; readonly links: readonly string[]; readonly overflowing: boolean }>(`(() => {
+        const card = document.querySelector('.offline-card')
+        if (!(card instanceof HTMLElement)) throw new Error('Offline panel missing')
+        return {
+          width: card.getBoundingClientRect().width,
+          height: card.getBoundingClientRect().height,
+          links: [...document.querySelectorAll('a')].map(link => link.getAttribute('href') ?? ''),
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(Math.abs(offline.width - expected)).toBeLessThanOrEqual(3)
+      if (width === 1440) expect(Math.abs(offline.height - 420)).toBeLessThanOrEqual(2)
+      expect(offline.links).toEqual(["/", "/", "/docs", "/changelog", "/remote"])
+      expect(offline.overflowing).toBe(false)
+    }
+    await page.close()
+  })
+
+  test("places P14 tablet status copy beside its icon while retaining every action", async () => {
+    const page = await requireBrowser().openPage()
+    for (const width of [768, 1023]) {
+      await page.setViewport(width, 900)
+      await page.navigate(url("/not-a-route"))
+      const notFound = await page.evaluate<{
+        readonly height: number
+        readonly iconRight: number
+        readonly headingLeft: number
+        readonly descriptionLeft: number
+        readonly links: number
+        readonly actionHeights: readonly number[]
+        readonly overflowing: boolean
+      }>(`(() => {
+        const card = document.querySelector('.not-found__card')
+        const icon = card?.querySelector('.not-found__icon')
+        const heading = card?.querySelector('h1')
+        const description = card?.querySelector('.prose')
+        if (!(card instanceof HTMLElement) || !(icon instanceof HTMLElement) || !(heading instanceof HTMLElement) || !(description instanceof HTMLElement)) throw new Error('Not-found panel missing')
+        return {
+          height: card.getBoundingClientRect().height,
+          iconRight: icon.getBoundingClientRect().right,
+          headingLeft: heading.getBoundingClientRect().left,
+          descriptionLeft: description.getBoundingClientRect().left,
+          links: card.querySelectorAll('a').length,
+          actionHeights: [...card.querySelectorAll('a')].map(link => link.getBoundingClientRect().height),
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(notFound.height).toBeLessThanOrEqual(280)
+      expect(notFound.headingLeft - notFound.iconRight).toBeGreaterThanOrEqual(12)
+      expect(notFound.descriptionLeft - notFound.iconRight).toBeGreaterThanOrEqual(12)
+      expect(notFound.links).toBe(3)
+      expect(Math.min(...notFound.actionHeights)).toBeGreaterThanOrEqual(44)
+      expect(notFound.overflowing).toBe(false)
+
+      await page.navigate(url("/offline.html"))
+      const offline = await page.evaluate<{
+        readonly height: number
+        readonly iconRight: number
+        readonly headingLeft: number
+        readonly descriptionTop: number
+        readonly noteCount: number
+        readonly retryHeight: number
+        readonly retryTop: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const card = document.querySelector('.offline-card')
+        const icon = card?.querySelector('.offline-icon')
+        const heading = card?.querySelector('h1')
+        const description = card?.querySelector('p:not(.status)')
+        const retry = card?.querySelector('.retry')
+        if (!(card instanceof HTMLElement) || !(icon instanceof HTMLElement) || !(heading instanceof HTMLElement) || !(description instanceof HTMLElement) || !(retry instanceof HTMLElement)) throw new Error('Offline panel missing')
+        return {
+          height: card.getBoundingClientRect().height,
+          iconRight: icon.getBoundingClientRect().right,
+          headingLeft: heading.getBoundingClientRect().left,
+          descriptionTop: description.getBoundingClientRect().top - card.getBoundingClientRect().top,
+          noteCount: card.querySelectorAll('p:not(.status)').length,
+          retryHeight: retry.getBoundingClientRect().height,
+          retryTop: retry.getBoundingClientRect().top - card.getBoundingClientRect().top,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(offline.height).toBeLessThanOrEqual(280)
+      if (width === 768) {
+        expect(Math.abs(offline.height - 237)).toBeLessThanOrEqual(2)
+        expect(offline.descriptionTop).toBeGreaterThanOrEqual(108)
+        expect(offline.descriptionTop).toBeLessThanOrEqual(113)
+        expect(offline.retryTop).toBeGreaterThanOrEqual(165)
+        expect(offline.retryTop).toBeLessThanOrEqual(171)
+      }
+      expect(offline.headingLeft - offline.iconRight).toBeGreaterThanOrEqual(12)
+      expect(offline.noteCount).toBe(2)
+      expect(offline.retryHeight).toBeGreaterThanOrEqual(44)
+      expect(offline.overflowing).toBe(false)
+    }
+    await page.close()
+  })
+
   test("uses P10 group widths, P13 stacked cards, and P14 framed left-aligned status content", async () => {
     const page = await requireBrowser().openPage()
     await page.navigate(url("/docs"))

@@ -498,6 +498,29 @@
 
 /* --- changelog ---------------------------------------------------------- */
 
+.release__inline-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--yc-space-1);
+  margin-block-end: var(--yc-space-4);
+  padding: 0;
+  border: 0;
+}
+
+.release__inline-filters .filters__option {
+  justify-content: center;
+  min-inline-size: 0;
+  padding-inline: var(--yc-space-1);
+  border-color: var(--yc-border-strong);
+  font-size: var(--yc-size-xs);
+}
+
+@media (min-width: 1024px) {
+  .release__inline-filters {
+    display: none;
+  }
+}
+
 .releases {
   display: grid;
   border-block-start: var(--yc-border-width) solid var(--yc-border);
@@ -646,6 +669,14 @@
    prose-and-steps article treatment used by P11 and the other documentation pages. */
 .docs--index .docs-article {
   max-inline-size: none;
+  padding-inline: 0;
+}
+
+@media (min-width: 1280px) {
+  .docs--index .docs-shell {
+    max-inline-size: none;
+    grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr);
+  }
 }
 
 .docs--index .doc-section {
@@ -677,6 +708,10 @@
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.docs--index .card__link svg {
+  display: none;
+}
+
 .docs--index .card__text {
   grid-column: 1 / -1;
 }
@@ -697,6 +732,35 @@
 }
 
 @media (max-width: 639px) {
+  .docs--index .docs-article {
+    padding-block-start: var(--yc-space-4);
+  }
+
+  .docs--index .docs-article__lede {
+    font-size: var(--yc-size-sm);
+    line-height: var(--yc-leading-sm);
+    margin-block: var(--yc-space-1) var(--yc-space-3);
+  }
+
+  .docs--index .doc-section {
+    gap: var(--yc-space-2);
+    padding: var(--yc-space-3);
+  }
+
+  .docs--index .card-grid {
+    gap: var(--yc-space-1);
+  }
+
+  .docs--index .card__title {
+    font-size: var(--yc-size-sm);
+    line-height: var(--yc-leading-sm);
+  }
+
+  .docs--index .card__text {
+    font-size: var(--yc-size-2xs);
+    line-height: var(--yc-leading-2xs);
+  }
+
   .docs--index [data-doc-group="configuration"] .card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -722,7 +786,7 @@
 
   .docs--index [data-doc-group]:not([data-doc-group="configuration"]) .card__link {
     min-block-size: var(--yc-hit-min);
-    padding: var(--yc-space-2) 0;
+    padding: var(--yc-space-1) 0;
   }
 }
 
@@ -736,6 +800,34 @@
 .docs--article .doc-section {
   gap: var(--yc-space-3);
   padding-block: var(--yc-space-6);
+}
+
+@media (max-width: 639px) {
+  .docs--article .docs-article__lede {
+    margin-block: var(--yc-space-1) var(--yc-space-3);
+    font-size: var(--yc-size-sm);
+    line-height: var(--yc-leading-sm);
+  }
+
+  .docs--article .doc-section {
+    gap: var(--yc-space-2);
+    padding-block: var(--yc-space-3);
+  }
+
+  .docs--article .doc-section h2 {
+    font-size: var(--yc-size-lg);
+    line-height: var(--yc-leading-lg);
+  }
+
+  .docs--article .code-block pre,
+  .docs--article .doc-table th,
+  .docs--article .doc-table td {
+    padding: var(--yc-space-2);
+  }
+
+  .docs--article .code-block__copy {
+    min-block-size: var(--yc-hit-min);
+  }
 }
 
 .docs-search-pane .search__results {
@@ -806,6 +898,51 @@
   margin-inline-start: var(--yc-space-4);
   color: var(--yc-text-muted);
   list-style: disc;
+}
+
+@media (min-width: 1280px) {
+  .docs--changelog .docs-shell {
+    grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr);
+  }
+
+  .docs--changelog .docs-article {
+    max-inline-size: calc(768px + var(--yc-gutter) * 2);
+  }
+}
+
+@media (max-width: 1023px) {
+  .docs--changelog .docs-article {
+    padding-inline: 0;
+  }
+
+  .docs--changelog .docs-article__lede {
+    margin-block: var(--yc-space-1) var(--yc-space-3);
+    font-size: var(--yc-size-sm);
+    line-height: var(--yc-leading-sm);
+  }
+
+  .releases--timeline .release {
+    gap: var(--yc-space-2);
+    padding: var(--yc-space-3);
+  }
+
+  .release__meta {
+    gap: var(--yc-space-1) var(--yc-space-2);
+    padding-block-end: var(--yc-space-2);
+  }
+
+  .release__changes {
+    gap: var(--yc-space-2);
+  }
+
+  .release__change {
+    gap: var(--yc-space-1);
+    padding-block-start: var(--yc-space-2);
+  }
+
+  .release__change ul {
+    gap: var(--yc-space-1);
+  }
 }
 
 .filters--release {

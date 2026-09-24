@@ -693,7 +693,15 @@ body:has(.app) {
   gap: var(--yc-space-2);
   align-items: flex-start;
   min-block-size: var(--yc-hit-min);
-  padding: var(--yc-space-1) 0;
+  padding: var(--yc-space-2);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-sm);
+  background: var(--yc-surface-sunken);
+}
+
+.question__option:has(input:checked) {
+  border-color: var(--yc-green-strong);
+  background: var(--yc-green-soft);
 }
 
 .question__custom {
@@ -849,16 +857,19 @@ body:has(.app) {
   gap: var(--yc-space-2);
 }
 
-/* The compact stack: below 480 the field takes its own row and the controls sit
-   under it, because a usable text field plus two 44px controls does not fit one line. */
+/* Keep compact delivery controls inline with the field while retaining touch-sized actions. */
 @media (max-width: 479px) {
   .composer__row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    display: flex;
   }
 
   .composer__controls {
     justify-content: space-between;
+    gap: var(--yc-space-1);
+  }
+
+  .composer__delivery {
+    inline-size: min(128px, 40vw);
   }
 }
 
@@ -871,7 +882,6 @@ body:has(.app) {
   grid-column: 1 / -1;
 }
 
-.app--sessions .workspace__scroll,
 .app--settings .workspace__scroll {
   inline-size: min(100%, 1180px);
   margin-inline: auto;
@@ -1050,6 +1060,13 @@ body:has(.app) {
   padding: var(--yc-space-5);
 }
 
+@media (min-width: 1024px) {
+  .activity-page__events,
+  .activity-page__decisions {
+    padding: var(--yc-space-3);
+  }
+}
+
 .activity-page__decisions {
   border-inline-start: var(--yc-border-width) solid var(--yc-border);
   background: var(--yc-surface-sunken);
@@ -1070,6 +1087,48 @@ body:has(.app) {
   border-radius: var(--yc-radius-lg);
   overflow: hidden;
   background: var(--yc-surface-raised);
+}
+
+.account-card__sign-in {
+  display: grid;
+  justify-items: center;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-3) var(--yc-space-4);
+  text-align: center;
+}
+
+.account-card__icon {
+  display: grid;
+  place-items: center;
+  inline-size: var(--yc-hit-min);
+  block-size: var(--yc-hit-min);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+  color: var(--yc-green-strong);
+}
+
+.account-card__sign-in h3 {
+  font-size: var(--yc-size-lg);
+}
+
+.account-card__detail {
+  max-inline-size: var(--yc-measure);
+  color: var(--yc-text-muted);
+}
+
+.account-card__actions {
+  inline-size: 100%;
+}
+
+.account-card__sign-in .button {
+  inline-size: 100%;
+  min-block-size: var(--yc-hit-min);
+}
+
+@media (max-width: 639px) {
+  .account-card .button--primary {
+    inline-size: 100%;
+  }
 }
 
 .device-access-note {
@@ -1260,6 +1319,7 @@ body:has(.app) {
   .device-table .device {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--yc-space-2);
+    padding: var(--yc-space-3);
     border: var(--yc-border-width) solid var(--yc-border);
     border-radius: var(--yc-radius-md);
   }
@@ -1268,14 +1328,26 @@ body:has(.app) {
     border-block-start: var(--yc-border-width) solid var(--yc-border);
   }
 
-  .device__registration,
-  .device__connection,
+  .device__registration {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
   .device__last-seen {
     grid-column: 1;
+    grid-row: 2;
+  }
+
+  .device__connection {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
   }
 
   .device__action {
     grid-column: 1 / -1;
+    grid-row: 3;
     inline-size: 100%;
   }
 
@@ -1285,6 +1357,15 @@ body:has(.app) {
 
   .settings {
     gap: var(--yc-space-6);
+  }
+
+  .activity-page__events,
+  .activity-page__decisions {
+    padding: var(--yc-space-3);
+  }
+
+  .activity-page .requests {
+    gap: var(--yc-space-3);
   }
 }
 
@@ -1322,8 +1403,22 @@ body:has(.app) {
 }
 
 @media (max-width: 1023px) {
+  .sessions-table__row {
+    row-gap: var(--yc-space-1);
+  }
+
+  .sessions-table__status {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: start;
+  }
+
   .requests .button,
   .settings .button {
+    min-block-size: var(--yc-hit-min);
+  }
+
+  .activity-page .request__actions .button {
     min-block-size: var(--yc-hit-min);
   }
 
@@ -1354,7 +1449,7 @@ body:has(.app) {
     inline-size: min(150px, calc(100vw - 174px));
   }
 
-  .app-header__end > :not(:first-child) {
+  .app .app-header__end > :not(:first-child) {
     display: none;
   }
 

@@ -91,45 +91,55 @@ export function AccountSettings(): JSX.Element {
       hint="This workspace reaches your machines with the account this browser is signed in with."
     >
       <div class="account-card">
-        <div class="defs__row">
-          <span class="defs__key">Account</span>
-          <span class="defs__value">
-            <strong>{signedIn() ? state().owner?.id : detail()}</strong>
-            <Show when={signedIn()}><span class="chip">Signed in</span></Show>
-          </span>
-        </div>
-        <Show when={expiry()}>
-          {(label) => (
+        <Show when={actions().includes("sign-in")} fallback={
+          <>
             <div class="defs__row">
-              <span class="defs__key">Session expires</span>
-              <span class="defs__value">{label()}</span>
+              <span class="defs__key">Account</span>
+              <span class="defs__value">
+                <strong>{signedIn() ? state().owner?.id : detail()}</strong>
+                <Show when={signedIn()}><span class="chip">Signed in</span></Show>
+              </span>
             </div>
-          )}
-        </Show>
-        <div class="defs__row">
-          <span class="defs__key">Actions</span>
-          <span class="defs__value">
-            <Show when={signedIn()}>
-              <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.logout()}>
-                Sign out
-              </button>
-              <button type="button" class="button button--ghost button--small" onClick={() => void remote.store.load()}>
-                <Icon name="refresh" size={16} />
-                Refresh account
-              </button>
+            <Show when={expiry()}>
+              {(label) => (
+                <div class="defs__row">
+                  <span class="defs__key">Session expires</span>
+                  <span class="defs__value">{label()}</span>
+                </div>
+              )}
             </Show>
-            <Show when={actions().includes("sign-in")}>
-              <button type="button" class="button button--primary button--small" onClick={() => remote.signIn()}>
+            <div class="defs__row">
+              <span class="defs__key">Actions</span>
+              <span class="defs__value">
+                <Show when={signedIn()}>
+                  <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.logout()}>
+                    Sign out
+                  </button>
+                  <button type="button" class="button button--ghost button--small" onClick={() => void remote.store.load()}>
+                    <Icon name="refresh" size={16} />
+                    Refresh account
+                  </button>
+                </Show>
+                <Show when={actions().includes("retry")}>
+                  <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.load()}>
+                    Retry account check
+                  </button>
+                </Show>
+              </span>
+            </div>
+          </>
+        }>
+          <div class="account-card__sign-in">
+            <span class="account-card__icon"><Icon name="key" size={24} /></span>
+            <h3>Sign in to YCoding</h3>
+            <p class="account-card__detail">{detail()}</p>
+            <div class="account-card__actions">
+              <button type="button" class="button button--primary" onClick={() => remote.signIn()}>
                 Sign in with Google
               </button>
-            </Show>
-            <Show when={actions().includes("retry")}>
-              <button type="button" class="button button--secondary button--small" onClick={() => void remote.store.load()}>
-                Retry account check
-              </button>
-            </Show>
-          </span>
-        </div>
+            </div>
+          </div>
+        </Show>
       </div>
     </Section>
   )

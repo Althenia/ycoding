@@ -75,7 +75,7 @@
       main {
         display: flex;
         flex-direction: column;
-        max-width: 600px;
+        max-width: 672px;
         min-height: 400px;
         margin: 48px auto;
         padding: 32px;
@@ -149,10 +149,57 @@
           width: 100%;
         }
       }
+      @media (max-width: 479px) {
+        main {
+          margin-inline: 0;
+        }
+      }
       @media (min-width: 640px) and (max-width: 1023px) {
+        main {
+          max-width: none;
+          margin-inline: 24px;
+        }
         h1 {
           font-size: 18px;
           line-height: 27px;
+        }
+      }
+      @media (min-width: 768px) and (max-width: 1023px) {
+        main {
+          display: grid;
+          grid-template-columns: 48px minmax(0, 1fr);
+          gap: 8px 20px;
+          min-height: 0;
+          padding: 24px;
+        }
+        .status {
+          grid-column: 1 / -1;
+          margin-bottom: 16px;
+          padding-bottom: 8px;
+        }
+        .offline-icon {
+          grid-column: 1;
+          grid-row: 2 / span 3;
+          margin-bottom: 0;
+        }
+        h1 {
+          grid-column: 2;
+          grid-row: 2;
+          align-self: end;
+          margin-bottom: 0;
+        }
+        main p:not(.status) {
+          grid-column: 2;
+          margin-bottom: 0;
+        }
+        .actions {
+          grid-column: 1 / -1;
+          margin-top: 0;
+        }
+      }
+      @media (min-width: 1024px) {
+        main {
+          min-height: 420px;
         }
       }
     </style>

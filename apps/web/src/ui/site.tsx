@@ -233,7 +233,6 @@ export function NotFoundPage(): JSX.Element {
   return (
     <div class="not-found">
       <div class="not-found__card">
-        <p class="not-found__eyebrow">404 · NOT FOUND</p>
         <div class="not-found__icon">
           <Icon name="search" size={28} />
         </div>
@@ -247,6 +246,10 @@ export function NotFoundPage(): JSX.Element {
             Go home
           </Link>
         </div>
+        <Link href="/remote" class="text-link not-found__workspace">
+          <Icon name="terminal" size={16} />
+          Open workspace
+        </Link>
       </div>
     </div>
   )

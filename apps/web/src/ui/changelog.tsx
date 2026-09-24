@@ -40,6 +40,29 @@ export function ChangelogPage(): JSX.Element {
       rail={filters}
       class="docs--changelog"
     >
+      <fieldset class="release__inline-filters">
+        <legend class="visually-hidden">Change type</legend>
+        <button
+          type="button"
+          class={`filters__option${tag() === "all" ? " filters__option--active" : ""}`}
+          aria-pressed={tag() === "all"}
+          onClick={() => setTag("all")}
+        >
+          All
+        </button>
+        <For each={tags}>
+          {(value) => (
+            <button
+              type="button"
+              class={`filters__option${tag() === value ? " filters__option--active" : ""}`}
+              aria-pressed={tag() === value}
+              onClick={() => setTag(value)}
+            >
+              {value}
+            </button>
+          )}
+        </For>
+      </fieldset>
       <Show when={releases().length > 0} fallback={<p class="prose">No releases match these filters.</p>}>
         <ol class="releases releases--timeline">
           <For each={releases()}>
@@ -54,7 +77,7 @@ export function ChangelogPage(): JSX.Element {
                 </div>
                 <div class="release__changes">
                   <h3>{release.title}</h3>
-                  <For each={release.tags}>
+                  <For each={release.tags.filter((tag) => release.changes.some((change) => change.tag === tag))}>
                     {(tag) => <ReleaseChangeGroup tag={tag} changes={release.changes.filter((change) => change.tag === tag)} />}
                   </For>
                 </div>

@@ -202,14 +202,155 @@ describe("remote shell layout", () => {
       await page.close()
     }
   }, 30_000)
+
+  test("keeps the R01 mobile device sheet usable over the branded four-tab workspace", async () => {
+    for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("stitch=r01&specimen=390", 390, "Select Active Device", theme, 620)
+      const state = await page.evaluate<{
+        readonly brandVisible: boolean
+        readonly tabs: readonly string[]
+        readonly sheet: { readonly top: number; readonly bottom: number }
+        readonly options: readonly { readonly label: string; readonly height: number }[]
+        readonly overflow: boolean
+      }>(`(() => {
+        const box=document.querySelector('.custom-select__surface')?.getBoundingClientRect();
+        return {
+          brandVisible:document.querySelector('.app-header .brand img') instanceof HTMLImageElement && document.querySelector('.app-header .brand img').getBoundingClientRect().width > 0,
+          tabs:[...document.querySelectorAll('.bottom-nav__item')].filter(link=>link.getBoundingClientRect().width>0).map(link=>link.textContent.trim()),
+          sheet:{top:box?.top ?? 0,bottom:box?.bottom ?? 0},
+          options:[...document.querySelectorAll('.custom-select__option')].map(option=>({label:option.querySelector('.custom-select__option-body')?.textContent.trim() ?? '',height:option.getBoundingClientRect().height})),
+          overflow:document.documentElement.scrollWidth > innerWidth,
+        };
+      })()`)
+      expect(state.brandVisible).toBe(true)
+      expect(state.tabs).toEqual(["Chat", "Activity", "Sessions", "More"])
+      expect(state.sheet.bottom).toBeCloseTo(620, 0)
+      expect(state.sheet.top).toBeLessThan(state.sheet.bottom)
+      expect(state.options.map((option) => option.label)).toEqual(["Studio Mac", "Dev Linux"])
+      expect(state.options.every((option) => option.height >= 44)).toBe(true)
+      expect(state.overflow).toBe(false)
+      await page.evaluate(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('[aria-label="Device"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
+      expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__surface') === null`)).toBe(true)
+      await page.close()
+    }
+  }, 30_000)
+
+  test("keeps the R03 mobile composer compact without shrinking delivery or send controls", async () => {
+    for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("stitch=r03&specimen=390", 390, "Run sanity checks on worker threads.", theme, 620)
+      const state = await page.evaluate<{
+        readonly height: number
+        readonly input: number
+        readonly actions: readonly { readonly label: string; readonly height: number }[]
+        readonly messages: number
+        readonly overflow: boolean
+      }>(`(() => {
+        const composer=document.querySelector('.composer');
+        return {
+          height:composer?.getBoundingClientRect().height ?? 0,
+          input:composer?.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
+          actions:[...composer?.querySelectorAll('button') ?? []].map(button=>({label:button.getAttribute('aria-label') ?? button.textContent.trim(),height:button.getBoundingClientRect().height})),
+          messages:document.querySelectorAll('.transcript > .message').length,
+          overflow:document.documentElement.scrollWidth > innerWidth,
+        };
+      })()`)
+      expect(state.height).toBeLessThanOrEqual(160)
+      expect(state.input).toBeGreaterThanOrEqual(44)
+      expect(state.actions.map((action) => action.label)).toContain("Send prompt")
+      expect(state.actions.every((action) => action.height >= 44), JSON.stringify(state.actions)).toBe(true)
+      expect(state.messages).toBe(2)
+      expect(state.overflow).toBe(false)
+      await page.evaluate(`document.querySelector('.composer__delivery-option:nth-child(2)')?.click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.composer__delivery-option:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)).toBe(true)
+      await page.close()
+    }
+  }, 30_000)
+
+  test("densifies R04 mobile Activity while keeping decisions and event actions visible", async () => {
+    for (const theme of ["dark", "light"] as const) {
+      const page = await fixture("stitch=r04&specimen=390", 390, "Authorize branch push for feat/ast-cache", theme, 901)
+      const state = await page.evaluate<{
+        readonly sectionPadding: readonly number[]
+        readonly eventRows: number
+        readonly decisions: number
+        readonly actions: readonly { readonly label: string; readonly height: number }[]
+        readonly overflow: boolean
+      }>(`(() => ({
+        sectionPadding:[...document.querySelectorAll('.activity-page__events,.activity-page__decisions')].map(element=>parseFloat(getComputedStyle(element).paddingTop)),
+        eventRows:document.querySelectorAll('.activity-page__events .activity-row').length,
+        decisions:document.querySelectorAll('.activity-page__decisions .request').length,
+        actions:[...document.querySelectorAll('.activity-page__decisions .request__actions button')].map(button=>({label:button.textContent.trim(),height:button.getBoundingClientRect().height})),
+        overflow:document.documentElement.scrollWidth > innerWidth,
+      }))()`)
+      expect(state.sectionPadding.every((padding) => padding <= 16)).toBe(true)
+      expect(state.eventRows).toBeGreaterThan(0)
+      expect(state.decisions).toBe(2)
+      expect(state.actions.map((action) => action.label)).toContain("Approve once")
+      expect(state.actions.every((action) => action.height >= 44), JSON.stringify(state.actions)).toBe(true)
+      expect(state.overflow).toBe(false)
+      await page.close()
+    }
+  }, 30_000)
+
+  test("keeps the approved remote families responsive at 320, 390, 768, and 1440px in both themes", async () => {
+    for (const width of [320, 390, 768, 1440] as const) {
+      for (const theme of ["dark", "light"] as const) {
+        const workspace = await fixture("stitch=r01&specimen=390", width, "Token expiry refactor", theme, 901)
+        const workspaceState = await workspace.evaluate<{ readonly overflow: boolean; readonly trigger: number; readonly tabs: number }>(`(() => ({
+          overflow:document.documentElement.scrollWidth > innerWidth,
+          trigger:document.querySelector('[aria-label="Device"]')?.getBoundingClientRect().height ?? 0,
+          tabs:[...document.querySelectorAll('.bottom-nav__item')].filter(item=>item.getBoundingClientRect().width>0).length,
+        }))()`)
+        expect(workspaceState.overflow).toBe(false)
+        expect(workspaceState.trigger).toBeGreaterThanOrEqual(44)
+        expect(workspaceState.tabs).toBe(width < 768 ? 4 : 0)
+        expect(await workspace.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
+        await workspace.close()
+
+        const conversation = await fixture("stitch=r03&specimen=390", width, "Run sanity checks on worker threads.", theme, 901)
+        const conversationState = await conversation.evaluate<{ readonly overflow: boolean; readonly messages: number; readonly input: number; readonly inputWidth: number; readonly send: number }>(`(() => ({
+          overflow:document.documentElement.scrollWidth > innerWidth,
+          messages:document.querySelectorAll('.transcript > .message').length,
+          input:document.querySelector('.composer__input')?.getBoundingClientRect().height ?? 0,
+          inputWidth:document.querySelector('.composer__input')?.getBoundingClientRect().width ?? 0,
+          send:document.querySelector('[aria-label="Send prompt"]')?.getBoundingClientRect().height ?? 0,
+        }))()`)
+        expect(conversationState.overflow).toBe(false)
+        expect(conversationState.messages).toBe(2)
+        expect(conversationState.input).toBeGreaterThanOrEqual(44)
+        expect(conversationState.send).toBeGreaterThanOrEqual(44)
+        if (width < 480) expect(conversationState.inputWidth, `${width}px composer input`).toBeGreaterThanOrEqual(96)
+        expect(await conversation.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
+        await conversation.close()
+
+        const activity = await fixture("stitch=r04&specimen=390", width, "Authorize branch push for feat/ast-cache", theme, 901)
+        const activityState = await activity.evaluate<{ readonly overflow: boolean; readonly rows: number; readonly decisions: number; readonly actions: readonly number[] }>(`(() => ({
+          overflow:document.documentElement.scrollWidth > innerWidth,
+          rows:document.querySelectorAll('.activity-page__events .activity-row').length,
+          decisions:document.querySelectorAll('.activity-page__decisions .request').length,
+          actions:[...document.querySelectorAll('.activity-page__decisions .request__actions button')].map(button=>button.getBoundingClientRect().height),
+        }))()`)
+        expect(activityState.overflow).toBe(false)
+        expect(activityState.rows).toBeGreaterThan(0)
+        expect(activityState.decisions).toBe(2)
+        if (width < 1024) expect(activityState.actions.every((height) => height >= 44)).toBe(true)
+        expect(await activity.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
+        await activity.close()
+      }
+    }
+  }, 60_000)
 })
 
-async function fixture(query: string, width: number, expected: string) {
+async function fixture(query: string, width: number, expected: string, theme?: "dark" | "light", height = 1366) {
   const page = await requireBrowser().openPage()
-  await page.setViewport(width, 1366)
+  await page.setViewport(width, height)
   await page.navigate(`http://127.0.0.1:${port}/verify/remote.html?${query}`)
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (await page.evaluate<boolean>(`document.body.innerText.includes(${JSON.stringify(expected)})`)) return page
+    if (await page.evaluate<boolean>(`document.body.innerText.includes(${JSON.stringify(expected)})`)) {
+      if (theme !== undefined) await page.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`)
+      return page
+    }
     await Bun.sleep(100)
   }
   await page.close()

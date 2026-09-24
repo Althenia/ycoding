@@ -400,10 +400,9 @@ function scenario(family: StitchFamily, specimen: StitchSpecimen): StitchRemoteS
       account: "signedout",
       devices: [],
       sessions: [],
-      expectedText: ["Signed out", "Sign in with Google"],
+      expectedText: ["Signed out", "Sign in to YCoding", "Sign in with Google"],
       exclusions: [
         ...baseExclusions,
-        "The source Sign in to YCoding heading maps to the native signed-out account state.",
         "The native sign-in action lives in the combined Settings route rather than a source-only standalone card.",
       ],
     }

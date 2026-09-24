@@ -103,6 +103,44 @@ describe("approved remote fidelity invariants", () => {
     await page.close()
   }, 30_000)
 
+  test("lets the R02 desktop Sessions table span the stage without losing rows or targets", async () => {
+    const page = await scenario("r02", 1440, "Postgres Partition Pruning Worker")
+    for (const width of [1280, 1440, 2048] as const) {
+      await page.setViewport(width, 900)
+      const state = await page.evaluate<{
+        readonly width: number
+        readonly center: number
+        readonly viewport: number
+        readonly rows: number
+        readonly columns: number
+        readonly minTargetHeight: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const table = document.querySelector('.sessions-results')
+        const rows = [...document.querySelectorAll('.sessions-table__row')]
+        const targets = [...document.querySelectorAll('.sessions-table__select')]
+        if (!(table instanceof HTMLElement) || !(rows[0] instanceof HTMLElement) || targets.length === 0) throw new Error('R02 Sessions table missing')
+        const rect = table.getBoundingClientRect()
+        return {
+          width: rect.width,
+          center: rect.left + rect.width / 2,
+          viewport: innerWidth,
+          rows: rows.length,
+          columns: getComputedStyle(rows[0]).gridTemplateColumns.split(' ').length,
+          minTargetHeight: Math.min(...targets.map(target => target.getBoundingClientRect().height)),
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(state.width).toBeGreaterThanOrEqual(width - 128)
+      expect(Math.abs(state.center - state.viewport / 2)).toBeLessThanOrEqual(2)
+      expect(state.rows).toBe(4)
+      expect(state.columns).toBe(4)
+      expect(state.minTargetHeight).toBeGreaterThanOrEqual(44)
+      expect(state.overflowing).toBe(false)
+    }
+    await page.close()
+  }, 30_000)
+
   test("keeps every Sessions selection target touch-sized on compact layouts", async () => {
     for (const width of [390, 768] as const) {
       for (const theme of ["light", "dark"] as const) {
@@ -111,6 +149,50 @@ describe("approved remote fidelity invariants", () => {
         expect(targets).toHaveLength(4)
         expect(targets.every((target) => target.height >= 44 && target.width >= 44)).toBe(true)
         expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+        await page.close()
+      }
+    }
+  }, 30_000)
+
+  test("keeps R02 compact Session status beside its title without losing metadata", async () => {
+    for (const width of [390, 768] as const) {
+      for (const theme of ["light", "dark"] as const) {
+        const page = await scenario("r02", width, "Async Auth Token Revocation Migration", theme)
+        const state = await page.evaluate<{
+          readonly rowHeight: number
+          readonly statusOffset: number
+          readonly title: string
+          readonly project: string
+          readonly updated: string
+          readonly targets: readonly number[]
+          readonly rowCount: number
+          readonly overflowing: boolean
+        }>(`(() => {
+          const row = document.querySelector('.sessions-table__row')
+          const title = row?.querySelector('.sessions-table__title')
+          const status = row?.querySelector('.sessions-table__status')
+          if (!(row instanceof HTMLElement) || !(title instanceof HTMLElement) || !(status instanceof HTMLElement)) throw new Error('R02 Session row missing')
+          return {
+            rowHeight: row.getBoundingClientRect().height,
+            statusOffset: status.getBoundingClientRect().top - title.getBoundingClientRect().top,
+            title: title.textContent?.trim() ?? '',
+            project: row.querySelector('.sessions-table__project')?.textContent?.trim() ?? '',
+            updated: row.querySelector('.sessions-table__updated')?.textContent?.trim() ?? '',
+            targets: [...document.querySelectorAll('.sessions-table__select')].map(button => button.getBoundingClientRect().height),
+            rowCount: document.querySelectorAll('.sessions-table__row').length,
+            overflowing: document.documentElement.scrollWidth > innerWidth,
+          }
+        })()`)
+        expect(state.statusOffset).toBeGreaterThanOrEqual(-2)
+        expect(state.statusOffset).toBeLessThanOrEqual(8)
+        expect(state.rowHeight).toBeLessThanOrEqual(width === 390 ? 164 : 150)
+        expect(state.title).toBe("Async Auth Token Revocation Migration")
+        expect(state.project).toBe("auth-gate")
+        expect(state.updated).not.toBe("")
+        expect(state.targets).toHaveLength(4)
+        expect(state.targets.every((height) => height >= 44)).toBe(true)
+        expect(state.rowCount).toBe(4)
+        expect(state.overflowing).toBe(false)
         await page.close()
       }
     }
@@ -129,6 +211,45 @@ describe("approved remote fidelity invariants", () => {
     }
   }, 30_000)
 
+  test("aligns R04 desktop events and decisions with the reference column insets", async () => {
+    for (const theme of ["light", "dark"] as const) {
+      const page = await scenario("r04", 1440, "Pending decisions", theme)
+      const state = await page.evaluate<{
+        readonly eventLeft: number
+        readonly decisionLeft: number
+        readonly decisionRightInset: number
+        readonly events: number
+        readonly decisions: number
+        readonly actions: number
+        readonly overflowing: boolean
+      }>(`(() => {
+        const event = document.querySelector('.activity-page__events .activity-row')
+        const decision = document.querySelector('.activity-page__decisions .request')
+        if (!(event instanceof HTMLElement) || !(decision instanceof HTMLElement)) throw new Error('R04 Activity cards missing')
+        return {
+          eventLeft: event.getBoundingClientRect().left,
+          decisionLeft: decision.getBoundingClientRect().left,
+          decisionRightInset: innerWidth - decision.getBoundingClientRect().right,
+          events: document.querySelectorAll('.activity-page__events .activity-row').length,
+          decisions: document.querySelectorAll('.activity-page__decisions .request').length,
+          actions: document.querySelectorAll('.activity-page__decisions .request button').length,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(state.eventLeft).toBeGreaterThanOrEqual(10)
+      expect(state.eventLeft).toBeLessThanOrEqual(15)
+      expect(state.decisionLeft).toBeGreaterThanOrEqual(973)
+      expect(state.decisionLeft).toBeLessThanOrEqual(981)
+      expect(state.decisionRightInset).toBeGreaterThanOrEqual(10)
+      expect(state.decisionRightInset).toBeLessThanOrEqual(15)
+      expect(state.events).toBe(3)
+      expect(state.decisions).toBe(2)
+      expect(state.actions).toBeGreaterThanOrEqual(6)
+      expect(state.overflowing).toBe(false)
+      await page.close()
+    }
+  }, 30_000)
+
   test("lays out desktop decisions in two columns with hard and final prompts full width", async () => {
     const page = await scenario("r05", 1440, "Clarify Disambiguation Query")
     const cards = await page.evaluate<readonly { readonly x: number; readonly width: number; readonly hard: boolean }[]>(`[...document.querySelectorAll('.requests>.request')].map(card=>({x:card.getBoundingClientRect().x,width:card.getBoundingClientRect().width,hard:card.classList.contains('request--hard')}))`)
@@ -137,6 +258,53 @@ describe("approved remote fidelity invariants", () => {
     expect(cards.find((card) => card.hard)?.width).toBeGreaterThan((cards[0]?.width ?? 0) * 1.8)
     expect(cards.at(-1)?.width).toBeGreaterThan((cards[0]?.width ?? 0) * 1.8)
     await page.close()
+  }, 30_000)
+
+  test("frames R05 choice rows without changing native answers or touch targets", async () => {
+    for (const [width, marker, optionCount, actionCount] of [
+      [390, "Select Target Cluster", 2, 6],
+      [768, "syslog daemon bridge", 3, 4],
+      [1440, "Clarify Disambiguation Query", 4, 6],
+    ] as const) {
+      for (const theme of ["light", "dark"] as const) {
+        const page = await scenario("r05", width, marker, theme)
+        const state = await page.evaluate<{
+          readonly options: number
+          readonly minHeight: number
+          readonly selectedBorder: string
+          readonly otherBorder: string
+          readonly selectedFill: string
+          readonly otherFill: string
+          readonly checked: number
+          readonly actions: number
+          readonly overflowing: boolean
+        }>(`(() => {
+          const options = [...document.querySelectorAll('.request .question__option')]
+          const selected = options.find(option => option.querySelector('input:checked'))
+          const other = options.find(option => option.querySelector('input:not(:checked)'))
+          if (!(selected instanceof HTMLElement) || !(other instanceof HTMLElement)) throw new Error('R05 choice states missing')
+          return {
+            options: options.length,
+            minHeight: Math.min(...options.map(option => option.getBoundingClientRect().height)),
+            selectedBorder: getComputedStyle(selected).borderColor,
+            otherBorder: getComputedStyle(other).borderColor,
+            selectedFill: getComputedStyle(selected).backgroundColor,
+            otherFill: getComputedStyle(other).backgroundColor,
+            checked: document.querySelectorAll('.request .question__option input:checked').length,
+            actions: document.querySelectorAll('.request button').length,
+            overflowing: document.documentElement.scrollWidth > innerWidth,
+          }
+        })()`)
+        expect(state.options).toBe(optionCount)
+        expect(state.minHeight).toBeGreaterThanOrEqual(44)
+        expect(state.selectedBorder).not.toBe(state.otherBorder)
+        expect(state.selectedFill).not.toBe(state.otherFill)
+        expect(state.checked).toBeGreaterThan(0)
+        expect(state.actions).toBeGreaterThanOrEqual(actionCount)
+        expect(state.overflowing).toBe(false)
+        await page.close()
+      }
+    }
   }, 30_000)
 
   test("keeps compact decision and account actions at least 44px", async () => {
@@ -149,6 +317,143 @@ describe("approved remote fidelity invariants", () => {
     const mobile = await scenario("r06", 390, "Sign in with Google")
     expect(await mobile.evaluate<number>(`document.querySelector('#account-settings')?.closest('section')?.querySelector('button')?.getBoundingClientRect().height ?? 0`)).toBeGreaterThanOrEqual(44)
     await mobile.close()
+  }, 30_000)
+
+  test("fills the R06 mobile sign-in row without hiding its account explanation", async () => {
+    const page = await scenario("r06", 390, "Sign in with Google")
+    for (const width of [390, 320] as const) {
+      await page.setViewport(width, 620)
+      const state = await page.evaluate<{
+        readonly buttonWidth: number
+        readonly rowWidth: number
+        readonly buttonHeight: number
+        readonly accountText: string
+        readonly actionVisibleAboveNav: boolean
+        readonly overflowing: boolean
+      }>(`(() => {
+        const button = document.querySelector('.account-card .button--primary')
+        const row = button?.parentElement
+        const account = document.querySelector('#account-settings')?.closest('section')
+        const nav = document.querySelector('.bottom-nav')
+        if (!(button instanceof HTMLButtonElement) || !(row instanceof HTMLElement) || !(account instanceof HTMLElement) || !(nav instanceof HTMLElement)) throw new Error('Signed-out account action missing')
+        return {
+          buttonWidth: button.getBoundingClientRect().width,
+          rowWidth: row.getBoundingClientRect().width,
+          buttonHeight: button.getBoundingClientRect().height,
+          accountText: account.innerText,
+          actionVisibleAboveNav: button.getBoundingClientRect().bottom <= nav.getBoundingClientRect().top,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(state.buttonWidth).toBeGreaterThanOrEqual(state.rowWidth - 2)
+      expect(state.buttonHeight).toBeGreaterThanOrEqual(44)
+      expect(state.accountText).toContain("not signed in")
+      expect(state.accountText).toContain("Sign in with Google")
+      if (width === 390) expect(state.actionVisibleAboveNav).toBe(true)
+      expect(state.overflowing).toBe(false)
+      if (width === 320) {
+        const reachable = await page.evaluate<boolean>(`(() => {
+          const button = document.querySelector('.account-card .button--primary')
+          const nav = document.querySelector('.bottom-nav')
+          if (!(button instanceof HTMLButtonElement) || !(nav instanceof HTMLElement)) return false
+          button.scrollIntoView({ block: 'end' })
+          return button.getBoundingClientRect().top >= 0 && button.getBoundingClientRect().bottom <= nav.getBoundingClientRect().top
+        })()`)
+        expect(reachable).toBe(true)
+      }
+    }
+    await page.close()
+  }, 30_000)
+
+  test("presents R06 sign-in as a centered action while retaining Settings context", async () => {
+    const page = await scenario("r06", 390, "Sign in with Google")
+    for (const width of [320, 390, 430] as const) {
+      await page.setViewport(width, 844)
+      const state = await page.evaluate<{
+        readonly heading: string
+        readonly detail: string
+        readonly explanation: string
+        readonly signInActions: number
+        readonly sections: number
+        readonly navVisible: boolean
+        readonly centered: boolean
+        readonly overflowing: boolean
+      }>(`(() => {
+        const panel = document.querySelector('.account-card')
+        const heading = panel?.querySelector('h3')
+        const detail = panel?.querySelector('.account-card__detail')
+        const action = panel?.querySelector('button')
+        if (!(panel instanceof HTMLElement) || !(heading instanceof HTMLElement) || !(detail instanceof HTMLElement) || !(action instanceof HTMLButtonElement)) throw new Error('R06 sign-in panel missing')
+        const middle = (element) => element.getBoundingClientRect().left + element.getBoundingClientRect().width / 2
+        return {
+          heading: heading.textContent.trim(),
+          detail: detail.textContent.trim(),
+          explanation: document.querySelector('#account-settings')?.nextElementSibling?.textContent?.trim() ?? '',
+          signInActions: panel.querySelectorAll('button').length,
+          sections: document.querySelectorAll('.settings__section').length,
+          navVisible: [...document.querySelectorAll('.bottom-nav a')].some((link) => link.getBoundingClientRect().height >= 44),
+          centered: Math.abs(middle(heading) - middle(panel)) <= 2 && Math.abs(middle(action) - middle(panel)) <= 2,
+          overflowing: document.documentElement.scrollWidth > innerWidth,
+        }
+      })()`)
+      expect(state.heading).toBe("Sign in to YCoding")
+      expect(state.detail).toContain("not signed in")
+      expect(state.explanation).toContain("This workspace reaches your machines")
+      expect(state.signInActions).toBe(1)
+      expect(state.sections).toBe(5)
+      expect(state.navVisible).toBe(true)
+      expect(state.centered).toBe(true)
+      expect(state.overflowing).toBe(false)
+    }
+    await page.close()
+  }, 30_000)
+
+  test("keeps R07 mobile device records compact with every live field and action", async () => {
+    const page = await scenario("r07", 390, "Enrollment code (shown once)")
+    for (const width of [320, 390, 430] as const) {
+      await page.setViewport(width, 844)
+      const rows = await page.evaluate<readonly {
+        readonly height: number
+        readonly name: string
+        readonly registration: string
+        readonly connection: string
+        readonly lastSeen: string
+        readonly actionHeight: number
+        readonly aligned: boolean
+        readonly contained: boolean
+      }[]>(`[...document.querySelectorAll('.device-table .device')].map(row => {
+        const name = row.querySelector('.device__name')
+        const registration = row.querySelector('.device__registration')
+        const connection = row.querySelector('.device__connection')
+        const lastSeen = row.querySelector('.device__last-seen')
+        const action = row.querySelector('.device__action button')
+        if (!(name instanceof HTMLElement) || !(registration instanceof HTMLElement) || !(connection instanceof HTMLElement) || !(lastSeen instanceof HTMLElement)) throw new Error('R07 device field missing')
+        const box = row.getBoundingClientRect()
+        return {
+          height: box.height,
+          name: name.textContent.trim(),
+          registration: registration.textContent.trim(),
+          connection: connection.textContent.trim(),
+          lastSeen: lastSeen.textContent.trim(),
+          actionHeight: action?.getBoundingClientRect().height ?? 0,
+          aligned: Math.abs(name.getBoundingClientRect().top - registration.getBoundingClientRect().top) <= 4 && Math.abs(connection.getBoundingClientRect().top - lastSeen.getBoundingClientRect().top) <= 4,
+          contained: [name, registration, connection, lastSeen, action].filter(Boolean).every(element => element.getBoundingClientRect().left >= box.left && element.getBoundingClientRect().right <= box.right),
+        }
+      })`)
+      expect(rows).toHaveLength(3)
+      expect(rows.map((row) => row.name)).toEqual(["Studio Mac", "Workstation-Box", "Legacy-MacBook"])
+      expect(rows.map((row) => row.registration)).toEqual(["Enrolled", "Enrolled", "Revoked"])
+      expect(rows.map((row) => row.connection)).toEqual(["Online", "Offline", "Disconnected"])
+      expect(rows.every((row) => row.lastSeen.length > 0 && row.aligned && row.contained)).toBe(true)
+      expect(rows[0]!.height).toBeLessThanOrEqual(140)
+      expect(rows[1]!.height).toBeLessThanOrEqual(140)
+      expect(rows[2]!.height).toBeLessThanOrEqual(90)
+      expect(rows[0]!.actionHeight).toBeGreaterThanOrEqual(44)
+      expect(rows[1]!.actionHeight).toBeGreaterThanOrEqual(44)
+      expect(rows[2]!.actionHeight).toBe(0)
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth > innerWidth`)).toBe(false)
+    }
+    await page.close()
   }, 30_000)
 
   test("keeps loading, signed-out, offline, pending-decision, revoked-device, and selected-session states truthful", async () => {
