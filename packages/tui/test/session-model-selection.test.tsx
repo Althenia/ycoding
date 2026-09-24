@@ -383,6 +383,34 @@ test("rapid variant cycling advances from the newest pending variant", async () 
   }
 }, 30_000)
 
+test("variant cycling keeps advancing when the catalog lists the none sentinel first", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "variant-cycle-none",
+    withoutPicker: true,
+    recent: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    catalog: models.map((item) =>
+      item.id === "gpt-5-2"
+        ? { ...item, variants: [{ id: "none" }, { id: "high" }, { id: "low" }] }
+        : item,
+    ),
+  })
+  try {
+    await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the model preference")
+    await screen.variantCycle()
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "high" })
+    await screen.variantCycle()
+    expect(screen.variant()).toBe("low")
+    await screen.variantCycle()
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
+    await screen.variantCycle()
+    expect(screen.variant()).toBe("high")
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
 test("keeps the desired target until the matching prompt submission commits it", async () => {
   switches.length = 0
   const screen = await renderPicker({

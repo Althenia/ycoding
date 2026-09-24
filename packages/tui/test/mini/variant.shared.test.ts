@@ -51,6 +51,15 @@ describe("run variant shared", () => {
     expect(cycleVariant(undefined, [])).toBeUndefined()
   })
 
+  test("skips base-model sentinel variant ids so every cycle step changes state", () => {
+    // The catalog can list "none" (reasoning off) first; selecting it normalizes to
+    // the base model, so a cycle step landing on it must never repeat from default.
+    expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("low")
+    expect(cycleVariant(undefined, ["default", "low", "high"])).toBe("low")
+    expect(cycleVariant("high", ["none", "low", "high"])).toBeUndefined()
+    expect(cycleVariant(undefined, ["none", "default"])).toBeUndefined()
+  })
+
   test("formats model labels", () => {
     expect(formatModelLabel(model, undefined)).toBe("gpt-5 · openai")
     expect(formatModelLabel(model, "high")).toBe("gpt-5 · openai · high")
