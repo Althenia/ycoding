@@ -2278,12 +2278,11 @@ export function Prompt(props: PromptProps) {
             location: location as never,
             agent: agentID,
             model: modelRef,
-          }) as unknown as { data: { id: string } }
-          const createdID = created?.data?.id ?? (created as unknown as string)
-          await client.api.session.autonomy.set({ sessionID: createdID, payload: { goal: candidate } })
+          })
+          await client.api.session.autonomy.set({ sessionID: created.id, payload: { goal: candidate } })
           props.onLandingGoalToggle?.(candidate)
           clearPrompt()
-          setTimeout(() => route.navigate({ type: "session", sessionID: createdID }), 50)
+          setTimeout(() => route.navigate({ type: "session", sessionID: created.id }), 50)
           return true
         } catch (error) {
           toast.show({ title: "Failed to create a session with the goal", message: errorMessage(error), variant: "error" })

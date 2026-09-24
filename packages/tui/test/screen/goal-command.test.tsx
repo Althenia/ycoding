@@ -11,6 +11,7 @@ import { renderScreen } from "./harness"
 // Distinct Location and Session from every other screen suite so the shared module mocks
 // installed by renderScreen cannot collide with a concurrent lane.
 const sessionID = "ses_goal_command"
+const landingSessionID = "ses_goal_command_landing"
 const directory = "/tmp/ycoding/goal-command"
 const location = { directory, project: { id: "proj_goal_command", directory } }
 const session = {
@@ -39,6 +40,7 @@ let autonomySets: Array<Record<string, unknown>> = []
 let promptRequests: Array<{ id: string; text: string; resume?: boolean }> = []
 let failNextAutonomySet = false
 let modelSwitchStarted = false
+let landingCreates = 0
 
 function resetFixture(state: SessionAutonomyState) {
   autonomyState = state
@@ -46,9 +48,22 @@ function resetFixture(state: SessionAutonomyState) {
   promptRequests = []
   failNextAutonomySet = false
   modelSwitchStarted = false
+  landingCreates = 0
 }
 
 const route: FetchHandler = async (url, request) => {
+  if (url.pathname === "/api/session" && request.method === "POST") {
+    landingCreates++
+    return json({ data: { ...session, id: landingSessionID } })
+  }
+  if (url.pathname === `/api/session/${landingSessionID}`) return json({ data: { ...session, id: landingSessionID } })
+  if (url.pathname === `/api/session/${landingSessionID}/autonomy`) {
+    if (request.method === "PUT") {
+      const body: unknown = await request.json()
+      if (body && typeof body === "object" && "goal" in body) autonomySets.push({ goal: body.goal })
+    }
+    return json({ data: autonomyState })
+  }
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
   if (url.pathname === "/api/session") return json({ data: [session], cursor: {} })
@@ -203,6 +218,23 @@ test("replaces an active goal with the exact /goal text and never admits a promp
 
     expect(autonomySets).toEqual([{ goal: "replace the migration plan" }])
     expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("creates a landing session and sets its goal with the returned session ID", async () => {
+  resetFixture({ mode: "normal", yolo: 0 })
+  const screen = await renderScreen({ width: 100, height: 69, route, settle: "Message YCoding…" })
+  try {
+    await focusComposer(screen)
+    await screen.input.typeText("/goal Investigate $reviewer and /command references")
+    await submitComposer(screen)
+    await waitFor(() => autonomySets.length > 0 || screen.frame().includes("Failed to create a session with the goal"), "landing goal result")
+
+    expect(landingCreates).toBe(1)
+    expect(autonomySets).toEqual([{ goal: "Investigate $reviewer and /command references" }])
+    expect(screen.frame()).not.toContain("Invalid session ID")
   } finally {
     await screen.dispose()
   }
