@@ -9,6 +9,7 @@ import { modeChips } from "../src/component/prompt/mode-chips"
 import {
   Header,
   headerModelLabel,
+  headerModelRef,
   pendingModelVariant,
   pendingVariantSelection,
   sessionRetryHeaderState,
@@ -203,6 +204,17 @@ test("cycling back to default shows the pending default rather than the saved va
       { pendingModel: "GPT-5.6 Terra", pendingVariant: pendingVariantSelection({ variant: undefined }, "high") },
     ),
   ).toBe("→ GPT-5.6 Terra")
+})
+
+test("keeps the header model and variant from one source after a model switch", () => {
+  const durable = { providerID: "qwen", id: "Qwen 3.8" }
+  const previousMessage = { providerID: "anthropic", id: "claude-opus-5", variant: "max" }
+  expect(headerModelRef(durable, previousMessage)).toEqual(durable)
+})
+
+test("uses the last assistant message model only when the session model is absent", () => {
+  const previousMessage = { providerID: "anthropic", id: "claude-opus-5", variant: "max" }
+  expect(headerModelRef(undefined, previousMessage)).toEqual(previousMessage)
 })
 
 test("never displays the default variant sentinel", () => {

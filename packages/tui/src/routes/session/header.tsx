@@ -78,6 +78,20 @@ export function headerModelLabel(input: {
 }
 
 /**
+ * The header names one model at a time: the durable Session model wins, and the last assistant
+ * message's model is a whole-reference fallback used only when the Session model is absent.
+ * Taking the model from one source and its variant from the other keeps a stale variant beside a
+ * newly selected model after a model switch, because the durable ref then omits its variant while
+ * the message ref still carries the previous model's.
+ */
+export function headerModelRef<T extends { providerID: string; id: string; variant?: string }>(
+  sessionModel: T | undefined,
+  messageModel: T | undefined,
+) {
+  return sessionModel ?? messageModel
+}
+
+/**
  * Truncation ladder from the design contract: ellipsize identifiers and drop them whole rather than
  * shorten status labels; below 120 columns, only working drops its state word.
  */

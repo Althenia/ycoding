@@ -133,7 +133,7 @@ import {
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
-import { Header, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
+import { Header, headerModelRef, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, inlineDiffGroups, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
 import { parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
@@ -503,14 +503,15 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const message = messages().findLast((item) => item.type === "assistant")
     return message?.type === "assistant" ? message : undefined
   })
+  const currentHeaderModel = createMemo(() => headerModelRef(session()?.model, headerMessage()?.model))
   const headerModel = createMemo(() => {
-    const model = session()?.model ?? headerMessage()?.model
+    const model = currentHeaderModel()
     if (!model) return
     const info = models().find((item) => item.providerID === model.providerID && item.id === model.id)
     const name = info?.name ?? Locale.titlecase(model.id.replaceAll("-", " "))
     return `${model.providerID}/${name}`
   })
-  const headerVariant = createMemo(() => session()?.model?.variant ?? headerMessage()?.model.variant)
+  const headerVariant = createMemo(() => currentHeaderModel()?.variant)
   const pendingHeaderModel = createMemo(() => {
     // While a switch is in flight, show the desired target as pending progress. The durable Session
     // model is still the active one until the switch settles.
@@ -536,7 +537,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
   // names it beside the agent. A provider with a single credential keeps the plain `provider/model`
   // label, and only the user-facing credential label is exposed — never a credential ID or token.
   const headerProfile = createMemo(() => {
-    const model = session()?.model ?? headerMessage()?.model
+    const model = currentHeaderModel()
     if (!model) return undefined
     const target = location()
     const integrationID =
