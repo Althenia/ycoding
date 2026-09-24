@@ -170,6 +170,7 @@ test("session diagnostics expose only bounded provider-request telemetry", async
       tokens: { input: 12_000, output: 900, reasoning: 300, cache: { read: 18_200, write: 1_200 } },
       latestInvalidation: "tool-prefix-changed" as const,
       latestNamespace: "a1b2c3d4",
+      latestTiming: { promptEvalDurationNs: 4_000_000, generationDurationNs: 8_000_000 },
     },
   }
   const client = YCoding.make({
@@ -184,6 +185,7 @@ test("session diagnostics expose only bounded provider-request telemetry", async
 
   expect(result).toEqual(diagnostics)
   expect(result?.requests?.latestNamespace).toBe("a1b2c3d4")
+  expect(result?.requests?.latestTiming?.promptEvalDurationNs).toBe(4_000_000)
   expect(JSON.stringify(result)).not.toContain("promptCacheKey")
   expect(request && new URL(request.url).pathname).toBe("/api/session/ses_test/diagnostics")
 })

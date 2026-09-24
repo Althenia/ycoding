@@ -36,6 +36,17 @@ test("preserves whether provider cache categories were reported", () => {
   ).toEqual({ readReported: false, writeReported: true })
 })
 
+test("keeps provider timings separate from token accounting", () => {
+  const usage = new Usage({ inputTokens: 20, nonCachedInputTokens: 12, cacheReadInputTokens: 8,
+    promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000, loadDurationNs: 6_000_000 })
+  expect(SessionUsage.timing(usage)).toEqual({
+    promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000, loadDurationNs: 6_000_000,
+  })
+  expect(SessionUsage.timing(new Usage({ inputTokens: 5 }))).toBeUndefined()
+  expect(SessionUsage.tokens(usage).cache.read).toBe(8)
+  expect(SessionUsage.timing(new Usage({ promptEvalDurationNs: -1, loadDurationNs: Number.NaN }))).toBeUndefined()
+})
+
 test("falls back to the OpenRouter master price only when provider pricing is unavailable", () => {
   const usage = { input: 1_000, output: 100, reasoning: 50, cache: { read: 0, write: 0 } }
 

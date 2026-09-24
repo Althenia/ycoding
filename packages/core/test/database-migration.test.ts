@@ -50,6 +50,7 @@ const currentMigrations = [
   { id: "20260808031138_provider-request-cache-read-reported" },
   { id: "20260908062843_session-archive-retention" },
   { id: "20260922051821_long_spitfire" },
+  { id: "20260924030327_prompt-cache-request-timing" },
 ]
 const selectiveCompactionTables = [
   "compaction_manifest_blob",
@@ -467,9 +468,10 @@ describe("DatabaseMigration", () => {
           canonicalMessage,
         )
         expect(
-          yield* db.get(sql`SELECT cache_read_reported FROM session_provider_request WHERE id = 'prq_legacy'`),
+          yield* db.get(sql`SELECT cache_read_reported, timing FROM session_provider_request WHERE id = 'prq_legacy'`),
         ).toEqual({
           cache_read_reported: null,
+          timing: null,
         })
         expect(
           yield* db.get(sql`SELECT status, revision, manifest_digest, error_code FROM session_context_state`),

@@ -127,6 +127,12 @@ export type SessionCompactionMetrics = {
 
 export type EventLogSynced = { type: "log.synced"; aggregateID: string; seq?: number }
 
+export type ProviderRequestTiming = {
+  promptEvalDurationNs?: number
+  generationDurationNs?: number
+  loadDurationNs?: number
+}
+
 export type SessionAutonomyMode = "normal"
 
 export type SessionAutonomyYoloLevel = 0 | 1 | 2 | 3
@@ -203,6 +209,8 @@ export type ModelVariant = {
 }
 
 export type MoneyUSDPerMillionTokens = number
+
+export type ModelAPI = "chat" | "responses"
 
 export type GenerateTextResponse = { data: { text: string } }
 
@@ -506,39 +514,6 @@ export type SessionMessageCompactionCompletedV1 = {
   recent: string
   messages?: number
   tokens?: TokenUsageInfo
-}
-
-export type ProviderRequestSummary = {
-  logical: number
-  physical: number
-  helpers: number
-  continued: number
-  fallback: number
-  cacheReadReported?: boolean
-  cost?: MoneyUSD
-  models?: Array<{
-    model: ModelRef
-    requests: number
-    tokens: TokenUsageInfo
-    cacheReadReported?: boolean
-    cost?: MoneyUSD
-    costProvenance?: "recorded" | "current_catalog"
-  }>
-  tokens: TokenUsageInfo
-  latestInvalidation?:
-    | "first-request"
-    | "compaction-reset"
-    | "model-switched"
-    | "model-variant-switched"
-    | "stable-hit"
-    | "prefix-changed"
-    | "system-prefix-changed"
-    | "tool-prefix-changed"
-    | "below-minimum"
-    | "provider-not-reported"
-    | "cache-disabled"
-    | "retry-fallback"
-  latestNamespace?: string
 }
 
 export type ProviderRequestReport = {
@@ -1483,6 +1458,40 @@ export type SessionCompactionEnded = {
   }
 }
 
+export type ProviderRequestSummary = {
+  logical: number
+  physical: number
+  helpers: number
+  continued: number
+  fallback: number
+  cacheReadReported?: boolean
+  cost?: MoneyUSD
+  models?: Array<{
+    model: ModelRef
+    requests: number
+    tokens: TokenUsageInfo
+    cacheReadReported?: boolean
+    cost?: MoneyUSD
+    costProvenance?: "recorded" | "current_catalog"
+  }>
+  tokens: TokenUsageInfo
+  latestInvalidation?:
+    | "first-request"
+    | "compaction-reset"
+    | "model-switched"
+    | "model-variant-switched"
+    | "stable-hit"
+    | "prefix-changed"
+    | "system-prefix-changed"
+    | "tool-prefix-changed"
+    | "below-minimum"
+    | "provider-not-reported"
+    | "cache-disabled"
+    | "retry-fallback"
+  latestNamespace?: string
+  latestTiming?: ProviderRequestTiming
+}
+
 export type SessionAutonomyGoal = {
   text: string
   status: SessionAutonomyGoalStatus
@@ -2114,23 +2123,6 @@ export type BrowserElement = {
 
 export type PermissionV2Ruleset = Array<PermissionV2Rule>
 
-export type SessionCacheDiagnostics = {
-  model: ModelRef
-  context: { total: number; limit?: number; remaining?: number; percent?: number }
-  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
-  cache: {
-    eligible: number
-    hitRatio?: number
-    mechanism: SessionCacheMechanism
-    readReported: boolean
-    writeReported: boolean
-    minimumTokens?: number
-    belowMinimum?: boolean
-  }
-  estimatedCost?: MoneyUSD
-  requests?: ProviderRequestSummary
-}
-
 export type SessionRevertStaged = {
   id: string
   created: number
@@ -2262,6 +2254,23 @@ export type SessionMessageCompaction =
   | SessionMessageCompactionFailedV1
   | SessionMessageCompactionFailed
 
+export type SessionCacheDiagnostics = {
+  model: ModelRef
+  context: { total: number; limit?: number; remaining?: number; percent?: number }
+  tokens: { uncachedInput: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number }
+  cache: {
+    eligible: number
+    hitRatio?: number
+    mechanism: SessionCacheMechanism
+    readReported: boolean
+    writeReported: boolean
+    minimumTokens?: number
+    belowMinimum?: boolean
+  }
+  estimatedCost?: MoneyUSD
+  requests?: ProviderRequestSummary
+}
+
 export type SessionAutonomyState = {
   mode: SessionAutonomyMode
   yolo: SessionAutonomyYoloLevel | boolean
@@ -2301,6 +2310,7 @@ export type ModelInfo = {
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   daybreak?: Array<ModelDaybreak>
+  api?: ModelAPI
   limit: { context: number; input?: number; output: number }
 }
 
@@ -2548,16 +2558,6 @@ export type ProjectArtifactAgentDefinition = {
   permissions: PermissionV2Ruleset
 }
 
-export type SessionDiagnosticsUpdated = {
-  id: string
-  created: number
-  metadata?: { [x: string]: any }
-  sourceEpoch?: string
-  type: "session.diagnostics.updated"
-  location?: LocationRef
-  data: { sessionID: string; diagnostics: SessionCacheDiagnostics }
-}
-
 export type SessionMessageUser = {
   id: string
   metadata?: { [x: string]: JsonValue }
@@ -2595,6 +2595,16 @@ export type SessionMessageAssistantTool = {
     | SessionMessageToolStateCompleted
     | SessionMessageToolStateError
   time: { created: number; ran?: number; completed?: number }
+}
+
+export type SessionDiagnosticsUpdated = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.diagnostics.updated"
+  location?: LocationRef
+  data: { sessionID: string; diagnostics: SessionCacheDiagnostics }
 }
 
 export type GuardrailStatus = GuardrailStatus1

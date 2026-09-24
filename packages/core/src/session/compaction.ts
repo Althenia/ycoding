@@ -156,6 +156,7 @@ const make = (dependencies: Dependencies): Interface => {
     })
     const chunks: string[] = []
     let usage: SessionUsage.Recorded | undefined
+    let timing: ReturnType<typeof SessionUsage.timing>
     let failure: FailureCode | undefined
     const completeRequest = Effect.suspend(() => {
       const recorded = usage ?? {
@@ -169,6 +170,7 @@ const make = (dependencies: Dependencies): Interface => {
             tokens: recorded.tokens,
             ...(cost === undefined ? {} : { cost }),
             continuation: "full",
+            ...(timing === undefined ? {} : { timing }),
             ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
           }),
           dependencies.cacheRuntime.observe({
@@ -184,8 +186,9 @@ const make = (dependencies: Dependencies): Interface => {
     const streamed = startStreamed(dependencies, request, {
       cost: input.resolved.cost,
       chunks,
-      updateUsage: (recorded) => {
+      updateUsage: (recorded, reportedTiming) => {
         usage = usage ? SessionUsage.add(usage, recorded) : recorded
+        timing = reportedTiming
       },
       setFailure: (code) => {
         failure = code
@@ -1049,7 +1052,7 @@ function startStreamed(
   hooks: {
     readonly cost: ModelV2.Info["cost"]
     readonly chunks: string[]
-    readonly updateUsage: (step: SessionUsage.Recorded) => void
+    readonly updateUsage: (step: SessionUsage.Recorded, timing: ReturnType<typeof SessionUsage.timing>) => void
     readonly setFailure: (code: FailureCode) => void
   },
 ) {
@@ -1058,7 +1061,8 @@ function startStreamed(
       if (LLMEvent.is.providerError(event))
         hooks.setFailure(event.classification === "context-overflow" ? "context_limit_unresolved" : "provider_failed")
       if (LLMEvent.is.textDelta(event)) hooks.chunks.push(event.text)
-      if (LLMEvent.is.stepFinish(event)) hooks.updateUsage(SessionUsage.record(event.usage, hooks.cost))
+      if (LLMEvent.is.stepFinish(event))
+        hooks.updateUsage(SessionUsage.record(event.usage, hooks.cost), SessionUsage.timing(event.usage))
       return Effect.void
     }),
     Effect.catchTag("LLM.Error", () =>

@@ -894,6 +894,7 @@ const layer = Layer.effectDiscard(
             invalidation: event.data.invalidation,
             continuation: event.data.continuation,
             cache_read_reported: event.data.cacheReadReported,
+            timing: event.data.timing,
             cost: event.data.cost,
             tokens: event.data.tokens,
             time_created: DateTime.toEpochMillis(event.data.time),

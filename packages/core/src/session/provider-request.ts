@@ -42,6 +42,7 @@ export interface CompleteInput {
   readonly invalidation?: ProviderRequest.Invalidation
   readonly continuation: ProviderRequest.Continuation
   readonly cacheReadReported?: boolean
+  readonly timing?: ProviderRequest.Timing
   readonly cost?: Money.USD
   readonly tokens: TokenUsage.Info
 }
@@ -193,7 +194,8 @@ export function summarize(records: readonly CostedRecord[]): ProviderRequest.Sum
     tokens: metrics.tokens,
     ...(latest === undefined
       ? {}
-      : { latestInvalidation: latest.invalidation, latestNamespace: latest.promptCacheKey.slice(0, 8) }),
+      : { latestInvalidation: latest.invalidation, latestNamespace: latest.promptCacheKey.slice(0, 8),
+          ...(latest.timing === undefined ? {} : { latestTiming: latest.timing }) }),
   }
 }
 
@@ -250,6 +252,7 @@ const rowRecord = (row: typeof SessionProviderRequestTable.$inferSelect): Provid
   invalidation: row.invalidation,
   continuation: row.continuation,
   ...(row.cache_read_reported === null ? {} : { cacheReadReported: row.cache_read_reported }),
+  ...(row.timing === null ? {} : { timing: row.timing }),
   ...(row.cost === null ? {} : { cost: Money.USD.make(row.cost) }),
   tokens: row.tokens,
   time: DateTime.makeUnsafe(row.time_created),
@@ -297,6 +300,7 @@ const layer = Layer.effect(
             .select({
               invalidation: SessionProviderRequestTable.invalidation,
               promptCacheKey: SessionProviderRequestTable.prompt_cache_key,
+              timing: SessionProviderRequestTable.timing,
             })
             .from(SessionProviderRequestTable)
             .where(eq(SessionProviderRequestTable.session_id, sessionID))
@@ -353,7 +357,8 @@ const layer = Layer.effect(
           ),
           ...(last === undefined
             ? {}
-            : { latestInvalidation: last.invalidation, latestNamespace: last.promptCacheKey.slice(0, 8) }),
+            : { latestInvalidation: last.invalidation, latestNamespace: last.promptCacheKey.slice(0, 8),
+                ...(last.timing === null ? {} : { latestTiming: last.timing }) }),
         }
       })
 
@@ -450,6 +455,7 @@ const layer = Layer.effect(
                       invalidation: completion.invalidation ?? current.defaultInvalidation,
                       continuation: completion.continuation,
                       ...(completion.cacheReadReported === undefined ? {} : { cacheReadReported: completion.cacheReadReported }),
+                      ...(completion.timing === undefined ? {} : { timing: completion.timing }),
                       ...(completion.cost === undefined ? {} : { cost: completion.cost }),
                       tokens: completion.tokens,
                       time,

@@ -14,7 +14,7 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionTitle } from "@ycoding-ai/core/session/title"
@@ -25,6 +25,7 @@ import { InstallationVersion } from "@ycoding-ai/core/installation/version"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { Money } from "@ycoding-ai/schema/money"
 import { Effect, Layer, Stream } from "effect"
+import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 let requests: LLMRequest[] = []
@@ -59,6 +60,7 @@ const client = Layer.mock(LLMClient.Service)({
           cacheReadInputTokens: 3,
           cacheWriteInputTokens: 2,
           reasoningTokens: 2,
+          promptEvalDurationNs: 4_000_000,
         },
       }),
       LLMEvent.finish({
@@ -232,6 +234,11 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
     expect(renamed?.title).toBe("Generated Title")
     expect(renamed?.tokens).toEqual({ input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } })
     expect(renamed?.cost).toBeCloseTo(0.0000233)
+    const { db } = yield* Database.Service
+    expect(yield* db.select({ timing: SessionProviderRequestTable.timing }).from(SessionProviderRequestTable)
+      .where(eq(SessionProviderRequestTable.session_id, sessionID)).get()).toMatchObject({
+      timing: { promptEvalDurationNs: 4_000_000 },
+    })
     expect(cachePolicies).toHaveLength(1)
     expect(cachePolicies[0]).toMatchObject({
       modelID: "title-model",

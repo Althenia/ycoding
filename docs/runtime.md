@@ -472,17 +472,29 @@ Caching is split into distinct concerns:
 - TUI diagnostics;
 - project artifact reuse, which is not a provider prompt cache.
 
+Session request preparation sorts hooked provider-visible tools by name and
+canonicalizes their JSON schemas before deriving the tool digest and sending
+the request. Historical messages remain in chronological order; a new user
+message changes the suffix without reordering unchanged tools.
+
 Runpod Jobs requests through the native vLLM/Ollama routes retain the ordered
 model-visible prompt but send no OpenAI prompt-cache controls. Ollama places
 the initial system instruction first and lowers chronological instruction updates
 to escaped user text in place. vLLM prefix
 caching is worker-owned; its cache-read tokens are reported only when the
 worker returns `usage.prompt_tokens_details.cached_tokens`. An absent count
+remains unreported. Ollama reports cached reads only when its worker returns
+`prompt_eval_cached_count`; the count is bounded by the reported
+`prompt_eval_count` before splitting cached and uncached tokens. An absent count
 remains unreported. Ollama's model storage and Runpod's model-download caching
 do not imply prompt-cache telemetry. Each Runpod Ollama `prompt_eval_count`
 measures that request's evaluated input context. The Session records each step's
 usage, while the compaction gate compares the latest step's context measurement
 against the model limit rather than summing contexts from earlier steps.
+When supplied, Ollama `prompt_eval_duration`, `eval_duration`, and `load_duration`
+are kept as provider-request timing in nanoseconds. The latest request timing
+appears in the Session usage summary and diagnostics, not in subsequent prompts;
+missing timing and inference-worker identity remain unreported.
 
 ### OpenAI
 

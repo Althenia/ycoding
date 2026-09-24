@@ -55,6 +55,8 @@ const ROUTE_MECHANISMS: Record<string, Session.CacheMechanism | undefined> = {
   "google-vertex-gemini": "gemini-prefix-cache",
   "ai-sdk:@ai-sdk/google": "gemini-prefix-cache",
   "ai-sdk:@ai-sdk/google-vertex": "gemini-prefix-cache",
+  "runpod-ollama": "provider-reported",
+  "runpod-vllm": "provider-reported",
 }
 
 export function mechanism(

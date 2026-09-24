@@ -39,6 +39,9 @@ test("decodes content-free provider request records", () => {
   expect(decode({ ...record, cacheReadReported: true }).cacheReadReported).toBe(true)
   expect(decode({ ...record, cacheReadReported: false }).cacheReadReported).toBe(false)
   expect(decoded).not.toHaveProperty("cacheReadReported")
+  expect(decode({ ...record, timing: { promptEvalDurationNs: 0, generationDurationNs: 5 } }).timing)
+    .toEqual({ promptEvalDurationNs: 0, generationDurationNs: 5 })
+  expect(() => decode({ ...record, timing: { promptEvalDurationNs: -1 } })).toThrow()
 })
 
 test("rejects unknown sources and non-positive counters", () => {
@@ -77,6 +80,8 @@ test("preserves optional cache-read reporting certainty on summaries and model s
   }
   expect(decodeSummary({ ...metrics, cacheReadReported: true }).cacheReadReported).toBe(true)
   expect(decodeSummary(metrics)).not.toHaveProperty("cacheReadReported")
+  expect(decodeSummary({ ...metrics, latestTiming: { loadDurationNs: 12 } }).latestTiming)
+    .toEqual({ loadDurationNs: 12 })
   expect(
     decodeSummary({
       ...metrics,

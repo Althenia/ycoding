@@ -126,6 +126,9 @@ test("derives provider cache mechanisms from the executed route", () => {
 })
 
 test("derives provider cache mechanisms from native (non-AI-SDK) route ids", () => {
+  expect(SessionCacheDiagnostics.mechanism("runpod-ollama", model("runpod"), {
+    input: 10, output: 2, reasoning: 0, cache: { read: 0, write: 0 },
+  })).toBe("provider-reported")
   const cases = {
     openrouter: "openrouter-cache-control",
     "google-vertex-messages": "anthropic-cache-control",
@@ -141,6 +144,8 @@ test("derives provider cache mechanisms from native (non-AI-SDK) route ids", () 
     "openai-codex-websocket-responses": "openai-prefix-cache",
     "github-copilot-chat": "openai-prefix-cache",
     "github-copilot-responses": "openai-prefix-cache",
+    "runpod-ollama": "provider-reported",
+    "runpod-vllm": "provider-reported",
   } as const
   for (const [routeID, expected] of Object.entries(cases))
     expect([routeID, SessionCacheDiagnostics.mechanism(routeID, model("anthropic"), tokens)]).toEqual([

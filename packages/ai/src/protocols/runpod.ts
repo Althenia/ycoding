@@ -45,6 +45,10 @@ const OllamaResponse = Schema.Struct({
   done: Schema.Literal(true),
   done_reason: Schema.optional(Schema.String),
   prompt_eval_count: Schema.optional(Schema.Number),
+  prompt_eval_cached_count: Schema.optional(Schema.Number),
+  prompt_eval_duration: Schema.optional(Schema.Number),
+  eval_duration: Schema.optional(Schema.Number),
+  load_duration: Schema.optional(Schema.Number),
   eval_count: Schema.optional(Schema.Number),
 })
 const VLLMResponse = Schema.Struct({
@@ -181,8 +185,16 @@ const stepOllama = (state: { readonly lifecycle: Lifecycle.State; readonly reque
     Effect.mapError(() => ProviderShared.eventError(OLLAMA, "Invalid Ollama response")),
   )
   const usage = Usage.from({
-    inputTokens: response.prompt_eval_count,
+    ...ProviderShared.normalizeInputUsage({
+      semantics: "inclusive-total", total: response.prompt_eval_count, cacheRead: response.prompt_eval_cached_count,
+    }),
     outputTokens: response.eval_count,
+    ...(response.prompt_eval_duration !== undefined && Number.isSafeInteger(response.prompt_eval_duration) && response.prompt_eval_duration >= 0
+      ? { promptEvalDurationNs: response.prompt_eval_duration } : {}),
+    ...(response.eval_duration !== undefined && Number.isSafeInteger(response.eval_duration) && response.eval_duration >= 0
+      ? { generationDurationNs: response.eval_duration } : {}),
+    ...(response.load_duration !== undefined && Number.isSafeInteger(response.load_duration) && response.load_duration >= 0
+      ? { loadDurationNs: response.load_duration } : {}),
     totalTokens: response.prompt_eval_count === undefined || response.eval_count === undefined
       ? undefined : response.prompt_eval_count + response.eval_count,
   })

@@ -229,6 +229,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       invalidation: "first-request",
       continuation: "full",
       cacheReadReported: true,
+      timing: { promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000, loadDurationNs: 6_000_000 },
       cost: Money.USD.make(0.0123),
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
     })
@@ -248,6 +249,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       attempts: 2,
       invalidation: "first-request",
       continuation: "full",
+      timing: { promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000, loadDurationNs: 6_000_000 },
       promptCacheKey: "cache-key",
       systemDigest: "system-digest",
       toolDigest: "tool-digest",
@@ -270,6 +272,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       "source",
       "systemDigest",
       "time",
+      "timing",
       "tokens",
       "toolDigest",
     ])
@@ -292,6 +295,7 @@ it.effect("records logical requests, physical attempts, sources, and token cost 
       ],
       tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 900, write: 50 } },
       latestInvalidation: "first-request",
+      latestTiming: { promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000, loadDurationNs: 6_000_000 },
       latestNamespace: "cache-ke",
     })
   }),
