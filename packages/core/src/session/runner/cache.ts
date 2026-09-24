@@ -1,9 +1,10 @@
 export * as SessionRunnerCache from "./cache"
 
-import type { CachePolicy, LLMRequest } from "@ycoding-ai/ai"
+import { ToolDefinition, type CachePolicy, type LLMRequest } from "@ycoding-ai/ai"
 import { OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT } from "@ycoding-ai/ai/cache-policy"
 import { cacheProfile } from "@ycoding-ai/ai/cache-profile"
 import { OpenAIOptions } from "@ycoding-ai/ai/protocols/utils/openai-options"
+import { Schema } from "effect"
 import type { ConfigEfficiency } from "../../config/efficiency"
 import type { PermissionV2 } from "../../permission"
 import { Hash } from "../../util/hash"
@@ -32,6 +33,19 @@ export const systemDigest = (system: LLMRequest["system"]): string =>
       })),
     ),
   )
+
+const decodeSchema = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))
+
+export const canonicalTools = (tools: LLMRequest["tools"]): LLMRequest["tools"] =>
+  tools.map((tool) => ToolDefinition.make({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: decodeSchema(canonicalJson(tool.inputSchema)),
+    ...(tool.outputSchema === undefined ? {} : { outputSchema: decodeSchema(canonicalJson(tool.outputSchema)) }),
+    ...(tool.cache === undefined ? {} : { cache: tool.cache }),
+    ...(tool.metadata === undefined ? {} : { metadata: tool.metadata }),
+    ...(tool.native === undefined ? {} : { native: decodeSchema(canonicalJson(tool.native)) }),
+  })).toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
 
 export const toolDigest = (tools: LLMRequest["tools"]): string =>
   Hash.sha256(

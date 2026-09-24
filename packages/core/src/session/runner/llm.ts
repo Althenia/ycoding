@@ -543,6 +543,7 @@ const layer = Layer.effect(
                     : "full",
               ...(invalidation === undefined ? {} : { invalidation }),
               ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
+              ...(settlement?.timing === undefined ? {} : { timing: settlement.timing }),
             }),
             cacheRuntime.observe({
               namespace: originalPrepared.cache.promptCacheKey,

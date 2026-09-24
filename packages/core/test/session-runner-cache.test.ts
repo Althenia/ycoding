@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
-import { SystemPart, ToolDefinition } from "@ycoding-ai/ai"
+import { LLM, Message, SystemPart, ToolDefinition } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
+import { configure } from "@ycoding-ai/ai/providers/openai"
+import type { OpenAIResponsesBody } from "@ycoding-ai/ai/protocols/openai-responses"
+import { LLMClient } from "@ycoding-ai/ai/route"
 import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { ExecuteTool } from "@ycoding-ai/core/tool/execute"
@@ -99,6 +102,37 @@ test("canonicalizes object order and preserves JSON array positions", () => {
   expect(namespaceWithSchema({ values: [undefined, "tail"] })).toBe(namespaceWithSchema({ values: [null, "tail"] }))
   expect(namespaceWithSchema({ value: undefined })).toBe(namespaceWithSchema({}))
   expect(namespaceWithSchema({ value: null })).not.toBe(namespaceWithSchema({}))
+})
+
+test("canonicalizes unordered tool discovery and schema keys in the provider request", async () => {
+  const model = configure({ apiKey: "fixture-key" }).responses("gpt-5.6")
+  const tools = [
+    ToolDefinition.make({ name: "zeta", description: "Z", inputSchema: { type: "object" } }),
+    ToolDefinition.make({ name: "alpha", description: "A", inputSchema: {
+      type: "object", properties: { z: { type: "string" }, a: { type: "number" } },
+    } }),
+  ]
+  const reversed = [
+    ToolDefinition.make({ name: "alpha", description: "A", inputSchema: {
+      properties: { a: { type: "number" }, z: { type: "string" } }, type: "object",
+    } }),
+    tools[0],
+  ]
+  const prepare = (input: ReadonlyArray<ToolDefinition>) => {
+    const ordered = SessionRunnerCache.canonicalTools(input)
+    return LLMClient.prepare<OpenAIResponsesBody>(LLM.request({ model, system: "Stable", messages: [Message.user("First")], tools: ordered }))
+  }
+  const first = await Effect.runPromise(prepare(tools))
+  const second = await Effect.runPromise(prepare(reversed))
+  expect(SessionRunnerCache.toolDigest(SessionRunnerCache.canonicalTools(tools))).toBe(
+    SessionRunnerCache.toolDigest(SessionRunnerCache.canonicalTools(reversed)),
+  )
+  expect(JSON.stringify(first.body)).toBe(JSON.stringify(second.body))
+  const changedUser = await Effect.runPromise(LLMClient.prepare<OpenAIResponsesBody>(LLM.request({
+    model, system: "Stable", messages: [Message.user("Second")], tools: SessionRunnerCache.canonicalTools(tools),
+  })))
+  expect(JSON.stringify(first.body.tools)).toBe(JSON.stringify(changedUser.body.tools))
+  expect(JSON.stringify(first.body.input?.[0])).toBe(JSON.stringify(changedUser.body.input?.[0]))
 })
 
 test("uses deterministic code-point ordering for integer-like and non-BMP keys", () => {

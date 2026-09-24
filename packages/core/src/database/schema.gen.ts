@@ -683,6 +683,7 @@ export default {
           \`invalidation\` text NOT NULL,
           \`continuation\` text NOT NULL,
           \`cache_read_reported\` integer,
+          \`timing\` text,
           \`cost\` real,
           \`tokens\` text NOT NULL,
           \`time_created\` integer NOT NULL,

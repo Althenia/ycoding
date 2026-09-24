@@ -50,6 +50,60 @@ describe("Runpod Ollama /runsync", () => {
     }))),
   )
 
+  it.effect("records reported Ollama cached reads without including them in the uncached count", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")).toMatchObject({ usage: {
+        inputTokens: 20, nonCachedInputTokens: 12, cacheReadInputTokens: 8,
+        outputTokens: 3, totalTokens: 23,
+      } })
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      message: { role: "assistant", content: "Hi" }, done: true,
+      prompt_eval_count: 20, prompt_eval_cached_count: 8, eval_count: 3,
+      prompt_eval_duration: 4_000_000, eval_duration: 5_000_000, load_duration: 6_000_000,
+    }] })))),
+  )
+
+  it.effect("captures Ollama timing in structured usage without echoing it into subsequent prompts", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")?.usage).toMatchObject({
+        promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000, loadDurationNs: 6_000_000,
+      })
+      const prepared = yield* LLMClient.prepare(request)
+      expect(JSON.stringify(prepared.body)).not.toContain("prompt_eval_duration")
+      expect(JSON.stringify(prepared.body)).not.toContain("load_duration")
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      message: { role: "assistant", content: "Hi" }, done: true,
+      prompt_eval_count: 20, prompt_eval_cached_count: 8, eval_count: 3,
+      prompt_eval_duration: 4_000_000, eval_duration: 5_000_000, load_duration: 6_000_000,
+    }] })))),
+  )
+
+  it.effect("leaves Ollama cached reads unreported when worker omits them", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      const usage = events.find((event) => event.type === "finish" && event.usage !== undefined)?.usage
+      expect(usage?.inputTokens).toBe(5)
+      expect(usage?.nonCachedInputTokens).toBe(5)
+      expect(usage?.cacheReadInputTokens).toBeUndefined()
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      message: { role: "assistant", content: "Hi" }, done: true, prompt_eval_count: 5, eval_count: 2,
+    }] })))),
+  )
+
+  it.effect("bounds inconsistent Ollama cached counts by evaluated input", () =>
+    Effect.gen(function* () {
+      const events = Array.from(yield* LLMClient.stream(request).pipe(Stream.runCollect))
+      expect(events.find((event) => event.type === "finish")).toMatchObject({ usage: {
+        inputTokens: 5, cacheReadInputTokens: 5, nonCachedInputTokens: 0,
+      } })
+    }).pipe(Effect.provide(fixedResponse(JSON.stringify({ status: "COMPLETED", output: [{
+      message: { role: "assistant", content: "Hi" }, done: true,
+      prompt_eval_count: 5, prompt_eval_cached_count: 8, eval_count: 2,
+    }] })))),
+  )
+
   it.effect("round-trips Ollama tool calls and tool results", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(LLM.request({ model: selected, messages: [

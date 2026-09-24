@@ -56,6 +56,10 @@ export class Usage extends Schema.Class<Usage>("LLM.Usage")({
   cacheWriteInputTokens: Schema.optional(Schema.Number),
   reasoningTokens: Schema.optional(Schema.Number),
   totalTokens: Schema.optional(Schema.Number),
+  /** Provider-reported inference timings in nanoseconds, when available. */
+  promptEvalDurationNs: Schema.optional(Schema.Number),
+  generationDurationNs: Schema.optional(Schema.Number),
+  loadDurationNs: Schema.optional(Schema.Number),
   providerMetadata: Schema.optional(ProviderMetadata),
 }) {
   /**

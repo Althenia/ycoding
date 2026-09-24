@@ -235,12 +235,14 @@ export const layer = (options?: SessionModelHeaders.Options) =>
             ]),
           ),
         })
-        const hookedTools = Object.entries(contextEvent.tools).flatMap(([name, tool]) => {
-          const registered = toolsByName.get(name)
-          return registered
-            ? [Object.assign({}, registered, { description: tool.description, inputSchema: tool.input })]
-            : []
-        })
+        const hookedTools = SessionRunnerCache.canonicalTools(
+          Object.entries(contextEvent.tools).flatMap(([name, tool]) => {
+            const registered = toolsByName.get(name)
+            return registered
+              ? [Object.assign({}, registered, { description: tool.description, inputSchema: tool.input })]
+              : []
+          }),
+        )
         const namespaceInput = {
           projectID: session.projectID,
           directory: session.location.directory,

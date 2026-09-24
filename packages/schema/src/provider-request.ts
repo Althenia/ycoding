@@ -49,6 +49,13 @@ export type ReportSort = typeof ReportSort.Type
 export const ReportOrder = Schema.Literals(["asc", "desc"])
 export type ReportOrder = typeof ReportOrder.Type
 
+export const Timing = Schema.Struct({
+  promptEvalDurationNs: NonNegativeInt.pipe(optional),
+  generationDurationNs: NonNegativeInt.pipe(optional),
+  loadDurationNs: NonNegativeInt.pipe(optional),
+}).annotate({ identifier: "ProviderRequest.Timing" })
+export interface Timing extends Schema.Schema.Type<typeof Timing> {}
+
 const ReportLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(200))
 
 export const ReportInput = Schema.Struct({
@@ -89,6 +96,7 @@ export const Record = Schema.Struct({
   continuation: Continuation,
   /** Whether the provider explicitly reported cache-read usage; absent for historical records. */
   cacheReadReported: Schema.Boolean.pipe(optional),
+  timing: Timing.pipe(optional),
   /** Persisted provider-reported USD cost. */
   cost: Money.USD.pipe(optional),
   tokens: TokenUsage.Info,
@@ -135,6 +143,7 @@ export const Summary = Schema.Struct({
   tokens: TokenUsage.Info,
   latestInvalidation: Invalidation.pipe(optional),
   latestNamespace: Schema.String.check(Schema.isMinLength(8), Schema.isMaxLength(8)).pipe(optional),
+  latestTiming: Timing.pipe(optional),
 }).annotate({ identifier: "ProviderRequest.Summary" })
 export interface Summary extends Schema.Schema.Type<typeof Summary> {}
 

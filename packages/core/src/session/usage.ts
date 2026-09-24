@@ -1,6 +1,7 @@
 export * as SessionUsage from "./usage"
 
 import type { Usage } from "@ycoding-ai/ai"
+import type { ProviderRequest } from "@ycoding-ai/schema/provider-request"
 import { Money } from "@ycoding-ai/schema/money"
 import type { TokenUsage } from "@ycoding-ai/schema/token-usage"
 import type { ModelV2 } from "../model"
@@ -21,6 +22,20 @@ export const providerCache = (usage: Usage | undefined) => ({
   readReported: usage?.cacheReadInputTokens !== undefined,
   writeReported: usage?.cacheWriteInputTokens !== undefined,
 })
+
+export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undefined => {
+  const duration = (value: number | undefined) =>
+    value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+  const promptEvalDurationNs = duration(usage?.promptEvalDurationNs)
+  const generationDurationNs = duration(usage?.generationDurationNs)
+  const loadDurationNs = duration(usage?.loadDurationNs)
+  const values = {
+    ...(promptEvalDurationNs === undefined ? {} : { promptEvalDurationNs }),
+    ...(generationDurationNs === undefined ? {} : { generationDurationNs }),
+    ...(loadDurationNs === undefined ? {} : { loadDurationNs }),
+  }
+  return Object.keys(values).length === 0 ? undefined : values
+}
 
 // TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.
 export function estimatedCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info): Money.USD | undefined {

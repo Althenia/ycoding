@@ -1622,6 +1622,28 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("keeps the hooked provider tool prefix ordered across discovery order changes", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const hooks = yield* PluginHooks.Service
+      let reverse = false
+      yield* hooks.register("session", "context", (event) => Effect.sync(() => {
+        reverse = !reverse
+        if (reverse) event.tools = Object.fromEntries(Object.entries(event.tools).reverse())
+      }))
+      yield* admit(session, "First")
+      response = reply.text("First reply", "first-tool-order")
+      yield* session.resume(sessionID)
+      yield* admit(session, "Second")
+      response = reply.text("Second reply", "second-tool-order")
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "echo", "storefail"])
+      expect(requests[1]?.tools.map((tool) => tool.name)).toEqual(requests[0]?.tools.map((tool) => tool.name))
+    }),
+  )
+
   it.effect("omits tools denied by the durable session ceiling", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -2356,6 +2378,9 @@ describe("SessionRunnerLLM", () => {
               cacheReadInputTokens: 900,
               outputTokens: 30,
               reasoningTokens: 10,
+              promptEvalDurationNs: 4_000_000,
+              generationDurationNs: 5_000_000,
+              loadDurationNs: 6_000_000,
             },
           }),
           LLMEvent.finish({ reason: "stop" }),
@@ -2403,6 +2428,8 @@ describe("SessionRunnerLLM", () => {
           continued: 0,
           fallback: 0,
           latestInvalidation: "stable-hit",
+          latestTiming: { promptEvalDurationNs: 4_000_000, generationDurationNs: 5_000_000,
+            loadDurationNs: 6_000_000 },
           tokens: { input: 100, output: 20, reasoning: 10, cache: { read: 900, write: 0 } },
         },
       })

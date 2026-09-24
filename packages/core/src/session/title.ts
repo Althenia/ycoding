@@ -133,6 +133,7 @@ const make = (dependencies: Dependencies) => {
     const chunks: string[] = []
     let failed = false
     let usage: SessionUsage.Recorded | undefined
+    let timing: ReturnType<typeof SessionUsage.timing>
     const recordUsage = Effect.suspend(() =>
       usage
         ? dependencies.events.publish(SessionEvent.UsageRecorded, {
@@ -155,6 +156,7 @@ const make = (dependencies: Dependencies) => {
               ? {}
               : { cost: SessionUsage.estimatedCost(resolved.cost, recorded.tokens)! }),
             continuation: "full",
+            ...(timing === undefined ? {} : { timing }),
             ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
           }),
           dependencies.cacheRuntime.observe({
@@ -172,6 +174,7 @@ const make = (dependencies: Dependencies) => {
         if (LLMEvent.is.providerError(event)) failed = true
         if (LLMEvent.is.textDelta(event)) chunks.push(event.text)
         if (LLMEvent.is.stepFinish(event)) {
+          timing = SessionUsage.timing(event.usage)
           const step = SessionUsage.record(event.usage, resolved.cost)
           usage = usage ? SessionUsage.add(usage, step) : step
         }
