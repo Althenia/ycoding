@@ -86,16 +86,16 @@ test("committed snapshot contains current OpenAI and Anthropic catalog pricing",
   const fable = snapshot.anthropic?.models?.["claude-fable-5"]
 
   expect(sol?.cost).toMatchObject({
-    input: 5,
-    output: 30,
-    cache_read: 0.5,
-    cache_write: 6.25,
+    input: 4,
+    output: 20,
+    cache_read: 0.4,
+    cache_write: 5,
     tiers: [
       {
-        input: 10,
-        output: 45,
-        cache_read: 1,
-        cache_write: 12.5,
+        input: 8,
+        output: 30,
+        cache_read: 0.8,
+        cache_write: 10,
         tier: { type: "context", size: 272_000 },
       },
     ],
@@ -130,6 +130,40 @@ test("committed snapshot contains current OpenAI and Anthropic catalog pricing",
         },
       ],
     },
+  })
+})
+
+test("committed snapshot contains Muse Spark normal and contributor catalog entries", async () => {
+  const snapshot = JSON.parse(
+    await Bun.file(path.join(import.meta.dir, "models-dev.snapshot.json")).text(),
+  ) as {
+    meta?: {
+      models?: Record<
+        string,
+        {
+          id?: string
+          family?: string
+          reasoning_options?: Array<{ type?: string; values?: Array<string | null> }>
+          limit?: { context?: number; output?: number }
+          cost?: { input?: number; output?: number; cache_read?: number }
+        }
+      >
+    }
+  }
+  const normal = snapshot.meta?.models?.["muse-spark-1.3"]
+  const contributor = snapshot.meta?.models?.["muse-spark-1.3-contributor"]
+
+  expect(normal).toMatchObject({
+    id: "muse-spark-1.3",
+    family: "muse",
+    limit: { context: 1_048_576, output: 131_072 },
+    cost: { input: 1.25, output: 4.25, cache_read: 0.15 },
+  })
+  expect(contributor).toMatchObject({
+    id: "muse-spark-1.3-contributor",
+    family: "muse",
+    limit: { context: 1_048_576, output: 131_072 },
+    cost: { input: 0.1, output: 0.2, cache_read: 0.002 },
   })
 })
 
