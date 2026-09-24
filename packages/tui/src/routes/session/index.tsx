@@ -133,7 +133,7 @@ import {
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
 import { promptSkillsFromMetadata, segmentPromptSkills } from "../../prompt/skill"
 import { sessionSkillContent } from "../../util/session-skills"
-import { Header, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
+import { Header, pendingVariantSelection, sessionRetryHeaderState, type SessionHeaderOperationalState, type SessionHeaderState } from "./header"
 import { railPlacement, railWidth } from "./rail"
 import { InlineDiff, inlineDiffGroups, parseInlineDiff, type InlineDiffFile, type InlineDiffGroup } from "./inline-diff"
 import { parseInlineCommandResult, type InlineCommandResult } from "./inline-command"
@@ -521,8 +521,8 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     const name = info?.name ?? Locale.titlecase(selected.modelID.replaceAll("-", " "))
     return `${selected.providerID}/${name}`
   })
-  const pendingHeaderVariant = createMemo(
-    () => local.model.pendingTarget(route.sessionID)?.variant ?? local.model.variant.current(),
+  const pendingHeaderVariant = createMemo(() =>
+    pendingVariantSelection(local.model.pendingTarget(route.sessionID), local.model.variant.current()),
   )
   const headerAgent = createMemo(() => {
     const agent = session()?.agent ?? headerMessage()?.agent

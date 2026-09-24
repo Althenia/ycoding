@@ -111,6 +111,10 @@ export function pendingModelVariant(
   return `→ ${pending.pendingModel}${pendingVariant ? ` · ${pendingVariant}` : ""}`
 }
 
+export function pendingVariantSelection(pending: { variant?: string } | undefined, current: string | undefined) {
+  return pending ? pending.variant : current
+}
+
 function pendingAgent(current: string | undefined, pending: string | undefined) {
   return pending && current?.toLocaleLowerCase() !== pending.toLocaleLowerCase() ? `→ ${pending}` : undefined
 }

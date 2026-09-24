@@ -10,6 +10,7 @@ import {
   Header,
   headerModelLabel,
   pendingModelVariant,
+  pendingVariantSelection,
   sessionRetryHeaderState,
   headerSegments,
   headerStatusLabel,
@@ -193,6 +194,15 @@ test("shows the selected model and variant only while the session still uses a d
       { pendingModel: "GPT-5.6 Terra", pendingVariant: "high" },
     ),
   ).toBeUndefined()
+})
+
+test("cycling back to default shows the pending default rather than the saved variant", () => {
+  expect(
+    pendingModelVariant(
+      { model: "GPT-5.6 Terra", variant: "high" },
+      { pendingModel: "GPT-5.6 Terra", pendingVariant: pendingVariantSelection({ variant: undefined }, "high") },
+    ),
+  ).toBe("→ GPT-5.6 Terra")
 })
 
 test("never displays the default variant sentinel", () => {
@@ -769,6 +779,9 @@ describe("header rendering", () => {
       .find((span) => span.text.includes("→ GPT-5.6 Terra · high"))
 
     expect(highlight?.fg.toInts()).toEqual(theme.text.subdued.toInts())
+    setPending({ pendingModel: "anthropic/claude-opus-5", pendingVariant: undefined })
+    await app.waitForFrame((frame) => frame.includes("→ anthropic/claude-opus-5"))
+    expect(app.captureCharFrame()).not.toContain("→ anthropic/claude-opus-5 · max")
     setSubagent(true)
     await app.waitForFrame((frame) => frame.includes("subagent"))
     expect(app.captureCharFrame()).not.toContain("→ Zeus")
