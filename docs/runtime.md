@@ -349,6 +349,7 @@ Current behavior:
 - Running children receive a status, blocker, and ETA request every ten minutes.
 - An optional child `timeout` accepts at most 86,400,000 ms and defaults to 3,600,000 ms when omitted. On expiry, the runtime interrupts the child, settles its durable task as failed, and delivers the existing parent failure notification.
 - A child question reported through orchestration receives the safe default answer immediately when its managed Session family is in `yolo` or active `goal` mode. The task remains running, and no parent-question notification or sound is emitted.
+- A question that needs the parent suspends the child drain without waiting for its own tool execution to terminate. The task remains waiting until the parent answers; the durable answer wakes the child to continue.
 - The effective permission policy limits which subagents are available.
 - Configured and managed subagents materialize the Location's registered tool catalog through their ordered permission rules and inherited parent ceiling. Empty managed-agent rules resolve to safe defaults with shell requiring approval; final `subagent` and `subagent_control` denies prevent nested orchestration.
 - Nested subagents are bounded by `experimental.subagent_depth`; the default depth is one.

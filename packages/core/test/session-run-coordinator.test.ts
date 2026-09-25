@@ -1,11 +1,41 @@
 import { describe, expect } from "bun:test"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
+import { SubagentReportTool } from "@ycoding-ai/core/tool/subagent-report"
 import { testEffect } from "./lib/effect"
 
 const it = testEffect(Layer.empty)
 
 describe("SessionRunCoordinator", () => {
+  it.effect("a child tool can interrupt the drain waiting for it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const settled = yield* Deferred.make<void>()
+        let stop: () => Effect.Effect<void> = () => Effect.void
+        const coordinator = yield* SessionRunCoordinator.make<string, never, string>({
+          drain: () => Effect.uninterruptibleMask((restore) => Effect.gen(function* () {
+            const tool = yield* Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(SubagentReportTool.interruptForParentQuestion(stop())),
+              Effect.forkChild,
+            )
+            const result = yield* restore(Fiber.await(tool)).pipe(Effect.exit)
+            if (result._tag === "Failure") yield* Fiber.interrupt(tool)
+            yield* restore(Effect.never)
+          })),
+          settled: () => Deferred.succeed(settled, undefined).pipe(Effect.asVoid),
+        })
+        stop = () => coordinator.interrupt("session", "question")
+
+        yield* coordinator.wake("session")
+        yield* Deferred.await(started)
+        yield* Deferred.await(settled)
+        yield* coordinator.awaitIdle("session")
+      }),
+    ),
+    2000,
+  )
+
   it.effect("joins concurrent resumes for one key", () =>
     Effect.scoped(
       Effect.gen(function* () {

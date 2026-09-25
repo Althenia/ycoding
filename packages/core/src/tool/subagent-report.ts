@@ -8,6 +8,8 @@ import { PluginRuntime } from "../plugin/runtime"
 import { Tool } from "./tool"
 
 export const name = "subagent_report"
+export const interruptForParentQuestion = (interrupt: Effect.Effect<void>) =>
+  interrupt.pipe(Effect.forkDetach({ startImmediately: true }), Effect.asVoid)
 export const Input = Report
 export const Output = Schema.Union([
   Schema.Struct({ action: Schema.Literal("progress"), task: Task }),
@@ -39,7 +41,9 @@ export const Plugin = {
                 const report = yield* orchestration.question(context.sessionID, input.text, input.data)
                 if (report.autoAnswered) return { action: "question" as const, question: report.question }
                 yield* runtime.job.background(context.sessionID)
-                yield* runtime.session.interrupt(context.sessionID)
+                // The drain awaits this tool fiber; waiting here for the drain to exit
+                // would deadlock the question and its eventual parent answer.
+                yield* interruptForParentQuestion(runtime.session.interrupt(context.sessionID))
                 return { action: "question" as const, question: report.question }
               }).pipe(Effect.mapError((error) => new ToolFailure({ message: error.message, error }))),
           }),
