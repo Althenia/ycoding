@@ -638,6 +638,58 @@ it.effect("projects replay metadata onto AI SDK prompt parts", () =>
   }),
 )
 
+it.effect("lowers tool-result media as native AI SDK content instead of JSON text", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () => ({ provider: event.model.providerID }),
+      }
+    })
+    const resolved = yield* aisdk.model(model("@ai-sdk/anthropic"))
+    const prepared = yield* LLMClient.prepare<LanguageModelV3CallOptions>(
+      LLM.request({
+        model: resolved,
+        cache: "none",
+        messages: [
+          Message.assistant([{ type: "tool-call", id: "call_1", name: "read", input: { path: "a.png" } }]),
+          Message.tool({
+            id: "call_1",
+            name: "read",
+            result: {
+              type: "content",
+              value: [
+                { type: "text", text: "Image read successfully" },
+                { type: "file", uri: "data:image/png;base64,iVBORw0KGgo=", mime: "image/png", name: "a.png" },
+                { type: "file", uri: "data:application/pdf;base64,JVBERi0=", mime: "application/pdf", name: "a.pdf" },
+              ],
+            },
+          }),
+        ],
+      }),
+    )
+
+    expect(prepared.body.prompt.at(-1)).toEqual({
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: "call_1",
+          toolName: "read",
+          output: {
+            type: "content",
+            value: [
+              { type: "text", text: "Image read successfully" },
+              { type: "image-data", data: "iVBORw0KGgo=", mediaType: "image/png" },
+              { type: "file-data", data: "JVBERi0=", mediaType: "application/pdf", filename: "a.pdf" },
+            ],
+          },
+        },
+      ],
+    })
+  }),
+)
+
 it.effect("wraps unsupported Anthropic chronological system updates as user content", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

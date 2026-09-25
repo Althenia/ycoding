@@ -32,6 +32,7 @@ import {
   UnknownProviderReason,
   type ContentPart,
   type LLMRequest,
+  type ToolContent,
   type ToolDefinition,
   type UsageInput,
 } from "@ycoding-ai/ai"
@@ -648,8 +649,21 @@ function toolOutput(result: ToolResultValue) {
     case "text":
     case "error":
       return { type: "text" as const, value: messageValue(result.value) }
+    case "content":
+      // Keep media as provider-native content; JSON-stringified base64 is billed as prompt text.
+      return { type: "content" as const, value: result.value.map(toolContentPart) }
   }
   return { type: "json" as const, value: jsonValue(result.value) }
+}
+
+function toolContentPart(item: ToolContent) {
+  if (item.type === "text") return { type: "text" as const, text: item.text }
+  const data = /^data:[^;,]+;base64,(.*)$/s.exec(item.uri)?.[1]
+  const image = item.mime.startsWith("image/")
+  if (data === undefined)
+    return image ? { type: "image-url" as const, url: item.uri } : { type: "file-url" as const, url: item.uri }
+  if (image) return { type: "image-data" as const, data, mediaType: item.mime }
+  return { type: "file-data" as const, data, mediaType: item.mime, filename: item.name }
 }
 
 function tool(request: LLMRequest, input: ToolDefinition): LanguageModelV3FunctionTool {
