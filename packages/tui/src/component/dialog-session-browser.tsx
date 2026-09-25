@@ -40,6 +40,7 @@ export function SessionIsolatedBrowserCommand(props: Props) {
 
 function DialogChromeConnection(props: { sessionID: string }) {
   const client = useClient()
+  const dialog = useDialog()
   const { themeV2 } = useTheme().contextual("elevated")
   const baseUrl = client.baseUrl()
   const address = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined
@@ -53,6 +54,7 @@ function DialogChromeConnection(props: { sessionID: string }) {
   const [pending, setPending] = createSignal(false)
   let request: AbortController | undefined
   let expiryTimer: ReturnType<typeof setTimeout> | undefined
+  let reconnectInterval: ReturnType<typeof setInterval> | undefined
 
   const refresh = () => {
     request?.abort()
@@ -99,9 +101,17 @@ function DialogChromeConnection(props: { sessionID: string }) {
       })
   }
 
+  const stopReconnect = () => {
+    if (reconnectInterval) {
+      clearInterval(reconnectInterval)
+      reconnectInterval = undefined
+    }
+  }
+
   onCleanup(() => {
     request?.abort()
     clearTimeout(expiryTimer)
+    stopReconnect()
     setSecret()
   })
   Keymap.createLayer(() => ({
@@ -112,6 +122,20 @@ function DialogChromeConnection(props: { sessionID: string }) {
     ],
   }))
   createEffect(on(() => props.sessionID, refresh))
+
+  createEffect(() => {
+    if (status() !== "pairing" && status() !== "unavailable") return
+    reconnectInterval = setInterval(() => {
+      const current = status()
+      if (current === "connected") {
+        dialog.clear()
+        stopReconnect()
+        return
+      }
+      if (current === "loading" || current === "pairing") refresh()
+    }, 2000)
+    onCleanup(stopReconnect)
+  })
 
   return (
     <box paddingBottom={1} flexDirection="column">

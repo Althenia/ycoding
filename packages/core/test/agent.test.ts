@@ -238,16 +238,8 @@ describe("AgentV2", () => {
       expect(gsd.system).toContain("Never overengineer")
       expect(gsd.system).toContain("repository standards and guidelines")
       expect(gsd.system).toContain("Verify subagent evidence")
-      for (const field of [
-        "Done",
-        "Tasks left",
-        "Blockers",
-        "Feasibility and conceivable path",
-        "Residual risks",
-        "Remaining gaps",
-      ]) {
-        expect(gsd.system).toContain(field)
-      }
+      expect(gsd.system).toContain("Lead with the delivered outcome or direct answer")
+      expect(gsd.system).toContain("plain, brisk language")
       expect(gsd.color).toBe("#e67e22")
       const source = yield* Effect.promise(() =>
         Bun.file(new URL("../src/plugin/agent/GSD.md", import.meta.url)).text(),
@@ -257,6 +249,31 @@ describe("AgentV2", () => {
       expect(source.toLowerCase()).not.toContain("one-shot")
       expect(PermissionV2.evaluate("subagent", "occam", gsd.permissions).effect).toBe("allow")
       expect(yield* agent.resolve()).toMatchObject({ id: "god" })
+    }),
+  )
+
+  it.effect("gives each selectable primary agent a distinct role-matched communication style", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
+        Effect.provideService(Location.Service, Location.Service.of(testLocation)),
+      )
+
+      const styles = [
+        ["GSD", "plain, brisk language", "next action only when someone must act"],
+        ["architech", "Lead with the recommendation or decision", "affected boundaries and material trade-offs"],
+        ["god", "quiet authority", "Correct false premises plainly without condescension"],
+        ["yangi", "spare, plain sentences", "Stop once the point is proved"],
+      ] as const
+      for (const [id, voice, structure] of styles) {
+        const item = yield* agent.get(AgentV2.ID.make(id))
+        if (!item?.system) throw new Error(`expected ${id} with a system prompt`)
+        expect(item.system).toContain("## Communication")
+        expect(item.system).toContain(voice)
+        expect(item.system).toContain(structure)
+        expect(item.system).toContain("exact checks")
+        expect(item.system).toContain("blockers")
+      }
     }),
   )
 

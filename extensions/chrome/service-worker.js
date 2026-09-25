@@ -236,7 +236,10 @@ async function open(url, handshake) {
   const current = new WebSocket(url)
   socket = current
   await new Promise((resolve, reject) => {
-    const failed = () => reject(new Error("Unable to connect to the local YCoding service"))
+    const failed = (event) => {
+      event.preventDefault?.()
+      reject(new Error("Unable to connect to the local YCoding service"))
+    }
     current.addEventListener("open", resolve, { once: true })
     current.addEventListener("error", failed, { once: true })
   })
