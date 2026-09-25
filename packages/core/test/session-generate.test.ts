@@ -19,6 +19,7 @@ import { PluginSupervisor } from "@ycoding-ai/core/plugin/supervisor"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
+import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
 import { ReferenceInstructions } from "@ycoding-ai/core/reference/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
@@ -316,7 +317,7 @@ it.effect("generates from fresh settled Session context without durable mutation
           ? message.content.flatMap((content) => (content.type === "text" ? [content.text] : []))
           : [],
       ),
-    ).toEqual([["Changed context", ProjectArtifactInstructions.content].join("\n\n")])
+    ).toEqual([["Changed context", ProjectArtifactInstructions.content, MemoryInstructions.content].join("\n\n")])
     expect(userTexts(request)).toEqual(["Existing durable context", "Summarize privately"])
     expect(
       request.messages.flatMap((message) =>

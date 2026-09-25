@@ -11,6 +11,7 @@ import { InstructionBuiltIns } from "../instructions/builtins"
 import { ProjectArtifactInstructions } from "../project-artifact/instructions"
 import { Location } from "../location"
 import { McpInstructions } from "../mcp/instructions"
+import { MemoryInstructions } from "../memory/instructions"
 import { PluginSupervisor } from "../plugin/supervisor"
 import { ReferenceInstructions } from "../reference/instructions"
 import { SkillInstructions } from "../skill/instructions"
@@ -73,6 +74,7 @@ const layer = Layer.effect(
     const referenceInstructions = yield* ReferenceInstructions.Service
     const skillInstructions = yield* SkillInstructions.Service
     const projectArtifactInstructions = ProjectArtifactInstructions.make()
+    const memoryInstructions = MemoryInstructions.make()
     const store = yield* SessionStore.Service
 
     const revision = Effect.fn("SessionContext.revision")(function* (sessionID: SessionSchema.ID) {
@@ -103,6 +105,7 @@ const layer = Layer.effect(
           referenceInstructions.load(),
           mcpInstructions.load(agent),
           Effect.succeed(projectArtifactInstructions),
+          Effect.succeed(memoryInstructions),
           entries.load(sessionID),
         ],
         { concurrency: "unbounded" },

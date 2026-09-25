@@ -30,6 +30,7 @@ import { PermissionV2 } from "@ycoding-ai/core/permission"
 import { EventTable } from "@ycoding-ai/core/event/sql"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
+import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
 import { ProjectArtifact } from "@ycoding-ai/schema/project-artifact"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { Form } from "@ycoding-ai/core/form"
@@ -273,7 +274,7 @@ const unstoredOpenAIResponsesModel = Model.make({
 })
 const defaultSystem = PROMPT_DEFAULT
 const withProjectArtifactGuidance = (...values: readonly string[]) =>
-  [...values, ProjectArtifactInstructions.content].join("\n\n")
+  [...values, ProjectArtifactInstructions.content, MemoryInstructions.content].join("\n\n")
 const replacementModel = Model.make({
   id: "replacement",
   provider: "fake",
@@ -2940,6 +2941,7 @@ describe("SessionRunnerLLM", () => {
         sessionID,
         delta: {
           "ycoding/project-artifact-authoring": Instructions.hash(ProjectArtifactInstructions.content),
+          "ycoding/workspace-memory": Instructions.hash(MemoryInstructions.content),
           "test/context": Instructions.hash("Initial context"),
         },
       })

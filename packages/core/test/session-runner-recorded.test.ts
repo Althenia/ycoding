@@ -15,6 +15,7 @@ import { Config } from "@ycoding-ai/core/config"
 import { Project } from "@ycoding-ai/core/project"
 import { ProjectTable } from "@ycoding-ai/core/project/sql"
 import { ProjectArtifactInstructions } from "@ycoding-ai/core/project-artifact/instructions"
+import { MemoryInstructions } from "@ycoding-ai/core/memory/instructions"
 import { AbsolutePath } from "@ycoding-ai/core/schema"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Snapshot } from "@ycoding-ai/core/snapshot"
@@ -56,7 +57,7 @@ const sessionID = SessionV2.ID.make("ses_runner_recorded")
 // wire key is scoped to the recorded Session.
 const expectedPromptCacheKey = SessionRunnerCache.promptCacheKeyForGeneration(
   sessionID,
-  "37a99799f1e7e76bea634e42c89228f923b9ce7b1b37792ff5cee024371c5474",
+  "b262c30baea8fc90ee7f7d4d335518f539c2d84701e3ae4fe84c49d543d89696",
 )
 if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")
@@ -66,9 +67,11 @@ const cassette = HttpRecorder.layerFetch(cassetteName, {
   directory: cassetteDirectory,
   match: (incoming, recorded) => {
     const expected = JSON.parse(recorded.body)
-    expected.messages[0].content = [expected.messages[0].content.trimEnd(), ProjectArtifactInstructions.content].join(
-      "\n\n",
-    )
+    expected.messages[0].content = [
+      expected.messages[0].content.trimEnd(),
+      ProjectArtifactInstructions.content,
+      MemoryInstructions.content,
+    ].join("\n\n")
     expected.prompt_cache_key = expectedPromptCacheKey
     // Current requests append trusted Session state after the admitted user text.
     expected.messages[1].content +=

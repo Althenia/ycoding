@@ -1,10 +1,14 @@
 # Repository memories and shared knowledge
 
-Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. Nothing is recalled into prompts or extracted from transcripts automatically.
+Memory stores linked, human-readable Markdown concepts. It separates repository memories, shared by all worktrees of one local Git repository, from shared knowledge. It is an explicit knowledge store, not Session history, a prompt cache, or a project artifact. Concept content is never injected into prompts, and transcripts are never extracted into memory.
 
-## Start with an explicit request
+## Agent guidance
 
-Ask the agent to use the built-in `memory` tool:
+Every Session receives built-in `ycoding/workspace-memory` guidance. It directs agents to search memory before substantive work, verify retrieved facts against live files, and, after the primary task is complete and validated, write or update concepts for newly verified, durable, non-obvious facts and decisions with their sources. It forbids storing transient task state, transcripts, logs, secrets, credentials, private URLs, customer data, or speculation. Every such call goes through the `memory` tool and its [permission boundary](#permission-boundary).
+
+## Explicit requests
+
+Ask the agent to use the built-in `memory` tool directly:
 
 - “Search workspace memory for build constraints.”
 - “Read the `build/testing` memory concept.”
