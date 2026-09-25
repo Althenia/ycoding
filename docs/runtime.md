@@ -386,7 +386,7 @@ The TUI provides a session-skills dialog, expandable skill content, conflict det
 Instruction state is Session-owned.
 
 - Built-ins live in `packages/core/src/instructions`.
-- The built-in Git worktree guidance directs agents to create each worktree at `<main repository root>/.worktrees/<name>`, creating `.worktrees` when missing, on a named branch identical to the worktree name, never as a detached HEAD.
+- The built-in Git worktree guidance directs agents to create each worktree at `<main repository root>/.worktrees/<name>`, creating `.worktrees` when missing, on a named branch identical to the worktree name, never as a detached HEAD. It keeps history linear when integrating a worktree branch: the agent rebases the branch onto a moved target branch, then fast-forwards the target with `git merge --ff-only --autostash <name>` and never creates a merge commit.
 - Discovery observes ambient global and upward-project instruction sources.
 - Guidance and persisted instruction entries are composed explicitly by the session runner.
 - `session.instructions.updated` stores changed source keys and content hashes.

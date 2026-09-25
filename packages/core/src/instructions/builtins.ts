@@ -83,7 +83,7 @@ const layer = Layer.effect(
               key: Instructions.Key.make("core/git-worktree"),
               codec: Schema.toCodecJson(Schema.String),
               read: Effect.succeed(
-                "When working with a Git worktree, create it at `<main repository root>/.worktrees/<name>`, creating the `.worktrees` directory first if it does not exist. Give every worktree a named branch identical to its worktree name, for example `git worktree add -b <name> .worktrees/<name>`; never create a detached HEAD worktree.",
+                "When working with a Git worktree, create it at `<main repository root>/.worktrees/<name>`, creating the `.worktrees` directory first if it does not exist. Give every worktree a named branch identical to its worktree name, for example `git worktree add -b <name> .worktrees/<name>`; never create a detached HEAD worktree. Keep history linear when integrating a worktree branch: if the target branch has moved, rebase the worktree branch onto it, then from the target branch checkout run `git merge --ff-only --autostash <name>`; never create a merge commit.",
               ),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
