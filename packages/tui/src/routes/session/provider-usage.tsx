@@ -32,12 +32,16 @@ export type ProviderUsageSnapshot = ProviderUsageListOutput["data"][number]
 const NAV_CELL_WIDTH = 12
 
 export function visibleProviderSnapshots(snapshots: readonly ProviderUsageSnapshot[]) {
-  return [...snapshots.reduce((result, snapshot) => {
-    const current = result.get(snapshot.providerID)
-    if (!current || snapshot.updatedAt >= current.updatedAt) result.set(snapshot.providerID, snapshot)
+  return [...snapshots.filter((snapshot) => snapshot.status !== "unsupported").reduce((result, snapshot) => {
+    const key = JSON.stringify([snapshot.providerID, snapshot.profile])
+    const current = result.get(key)
+    if (!current || snapshot.updatedAt >= current.updatedAt) result.set(key, snapshot)
     return result
   }, new Map<string, ProviderUsageSnapshot>()).values()]
-    .toSorted((left, right) => left.label.localeCompare(right.label) || left.providerID.localeCompare(right.providerID))
+    .toSorted((left, right) =>
+      left.label.localeCompare(right.label) ||
+      left.providerID.localeCompare(right.providerID) ||
+      (left.profile ?? "").localeCompare(right.profile ?? ""))
 }
 
 export function createProviderUsageGenerationGuard() {
@@ -306,7 +310,7 @@ function OverviewTable(props: { items: readonly OverviewItem[]; width: number })
     <Show when={!narrow()}><text fg={themeV2.text.subdued}>{overviewHeader(geometry())}</text></Show>
     <For each={props.items}>{(item, index) => {
       const identity = index() === 0 ? "Total" : item.model
-      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps ?? "Unreported"} · reasoning {item.reasoning ?? "Unreported"} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
+      if (narrow()) return <box flexDirection="column" paddingTop={1}><text fg={index() === 0 ? themeV2.text.feedback.info.default : themeV2.text.default}>{identity} · {item.input} in · {item.output} out · {item.spent}</text><text fg={themeV2.text.subdued}>  steps {item.steps ?? "-"} · reasoning {item.reasoning ?? "-"} · cache {item.cacheRead}/{item.cacheWrite}</text></box>
       return <OverviewRow item={item} identity={identity} geometry={geometry()} total={index() === 0} />
     }}</For>
   </box>
@@ -340,10 +344,10 @@ function OverviewRow(props: {
   return (
     <text>
       <span style={{ fg: props.total ? themeV2.text.feedback.info.default : themeV2.text.default }}>{Locale.truncate(props.identity, props.geometry.name).padEnd(props.geometry.name)}</span>{" "}
-      <span>{(props.item.steps ?? "Unreported").padStart(props.geometry.steps)}</span>{" "}
+      <span>{(props.item.steps ?? "-").padStart(props.geometry.steps)}</span>{" "}
       <span style={{ fg: themeV2.text.feedback.success.default }}>{props.item.input.padStart(props.geometry.input)}</span>{" "}
       <span style={{ fg: themeV2.text.feedback.warning.subdued }}>{props.item.output.padStart(props.geometry.output)}</span>{" "}
-      <span style={{ fg: themeV2.text.label }}>{(props.item.reasoning ?? "Unreported").padStart(props.geometry.reasoning)}</span>{" "}
+      <span style={{ fg: themeV2.text.label }}>{(props.item.reasoning ?? "-").padStart(props.geometry.reasoning)}</span>{" "}
       <span style={{ fg: themeV2.text.feedback.info.default }}>{`${props.item.cacheRead}/${props.item.cacheWrite}`.padStart(props.geometry.cache)}</span>{" "}
       <span style={{ fg: themeV2.text.feedback.success.subdued }}>{props.item.spent.padStart(props.geometry.cost)}</span>
     </text>
@@ -355,7 +359,7 @@ function QuotaSection(props: { snapshot: ProviderUsageSnapshot; now: number }) {
   return (
     <box flexDirection="column" paddingBottom={1}>
       <text fg={themeV2.text.feedback.info.default}>
-        {props.snapshot.label} ·{" "}
+        {props.snapshot.label}{props.snapshot.profile ? ` · ${props.snapshot.profile}` : ""} ·{" "}
         {props.snapshot.status === "available" || props.snapshot.status === "stale"
           ? freshnessLabel(props.snapshot, props.now)
           : props.snapshot.status}{" "}
@@ -431,7 +435,7 @@ function summaryPresentation(summary: ProviderRequestSummary): OverviewItem {
     input: summary.tokens.input.toLocaleString("en-US"),
     output: summary.tokens.output.toLocaleString("en-US"),
     reasoning: summary.tokens.reasoning.toLocaleString("en-US"),
-    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "Unreported",
+    cacheRead: summary.cacheReadReported ? summary.tokens.cache.read.toLocaleString("en-US") : "-",
     cacheWrite: summary.tokens.cache.write.toLocaleString("en-US"),
     spent: money(summary.cost),
   }
@@ -450,7 +454,7 @@ function spendPresentation(
     input: spend.tokens.input.toLocaleString("en-US"),
     output: spend.tokens.output.toLocaleString("en-US"),
     reasoning: spend.tokens.reasoning.toLocaleString("en-US"),
-    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "Unreported",
+    cacheRead: spend.cacheReadReported ? spend.tokens.cache.read.toLocaleString("en-US") : "-",
     cacheWrite: spend.tokens.cache.write.toLocaleString("en-US"),
     spent: spend.cost === undefined ? "Not reported" : money(spend.cost),
   }

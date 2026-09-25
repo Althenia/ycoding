@@ -252,6 +252,73 @@ describe("ProviderUsageV2", () => {
     expect(unsupported).toMatchObject({ status: "unsupported", windows: [] })
   })
 
+  test("lists one snapshot per stored profile and keeps observations on the active profile", async () => {
+    const profile = (id: string, label: string, active: boolean) =>
+      new Credential.Info({
+        id: Credential.ID.make(`cred_${id}`),
+        integrationID: Integration.ID.make("test-provider"),
+        label,
+        active,
+        value: { type: "key", key: `secret-${id}`, metadata: {} },
+      })
+    const single = ProviderV2.ID.make("single-provider")
+    const service = ProviderUsageV2.make({
+      credentials: {
+        all: () =>
+          Effect.succeed([
+            profile("work", "work", false),
+            profile("personal", "personal", true),
+            new Credential.Info({
+              id: Credential.ID.make("cred_single"),
+              integrationID: Integration.ID.make(single),
+              label: "owner@example.com",
+              value: { type: "key", key: "secret-single", metadata: {} },
+            }),
+          ]),
+      },
+      providers: { available: () => Effect.succeed([ProviderV2.Info.empty(providerID), ProviderV2.Info.empty(single)]) },
+      adapters: Object.fromEntries([providerID, single].map((id) => [id, (input: ProviderUsageV2.AdapterInput) =>
+        Effect.succeed(new ProviderUsage.Snapshot({
+          providerID: input.providerID,
+          label: input.label,
+          status: "available",
+          source: "provider_api",
+          stability: "stable",
+          updatedAt: input.updatedAt,
+          windows: [new ProviderUsage.Window({
+            id: "weekly",
+            label: "Weekly",
+            unit: "percent",
+            used: input.credential.label === "work" ? 10 : 60,
+          })],
+        })),
+      ] as const)),
+      now: () => 100,
+    })
+    await Effect.runPromise(
+      service.observe(
+        new ProviderUsage.Observation({
+          providerID,
+          label: "Test Provider",
+          source: "response_headers",
+          stability: "observed",
+          observedAt: 200,
+          windows: [new ProviderUsage.Window({ id: "weekly", label: "Weekly", unit: "percent", used: 90 })],
+        }),
+      ),
+    )
+
+    const values = await Effect.runPromise(service.list({ refresh: true }))
+
+    expect(values.map((value) => [String(value.providerID), value.profile, value.source, value.windows[0]?.used])).toEqual([
+      ["single-provider", undefined, "provider_api", 60],
+      ["test-provider", "personal", "response_headers", 90],
+      ["test-provider", "work", "provider_api", 10],
+    ])
+    expect(JSON.stringify(values)).not.toContain("owner@example.com")
+    expect(JSON.stringify(values)).not.toContain("secret-")
+  })
+
   test("maps authenticated provider failures to safe status values", async () => {
     const credential = new Credential.Info({
       id: Credential.ID.make("cred_provider_usage_auth"),

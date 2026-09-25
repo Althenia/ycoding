@@ -20,11 +20,17 @@ sources:
 
 ## Snapshot Contract
 
-A snapshot carries provider ID and safe display label, availability status, source and stability classification, update time, named windows, and an optional safe diagnostic message.[^spec-v2]
+A snapshot carries provider ID and safe display label, availability status, source and stability classification, update time, named windows, and an optional safe diagnostic message; it also carries the stored credential profile name only when the provider has more than one stored profile.[^spec-v2]
 
 Status values are available, stale, unsupported, unauthorized, and error; a refresh failure never blocks Session startup or model execution, and a later failure retains the previous valid snapshot as stale.[^guardrail-ops]
 
 Unknown values are omitted from snapshots and render as Not reported in the terminal, never as zero.[^spec-v2]
+
+## Listing and Profiles
+
+The list returns one snapshot per stored credential profile for a provider with a quota adapter and several profiles, and one snapshot for any other provider; providers without a quota adapter or usable credential return explicit unsupported snapshots, and results are ordered by provider ID, then profile name.[^spec-v2]
+
+Observed response data applies only to the provider's active profile, and a newer observation takes precedence over that profile's older API snapshot.[^spec-v2]
 
 ## Sources and Stability
 
@@ -34,9 +40,11 @@ Provider results cache by provider and credential identity; credentials, account
 
 ## Terminal Presentation
 
-The Provider Usage command appears when a provider selected by the current root family has visible quota data or when local request diagnostics exist; parallel Sessions using the same provider share one section.[^guardrail-ops]
+The Usage view renders one section per available configured provider in the current Location, or one section per stored profile named by that profile for a multi-profile provider; account-level percentages are never combined.[^guardrail-ops]
 
-Percentage windows use stable ten-character ASCII bars with warning styling at 70 to 89 percent and error styling at or above 90 percent; unsupported providers are omitted.[^guardrail-ops]
+Percentage windows use stable ten-character ASCII bars with warning styling at 70 to 89 percent and error styling at or above 90 percent; providers without a supported quota path or usable credential are hidden, while unauthorized and failed providers remain visible.[^guardrail-ops]
+
+Unreported steps, reasoning, cache reads, token totals, and report costs render as `-`.[^spec-v2]
 
 ## Related Concepts
 

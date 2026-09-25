@@ -128,15 +128,15 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "key", order: "asc" })
     expect(frame).toContain("VISIBLE OUT")
     expect(frame).toContain("REASON")
-    expect(frame).toContain("Unreported")
+    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s-(\s|$)/)
     expect(frame).not.toContain("output subset")
 
     app.mockInput.pressKey("RETURN")
     frame = await waitFor(app, (value) => value.includes("Usage details") && value.includes("Alpha"), "usage details")
     expect(frame).toContain("Visible output 1,200")
     expect(frame).toContain("Reasoning 300")
-    expect(frame).toContain("Cache read Unreported")
-    expect(frame).toContain("Total tokens Unreported")
+    expect(frame).toContain("Cache read -")
+    expect(frame).toContain("Total tokens -")
     app.mockInput.pressKey("ESCAPE")
     await waitFor(app, (value) => !value.includes("Usage details"), "details dismissal")
 

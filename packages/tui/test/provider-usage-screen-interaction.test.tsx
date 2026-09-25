@@ -255,8 +255,7 @@ test("keeps the failed Overview free of scrollbar strips and makes padded naviga
     expect(screen.scrollbox()?.verticalScrollBar.visible).toBe(true)
     screen.input.pressKey("END")
     await waitFor(screen, "Quota window 40")
-    await waitFor(screen, "Connected, but quota reporting is not available")
-    expect(screen.frame()).toContain("OpenRouter · unsupported")
+    expect(screen.frame()).not.toContain("OpenRouter")
   } finally {
     await screen.dispose()
   }

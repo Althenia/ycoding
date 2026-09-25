@@ -93,34 +93,40 @@ export function make(input: MakeInput): Interface {
       message,
     })
 
-  const get = Effect.fn("ProviderUsage.get")(function* (request: GetInput) {
-    const observed = observations.get(request.providerID)
-    if (!request.refresh && observed) return observed
+  const credentialsFor = (credentials: ReadonlyArray<Credential.Info>, providerID: Provider.ID) =>
+    credentials.filter((item) => item.integrationID === Integration.ID.make(providerID))
 
-    const adapter = input.adapters[request.providerID]
-    if (!adapter)
-      return unavailable(request.providerID, "unsupported", "Provider usage is unsupported")
+  const load = Effect.fnUntraced(function* (
+    providerID: Provider.ID,
+    candidates: ReadonlyArray<Credential.Info>,
+    credentialID: Credential.ID | undefined,
+    refresh: boolean | undefined,
+  ) {
+    // With several profiles stored for one provider, quota must follow the requested profile;
+    // falling back to the first row would report another account's usage.
+    const primary = candidates.find((item) => item.active) ?? candidates[0]
+    const selected = credentialID ? candidates.find((item) => item.id === credentialID) : primary
+    // Response-header observations come from Session requests, which run as the active profile.
+    const observed = () => (selected === primary ? observations.get(providerID) : undefined)
+    const profiled = (snapshot: ProviderUsage.Snapshot) =>
+      candidates.length > 1 && selected?.label ? new ProviderUsage.Snapshot({ ...snapshot, profile: selected.label }) : snapshot
 
-    const credentials = yield* input.credentials.all()
-    const integrationID = Integration.ID.make(request.providerID)
-    const candidates = credentials.filter((item) => item.integrationID === integrationID)
-    // With several profiles stored for one provider, quota must follow the profile the user
-    // selected; falling back to the first row would report another account's usage.
-    const selected = request.credentialID
-      ? candidates.find((item) => item.id === request.credentialID)
-      : (candidates.find((item) => item.active) ?? candidates[0])
-    if (!selected)
-      return unavailable(request.providerID, "unsupported", "No supported credential is configured")
+    const current = observed()
+    if (!refresh && current) return profiled(current)
+
+    const adapter = input.adapters[providerID]
+    if (!adapter) return unavailable(providerID, "unsupported", "Provider usage is unsupported")
+    if (!selected) return unavailable(providerID, "unsupported", "No supported credential is configured")
 
     const updatedAt = Math.max(0, Math.trunc(now()))
     const snapshot = yield* cache
       .get({
-        key: `${request.providerID}:${selected.id}`,
-        ttlMs: input.ttlMs?.[request.providerID] ?? minute,
-        refresh: request.refresh,
+        key: `${providerID}:${selected.id}`,
+        ttlMs: input.ttlMs?.[providerID] ?? minute,
+        refresh,
         load: adapter({
-          providerID: request.providerID,
-          label: providerLabel(request.providerID),
+          providerID,
+          label: providerLabel(providerID),
           credential: selected,
           updatedAt,
         }),
@@ -129,7 +135,7 @@ export function make(input: MakeInput): Interface {
         Effect.catch((error) =>
           Effect.succeed(
             unavailable(
-              request.providerID,
+              providerID,
               error instanceof RequestError && (error.status === 401 || error.status === 403)
                 ? "unauthorized"
                 : error instanceof RequestError && error.status === 404
@@ -142,17 +148,34 @@ export function make(input: MakeInput): Interface {
           ),
         ),
       )
-    const latest = observations.get(request.providerID)
-    return latest && latest.updatedAt >= snapshot.updatedAt ? latest : snapshot
+    const latest = observed()
+    return profiled(latest && latest.updatedAt >= snapshot.updatedAt ? latest : snapshot)
   })
 
   return {
-    get,
+    get: Effect.fn("ProviderUsage.get")(function* (request: GetInput) {
+      const credentials = yield* input.credentials.all()
+      return yield* load(
+        request.providerID,
+        credentialsFor(credentials, request.providerID),
+        request.credentialID,
+        request.refresh,
+      )
+    }),
     list: Effect.fn("ProviderUsage.list")(function* (request) {
       const providers = yield* input.providers.available()
+      const credentials = yield* input.credentials.all()
+      const targets = [...new Set(providers.map((provider) => provider.id))].toSorted().flatMap((providerID) => {
+        const candidates = credentialsFor(credentials, providerID)
+        const profiles =
+          input.adapters[providerID] && candidates.length > 1
+            ? candidates.toSorted((left, right) => left.label.localeCompare(right.label)).map((item) => item.id)
+            : [undefined]
+        return profiles.map((credentialID) => ({ providerID, candidates, credentialID }))
+      })
       return yield* Effect.forEach(
-        [...new Set(providers.map((provider) => provider.id))].toSorted(),
-        (providerID) => get({ providerID, refresh: request?.refresh }),
+        targets,
+        (target) => load(target.providerID, target.candidates, target.credentialID, request?.refresh),
         { concurrency: 4 },
       )
     }),

@@ -14,6 +14,7 @@ Provider usage is a read-only Location-scoped service that normalizes quota, cre
 A snapshot includes:
 
 - provider ID and safe display label, including a normalized provider-reported account type when available;
+- the stored credential profile name, present only when the provider has more than one stored profile;
 - availability status;
 - source and stability classification;
 - update time;
@@ -85,7 +86,7 @@ Other seats keep the legacy entitlement path, whose lanes report a percentage of
 
 Successful API snapshots are cached by provider and credential identity. Concurrent refreshes for the same cache key are single-flight. A refresh failure returns a stale copy when one exists.
 
-Observed response data is stored separately by provider. A newer observation takes precedence over an older API snapshot. A forced API refresh does not erase a newer observation.
+Observed response data is stored separately by provider and applies only to the provider's active profile. A newer observation takes precedence over that profile's older API snapshot. A forced API refresh does not erase a newer observation.
 
 No cache key contains a credential secret.
 
@@ -115,7 +116,7 @@ GET /api/provider/:providerID/usage
 
 Both operations accept the Location query. `refresh=true` requests a source refresh. The response contains normalized snapshots only and never exposes credential IDs, access tokens, API keys, refresh tokens, account emails, or raw provider payloads.
 
-The list uses `Catalog.provider.available()` to enumerate each available configured provider once, respecting disabled providers and provider policy. It includes connected providers with no selected Session and providers without a quota adapter; the latter return explicit `unsupported` snapshots. Independent refreshes run with concurrency bounded to four and preserve successful snapshots alongside per-provider failures. Results are ordered by provider ID.
+The list uses `Catalog.provider.available()` to enumerate each available configured provider, respecting disabled providers and provider policy. A provider with a quota adapter and several stored credential profiles returns one snapshot per profile; any other provider returns one snapshot, using its active profile when one exists. The list includes connected providers with no selected Session and providers without a quota adapter or usable credential; the latter return explicit `unsupported` snapshots. Independent refreshes run with concurrency bounded to four and preserve successful snapshots alongside per-provider failures. Results are ordered by provider ID, then profile name. `GET /api/provider/:providerID/usage` returns the active profile's snapshot.
 
 ## Durable provider-request usage
 
@@ -144,14 +145,14 @@ Summary totals and per-model spend rows expose optional `cacheReadReported`, tru
 - Stats displays a 52-week Sunday-aligned UTC calendar using retained daily reports. Future cells are blank. Missing retained days do not prove inactivity, and coverage remains explicitly unknown after retention cleanup.
 - The Session footer's usage action and `<leader>Shift+U` open the dedicated Usage screen; `<leader>u` remains Undo. Usage is not a command-palette item. Escape or back returns without submitting or discarding the Session draft.
 - Navigation labels occupy equally sized, padded, clickable cells separated by vertical rules. Narrow terminals retain the active view in a bounded navigation window. Overview and quota content show a theme-colored vertical scrollbar only when needed; no horizontal scrollbar occupies the space above the footer.
-- Provider IDs are deduplicated across the Location-connected-provider list, retaining the newest snapshot by update time; account-level percentages are never added or averaged.
-- Unsupported, unauthorized, and error snapshots retain their status and safe message. Providers with no reported windows remain visible without fabricated values. A failed refresh retains a previous snapshot as stale and shows a partial-refresh warning.
+- Snapshots are deduplicated by provider ID and profile, retaining the newest snapshot by update time; each profile renders as its own section named `label · profile`, and account-level percentages are never added or averaged.
+- `unsupported` snapshots, including providers without a usable credential, are hidden. Unauthorized and error snapshots retain their status and safe message. Providers with no reported windows remain visible without fabricated values. A failed refresh retains a previous snapshot as stale and shows a partial-refresh warning.
 - Spark and other named lanes render as separate windows within their provider section.
 - A window renders a ten-cell progress bar (`█` used and `░` unused) only when a ratio is derivable: a `percent` window reporting `used`, or any window reporting both `used` and a positive `limit`. Windows with no denominator, and `unlimited` windows, render their value as text, subject to the explicit OpenRouter rule below.
 - OpenRouter `daily`, `weekly`, and `monthly` windows report spend without a limit of their own and borrow the same snapshot's `key` USD limit as their denominator. The borrow is scoped to OpenRouter windows within one snapshot and never crosses providers or snapshots. When the key reports no limit, those windows stay text.
 - Bar values below 70% use normal styling, 70–89% warning styling, and 90% or higher error styling.
 - Each window renders its own reset beside its value, so Codex 5-hour, weekly, and Spark lanes, and Claude session and weekly lanes, each show a distinct reset. There is no aggregated reset row. Near resets use relative duration, later resets use a concrete local timestamp, and a window with no reported reset shows none.
-- Unknown values render as `Not reported`.
+- Unknown quota window values render as `Not reported`. Unreported steps, reasoning, cache reads, token totals, and report costs render as `-`.
 - Overview leads with a `Total` row built from the backend summary's own top-level token and cost totals, so it covers every model regardless of the per-model breakdown beneath it. It is not re-summed from the model rows.
 - Overview and report tables share header/row column geometry, right-aligned numeric values, and distinct metric colors. Wide layouts allocate remaining width to full model identities before truncating; narrow layouts separate identities and metric details. Selected report rows use the full-width offset surface.
 - Overview spend amounts render without a provenance label; `costProvenance` remains available to API consumers and does not claim historical billing.

@@ -4834,6 +4834,7 @@ export type ProviderUsageListOutput = {
   data: Array<{
     providerID: string
     label: string
+    profile?: string
     status: ProviderUsageStatus
     source: ProviderUsageSource
     stability: ProviderUsageStability
@@ -4870,6 +4871,7 @@ export type ProviderUsageGetOutput = {
   data: {
     providerID: string
     label: string
+    profile?: string
     status: ProviderUsageStatus
     source: ProviderUsageSource
     stability: ProviderUsageStability

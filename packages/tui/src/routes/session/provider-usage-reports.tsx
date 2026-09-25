@@ -587,7 +587,7 @@ function sortLabel(sort: Sort, order: Order) {
 }
 
 function cacheRead(value: ProviderRequestReport["total"] | ProviderRequestReport["rows"][number]) {
-  return value.cacheReadReported === true ? formatNumber(value.tokens.cache.read) : "Unreported"
+  return value.cacheReadReported === true ? formatNumber(value.tokens.cache.read) : "-"
 }
 
 function tokenTotal(value: ProviderRequestReport["total"] | ProviderRequestReport["rows"][number]) {
@@ -597,16 +597,16 @@ function tokenTotal(value: ProviderRequestReport["total"] | ProviderRequestRepor
 
 function tokenTotalLabel(value: ProviderRequestReport["total"] | ProviderRequestReport["rows"][number]) {
   const total = tokenTotal(value)
-  return total === undefined ? "Unreported" : formatNumber(total)
+  return total === undefined ? "-" : formatNumber(total)
 }
 
 function tableCost(value: ProviderRequestReport["total"] | ProviderRequestReport["rows"][number]) {
-  if (value.cost === undefined) return "Unreported"
+  if (value.cost === undefined) return "-"
   return value.costProvenance === "current_catalog" ? `$${value.cost.toFixed(2)} est.` : `$${value.cost.toFixed(2)}`
 }
 
 function costLabel(value: ProviderRequestReport["total"] | ProviderRequestReport["rows"][number]) {
-  if (value.cost === undefined) return "Unreported"
+  if (value.cost === undefined) return "-"
   if (value.costProvenance === "current_catalog") return `$${value.cost.toFixed(2)} estimated`
   if (value.costProvenance === "recorded") return `$${value.cost.toFixed(2)} recorded`
   return `$${value.cost.toFixed(2)} (source unreported)`

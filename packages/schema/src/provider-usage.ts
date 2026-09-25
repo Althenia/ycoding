@@ -45,6 +45,7 @@ export class Window extends Schema.Class<Window>("ProviderUsage.Window")({
 export class Snapshot extends Schema.Class<Snapshot>("ProviderUsage.Snapshot")({
   providerID: Provider.ID,
   label: Schema.String.check(Schema.isNonEmpty()),
+  profile: Schema.String.check(Schema.isNonEmpty()).pipe(optional),
   status: Status,
   source: Source,
   stability: Stability,

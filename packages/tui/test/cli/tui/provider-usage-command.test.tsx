@@ -25,7 +25,7 @@ const snapshot = (providerID: string, status: Snapshot["status"]): Snapshot => (
   windows: [],
 })
 
-test("keeps unsupported connected providers and de-duplicates visible failure states", () => {
+test("hides unsupported providers and de-duplicates each provider profile", () => {
   expect(
     visibleProviderSnapshots([
       snapshot("unsupported", "unsupported"),
@@ -34,8 +34,18 @@ test("keeps unsupported connected providers and de-duplicates visible failure st
       snapshot("unauthorized", "unauthorized"),
       snapshot("error", "error"),
       { ...snapshot("available", "stale"), updatedAt: 0 },
-    ]).map((item) => item.providerID),
-  ).toEqual(["available", "error", "stale", "unauthorized", "unsupported"])
+      { ...snapshot("profiled", "available"), profile: "work" },
+      { ...snapshot("profiled", "stale"), profile: "work", updatedAt: 0 },
+      { ...snapshot("profiled", "available"), profile: "personal" },
+    ]).map((item) => [item.providerID, item.profile, item.status]),
+  ).toEqual([
+    ["available", undefined, "available"],
+    ["error", undefined, "error"],
+    ["profiled", "personal", "available"],
+    ["profiled", "work", "available"],
+    ["stale", undefined, "stale"],
+    ["unauthorized", undefined, "unauthorized"],
+  ])
 })
 
 test("invalidates stale asynchronous generations", () => {
@@ -99,6 +109,8 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
     },
     snapshot("openrouter", "error"),
     snapshot("hidden", "unsupported"),
+    { ...snapshot("deepseek", "available"), label: "DeepSeek", profile: "work" },
+    { ...snapshot("deepseek", "available"), label: "DeepSeek", profile: "personal" },
   ]
   const app = await testRender(
     () => (
@@ -130,7 +142,9 @@ test("renders provider progress and unavailable states in a dedicated dialog", a
     expect(frame).toContain("Claude Max")
     expect(frame).toContain("68% used")
     expect(frame).toContain("Session")
-    expect(frame).toContain("hidden · unsupported")
+    expect(frame).not.toContain("hidden")
+    expect(frame).toContain("DeepSeek · personal · updated now")
+    expect(frame).toContain("DeepSeek · work · updated now")
     expect(frame).toContain("Quota information is not reported.")
   } finally {
     app.renderer.destroy()
@@ -181,7 +195,7 @@ test("renders unavailable local pricing without inventing zero cost", async () =
   try {
     const frame = app.captureCharFrame()
     expect(frame).toContain("custom/custom")
-    expect(frame).toContain("Unreported/0")
+    expect(frame).toContain("-/0")
     expect(frame).not.toContain("$0.00")
   } finally {
     app.renderer.destroy()
