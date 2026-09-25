@@ -208,7 +208,7 @@ describe("AgentV2", () => {
     }),
   )
 
-  it.effect("registers GSD as a one-shot delivery agent with focused verification", () =>
+  it.effect("registers GSD as a general-purpose delivery agent with outcome reporting", () =>
     Effect.gen(function* () {
       const agent = yield* AgentV2.Service
       yield* AgentPlugin.Plugin.effect(host({ agent: agentHost(agent) })).pipe(
@@ -219,24 +219,42 @@ describe("AgentV2", () => {
       const gsd = yield* agent.resolve(AgentV2.ID.make("GSD"))
       expect(gsd).toMatchObject({ id: "GSD", name: "GSD", mode: "primary", hidden: false })
       if (!gsd) throw new Error("expected the GSD primary agent")
-      expect(gsd.system).toContain("You are GSD (Get shit done), a one-shot delivery agent.")
+      expect(gsd.system).toContain("You are GSD (Get shit done), an all-round agent.")
+      expect(gsd.system).toContain("Answer read-only requests without making changes")
       expect(gsd.system).toContain("root cause")
-      expect(gsd.system).toContain("highest-impact complete solution")
+      expect(gsd.system).toContain("complete authorized outcome")
       expect(gsd.system).toContain("Implement directly when that is fastest")
       expect(gsd.system).toContain("Run independent subagent tasks in parallel")
+      expect(gsd.system).toContain("Compare delegation overhead with time saved on the critical path")
+      expect(gsd.system).toContain("Dispatch ready independent tasks early")
+      expect(gsd.system).toContain("keep tightly coupled edits and integration in your own hands")
+      expect(gsd.system).toContain("Give each child a bounded outcome, inputs, ownership, and acceptance checks")
+      expect(gsd.system).toContain("Continue independent work while children run")
       expect(gsd.system).toContain("assign one writer per file or mutable resource")
-      expect(gsd.system).toContain("Use TDD when it exposes a meaningful behavioral mismatch")
-      expect(gsd.system).toContain("Never run the full test suite")
+      expect(gsd.system).toContain("Use TDD for changed behavior")
+      expect(gsd.system).toContain("Run the full suite only when an affected required check demands it")
       expect(gsd.system).toContain("focused tests")
       expect(gsd.system).toContain("Ask the user only when truly blocked")
       expect(gsd.system).toContain("Never overengineer")
       expect(gsd.system).toContain("repository standards and guidelines")
       expect(gsd.system).toContain("Verify subagent evidence")
+      for (const field of [
+        "Done",
+        "Tasks left",
+        "Blockers",
+        "Feasibility and conceivable path",
+        "Residual risks",
+        "Remaining gaps",
+      ]) {
+        expect(gsd.system).toContain(field)
+      }
       expect(gsd.color).toBe("#e67e22")
       const source = yield* Effect.promise(() =>
         Bun.file(new URL("../src/plugin/agent/GSD.md", import.meta.url)).text(),
       )
       expect(source.match(/^color:\s*"(#[0-9a-fA-F]{6})"/m)?.[1]).toBe(gsd.color)
+      expect(source.toLowerCase()).not.toContain("oneshot")
+      expect(source.toLowerCase()).not.toContain("one-shot")
       expect(PermissionV2.evaluate("subagent", "occam", gsd.permissions).effect).toBe("allow")
       expect(yield* agent.resolve()).toMatchObject({ id: "god" })
     }),
