@@ -1998,6 +1998,73 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("keeps retained users before an installed Codex remote checkpoint and uses the latest later boundary", () =>
+    Effect.gen(function* () {
+      const first = { type: "reasoning" as const, text: "", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "old", encrypted_content: "old" } } } }
+      const remote = { type: "reasoning" as const, text: "", providerMetadata: { openai: { remoteCompactionV2: true, opaqueCompactionItem: { type: "compaction", id: "remote", encrypted_content: "remote" } } } }
+      const direct = Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) })
+      const request = LLM.request({
+        model: direct,
+        messages: [Message.assistant([first]), Message.user("Retained real user"), Message.assistant([remote]), Message.user("Continue")],
+        providerOptions: { openai: { store: false } },
+      })
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(request)
+      expect(prepared.body.input).toMatchObject([
+        { role: "user", content: [{ type: "input_text", text: "Retained real user" }] },
+        { type: "compaction", id: "remote", encrypted_content: "remote" },
+        { role: "user", content: [{ type: "input_text", text: "Continue" }] },
+      ])
+    }),
+  )
+
+  it.effect("selects a Copilot stateless compaction boundary for the shared context gate", () => Effect.sync(() => {
+    const request = LLM.request({
+      model: Model.update(model, { route: model.route.with({ id: "ai-sdk:@ai-sdk/github-copilot" }) }),
+      messages: [
+        Message.user("Old prefix"),
+        Message.assistant([{ type: "reasoning", text: "", providerMetadata: {
+          copilot: { opaqueCompactionItem: { type: "compaction", encrypted_content: "opaque" } },
+        } }]),
+        Message.user("New suffix"),
+      ],
+      providerOptions: { copilot: { store: false } },
+    })
+    expect(OpenAIResponses.pruneMessagesForServerCompaction(request).length).toBe(2)
+  }))
+
+  it.effect("lowers the Codex remote-v2 trigger only on a Codex route", () =>
+    Effect.gen(function* () {
+      const trigger = Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } })
+      const codex = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(LLM.request({
+        model: Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) }),
+        messages: [Message.user("Earlier context"), trigger],
+        providerOptions: { openai: { parallelToolCalls: true } },
+      }))
+      expect(codex.body.input.at(-1)).toEqual({ type: "compaction_trigger" })
+      expect(codex.body.parallel_tool_calls).toBe(true)
+      const publicRoute = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(LLM.request({
+        model,
+        messages: [trigger],
+      })).pipe(Effect.flip)
+      expect(publicRoute).toBeInstanceOf(LLMError)
+    }),
+  )
+
+  it.effect("distinguishes completed remote compaction from incomplete response settlement", () =>
+    Effect.gen(function* () {
+      const codex = Model.update(model, { route: model.route.with({ id: "openai-codex-responses" }) })
+      const request = LLM.request({ model: codex, messages: [Message.make({ role: "user", content: [], native: { openai: { compactionTrigger: true } } })] })
+      const completed = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
+        { type: "response.completed", response: {} },
+      ))))
+      const incomplete = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(sseEvents(
+        { type: "response.incomplete", response: {} },
+      ))))
+      expect(completed.events.find(LLMEvent.is.stepFinish)?.providerMetadata?.openai?.remoteCompactionCompleted).toBe(true)
+      expect(incomplete.events.find(LLMEvent.is.stepFinish)?.providerMetadata?.openai?.remoteCompactionCompleted).toBe(false)
+    }),
+  )
+
   it.effect("preserves opaque compaction state across a stored GPT-5.6 continuation", () =>
     Effect.gen(function* () {
       const opaque = {

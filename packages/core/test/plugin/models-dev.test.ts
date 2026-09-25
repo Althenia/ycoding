@@ -105,6 +105,61 @@ describe("ModelsDevPlugin", () => {
     ),
   )
 
+  it.effect("maps DeepSeek variants to the thinking toggle and requested effort", () =>
+    Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-models-dev-"))).pipe(
+      Effect.flatMap((directory) =>
+        Effect.gen(function* () {
+          const file = path.join(directory, "models.json")
+          yield* Effect.promise(() =>
+            Bun.write(
+              file,
+              JSON.stringify({
+                deepseek: {
+                  id: "deepseek",
+                  name: "DeepSeek",
+                  env: [],
+                  npm: "@ai-sdk/openai-compatible",
+                  api: "https://api.deepseek.com",
+                  models: {
+                    "deepseek-v4-pro": {
+                      id: "deepseek-v4-pro",
+                      name: "DeepSeek V4 Pro",
+                      release_date: "2026-01-01",
+                      attachment: false,
+                      reasoning: true,
+                      reasoning_options: [{ type: "toggle" }, { type: "effort", values: ["low", "high", "max"] }],
+                      tool_call: true,
+                      limit: { context: 1000, output: 100 },
+                    },
+                  },
+                },
+              }),
+            ),
+          )
+          const catalog = yield* Catalog.Service
+          const integrations = yield* Integration.Service
+          yield* ModelsDevPlugin.effect(
+            host({
+              catalog: catalogHost(catalog),
+              integration: integrationHost(integrations),
+            }),
+          )
+
+          const model = yield* catalog.model.get(ProviderV2.ID.make("deepseek"), ModelV2.ID.make("deepseek-v4-pro"))
+          expect(model?.variants).toEqual([
+            { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
+            { id: ModelV2.VariantID.make("low"), settings: { reasoningEffort: "low", thinking: { type: "enabled" } } },
+            { id: ModelV2.VariantID.make("high"), settings: { reasoningEffort: "high", thinking: { type: "enabled" } } },
+            { id: ModelV2.VariantID.make("max"), settings: { reasoningEffort: "max", thinking: { type: "enabled" } } },
+          ])
+        }).pipe(
+          Effect.provide(models(path.join(directory, "models.json"))),
+          Effect.ensuring(Effect.promise(() => rm(directory, { recursive: true, force: true }))),
+        ),
+      ),
+    ),
+  )
+
   it.effect("projects normalized models.dev snapshots into the catalog", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service

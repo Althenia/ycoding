@@ -383,28 +383,60 @@ test("rapid variant cycling advances from the newest pending variant", async () 
   }
 }, 30_000)
 
-test("variant cycling keeps advancing when the catalog lists the none sentinel first", async () => {
+test("variant cycling displays none, advances through offered variants, then returns to base", async () => {
   switches.length = 0
   const screen = await renderPicker({
     stateDir: "variant-cycle-none",
-    withoutPicker: true,
+    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
     recent: [{ providerID: "openai", modelID: "gpt-5-2" }],
     catalog: models.map((item) =>
       item.id === "gpt-5-2"
-        ? { ...item, variants: [{ id: "none" }, { id: "high" }, { id: "low" }] }
+        ? { ...item, variants: [{ id: "none" }, { id: "low" }, { id: "high" }] }
         : item,
     ),
   })
   try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("none"))
     await waitFor(() => screen.current()?.modelID === "gpt-5-2", "the model preference")
     await screen.variantCycle()
-    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "high" })
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "none" })
+    expect(screen.variant()).toBe("none")
+    await screen.app.waitForFrame((frame) => frame.includes("none"))
     await screen.variantCycle()
-    expect(screen.variant()).toBe("low")
+    expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2", variant: "low" })
+    await screen.variantCycle()
+    expect(screen.variant()).toBe("high")
     await screen.variantCycle()
     expect(screen.pendingTarget()).toEqual({ providerID: "openai", modelID: "gpt-5-2" })
     await screen.variantCycle()
-    expect(screen.variant()).toBe("high")
+    expect(screen.variant()).toBe("none")
+    expect(switches).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("renders and persists an advertised none variant from model selection", async () => {
+  switches.length = 0
+  const screen = await renderPicker({
+    stateDir: "variant-saved-none",
+    order: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    recent: [{ providerID: "openai", modelID: "gpt-5-2" }],
+    storedVariant: { "openai/gpt-5-2": "none" },
+    catalog: models.map((item) =>
+      item.id === "gpt-5-2" ? { ...item, variants: [{ id: "none" }, { id: "low" }] } : item,
+    ),
+  })
+  try {
+    screen.app.mockInput.pressEnter()
+    await screen.app.waitForFrame((frame) => frame.includes("Select variant") && frame.includes("none"))
+    screen.app.mockInput.pressEnter()
+    await waitFor(() => screen.pendingTarget()?.variant === "none", "the selected none variant")
+    expect(await Bun.file(path.join(root, "variant-saved-none", "model.json")).json()).toMatchObject({
+      variant: { "openai/gpt-5-2": "none" },
+    })
+    expect(screen.variant()).toBe("none")
     expect(switches).toEqual([])
   } finally {
     await screen.dispose()

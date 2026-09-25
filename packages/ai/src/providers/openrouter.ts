@@ -4,7 +4,7 @@ import { Endpoint } from "../route/endpoint"
 import { Framing } from "../route/framing"
 import { Protocol } from "../route/protocol"
 import { AuthOptions, type ProviderAuthOption } from "../route/auth-options"
-import { LLMRequest, ProviderID, type ModelID, type ProviderOptions } from "../schema"
+import { LLMRequest, ProviderID, mergeProviderOptions, type ModelID, type ProviderOptions } from "../schema"
 import type { ProviderPackage } from "../provider-package"
 import * as OpenAICompatibleProfiles from "./openai-compatible-profile"
 import * as OpenAIResponses from "../protocols/openai-responses"
@@ -224,6 +224,8 @@ const configuredRoute = (input: ModelOptions) => {
 export interface Settings extends ProviderPackage.Settings {
   readonly apiKey?: string
   readonly baseURL?: string
+  // Catalog reasoning variants (`effort`, `enabled`, `max_tokens`, ...).
+  readonly reasoning?: Record<string, unknown>
   readonly providerOptions?: OpenRouterProviderOptionsInput
 }
 
@@ -244,6 +246,10 @@ export const model: ProviderPackage.Definition<Settings>["model"] = (modelID, se
     headers: settings.headers === undefined ? undefined : { ...settings.headers },
     http: settings.body === undefined ? undefined : { body: { ...settings.body } },
     limits: settings.limits,
-    providerOptions: settings.providerOptions,
+    // The selected variant's reasoning wins over configured defaults.
+    providerOptions: mergeProviderOptions(
+      settings.providerOptions,
+      settings.reasoning === undefined ? undefined : { openrouter: { reasoning: settings.reasoning } },
+    ),
   }).model(modelID)
 export const responses = model

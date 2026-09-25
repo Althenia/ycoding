@@ -13,6 +13,7 @@ export const options = (routeID: string, hint: CacheHint | undefined): SharedV3P
     return { openrouter: { cacheControl: { type: "ephemeral", ttl: ttl(hint) } } }
   if (routeID === "ai-sdk:@ai-sdk/amazon-bedrock")
     return { bedrock: { cachePoint: { type: "default", ttl: ttl(hint) } } }
+  if (routeID === "ai-sdk:@ai-sdk/github-copilot") return { copilot: { cacheControl: { type: "ephemeral" } } }
 }
 
 export const merge = (

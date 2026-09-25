@@ -106,6 +106,12 @@ const imageGenerationCallItem = z.object({
   result: z.string(),
 })
 
+const compactionItem = z.object({
+  type: z.literal("compaction"),
+  id: z.string(),
+  encrypted_content: z.string(),
+})
+
 /**
  * `top_logprobs` request body argument can be set to an integer between
  * 0 and 20 specifying the number of most likely tokens to return at each
@@ -297,6 +303,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       prompt_cache_key: openaiOptions?.promptCacheKey,
       safety_identifier: openaiOptions?.safetyIdentifier,
       top_logprobs: topLogprobs,
+      context_management: openaiOptions?.contextManagement?.map((entry) => ({
+        type: entry.type,
+        compact_threshold: entry.compactThreshold,
+      })),
 
       // model-specific settings:
       ...(modelConfig.isReasoningModel &&
@@ -489,6 +499,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                   }),
                 ),
               }),
+              compactionItem,
             ]),
           ),
           service_tier: z.string().nullish(),
@@ -521,6 +532,14 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
     // map response content to content array
     for (const part of response.output) {
       switch (part.type) {
+        case "compaction": {
+          content.push({
+            type: "reasoning",
+            text: "",
+            providerMetadata: { copilot: { itemId: part.id, opaqueCompactionItem: part } },
+          })
+          break
+        }
         case "reasoning": {
           // when there are no summary parts, we need to add an empty reasoning part:
           if (part.summary.length === 0) {
@@ -1146,6 +1165,20 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                     currentReasoningOutputIndex = null
                   }
                 }
+              } else if (value.item.type === "compaction") {
+                const providerMetadata = {
+                  copilot: { itemId: value.item.id, opaqueCompactionItem: value.item },
+                }
+                controller.enqueue({
+                  type: "reasoning-start",
+                  id: `${value.item.id}:0`,
+                  providerMetadata,
+                })
+                controller.enqueue({
+                  type: "reasoning-end",
+                  id: `${value.item.id}:0`,
+                  providerMetadata,
+                })
               }
             } else if (isResponseFunctionCallArgumentsDeltaChunk(value)) {
               const toolCall = ongoingToolCalls[value.output_index]
@@ -1443,6 +1476,7 @@ const responseOutputItemAddedSchema = z.object({
       id: z.string(),
       encrypted_content: z.string().nullish(),
     }),
+    compactionItem,
     z.object({
       type: z.literal("function_call"),
       id: z.string(),
@@ -1505,6 +1539,7 @@ const responseOutputItemDoneSchema = z.object({
       id: z.string(),
       encrypted_content: z.string().nullish(),
     }),
+    compactionItem,
     z.object({
       type: z.literal("function_call"),
       id: z.string(),
@@ -1778,6 +1813,10 @@ const openaiResponsesProviderOptionsSchema = z.object({
   include: z
     .array(z.enum(["reasoning.encrypted_content", "file_search_call.results", "message.output_text.logprobs"]))
     .nullish(),
+  contextManagement: z.array(z.object({
+    type: z.literal("compaction"),
+    compactThreshold: z.number().optional(),
+  })).nullish(),
   instructions: z.string().nullish(),
 
   /**

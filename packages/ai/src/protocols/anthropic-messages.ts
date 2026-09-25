@@ -64,6 +64,11 @@ const AnthropicThinkingBlock = Schema.Struct({
   cache_control: Schema.optional(AnthropicCacheControl),
 })
 
+const AnthropicRedactedThinkingBlock = Schema.Struct({
+  type: Schema.tag("redacted_thinking"),
+  data: Schema.String,
+})
+
 const AnthropicToolUseBlock = Schema.Struct({
   type: Schema.tag("tool_use"),
   id: Schema.String,
@@ -123,6 +128,7 @@ type AnthropicUserBlock = Schema.Schema.Type<typeof AnthropicUserBlock>
 const AnthropicAssistantBlock = Schema.Union([
   AnthropicTextBlock,
   AnthropicThinkingBlock,
+  AnthropicRedactedThinkingBlock,
   AnthropicToolUseBlock,
   AnthropicServerToolUseBlock,
   AnthropicServerToolResultBlock,
@@ -217,6 +223,7 @@ const AnthropicStreamBlock = Schema.Struct({
   // server_tool_use id in `tool_use_id`.
   tool_use_id: Schema.optional(Schema.String),
   content: Schema.optional(Schema.Unknown),
+  data: Schema.optional(Schema.String),
 })
 
 const AnthropicStreamDelta = Schema.Struct({
@@ -486,6 +493,11 @@ const lowerMessages = Effect.fn("AnthropicMessages.lowerMessages")(function* (
           continue
         }
         if (part.type === "reasoning") {
+          const redactedData = part.providerMetadata?.anthropic?.redactedData
+          if (typeof redactedData === "string") {
+            content.push({ type: "redacted_thinking", data: redactedData })
+            continue
+          }
           content.push({
             type: "thinking",
             thinking: part.text,
@@ -692,14 +704,23 @@ const mergeUsage = (left: Usage | undefined, right: Usage | undefined) => {
     cacheWrite: right.cacheWriteInputTokens ?? left.cacheWriteInputTokens,
   })
   const outputTokens = right.outputTokens ?? left.outputTokens
+  const leftMetadata = left.providerMetadata?.["anthropic"]
+  const rightMetadata = right.providerMetadata?.["anthropic"]
+  const leftCreation = ProviderShared.isRecord(leftMetadata) ? leftMetadata.cache_creation : undefined
+  const rightCreation = ProviderShared.isRecord(rightMetadata) ? rightMetadata.cache_creation : undefined
+  const cacheCreation = {
+    ...(ProviderShared.isRecord(leftCreation) ? leftCreation : {}),
+    ...(ProviderShared.isRecord(rightCreation) ? rightCreation : {}),
+  }
   return new Usage({
     ...normalized,
     outputTokens,
     totalTokens: ProviderShared.totalTokens(normalized.inputTokens, outputTokens, undefined),
     providerMetadata: {
       anthropic: {
-        ...left.providerMetadata?.["anthropic"],
-        ...right.providerMetadata?.["anthropic"],
+        ...(ProviderShared.isRecord(leftMetadata) ? leftMetadata : {}),
+        ...(ProviderShared.isRecord(rightMetadata) ? rightMetadata : {}),
+        ...(Object.keys(cacheCreation).length === 0 ? {} : { cache_creation: cacheCreation }),
       },
     },
   })
@@ -779,12 +800,28 @@ const onContentBlockStart = (state: ParserState, event: AnthropicEvent): StepRes
     ]
   }
 
-  if (block.type === "thinking" && block.thinking) {
+  if (block.type === "thinking") {
     const events: LLMEvent[] = []
+    const id = `reasoning-${event.index ?? 0}`
+    const lifecycle = Lifecycle.reasoningStart(state.lifecycle, events, id)
+    if (!block.thinking) return [{ ...state, lifecycle }, events]
     return [
       {
         ...state,
-        lifecycle: Lifecycle.reasoningDelta(state.lifecycle, events, `reasoning-${event.index ?? 0}`, block.thinking),
+        lifecycle: Lifecycle.reasoningDelta(lifecycle, events, id, block.thinking),
+      },
+      events,
+    ]
+  }
+
+  if (block.type === "redacted_thinking" && block.data !== undefined) {
+    const events: LLMEvent[] = []
+    const id = `reasoning-${event.index ?? 0}`
+    const lifecycle = Lifecycle.reasoningStart(state.lifecycle, events, id)
+    return [
+      {
+        ...state,
+        lifecycle: Lifecycle.reasoningEnd(lifecycle, events, id, anthropicMetadata({ redactedData: block.data })),
       },
       events,
     ]

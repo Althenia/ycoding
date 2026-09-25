@@ -155,6 +155,20 @@ function build(id: ModelV2.ID, remote: UsableModel, baseURL: string, previous?: 
                 : {}),
             }
           : {}),
+      // The official client enables Responses compaction for every family except these.
+      ...(endpoint === "responses" && !["gpt-5", "gpt-5.1", "gpt-5.2"].includes(remote.capabilities.family)
+        ? {
+            contextManagement: [
+              {
+                type: "compaction",
+                compactThreshold:
+                  remote.capabilities.limits.max_prompt_tokens > 0
+                    ? Math.floor(remote.capabilities.limits.max_prompt_tokens * 0.9)
+                    : 50000,
+              },
+            ],
+          }
+        : {}),
     }),
     headers: previous?.headers,
     body: previous?.body,

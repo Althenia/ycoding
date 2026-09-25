@@ -18,6 +18,7 @@ import { SessionMessage } from "./message"
 import { SessionProviderState } from "./provider-state"
 import { SessionContinuation } from "./runner/continuation"
 import { SessionSchema } from "./schema"
+import type { ModelV2 } from "../model"
 import { SessionSummaryToon } from "./summary-toon"
 import {
   CompactionManifestBlobTable,
@@ -116,14 +117,22 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   entries: ReadonlyArray<Entry>,
+  model?: ModelV2.Ref,
 ) {
   return Effect.gen(function* () {
     const state = yield* findCurrent(db, sessionID)
     if (!state || state.status !== "active" || state.covered_through_seq === null) return { entries }
     const summary = yield* modelSummary(db, state)
+    const remote = yield* modelRemote(db, state)
+    const matchingRemote = remote && model &&
+      remote.provider === model.providerID && remote.modelID === model.id && (remote.variant ?? "default") === (model.variant ?? "default")
+      ? remote : undefined
+    const retained = matchingRemote && new Set(matchingRemote.retained.map((item) => item.messageID))
     const active = summary
       ? entries.filter((entry) => entry.seq === undefined || entry.seq > summary.coveredThrough.seq)
-      : entries
+      : matchingRemote
+        ? entries.filter((entry) => entry.seq === undefined || entry.seq > state.covered_through_seq! || retained!.has(entry.message.id))
+        : entries
     const exclusions = yield* db
       .select()
       .from(SessionContextExclusionTable)
@@ -135,7 +144,7 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
       )
       .all()
       .pipe(Effect.orDie)
-    if (exclusions.length === 0) return { entries: active, ...(summary === undefined ? {} : { summary }) }
+    if (exclusions.length === 0) return { entries: active, ...(summary === undefined ? {} : { summary }), ...(matchingRemote ? { remote: matchingRemote } : {}) }
     const filtered = active.flatMap((entry): ReadonlyArray<Entry> => {
       if (entry.seq === undefined || entry.seq > state.covered_through_seq!) return [entry]
       const messageExclusions = exclusions.flatMap((row) => {
@@ -176,7 +185,7 @@ export function selectEntries<Entry extends { readonly seq?: number; readonly me
         },
       ]
     })
-    return { entries: filtered, ...(summary === undefined ? {} : { summary }) }
+    return { entries: filtered, ...(summary === undefined ? {} : { summary }), ...(matchingRemote ? { remote: matchingRemote } : {}) }
   })
 }
 
@@ -207,6 +216,20 @@ const modelSummary = Effect.fnUntraced(function* (
     manifestDigest: state.manifest_digest,
     timeActivated: state.time_activated,
   } satisfies ModelSummary
+})
+
+const modelRemote = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  state: typeof SessionContextStateTable.$inferSelect,
+) {
+  if (state.manifest_digest === null || state.time_activated === null) return undefined
+  const blob = yield* db.select({ content: CompactionManifestBlobTable.content })
+    .from(CompactionManifestBlobTable).where(eq(CompactionManifestBlobTable.digest, state.manifest_digest)).get()
+    .pipe(Effect.orDie)
+  if (!blob || !plainRecord(blob.content)) return undefined
+  const remote = Schema.decodeUnknownOption(ContextManifest.RemoteStored)(blob.content.remote)
+  if (Option.isNone(remote)) return undefined
+  return { ...remote.value, manifestDigest: state.manifest_digest, coveredThroughSeq: state.covered_through_seq!, timeActivated: state.time_activated }
 })
 
 const layer = Layer.effect(
@@ -495,6 +518,17 @@ const commitActivation = Effect.fnUntraced(function* (
     activation.input.sessionID,
     activation.input.manifest.coveredThrough,
   )
+  if (activation.input.manifest.remote && activation.input.manifest.remoteItem)
+    yield* SessionProviderState.captureInTransaction(db, {
+      sessionID: activation.input.sessionID,
+      messageID: SessionMessage.ID.make(`msg_compaction_${activation.manifestDigest}`),
+      partOrdinal: 0,
+      partKind: "reasoning",
+      provider: activation.input.manifest.remote.provider,
+      modelID: activation.input.manifest.remote.modelID,
+      contextRevision: activation.revision,
+      state: { opaqueCompactionItem: activation.input.manifest.remoteItem },
+    })
   yield* SessionContinuation.invalidateInTransaction(db, activation.input.sessionID, activation.revision)
   yield* InstructionState.advanceEpoch(db, activation.input.sessionID, activation.sequence)
   if (activation.input.jobID) {
@@ -658,6 +692,7 @@ function selectorMatches(selector: ContextManifest.TargetSelector, data: unknown
 function manifestSelectors(manifest: ContextManifest.Manifest) {
   return [
     ...(manifest.summary ? [ContextManifest.summarySelector(manifest.summary)] : []),
+    ...(manifest.remote?.retained ?? []).map((item) => ({ kind: "message" as const, messageID: item.messageID, digest: ContextManifest.Digest.make(item.digest) })),
     ...manifest.exclusions.flatMap((exclusion) => {
       if (exclusion.reason === "provider_rebase" || exclusion.reason === "terminal_intermediate")
         return [exclusion.target]
@@ -701,6 +736,16 @@ const requireManifest = Effect.fnUntraced(function* (
         )
           throw new ActivationError({ code: "invalid_manifest", message: "Manifest rolling summary is invalid" })
       }
+      if (manifest.remote) {
+        const item = manifest.remoteItem
+        if (!item || !plainRecord(item) || item.type !== "compaction" ||
+          item.id !== manifest.remote.itemID || typeof item.encrypted_content !== "string" ||
+          item.encrypted_content.length === 0 ||
+          !Schema.is(Schema.Json)(item) ||
+          ContextManifest.payloadDigest(item) !== manifest.remote.digest ||
+          !manifest.remote.provider || !manifest.remote.modelID || manifest.summary)
+          throw new ActivationError({ code: "invalid_manifest", message: "Remote compaction payload is invalid" })
+      }
       const targets = new Set<string>()
       for (const exclusion of manifest.exclusions) {
         if (
@@ -723,6 +768,8 @@ const requireManifest = Effect.fnUntraced(function* (
 })
 
 function manifestMutation(manifest: ContextManifest.Manifest) {
+  if (manifest.remote && (!isDeeplyFrozen(manifest.remote) || !isDeeplyFrozen(manifest.remoteItem)))
+    return new ActivationError({ code: "selector_mutation", message: "Remote compaction state changed after validation" })
   if (manifest.summary && !isDeeplyFrozen(manifest.summary))
     return new ActivationError({
       code: "selector_mutation",

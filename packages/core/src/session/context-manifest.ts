@@ -124,6 +124,15 @@ export const RollingSummary = Schema.Struct({
 })
 export type RollingSummary = typeof RollingSummary.Type
 
+export const RemoteStored = Schema.Struct({
+  provider: nonempty,
+  modelID: nonempty,
+  variant: Schema.optional(Schema.String),
+  digest: Digest,
+  itemID: nonempty,
+  retained: Schema.Array(Schema.Struct({ messageID: SessionMessage.ID, seq: Event.Seq, digest: Digest })),
+})
+
 const decodeJSON = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
 const decodeCandidateValue = Schema.decodeUnknownSync(Candidate, strictDecodeOptions)
 
@@ -282,8 +291,54 @@ export type Manifest = {
   readonly protectedState: ReadonlyArray<ProtectedStateEntry>
   readonly exclusions: ReadonlyArray<ValidatedExclusion>
   readonly summary?: RollingSummary
+  readonly remote?: {
+    readonly provider: string
+    readonly modelID: string
+    readonly variant?: string
+    readonly digest: string
+    readonly itemID: string
+    readonly retained: ReadonlyArray<{ readonly messageID: SessionMessage.ID; readonly seq: Event.Seq; readonly digest: string }>
+  }
+  /** In-memory activation payload; manifestJSON excludes it from the durable manifest. */
+  readonly remoteItem?: Schema.Json
   readonly inputTokens: number
   readonly retainedTokens: number
+}
+
+export function remote(input: {
+  readonly baseContextRevision: number
+  readonly coveredThrough: CoveredThrough
+  readonly protectedState: ReadonlyArray<ProtectedStateEntry>
+  readonly retained: ReadonlyArray<{ readonly messageID: SessionMessage.ID; readonly seq: Event.Seq; readonly digest: string }>
+  readonly provider: string
+  readonly modelID: string
+  readonly variant?: string
+  readonly inputTokens: number
+  readonly retainedTokens: number
+  readonly item: Schema.Json
+}): Manifest {
+  if (!isPlainRecord(input.item) || input.item.type !== "compaction" ||
+    typeof input.item.id !== "string" || !input.item.id ||
+    typeof input.item.encrypted_content !== "string" || !input.item.encrypted_content)
+    throw new TypeError("Invalid Codex remote compaction item")
+  return deepFreeze({
+    schemaVersion: 1 as const,
+    baseContextRevision: input.baseContextRevision,
+    coveredThrough: input.coveredThrough,
+    protectedState: [...input.protectedState],
+    exclusions: [],
+    remote: {
+      provider: input.provider,
+      modelID: input.modelID,
+      ...(input.variant === undefined ? {} : { variant: input.variant }),
+      digest: Digest.make(payloadDigest(input.item)),
+      itemID: input.item.id,
+      retained: [...input.retained],
+    },
+    remoteItem: input.item,
+    inputTokens: input.inputTokens,
+    retainedTokens: input.retainedTokens,
+  })
 }
 
 export type ValidationResult =
@@ -989,7 +1044,9 @@ function cloneJson(value: Schema.Json): Schema.Json {
 }
 
 export function manifestJSON(manifest: Manifest): string {
-  return canonicalJSON(manifest)
+  if (manifest.remoteItem === undefined) return canonicalJSON(manifest)
+  const { remoteItem: _item, ...durable } = manifest
+  return canonicalJSON(durable)
 }
 
 export function manifestDigest(manifest: Manifest): string {

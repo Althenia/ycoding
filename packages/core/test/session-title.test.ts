@@ -60,6 +60,7 @@ const client = Layer.mock(LLMClient.Service)({
           cacheWriteInputTokens: 2,
           reasoningTokens: 2,
           promptEvalDurationNs: 4_000_000,
+          providerMetadata: { anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1 } } },
         },
       }),
       LLMEvent.finish({
@@ -213,7 +214,7 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
     const renamed = yield* store.get(sessionID)
     expect(renamed?.title).toBe("Generated Title")
     expect(renamed?.tokens).toEqual({ input: 10, output: 4, reasoning: 2, cache: { read: 3, write: 2 } })
-    expect(renamed?.cost).toBeCloseTo(0.0000233)
+    expect(renamed?.cost).toBeCloseTo(0.0000248)
     const { db } = yield* Database.Service
     expect(yield* db.select({ timing: SessionProviderRequestTable.timing }).from(SessionProviderRequestTable)
       .where(eq(SessionProviderRequestTable.session_id, sessionID)).get()).toMatchObject({

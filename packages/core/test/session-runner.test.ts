@@ -456,13 +456,14 @@ const echo = Layer.effectDiscard(
 const echoNode = makeLocationNode({ name: "test/session-runner-tools", layer: echo, deps: [ToolRegistry.node] })
 let modelResolveHook = Effect.void
 let currentModel = model
+let currentCost: ModelV2.Info["cost"] = []
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
     Effect.as(
       SessionRunnerModel.resolved(
         session.model?.id === "replacement" ? replacementModel : currentModel,
         session.model?.variant,
-        [],
+        currentCost,
       ),
     ),
   ),
@@ -833,6 +834,7 @@ const setup = Effect.gen(function* () {
   modelResolveHook = Effect.void
   pluginFlushHook = Effect.void
   currentModel = model
+  currentCost = []
   efficiencyConfig = undefined
   compactionWakeHook = Effect.void
   compactionSummary = false
@@ -1795,6 +1797,28 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+    }),
+  )
+
+  it.effect("records the one-hour Anthropic cache-write price for a step and its provider request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = anthropicCacheModel
+      currentCost = [{
+        input: Money.USDPerMillionTokens.make(2), output: Money.USDPerMillionTokens.zero,
+        cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(2.5) },
+      }]
+      yield* admit(session, "Price one-hour writes")
+      response = reply.text("Done", "hourly-cost").map((event) => LLMEvent.is.stepFinish(event)
+        ? LLMEvent.stepFinish({ index: event.index, reason: event.reason, usage: {
+            cacheWriteInputTokens: 1_000,
+            providerMetadata: { anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1_000 } } },
+          } })
+        : event)
+      yield* session.resume(sessionID)
+      expect(requireAssistant(yield* session.context(sessionID)).cost).toBe(Money.USD.make(0.004))
+      const records = yield* (yield* SessionProviderRequest.Service).list(sessionID)
+      expect(records[0]?.cost).toBe(Money.USD.make(0.004))
     }),
   )
 
@@ -3959,6 +3983,69 @@ describe("SessionRunnerLLM", () => {
       expect(JSON.stringify(requests[1]?.messages)).toContain("reasoning-secret")
       expect(JSON.stringify(requests[1]?.messages)).toContain("tool-call-secret")
       expect(JSON.stringify(requests[1]?.messages)).toContain("tool-result-secret")
+    }),
+  )
+
+  it.effect("materializes Codex opaque state from effective store false even under stored configuration", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = codexModel
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_state: "stored" })
+      yield* admit(session, "Codex first input")
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "codex-opaque" }),
+        LLMEvent.reasoningEnd({
+          id: "codex-opaque",
+          providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_codex", encrypted_content: "codex-private-state" } } },
+        }),
+        LLMEvent.textStart({ id: "codex-first" }),
+        LLMEvent.textDelta({ id: "codex-first", text: "Continue" }),
+        LLMEvent.textEnd({ id: "codex-first" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      yield* session.resume(sessionID)
+      yield* admit(session, "Codex next input")
+      response = reply.text("Done", "codex-next")
+      yield* session.resume(sessionID)
+      expect(requests[1]?.model.route.defaults.providerOptions?.openai?.store).toBe(false)
+      expect(JSON.stringify(requests[1]?.messages)).toContain("codex-private-state")
+    }),
+  )
+
+  it.effect("materializes catalog Copilot Responses opaque state from effective store false", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = Model.make({
+        id: "gpt-5.5",
+        provider: "github-copilot",
+        route: { ...OpenAIResponses.route.with({
+          id: "ai-sdk:@ai-sdk/github-copilot",
+          provider: "github-copilot",
+          providerOptions: { openai: { store: true }, copilot: { store: false } },
+          limits: testLimits,
+        }), providerMetadataKey: "copilot" },
+      })
+      efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_state: "stored" })
+      yield* admit(session, "First Copilot input")
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "copilot-opaque" }),
+        LLMEvent.reasoningEnd({ id: "copilot-opaque", providerMetadata: {
+          copilot: { opaqueCompactionItem: { type: "compaction", id: "cmp_copilot", encrypted_content: "copilot-private-state" } },
+        } }),
+        LLMEvent.textStart({ id: "copilot-first" }),
+        LLMEvent.textDelta({ id: "copilot-first", text: "Continue" }),
+        LLMEvent.textEnd({ id: "copilot-first" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      yield* session.resume(sessionID)
+      yield* admit(session, "Second Copilot input")
+      response = reply.text("Done", "copilot-next")
+      yield* session.resume(sessionID)
+      expect(JSON.stringify(requests[1]?.messages)).toContain("copilot-private-state")
     }),
   )
 

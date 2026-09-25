@@ -1554,4 +1554,24 @@ describe("volatile messages", () => {
     )
     expect(JSON.stringify(placement(copilot.messages))).toBe(JSON.stringify(placement(codex.messages)))
   })
+
+  test("allows bounded inline markers on the Copilot Claude Chat route", () => {
+    const copilotClaude = Model.update(anthropicModel, {
+      route: { ...anthropicModel.route, id: "ai-sdk:@ai-sdk/github-copilot", protocol: "ai-sdk" },
+    })
+    const applied = applyCachePolicy(
+      LLM.request({
+        model: copilotClaude,
+        system: "Stable system",
+        messages: [Message.user("u1"), Message.assistant("a1"), Message.user("u2")],
+        cache: { tools: false, system: true, messages: { tail: 2 } },
+      }),
+    )
+    expect(applied.system[0]?.cache).toEqual(new CacheHint({ type: "ephemeral" }))
+    expect(placement(applied.messages)).toEqual([
+      [new CacheHint({ type: "ephemeral" })],
+      [undefined],
+      [new CacheHint({ type: "ephemeral" })],
+    ])
+  })
 })

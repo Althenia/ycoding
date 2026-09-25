@@ -812,12 +812,12 @@ function streamPartEvents(
         LLMEvent.stepFinish({
           index: state.step++,
           reason: finishReason(event.finishReason),
-          usage: usage(event.usage),
+          usage: usage(event.usage, event.providerMetadata),
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
         LLMEvent.finish({
           reason: finishReason(event.finishReason),
-          usage: usage(event.usage),
+          usage: usage(event.usage, event.providerMetadata),
           providerMetadata: providerMetadata(event.providerMetadata),
         }),
       ])
@@ -826,7 +826,10 @@ function streamPartEvents(
   }
 }
 
-function usage(input: Extract<LanguageModelV3StreamPart, { type: "finish" }>["usage"]): UsageInput | undefined {
+function usage(
+  input: Extract<LanguageModelV3StreamPart, { type: "finish" }>["usage"],
+  metadata?: unknown,
+): UsageInput | undefined {
   const normalized = ProviderShared.normalizeInputUsage({
     semantics: "ai-sdk",
     total: input.inputTokens.total,
@@ -843,7 +846,26 @@ function usage(input: Extract<LanguageModelV3StreamPart, { type: "finish" }>["us
         ? undefined
         : normalized.inputTokens + input.outputTokens.total,
   }
-  return Object.values(output).some((value) => value !== undefined) ? output : undefined
+  const provider = ProviderShared.isRecord(metadata) ? metadata.anthropic : undefined
+  const rawUsage = ProviderShared.isRecord(provider) ? provider.usage : undefined
+  const rawCreation = ProviderShared.isRecord(rawUsage) ? rawUsage.cache_creation : undefined
+  const creation = ProviderShared.isRecord(rawCreation) ? rawCreation : undefined
+  const fiveMinute = creation?.ephemeral_5m_input_tokens
+  const oneHour = creation?.ephemeral_1h_input_tokens
+  const cacheCreation = {
+    ...(typeof fiveMinute === "number" && Number.isFinite(fiveMinute) && fiveMinute >= 0
+      ? { ephemeral_5m_input_tokens: fiveMinute }
+      : {}),
+    ...(typeof oneHour === "number" && Number.isFinite(oneHour) && oneHour >= 0
+      ? { ephemeral_1h_input_tokens: oneHour }
+      : {}),
+  }
+  return Object.values(output).some((value) => value !== undefined) || Object.keys(cacheCreation).length > 0
+    ? {
+        ...output,
+        ...(Object.keys(cacheCreation).length > 0 ? { providerMetadata: { anthropic: { cache_creation: cacheCreation } } } : {}),
+      }
+    : undefined
 }
 
 function finishReason(value: LanguageModelV3FinishReason): FinishReason {

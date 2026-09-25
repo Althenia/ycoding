@@ -7,19 +7,31 @@ import type { OpenAICompatibleChatPrompt } from "./openai-compatible-api-types"
 import { convertToBase64 } from "@ai-sdk/provider-utils"
 
 function getOpenAIMetadata(message: { providerOptions?: SharedV3ProviderOptions }) {
-  return message?.providerOptions?.copilot ?? {}
+  const { cacheControl: _, ...metadata } = message?.providerOptions?.copilot ?? {}
+  return metadata
+}
+
+function hasCacheHint(message: { providerOptions?: SharedV3ProviderOptions }) {
+  return message?.providerOptions?.copilot?.cacheControl !== undefined
 }
 
 export function convertToOpenAICompatibleChatMessages(prompt: LanguageModelV3Prompt): OpenAICompatibleChatPrompt {
   const messages: OpenAICompatibleChatPrompt = []
+  let cacheMarkers = 0
   for (const { role, content, ...message } of prompt) {
     const metadata = getOpenAIMetadata({ ...message })
+    const cacheControl =
+      cacheMarkers < 4 &&
+      (hasCacheHint({ ...message }) || (Array.isArray(content) && content.some((part) => hasCacheHint(part))))
+        ? (cacheMarkers++, { copilot_cache_control: { type: "ephemeral" as const } })
+        : {}
     switch (role) {
       case "system": {
         messages.push({
           role: "system",
           content: content,
           ...metadata,
+          ...cacheControl,
         })
         break
       }
@@ -30,6 +42,7 @@ export function convertToOpenAICompatibleChatMessages(prompt: LanguageModelV3Pro
             role: "user",
             content: content[0].text,
             ...getOpenAIMetadata(content[0]),
+            ...cacheControl,
           })
           break
         }
@@ -65,6 +78,7 @@ export function convertToOpenAICompatibleChatMessages(prompt: LanguageModelV3Pro
             }
           }),
           ...metadata,
+          ...cacheControl,
         })
 
         break
@@ -120,6 +134,7 @@ export function convertToOpenAICompatibleChatMessages(prompt: LanguageModelV3Pro
           reasoning_text: reasoningOpaque ? reasoningText : undefined,
           reasoning_opaque: reasoningOpaque,
           ...metadata,
+          ...cacheControl,
         })
 
         break
@@ -154,6 +169,9 @@ export function convertToOpenAICompatibleChatMessages(prompt: LanguageModelV3Pro
             tool_call_id: toolResponse.toolCallId,
             content: contentValue,
             ...toolResponseMetadata,
+            ...(cacheMarkers < 4 && (hasCacheHint(toolResponse) || hasCacheHint({ ...message }))
+              ? (cacheMarkers++, { copilot_cache_control: { type: "ephemeral" as const } })
+              : {}),
           })
         }
         break

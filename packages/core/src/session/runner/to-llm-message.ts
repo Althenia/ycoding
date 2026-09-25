@@ -256,6 +256,15 @@ function toLLMMessage(
         }),
       ]
     case "synthetic":
+      if (message.metadata?.remoteCompactionV2 === true) {
+        const state = materialized.get(SessionProviderState.key(message.id, 0, "reasoning"))
+        if (!state?.opaqueCompactionItem) return []
+        return [Message.assistant([{
+          type: "reasoning",
+          text: "",
+          providerMetadata: { openai: { remoteCompactionV2: true, opaqueCompactionItem: state.opaqueCompactionItem } },
+        }])]
+      }
       return [Message.make({ id: message.id, role: "user", content: message.text })]
     case "skill":
       return [Message.make({ id: message.id, role: "user", content: message.text, metadata: message.metadata })]

@@ -130,6 +130,37 @@ describe("OpenRouter", () => {
     }),
   )
 
+  it.effect("forwards catalog variant reasoning settings from the native package", () =>
+    Effect.gen(function* () {
+      const effort = yield* LLMClient.prepare(
+        LLM.request({
+          model: OpenRouter.model("openai/gpt-5.6-sol", {
+            apiKey: "test-key",
+            reasoning: { effort: "high" },
+            providerOptions: { openrouter: { reasoning: { summary: "detailed" } } },
+          }),
+          prompt: "Think.",
+        }),
+      )
+      const disabled = yield* LLMClient.prepare(
+        LLM.request({
+          model: OpenRouter.model("deepseek/deepseek-v4-pro", { apiKey: "test-key", reasoning: { enabled: false } }),
+          prompt: "Answer.",
+        }),
+      )
+      const budget = yield* LLMClient.prepare(
+        LLM.request({
+          model: OpenRouter.model("anthropic/claude-sonnet-4.6", { apiKey: "test-key", reasoning: { max_tokens: 8000 } }),
+          prompt: "Think.",
+        }),
+      )
+
+      expect(effort.body.reasoning).toEqual({ effort: "high", summary: "detailed", context: "all_turns" })
+      expect(disabled.body.reasoning).toEqual({ enabled: false })
+      expect(budget.body.reasoning).toEqual({ max_tokens: 8000 })
+    }),
+  )
+
   it.effect("defaults GPT-5.6 retained reasoning and merges OpenRouter reasoning options", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(

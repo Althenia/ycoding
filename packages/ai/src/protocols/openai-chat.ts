@@ -119,6 +119,8 @@ const OpenAIChatToolChoice = Schema.Union([
   }),
 ])
 
+const ChatThinkingTypes = ["enabled", "disabled"] as const
+
 export const bodyFields = {
   model: Schema.String,
   messages: Schema.Array(OpenAIChatMessage),
@@ -138,6 +140,8 @@ export const bodyFields = {
     }),
   ),
   reasoning_effort: Schema.optional(OpenAIOptions.OpenAIReasoningEffort),
+  // DeepSeek's OpenAI-format thinking toggle; sent only when configured.
+  thinking: Schema.optional(Schema.Struct({ type: Schema.Literals(ChatThinkingTypes) })),
   max_tokens: Schema.optional(Schema.Number),
   temperature: Schema.optional(Schema.Number),
   top_p: Schema.optional(Schema.Number),
@@ -517,14 +521,23 @@ const lowerOptions = Effect.fn("OpenAIChat.lowerOptions")(function* (request: LL
       ? undefined
       : configuredRetention
   const cacheOptions = cacheCapability === "gpt-5.6" ? OpenAIOptions.promptCacheOptions(request) : undefined
+  const thinking = chatThinking(request)
   return {
     ...(store !== undefined ? { store } : {}),
     ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
     ...(retention ? { prompt_cache_retention: retention } : {}),
     ...(cacheOptions ? { prompt_cache_options: cacheOptions } : {}),
     ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(thinking ? { thinking } : {}),
   }
 })
+
+const chatThinking = (request: LLMRequest) => {
+  const value = request.providerOptions?.openai?.thinking
+  if (!isRecord(value)) return undefined
+  const type = ChatThinkingTypes.find((item) => item === value.type)
+  return type === undefined ? undefined : { type }
+}
 
 const fromRequest = Effect.fn("OpenAIChat.fromRequest")(function* (request: LLMRequest) {
   // `fromRequest` returns the provider body only. Endpoint, auth, framing,

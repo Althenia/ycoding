@@ -389,7 +389,9 @@ or an explicit object:
 }
 ```
 
-The variant is optional.
+The variant is optional. `default` always selects the base model. `none` selects the model's catalog `none` variant when the model defines one (for example reasoning effort `none` on OpenAI models or thinking disabled on DeepSeek); on a model without that variant it selects the base model. The TUI variant cycle includes an offered `none` variant.
+
+Catalog reasoning variants reach the provider request in each provider's own format: DeepSeek variants send `thinking: { type: "enabled" | "disabled" }` and the requested `reasoning_effort`, which DeepSeek maps server-side; native OpenRouter variants send their `reasoning` object (`effort`, `enabled`, or `max_tokens`), merged with any configured OpenRouter reasoning options.
 
 ## Provider efficiency
 
@@ -534,7 +536,7 @@ Configure the goal pre-prompt with `agents.goal.system`. This helper synthesizes
 
 An unavailable configured model, failed provider request, or empty calculation leaves the prior goal unchanged. The runtime does not fall back to raw input or another model on that failure. The user replaces objectives explicitly; ordinary chat and agent goal-tool calls cannot rewrite them.
 
-For titles and goals, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. For selective-compaction manifests, the owner Session resolves `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. Each job reuses a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. This changes no configuration shape.
+For titles and goals, an explicit model on the matching hidden agent takes precedence over `efficiency.helper_models.<role>`; a missing value or `session` uses the current Session model. Local selective-compaction manifests resolve `helper_models.compaction.main` for main chats and `.subagent` for child Sessions before creating the helper child. An explicit configured compaction model takes precedence over the agent-pinned model; a missing value or `session` retains the existing `agent model`, then owner-Session-model precedence. A subagent owner's `session` value means that subagent's own model. Local jobs reuse a deterministic taskless child Session with the hidden primary `compaction` agent, the selected model, and provider/cache identity isolated from the owner. On a ChatGPT/Codex Responses route, remote compaction uses the owner Session's model regardless of the helper selection; if remote compaction fails, the same job uses the configured local helper. Direct OpenAI and eligible Copilot Responses can compact inline on their Session model without calling a helper. This changes no configuration shape.
 
 ## Permissions
 

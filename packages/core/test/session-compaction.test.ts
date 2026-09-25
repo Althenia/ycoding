@@ -1,7 +1,7 @@
 import { expect } from "bun:test"
-import { LLMClient, LLMEvent, Model, type LLMRequest } from "@ycoding-ai/ai"
+import { LLM, LLMClient, LLMError, LLMEvent, Message, Model, TransportReason, type LLMRequest } from "@ycoding-ai/ai"
 import { CACHE_POLICY_REVISION } from "@ycoding-ai/ai/cache-policy"
-import { OpenAIChat } from "@ycoding-ai/ai/protocols"
+import { OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Config } from "@ycoding-ai/core/config"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
@@ -28,15 +28,19 @@ import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionGuardrail } from "@ycoding-ai/core/session/guardrail"
 import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper-policy"
 import { SessionHistory } from "@ycoding-ai/core/session/history"
+import { SessionLiveState } from "@ycoding-ai/core/session/live-state"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
+import { SessionProviderState } from "@ycoding-ai/core/session/provider-state"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
+import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
 import { SessionSummaryToon } from "@ycoding-ai/core/session/summary-toon"
 import {
   SessionMessageTable,
+  SessionProviderStateLinkTable,
   SessionProviderRequestTable,
   SessionTable,
   SessionTaskTable,
@@ -46,6 +50,7 @@ import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SkillV2 } from "@ycoding-ai/core/skill"
 import { Token } from "@ycoding-ai/core/util/token"
 import { ID } from "@ycoding-ai/schema/session-compaction"
+import { Money } from "@ycoding-ai/schema/money"
 import { DateTime, Effect, Fiber, Layer, LayerMap, Schema, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, inArray } from "drizzle-orm"
@@ -59,15 +64,22 @@ const model = Model.make({
 
 let requests: LLMRequest[] = []
 let responseForRequest: ((request: LLMRequest) => string) | undefined
+let remoteEvents: readonly LLMEvent[] | undefined
+let remoteFailure = false
+let helperUsage: readonly LLMEvent[] | undefined
 let beforeResponse = Effect.void
 
 const client = Layer.mock(LLMClient.Service)({
   prepare: () => Effect.die("unused"),
   stream: (request) => {
     requests.push(request)
+    if (remoteEvents && request.model.route.id.startsWith("openai-codex-"))
+      return remoteFailure
+        ? Stream.concat(Stream.fromIterable(remoteEvents), Stream.fail(new LLMError({ module: "test", method: "stream", reason: new TransportReason({ message: "Stream interrupted" }) })))
+        : Stream.fromIterable(remoteEvents)
     const text = responseForRequest?.(request)
     if (text === undefined) return Stream.make(LLMEvent.providerError({ message: "Missing manifest response" }))
-    return Stream.unwrap(beforeResponse.pipe(Effect.as(Stream.make(LLMEvent.textDelta({ id: "manifest", text })))))
+    return Stream.unwrap(beforeResponse.pipe(Effect.as(Stream.fromIterable([LLMEvent.textDelta({ id: "manifest", text }), ...(helperUsage ?? [])]))))
   },
   generate: () => Effect.die("unused"),
 })
@@ -91,6 +103,13 @@ const unavailableHelpers = Layer.succeed(
     resolveModel: () => Effect.succeed(undefined),
   }),
 )
+const pricedHelpers = Layer.succeed(SessionHelperPolicy.Service, SessionHelperPolicy.Service.of({
+  settings: { titleMode: "local", models: {}, compactionScopes: {} }, localTitle,
+  resolveModel: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, [{
+    input: Money.USDPerMillionTokens.make(2), output: Money.USDPerMillionTokens.zero,
+    cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(2.5) },
+  }])),
+}))
 const guardrailSnapshots = new Map<SessionSchema.ID, SessionGuardrail.Snapshot>()
 const guardrails = Layer.mock(SessionGuardrail.Service, {
   withSnapshot: (sessionID, use) =>
@@ -128,6 +147,7 @@ const testWithConfig = (compaction = new ConfigCompaction.Info({ keep_recent_mes
         SessionProjector.node,
         SessionStore.node,
         SessionProviderRequest.node,
+        SessionProviderState.node,
         SessionHelperPolicy.node,
         SessionCompaction.node,
         SessionCompactionExecution.node,
@@ -147,6 +167,7 @@ const testWithConfig = (compaction = new ConfigCompaction.Info({ keep_recent_mes
   )
 
 const it = testWithConfig()
+const itPriced = testWithConfig(new ConfigCompaction.Info({ keep_recent_messages: 0 }), pricedHelpers)
 const itWithTwoPasses = testWithConfig(new ConfigCompaction.Info({ keep_recent_messages: 1, max_internal_passes: 2 }))
 const itWithTinyManifest = testWithConfig(
   new ConfigCompaction.Info({ keep_recent_messages: 1, max_manifest_bytes: 1, max_internal_passes: 1 }),
@@ -436,8 +457,203 @@ const generateManifest = Effect.fnUntraced(function* (job: SessionCompactionJob.
 const reset = () => {
   requests = []
   responseForRequest = undefined
+  remoteEvents = undefined
+  remoteFailure = false
+  helperUsage = undefined
   beforeResponse = Effect.void
   guardrailSnapshots.clear()
+}
+
+it.effect("validates a private remote-v2 manifest without placing ciphertext in its durable JSON", () =>
+  Effect.gen(function* () {
+    const remote = ContextManifest.remote({
+      baseContextRevision: 0,
+      coveredThrough: { messageID: SessionMessage.ID.make("msg_remote_boundary"), seq: EventV2.Seq.make(2) },
+      protectedState: [],
+      retained: [{ messageID: SessionMessage.ID.make("msg_remote_user"), seq: EventV2.Seq.make(1), digest: "a".repeat(64) }],
+      provider: "openai",
+      modelID: "gpt-5.5",
+      inputTokens: 1200,
+      retainedTokens: 300,
+      item: { type: "compaction", id: "cmp_remote_1", encrypted_content: "remote-ciphertext" },
+    })
+    expect(remote.remote?.digest).toMatch(/^[a-f0-9]{64}$/)
+    expect(ContextManifest.manifestJSON(remote)).not.toContain("remote-ciphertext")
+    expect(ContextManifest.manifestJSON(remote)).toContain("cmp_remote_1")
+  }),
+)
+
+it.effect("atomically activates an opaque Codex checkpoint without exposing its payload", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const context = yield* SessionContextState.Service
+    const sessionID = SessionSchema.ID.make("ses_remote_activation")
+    const first = SessionMessage.ID.make("msg_remote_first")
+    const latest = SessionMessage.ID.make("msg_remote_latest")
+    yield* seedSession(sessionID, 2)
+    yield* SessionContextState.initialize(db, sessionID, 0)
+    yield* insertAssistant(sessionID, first, 1, "Old assistant reasoning ".repeat(200))
+    yield* insertMessage(sessionID, latest, 2, "Retain this real user")
+    const row = yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.id, latest)).get()
+    expect(row).toBeDefined()
+    if (!row || !Schema.is(Schema.Json)(row.data)) throw new Error("Expected JSON user message")
+    const live = yield* SessionLiveState.captureDatabase(db, sessionID)
+    const manifest = ContextManifest.remote({
+      baseContextRevision: 0,
+      coveredThrough: { messageID: latest, seq: EventV2.Seq.make(2) },
+      protectedState: SessionLiveState.toProtectedState({ ...live.sources, guardrails: { sequence: 0, digest: ContextManifest.payloadDigest(null) } }),
+      retained: [{ messageID: latest, seq: EventV2.Seq.make(2), digest: ContextManifest.payloadDigest(row.data) }],
+      provider: "openai",
+      modelID: "gpt-5.5",
+      inputTokens: 2000,
+      retainedTokens: 200,
+      item: { type: "compaction", id: "cmp_remote", encrypted_content: "private-remote-payload" },
+    })
+    yield* context.activate({ sessionID, manifest })
+    const stored = yield* db.select().from(SessionProviderStateLinkTable).all()
+    expect(stored).toHaveLength(1)
+    expect(stored[0]?.message_id).toBe(SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`))
+    expect(JSON.stringify(yield* SessionHistory.forModel(db, sessionID))).not.toContain("private-remote-payload")
+    const selected = yield* SessionHistory.forModel(db, sessionID, ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("gpt-5.5") }))
+    expect(selected.map((message) => message.id)).toEqual([latest, SessionMessage.ID.make(`msg_compaction_${ContextManifest.manifestDigest(manifest)}`)])
+    const switched = yield* SessionHistory.forModel(db, sessionID, ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("gpt-5.4") }))
+    expect(switched.map((message) => message.id)).toEqual([first, latest])
+  }),
+)
+
+const codexModel = Model.make({ id: "codex-owner", provider: "openai", route: OpenAIResponses.route.with({ id: "openai-codex-responses" }) })
+const ownerRequest = () => Effect.succeed({
+  request: LLM.request({ model: codexModel, system: [{ type: "text" as const, text: "owner instructions" }],
+    messages: [Message.user("covered input")], tools: [{ name: "owner_tool", description: "owner tool", inputSchema: { type: "object" as const, properties: {} } }],
+    providerOptions: { openai: { promptCacheKey: "session-scoped-key", store: false } },
+  }),
+  cache: { promptCacheKey: "session-scoped-key", systemDigest: "system", toolDigest: "tools" },
+  cost: [], contextRevision: 0,
+})
+
+it.effect("runs remote-v2 on the owner route despite a different compaction helper and activates only one opaque item", () =>
+  Effect.gen(function* () {
+    reset()
+    const db = (yield* Database.Service).db
+    const sessionID = SessionSchema.ID.make("ses_codex_remote_job")
+    const first = SessionMessage.ID.make("msg_codex_remote_old")
+    const retained = SessionMessage.ID.make("msg_codex_remote_user")
+    yield* seedSession(sessionID, 2)
+    yield* SessionContextState.initialize(db, sessionID, 0)
+    yield* insertAssistant(sessionID, first, 1, "old history ".repeat(300))
+    yield* insertMessage(sessionID, retained, 2, "Retained user input")
+    remoteEvents = [
+      LLMEvent.reasoningEnd({ id: "cmp_1", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_1", encrypted_content: "ciphertext" } } } }),
+      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } }),
+    ]
+    const compaction = yield* SessionCompaction.Service
+    const manifest = yield* compaction.manifest(manifestJob(sessionID, { messageID: retained, seq: 2 }), ownerRequest)
+    expect(manifest.remote?.modelID).toBe("codex-owner")
+    expect(manifest.summary).toBeUndefined()
+    expect(requests).toHaveLength(1)
+    expect(requests[0].model.route.id).toBe("openai-codex-responses")
+    expect(requests[0].providerOptions?.openai?.promptCacheKey).toBe("session-scoped-key")
+    expect(requests[0].providerOptions?.openai?.parallelToolCalls).toBe(true)
+    expect(requests[0].tools.map((tool) => tool.name)).toEqual(["owner_tool"])
+    expect(requests[0].messages.at(-1)?.native?.openai).toEqual({ compactionTrigger: true })
+    const remoteRecords = yield* (yield* SessionProviderRequest.Service).list(sessionID)
+    expect(remoteRecords).toMatchObject([{ source: "compaction", routeID: "openai-codex-responses", promptCacheKey: "session-scoped-key" }])
+    retainManifestGuardrail(sessionID, manifest)
+    yield* (yield* SessionContextState.Service).activate({ sessionID, manifest })
+    expect((yield* db.select().from(SessionProviderStateLinkTable).all())).toHaveLength(1)
+    const next = SessionMessage.ID.make("msg_codex_remote_next")
+    const sequence = yield* db.select({ seq: EventSequenceTable.seq }).from(EventSequenceTable)
+      .where(eq(EventSequenceTable.aggregate_id, sessionID)).get()
+    yield* insertMessage(sessionID, next, (sequence?.seq ?? 2) + 1, "After checkpoint")
+    const ref = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("codex-owner") })
+    const selected = yield* SessionHistory.forModel(db, sessionID, ref)
+    const materialized = yield* (yield* SessionProviderState.Service).materialize({
+      sessionID, provider: "openai", modelID: "codex-owner", stateless: true,
+    })
+    const lowered = toLLMMessages(selected, ref, "openai", materialized)
+    expect(lowered.map((message) => message.role)).toEqual(["user", "assistant", "user"])
+    expect(lowered[0].content).toMatchObject([{ type: "text", text: "Retained user input" }])
+    expect(lowered[1].content).toMatchObject([{ type: "reasoning", providerMetadata: { openai: { opaqueCompactionItem: { encrypted_content: "ciphertext" } } } }])
+    expect(lowered[2].content).toMatchObject([{ type: "text", text: "After checkpoint" }])
+    const other = ModelV2.Ref.make({ providerID: ProviderV2.ID.make("openai"), id: ModelV2.ID.make("other-model") })
+    expect(JSON.stringify(toLLMMessages(yield* SessionHistory.forModel(db, sessionID, other), other, "openai", materialized))).not.toContain("ciphertext")
+  }),
+)
+
+it.effect("sends a full Codex WebSocket compaction request with no response-id delta", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_codex_ws_remote_job")
+    const boundary = SessionMessage.ID.make("msg_codex_ws_boundary")
+    yield* seedSession(sessionID, 1)
+    yield* insertMessage(sessionID, boundary, 1, "WebSocket source")
+    remoteEvents = [
+      LLMEvent.reasoningEnd({ id: "cmp_ws", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_ws", encrypted_content: "ciphertext" } } } }),
+      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } }),
+    ]
+    const websocket = Model.update(codexModel, { route: OpenAIResponses.webSocketRoute.with({ id: "openai-codex-websocket-responses" }) })
+    const prepare = () => ownerRequest().pipe(Effect.map((owner) => ({
+      ...owner,
+      request: LLM.request({ ...owner.request, model: websocket,
+        providerOptions: { openai: { promptCacheKey: "session-scoped-key", store: false, previousResponseId: "stale",
+          responsesWebSocket: { sessionKey: "session-scoped-key", fingerprint: "fingerprint", messageBoundary: 0, fullReplay: false } } },
+      }),
+    })))
+    const manifest = yield* (yield* SessionCompaction.Service).manifest(manifestJob(sessionID, { messageID: boundary, seq: 1 }), prepare)
+    expect(manifest.remote?.itemID).toBe("cmp_ws")
+    expect(requests[0].providerOptions?.openai?.responsesWebSocket).toMatchObject({ fullReplay: true })
+    expect(requests[0].providerOptions?.openai?.previousResponseId).toBeUndefined()
+    expect(requests[0].messages.at(-1)?.native?.openai).toEqual({ compactionTrigger: true })
+  }),
+)
+
+it.effect("retains the newest real users in chronological order within the 64K token budget", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_codex_remote_retention")
+    const old = SessionMessage.ID.make("msg_codex_remote_oversized")
+    const middle = SessionMessage.ID.make("msg_codex_remote_middle")
+    const latest = SessionMessage.ID.make("msg_codex_remote_latest")
+    yield* seedSession(sessionID, 3)
+    yield* insertMessage(sessionID, old, 1, "oversized ".repeat(30_000))
+    yield* insertMessage(sessionID, middle, 2, "Earlier real user")
+    yield* insertMessage(sessionID, latest, 3, "Latest real user")
+    remoteEvents = [
+      LLMEvent.reasoningEnd({ id: "cmp_retention", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_retention", encrypted_content: "ciphertext" } } } }),
+      LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } }),
+    ]
+    const manifest = yield* (yield* SessionCompaction.Service).manifest(manifestJob(sessionID, { messageID: latest, seq: 3 }), ownerRequest)
+    expect(manifest.remote?.retained.map((item) => item.messageID)).toEqual([middle, latest])
+    expect(manifest.retainedTokens).toBeLessThanOrEqual(64_000)
+  }),
+)
+
+for (const invalid of ["missing", "duplicate", "malformed", "stream error"] as const) {
+  it.effect(`falls back to local helper after ${invalid} remote output without activating an opaque item`, () =>
+    Effect.gen(function* () {
+      reset()
+      const sessionID = SessionSchema.ID.make(`ses_codex_remote_${invalid}`)
+      const first = SessionMessage.ID.make(`msg_codex_${invalid}_first`)
+      const boundary = SessionMessage.ID.make(`msg_codex_${invalid}_boundary`)
+      yield* seedSession(sessionID, 2)
+      yield* SessionContextState.initialize((yield* Database.Service).db, sessionID, 0)
+      yield* insertAssistant(sessionID, first, 1, "old context ".repeat(300))
+      yield* insertMessage(sessionID, boundary, 2, "Retained input")
+      const valid = LLMEvent.reasoningEnd({ id: "cmp", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp", encrypted_content: "ciphertext" } } } })
+      remoteEvents = [...(invalid === "missing" ? [] : invalid === "duplicate" ? [valid, valid] : [LLMEvent.reasoningEnd({ id: "cmp", providerMetadata: { openai: { opaqueCompactionItem: { type: "compaction", id: "cmp", encrypted_content: "" } } } })]), LLMEvent.stepFinish({ index: 0, reason: "stop", providerMetadata: { openai: { remoteCompactionCompleted: true } } })]
+      remoteFailure = invalid === "stream error"
+      responseForRequest = () => checkpoint(2, "Fallback checkpoint")
+      const manifest = yield* (yield* SessionCompaction.Service).manifest(manifestJob(sessionID, { messageID: boundary, seq: 2 }), ownerRequest)
+      expect(manifest.summary).toBeDefined()
+      expect(manifest.remote).toBeUndefined()
+      expect(requests.filter((request) => request.model.route.id === "openai-codex-responses")).toHaveLength(3)
+      expect((yield* (yield* SessionProviderRequest.Service).list(sessionID)).map((record) => record.invalidation))
+        .toEqual(["retry-fallback", "retry-fallback", "retry-fallback"])
+      expect(requests.some((request) => request.model.provider === "test")).toBe(true)
+      expect(yield* (yield* Database.Service).db.select().from(SessionProviderStateLinkTable).all()).toEqual([])
+    }),
+  )
 }
 
 function checkpoint(through: number, currentState = "Continue from the compacted conversation") {
@@ -694,6 +910,28 @@ it.effect("uses one deterministic hidden child Session for compaction provider t
         .all()
         .pipe(Effect.orDie),
     ).toEqual([])
+  }),
+)
+
+itPriced.effect("aggregates helper one-hour cache writes into the compaction request cost", () =>
+  Effect.gen(function* () {
+    reset()
+    const sessionID = SessionSchema.ID.make("ses_compaction_hourly_cost")
+    const first = SessionMessage.ID.make("msg_compaction_hourly_first")
+    const boundary = SessionMessage.ID.make("msg_compaction_hourly_boundary")
+    yield* seedSession(sessionID, 2)
+    yield* insertAssistant(sessionID, first, 1, "helper hourly cost source ".repeat(200))
+    yield* insertMessage(sessionID, boundary, 2, "Retain input")
+    responseForRequest = () => checkpoint(2, "Costed helper checkpoint")
+    helperUsage = [0, 1].map((index) => LLMEvent.stepFinish({ index, reason: "stop", usage: {
+      cacheWriteInputTokens: 1_000,
+      providerMetadata: { anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1_000 } } },
+    } }))
+    yield* generateManifest(manifestJob(sessionID, { messageID: boundary, seq: 2 }))
+    const rows = yield* (yield* Database.Service).db.select().from(SessionProviderRequestTable).all()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].cost).toBe(0.008)
+    expect(rows[0].tokens.cache.write).toBe(2_000)
   }),
 )
 

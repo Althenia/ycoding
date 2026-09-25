@@ -259,6 +259,8 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
         ? { promptCacheRetention: "24h" as const }
         : {}),
   }
+  const copilotClaudeChat =
+    input.routeID === "ai-sdk:@ai-sdk/github-copilot" && input.apiModelID.toLowerCase().includes("claude")
   const cache: CachePolicy | undefined = breakpointOpenAI
     ? {
         tools: false,
@@ -267,7 +269,9 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
         // selects the newest eligible boundaries within this provider limit.
         messages: { tail: OPENAI_PROMPT_CACHE_READ_CANDIDATE_LIMIT },
       }
-    : input.anthropicTtlSeconds !== undefined &&
+    : copilotClaudeChat
+      ? { tools: false, system: true, messages: { tail: 2 } }
+      : input.anthropicTtlSeconds !== undefined &&
         ANTHROPIC_CACHE_ROUTES.has(input.routeID) &&
         (!PROFILE_GATED_ANTHROPIC_CACHE_ROUTES.has(input.routeID) ||
           cacheProfile(input.apiModelID)?.extendedTtl === true)

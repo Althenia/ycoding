@@ -542,6 +542,61 @@ describe("Anthropic Messages route", () => {
     }),
   )
 
+  it.effect("round-trips empty signed and redacted thinking blocks", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "sig" } },
+        { type: "content_block_stop", index: 0 },
+        { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "opaque" } },
+        { type: "content_block_stop", index: 1 },
+        { type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "call_1", name: "lookup" } },
+        { type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{}" } },
+        { type: "content_block_stop", index: 2 },
+        { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.message.content).toEqual([
+        { type: "reasoning", text: "", providerMetadata: { anthropic: { signature: "sig" } } },
+        { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: "opaque" } } },
+        expect.objectContaining({ type: "tool-call", id: "call_1" }),
+      ])
+      const replay = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(
+        LLM.request({ model, messages: [response.message], cache: "none" }),
+      )
+      expect(replay.body.messages).toEqual([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "", signature: "sig" },
+            { type: "redacted_thinking", data: "opaque" },
+            { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+          ],
+        },
+      ])
+    }),
+  )
+
+  it.effect("retains both Anthropic cache-write TTL buckets", () =>
+    Effect.gen(function* () {
+      const body = sseEvents(
+        { type: "message_start", message: { usage: { input_tokens: 5, cache_creation: { ephemeral_5m_input_tokens: 2 } } } },
+        { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: {
+          output_tokens: 1,
+          cache_creation_input_tokens: 3,
+          cache_creation: { ephemeral_1h_input_tokens: 1 },
+        } },
+      )
+      const response = yield* LLMClient.generate(request).pipe(Effect.provide(fixedResponse(body)))
+
+      expect(response.usage?.providerMetadata).toMatchObject({
+        anthropic: { cache_creation: { ephemeral_5m_input_tokens: 2, ephemeral_1h_input_tokens: 1 } },
+      })
+    }),
+  )
+
   it.effect("assembles streamed tool call input", () =>
     Effect.gen(function* () {
       const body = sseEvents(

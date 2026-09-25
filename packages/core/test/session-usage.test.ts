@@ -60,3 +60,29 @@ test("falls back to the OpenRouter master price only when provider pricing is un
   })
   expect(SessionUsage.estimatedCatalogCost([], [], usage)).toBeUndefined()
 })
+
+test("prices Anthropic one-hour cache writes at twice input while preserving aggregate token totals", () => {
+  const opus = [{
+    input: Money.USDPerMillionTokens.make(4),
+    output: Money.USDPerMillionTokens.make(0),
+    cache: { read: Money.USDPerMillionTokens.zero, write: Money.USDPerMillionTokens.make(5) },
+  }] satisfies ModelV2.Info["cost"]
+  const usage = (oneHour: unknown) => new Usage({
+    inputTokens: 2_000,
+    nonCachedInputTokens: 0,
+    cacheWriteInputTokens: 2_000,
+    providerMetadata: { anthropic: { cache_creation: {
+      ephemeral_5m_input_tokens: 1_000,
+      ephemeral_1h_input_tokens: oneHour,
+    } } },
+  })
+
+  expect(SessionUsage.record(usage(1_000), opus).cost).toEqual(Money.USD.make(0.013))
+  expect(SessionUsage.record(new Usage({ cacheWriteInputTokens: 1_000, providerMetadata: {
+    anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1_000 } },
+  } }), opus).cost).toEqual(Money.USD.make(0.008))
+  expect(SessionUsage.record(new Usage({ cacheWriteInputTokens: 1_000 }), opus).cost).toEqual(Money.USD.make(0.005))
+  expect(SessionUsage.record(usage(undefined), opus).cost).toEqual(Money.USD.make(0.01))
+  expect(SessionUsage.record(usage(2_001), opus).cost).toEqual(Money.USD.make(0.01))
+  expect(SessionUsage.record(usage(1_000), opus).tokens.cache.write).toBe(2_000)
+})

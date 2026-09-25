@@ -60,6 +60,24 @@ test("keeps ordinary keys stable while isolating compaction cache scope", () => 
   expect(compaction).not.toBe(normal)
 })
 
+test("applies bounded cache policy only to Copilot Claude Chat models", () => {
+  const options = (apiModelID: string) =>
+    SessionRunnerCache.providerOptions({
+      ...base,
+      providerID: "github-copilot",
+      modelID: apiModelID,
+      apiModelID,
+      sessionID: `ses_${apiModelID}`,
+      routeID: "ai-sdk:@ai-sdk/github-copilot",
+      anthropicTtlSeconds: 300,
+    })
+
+  expect(options("claude-sonnet-4.6").cache).toEqual({ tools: false, system: true, messages: { tail: 2 } })
+  for (const model of ["gpt-5.6", "gemini-2.5-flash", "grok-4", "gpt-5.5"]) {
+    expect(options(model).cache).toBeUndefined()
+  }
+})
+
 test("derives Session-scoped provider keys for every generation", () => {
   const now = SessionRunnerCache.PROMPT_CACHE_ROTATION_INTERVAL_MS * 5
   const input = {

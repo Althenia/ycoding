@@ -12,6 +12,7 @@ import { EventTable } from "../event/sql"
 import { EventV2 } from "../event"
 import { SessionEvent } from "./event"
 import { SessionContextState } from "./context-state"
+import type { ModelV2 } from "../model"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -98,9 +99,25 @@ export function visibleForModel<T extends { readonly seq: number; readonly messa
   })
 }
 
-const entriesVisibleForModel = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+const entriesVisibleForModel = Effect.fnUntraced(function* (db: DatabaseService, sessionID: SessionSchema.ID, model?: ModelV2.Ref) {
   const canonical = visibleForModel(yield* messageEntries(db, sessionID), yield* latestProjectArtifactBoundary(db, sessionID))
-  const selection = yield* SessionContextState.selectEntries(db, sessionID, canonical)
+  const selection = yield* SessionContextState.selectEntries(db, sessionID, canonical, model)
+  if (selection.remote) {
+    const remote = selection.remote
+    const checkpoint = {
+      seq: remote.coveredThroughSeq,
+      message: SessionMessage.Synthetic.make({
+        id: SessionMessage.ID.make(`msg_compaction_${remote.manifestDigest}`),
+        type: "synthetic",
+        text: "",
+        metadata: { remoteCompactionV2: true },
+        time: { created: DateTime.makeUnsafe(remote.timeActivated) },
+      }),
+    }
+    const before = selection.entries.filter((entry) => entry.seq <= remote.coveredThroughSeq)
+    const after = selection.entries.filter((entry) => entry.seq > remote.coveredThroughSeq)
+    return [...before, checkpoint, ...after]
+  }
   if (!selection.summary) return selection.entries
   return [checkpointEntry(selection.summary), ...selection.entries]
 })
@@ -143,19 +160,21 @@ export const entriesForModelThrough = Effect.fnUntraced(function* (
 export const forModel = Effect.fn("SessionHistory.forModel")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
+  model?: ModelV2.Ref,
 ) {
-  return (yield* entriesVisibleForModel(db, sessionID)).map((entry) => entry.message)
+  return (yield* entriesVisibleForModel(db, sessionID, model)).map((entry) => entry.message)
 })
 
 export const entriesForRunner = Effect.fn("SessionHistory.entriesForRunner")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,
   instructions: Instructions.Instructions,
+  model?: ModelV2.Ref,
 ) {
   return yield* db
     .transaction(() =>
       Effect.gen(function* () {
-        const messages = yield* entriesVisibleForModel(db, sessionID)
+        const messages = yield* entriesVisibleForModel(db, sessionID, model)
         const assembled = yield* InstructionState.assemble(db, sessionID, instructions)
         return {
           initial: assembled.initial,

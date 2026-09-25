@@ -12,6 +12,7 @@ export type OpenAIResponsesInputItem =
   | OpenAIResponsesLocalShellCall
   | OpenAIResponsesLocalShellCallOutput
   | OpenAIResponsesReasoning
+  | OpenAIResponsesCompactionItem
   | OpenAIResponsesItemReference
   | OpenAIResponsesMcpApprovalResponse
 
@@ -211,4 +212,10 @@ export type OpenAIResponsesReasoning = {
     type: "summary_text"
     text: string
   }>
+}
+
+export type OpenAIResponsesCompactionItem = {
+  type: "compaction"
+  id: string
+  encrypted_content: string
 }

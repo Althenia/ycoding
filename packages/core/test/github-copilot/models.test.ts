@@ -24,13 +24,25 @@ test("defensively syncs advertised Copilot models", async () => {
               },
             },
             capabilities: {
-              family: "gpt",
+              family: "gpt-5",
               limits: {
                 max_context_window_tokens: 200000,
                 max_output_tokens: 16384,
                 max_prompt_tokens: 180000,
               },
               supports: { tool_calls: true, reasoning_effort: ["low", "high"] },
+            },
+          },
+          {
+            model_picker_enabled: true,
+            id: "gpt-5.2-2026-02-01",
+            name: "GPT-5.2 dated",
+            version: "gpt-5.2-2026-02-01",
+            supported_endpoints: ["/responses"],
+            capabilities: {
+              family: "gpt-5.2",
+              limits: { max_output_tokens: 1000, max_prompt_tokens: 180000 },
+              supports: { tool_calls: true },
             },
           },
           {
@@ -42,6 +54,42 @@ test("defensively syncs advertised Copilot models", async () => {
               family: "utility",
               limits: { max_output_tokens: 1000, max_prompt_tokens: 8000 },
               supports: { tool_calls: false },
+            },
+          },
+          {
+            model_picker_enabled: true,
+            id: "gpt-5.4",
+            name: "GPT-5.4 remote",
+            version: "gpt-5.4",
+            supported_endpoints: ["/responses"],
+            capabilities: {
+              family: "gpt",
+              limits: { max_output_tokens: 1000, max_prompt_tokens: 180000 },
+              supports: { tool_calls: true },
+            },
+          },
+          {
+            model_picker_enabled: true,
+            id: "gpt-5.3",
+            name: "GPT-5.3 remote",
+            version: "gpt-5.3",
+            supported_endpoints: ["/responses"],
+            capabilities: {
+              family: "gpt",
+              limits: { max_output_tokens: 1000, max_prompt_tokens: 0 },
+              supports: { tool_calls: true },
+            },
+          },
+          {
+            model_picker_enabled: true,
+            id: "claude-chat",
+            name: "Claude Chat",
+            version: "claude-chat",
+            supported_endpoints: ["/chat/completions"],
+            capabilities: {
+              family: "claude",
+              limits: { max_output_tokens: 1000, max_prompt_tokens: 1000 },
+              supports: { tool_calls: true },
             },
           },
           {
@@ -90,6 +138,15 @@ test("defensively syncs advertised Copilot models", async () => {
     expect(requests[0]?.get("Copilot-Integration-Id")).toBe("vscode-chat")
     expect(model?.name).toBe("GPT-5 local")
     expect(model?.settings).toMatchObject({ baseURL: server.url.origin, endpoint: "responses", store: false })
+    expect(model?.settings?.contextManagement).toBeUndefined()
+    // The official client excludes by model family, so a dated gpt-5.2 id is excluded too.
+    expect(models.get(ModelV2.ID.make("gpt-5.2-2026-02-01"))?.settings?.contextManagement).toBeUndefined()
+    expect(models.get(ModelV2.ID.make("gpt-5.4"))?.settings?.contextManagement).toEqual([
+      { type: "compaction", compactThreshold: 162000 },
+    ])
+    expect(models.get(ModelV2.ID.make("gpt-5.3"))?.settings?.contextManagement).toEqual([
+      { type: "compaction", compactThreshold: 50000 },
+    ])
     expect(model?.settings?.include).toEqual(["reasoning.encrypted_content"])
     expect(model?.cost[0]).toMatchObject({ input: 0, output: 0, cache: { read: 0, write: 0 } })
     expect(model?.variants.map((variant) => variant.id)).toEqual([
@@ -121,6 +178,10 @@ test("defensively syncs advertised Copilot models", async () => {
       },
     })
     expect(models.get(ModelV2.ID.make("gpt-4.1"))?.settings).toEqual({
+      baseURL: server.url.origin,
+      endpoint: "chat",
+    })
+    expect(models.get(ModelV2.ID.make("claude-chat"))?.settings).toEqual({
       baseURL: server.url.origin,
       endpoint: "chat",
     })

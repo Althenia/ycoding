@@ -110,6 +110,10 @@ export const jsonRequestParts = <Body>(input: JsonRequestInput<Body>) =>
 
 export interface HttpJsonInput<_Body, Frame> {
   readonly framing: Framing.Definition<Frame>
+  readonly onResponseHeaders?: (input: {
+    readonly request: LLMRequest
+    readonly headers: Headers.Headers
+  }) => Effect.Effect<void>
 }
 
 export type HttpJsonPatch<Body, Frame> = Partial<HttpJsonInput<Body, Frame>>
@@ -132,6 +136,11 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
     ),
   frames: (prepared, request, runtime) => {
     const execute = runtime.http.execute(prepared.request).pipe(
+      Effect.flatMap((response) =>
+        input.onResponseHeaders === undefined
+          ? Effect.succeed(response)
+          : input.onResponseHeaders({ request, headers: response.headers }).pipe(Effect.as(response)),
+      ),
       Effect.map((response) => ({
         status: response.status,
         stream: prepared.framing.frame(

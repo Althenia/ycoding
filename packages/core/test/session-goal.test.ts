@@ -24,11 +24,12 @@ import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
-import { SessionTable } from "@ycoding-ai/core/session/sql"
+import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
 import { SessionV2 } from "@ycoding-ai/core/session"
 import { Money } from "@ycoding-ai/schema/money"
 import { Deferred, Effect, Fiber, Layer, LayerMap, Stream } from "effect"
+import { eq } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const model = Model.make({
@@ -71,6 +72,7 @@ const client = Layer.mock(LLMClient.Service)({
           cacheReadInputTokens: 3,
           cacheWriteInputTokens: 2,
           reasoningTokens: 2,
+          providerMetadata: { anthropic: { cache_creation: { ephemeral_1h_input_tokens: 1 } } },
         },
       }),
       LLMEvent.finish({ reason: "stop" }),
@@ -258,6 +260,14 @@ it.effect("synthesizes the goal through the configured goal model without a loca
     ).toBe("Repair the migration and verify the suite passes.")
     expect(requests).toHaveLength(1)
     expect(yield* store.context(sessionID)).toEqual(before)
+    const { db } = yield* Database.Service
+    expect(
+      yield* db
+        .select({ cost: SessionProviderRequestTable.cost })
+        .from(SessionProviderRequestTable)
+        .where(eq(SessionProviderRequestTable.session_id, sessionID))
+        .get(),
+    ).toMatchObject({ cost: 0.0000248 })
   }),
 )
 

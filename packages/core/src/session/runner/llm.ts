@@ -293,6 +293,19 @@ const layer = Layer.effect(
                 contextSafetyMarginTokens: compactionPolicy.contextSafetyMarginTokens,
               },
               candidate: { context: initialContext, prepared: initialPrepared },
+              prepareOwner: (job) => Effect.gen(function* () {
+                const loaded = yield* context.load(yield* context.select(job.sessionID))
+                const through = yield* SessionHistory.entriesForModelThrough(db, job.sessionID, job.requestedThrough.seq)
+                const ids = new Set(through.map((entry) => entry.message.id))
+                const owner = yield* modelRequests.prepare({
+                  context: { ...loaded, messages: loaded.messages.filter((message) => ids.has(message.id) ||
+                    (message.type === "synthetic" && message.metadata?.remoteCompactionV2 === true)) },
+                  step: currentStep,
+                  disableContinuation: true,
+                })
+                return { request: owner.request, cache: owner.cache, cost: loaded.model.cost, modelRef: loaded.model.ref,
+                  contextRevision: loaded.contextRevision }
+              }),
               force: requestTrackerState.overflowRecovery === "pending",
               ...(lastProviderInput === undefined
                 ? {}
@@ -393,7 +406,7 @@ const layer = Layer.effect(
       const serialized = <A, E, R>(effect: Effect.Effect<A, E, R>) => publication.withPermit(effect)
       const publish = (event: LLMEvent, error?: SessionError.Error) => serialized(publisher.publish(event, error))
       const stepUsage = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
-        cost: SessionUsage.calculateCost(effective.cost, settlement.tokens),
+        cost: SessionUsage.calculateCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites),
         tokens: settlement.tokens,
       })
       const providerCache = (settlement: NonNullable<ReturnType<typeof publisher.stepSettlement>>) => ({
@@ -513,7 +526,7 @@ const layer = Layer.effect(
               cost: Money.USD.zero,
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             }
-        const estimatedCost = settlement ? SessionUsage.estimatedCost(effective.cost, settlement.tokens) : undefined
+        const estimatedCost = settlement ? SessionUsage.estimatedCost(effective.cost, settlement.tokens, settlement.oneHourCacheWrites) : undefined
         const cache = settlement ? providerCache(settlement) : undefined
         const invalidation =
           override ??

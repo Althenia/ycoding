@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { cycleVariant, formatModelLabel, pickVariant, resolveVariant } from "../../src/mini/variant.shared"
+import { decodeModelPreference } from "../../src/model-preference"
 import type { RunSession } from "../../src/mini/session.shared"
 import type { RunProvider } from "../../src/mini/types"
 
@@ -51,13 +52,17 @@ describe("run variant shared", () => {
     expect(cycleVariant(undefined, [])).toBeUndefined()
   })
 
-  test("skips base-model sentinel variant ids so every cycle step changes state", () => {
-    // The catalog can list "none" (reasoning off) first; selecting it normalizes to
-    // the base model, so a cycle step landing on it must never repeat from default.
-    expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("low")
-    expect(cycleVariant(undefined, ["default", "low", "high"])).toBe("low")
+  test("cycles through an offered none variant and keeps default as the base model", () => {
+    expect(cycleVariant(undefined, ["none", "low", "high"])).toBe("none")
+    expect(cycleVariant("none", ["none", "low", "high"])).toBe("low")
+    expect(cycleVariant("low", ["none", "low", "high"])).toBe("high")
     expect(cycleVariant("high", ["none", "low", "high"])).toBeUndefined()
-    expect(cycleVariant(undefined, ["none", "default"])).toBeUndefined()
+    expect(cycleVariant(undefined, ["default", "low", "high"])).toBe("low")
+    expect(resolveVariant("none", undefined, undefined, ["none", "low", "high"])).toBe("none")
+    expect(resolveVariant("default", "none", "low", ["none", "low", "high"])).toBeUndefined()
+    expect(decodeModelPreference({ variant: { "openai/gpt-6-luna": "none" } }).variant).toEqual({
+      "openai/gpt-6-luna": "none",
+    })
   })
 
   test("formats model labels", () => {

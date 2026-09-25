@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { LLM, Message, Model, type LLMRequest } from "@ycoding-ai/ai"
 import { OpenAIChat } from "@ycoding-ai/ai/protocols"
+import { OpenAIResponses } from "@ycoding-ai/ai/protocols/openai-responses"
 import { ConfigCompaction } from "@ycoding-ai/core/config/compaction"
 import { Database } from "@ycoding-ai/core/database/database"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
@@ -169,6 +170,39 @@ describe("Session hard context gate", () => {
       expect(result.compacted).toBe(true)
       expect(reloads).toEqual([true])
       expect(yield* allJobs()).toMatchObject([{ status: "ended", trigger: "mandatory" }])
+    }),
+  )
+
+  it.effect("ignores pre-compaction provider totals after a stateless Responses boundary", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup("provider_compacted")
+      const prepared = {
+        context: { revision: 0 },
+        prepared: { request: LLM.request({
+          model: Model.make({
+            id: "gpt-5.6",
+            provider: "openai",
+            route: OpenAIResponses.route.with({ providerOptions: { openai: { store: false } } }),
+          }),
+          messages: [
+            Message.user("old".repeat(2_000)),
+            Message.assistant([{ type: "reasoning", text: "", providerMetadata: {
+              openai: { opaqueCompactionItem: { type: "compaction", id: "cmp_gate", encrypted_content: "opaque" } },
+            } }]),
+            Message.user("new suffix"),
+          ],
+        }) },
+      }
+
+      const result = yield* runGate({
+        fixture,
+        candidate: prepared,
+        lastProviderInputTokens: 900,
+        lastProviderTotalTokens: 900,
+        reload: () => Effect.succeed(prepared),
+      })
+      expect(result.compacted).toBe(false)
+      expect(yield* allJobs()).toEqual([])
     }),
   )
 

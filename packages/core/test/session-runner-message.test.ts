@@ -8,7 +8,7 @@ import { toLLMMessages } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { AgentV2 } from "@ycoding-ai/core/agent"
 import { Shell } from "@ycoding-ai/schema/shell"
 import { ID, Name } from "@ycoding-ai/core/skill"
-import { DateTime } from "effect"
+import { DateTime, Schema } from "effect"
 
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
@@ -55,6 +55,41 @@ describe("toLLMMessages", () => {
     )
 
     expect(messages.map((message) => message.id)).toEqual([id("text"), id("reasoning")])
+  })
+
+  test("replays empty Anthropic reasoning in durable order before tool calls", () => {
+    const anthropicModel = ModelV2.Ref.make({
+      id: ModelV2.ID.make("claude-sonnet-4-5"),
+      providerID: ProviderV2.ID.make("anthropic"),
+    })
+    const durableMessage = SessionMessage.Assistant.make({
+      id: id("anthropic-thinking"),
+      type: "assistant",
+      agent: build,
+      model: anthropicModel,
+      content: [
+        SessionMessage.AssistantReasoning.make({ type: "reasoning", text: "", state: { signature: "sig" } }),
+        SessionMessage.AssistantReasoning.make({ type: "reasoning", text: "", state: { redactedData: "opaque" } }),
+        SessionMessage.AssistantTool.make({
+          type: "tool",
+          id: "call_1",
+          name: "lookup",
+          state: SessionMessage.ToolStateStreaming.make({ status: "streaming", input: "{}" }),
+          time: { created },
+        }),
+      ],
+      time: { created, completed: created },
+    })
+    const reloaded = Schema.decodeUnknownSync(SessionMessage.Assistant)(
+      Schema.encodeSync(SessionMessage.Assistant)(durableMessage),
+    )
+    const messages = toLLMMessages([reloaded], anthropicModel, "anthropic")
+
+    expect(messages[0]?.content).toEqual([
+      { type: "reasoning", text: "", providerMetadata: { anthropic: { signature: "sig" } } },
+      { type: "reasoning", text: "", providerMetadata: { anthropic: { redactedData: "opaque" } } },
+      { type: "tool-call", id: "call_1", name: "lookup", input: {} },
+    ])
   })
 
   test("rehydrates opaque OpenAI compaction state only for its source model", () => {

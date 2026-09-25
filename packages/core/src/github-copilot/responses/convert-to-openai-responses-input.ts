@@ -37,17 +37,39 @@ export async function convertToOpenAIResponsesInput({
   const input: OpenAIResponsesInput = []
   const warnings: Array<SharedV3Warning> = []
   const processedApprovalIds = new Set<string>()
+  const compactionBoundary = prompt.flatMap((entry, messageIndex) =>
+    entry.role !== "assistant"
+      ? []
+      : entry.content.flatMap((part, partIndex) => {
+          if (part.type !== "reasoning") return []
+          const item = (part.providerOptions?.copilot as { opaqueCompactionItem?: unknown } | undefined)
+            ?.opaqueCompactionItem
+          const parsed = compactionItemSchema.safeParse(item)
+          return parsed.success ? [{ messageIndex, partIndex, item: parsed.data }] : []
+        }),
+  ).at(-1)
 
-  for (const { role, content } of prompt) {
-    switch (role) {
+  for (const [messageIndex, entry] of prompt.entries()) {
+    if (
+      compactionBoundary !== undefined &&
+      entry.role !== "system" &&
+      messageIndex < compactionBoundary.messageIndex
+    )
+      continue
+    if (compactionBoundary?.messageIndex === messageIndex) input.push(compactionBoundary.item)
+    const effectiveEntry =
+      compactionBoundary?.messageIndex === messageIndex && entry.role === "assistant"
+        ? { ...entry, content: entry.content.slice(compactionBoundary.partIndex + 1) }
+        : entry
+    switch (effectiveEntry.role) {
       case "system": {
         switch (systemMessageMode) {
           case "system": {
-            input.push({ role: "system", content })
+            input.push({ role: "system", content: effectiveEntry.content })
             break
           }
           case "developer": {
-            input.push({ role: "developer", content })
+            input.push({ role: "developer", content: effectiveEntry.content })
             break
           }
           case "remove": {
@@ -68,7 +90,7 @@ export async function convertToOpenAIResponsesInput({
       case "user": {
         input.push({
           role: "user",
-          content: content.map((part, index) => {
+          content: effectiveEntry.content.map((part, index) => {
             switch (part.type) {
               case "text": {
                 return { type: "input_text", text: part.text }
@@ -121,7 +143,7 @@ export async function convertToOpenAIResponsesInput({
         const reasoningMessages: Record<string, OpenAIResponsesReasoning> = {}
         const toolCallParts: Record<string, LanguageModelV3ToolCallPart> = {}
 
-        for (const part of content) {
+        for (const part of effectiveEntry.content) {
           switch (part.type) {
             case "text": {
               input.push({
@@ -251,7 +273,7 @@ export async function convertToOpenAIResponsesInput({
       }
 
       case "tool": {
-        for (const part of content) {
+        for (const part of effectiveEntry.content) {
           if (part.type === "tool-approval-response") {
             if (processedApprovalIds.has(part.approvalId)) {
               continue
@@ -318,8 +340,7 @@ export async function convertToOpenAIResponsesInput({
       }
 
       default: {
-        const _exhaustiveCheck: never = role
-        throw new Error(`Unsupported role: ${_exhaustiveCheck}`)
+        throw new Error("Unsupported role")
       }
     }
   }
@@ -330,6 +351,13 @@ export async function convertToOpenAIResponsesInput({
 const openaiResponsesReasoningProviderOptionsSchema = z.object({
   itemId: z.string().nullish(),
   reasoningEncryptedContent: z.string().nullish(),
+  opaqueCompactionItem: z.unknown().optional(),
+})
+
+const compactionItemSchema = z.object({
+  type: z.literal("compaction"),
+  id: z.string(),
+  encrypted_content: z.string(),
 })
 
 export type OpenAIResponsesReasoningProviderOptions = z.infer<typeof openaiResponsesReasoningProviderOptionsSchema>

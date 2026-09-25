@@ -1,6 +1,7 @@
 export * as SessionCompactionGate from "./compaction-gate"
 
-import type { LLMRequest } from "@ycoding-ai/ai"
+import { LLMRequest, mergeProviderOptions } from "@ycoding-ai/ai"
+import { OpenAIResponses } from "@ycoding-ai/ai/protocols/openai-responses"
 import type { ID } from "@ycoding-ai/schema/session-compaction"
 import { desc, eq } from "drizzle-orm"
 import { Effect } from "effect"
@@ -43,6 +44,7 @@ export interface Input<
   // cache write) for this Session, if any. An output/reasoning-heavy step can
   // exceed the raw context limit while the input-side total stays below the cap.
   readonly lastProviderTotalTokens?: number
+  readonly prepareOwner?: SessionCompaction.OwnerRequestBuilder
   readonly reload: (options: {
     readonly fullRebase: boolean
   }) => Effect.Effect<Candidate<Context, Prepared>, ReloadError, ReloadRequirements>
@@ -70,8 +72,10 @@ export const ensureWithinLimit = <
     const cap = SessionContextPressure.hardInputCapTokens(input.capabilities)
     if (cap <= 0) return { ...input.candidate, compacted: false }
     const initialEstimate = estimate(input.candidate)
-    const providerInputTotal = input.lastProviderInputTokens
-    const providerFullTotal = input.lastProviderTotalTokens
+    const hasNewProviderBoundary = initialEstimate <
+      SessionContextPressure.estimatedInputTokens(input.candidate.prepared.request)
+    const providerInputTotal = hasNewProviderBoundary ? undefined : input.lastProviderInputTokens
+    const providerFullTotal = hasNewProviderBoundary ? undefined : input.lastProviderTotalTokens
     if (
       !input.force &&
       initialEstimate < cap &&
@@ -112,7 +116,7 @@ export const ensureWithinLimit = <
             const pending = yield* jobs.pending(input.sessionID)
             const existing = pending[0]
             if (existing) {
-              const settled = yield* waitFor(existing.id)
+              const settled = yield* waitFor(existing.id, input.prepareOwner)
               const rebuilt = yield* input.reload({ fullRebase: settled.status === "ended" })
               compacted ||= settled.status === "ended"
               currentEstimate = estimate(rebuilt)
@@ -140,7 +144,7 @@ export const ensureWithinLimit = <
               pressure: { estimatedInputTokens: currentEstimate, safeInputTokens: cap },
             })
             gateOwnedAdmissions += 1
-            const settled = yield* waitFor(admitted.id)
+            const settled = yield* waitFor(admitted.id, input.prepareOwner)
             const rebuilt = yield* input.reload({ fullRebase: settled.status === "ended" })
             compacted ||= settled.status === "ended"
             currentEstimate = estimate(rebuilt)
@@ -159,17 +163,29 @@ export const ensureWithinLimit = <
     return gated
   })
 
-const waitFor = (jobID: ID) =>
+const waitFor = (jobID: ID, prepareOwner?: SessionCompaction.OwnerRequestBuilder) =>
   SessionCompactionExecution.use((execution) =>
     execution.run({
       jobID,
-      manifest: (job) => SessionCompaction.Service.use((compaction) => compaction.manifest(job)),
+      manifest: (job) => SessionCompaction.Service.use((compaction) => compaction.manifest(job, prepareOwner)),
     }),
   )
 
 const estimate = <Context, Prepared extends { readonly request: LLMRequest }>(
   candidate: Candidate<Context, Prepared>,
-) => SessionContextPressure.estimatedInputTokens(candidate.prepared.request)
+) => estimatedProviderInputTokens(candidate.prepared.request)
+
+export const estimatedProviderInputTokens = (request: LLMRequest) => {
+  if (!request.model.route.id.includes("responses") &&
+    request.model.route.id !== "ai-sdk:@ai-sdk/github-copilot")
+    return SessionContextPressure.estimatedInputTokens(request)
+  const effective = LLMRequest.update(request, {
+    providerOptions: mergeProviderOptions(request.model.route.defaults.providerOptions, request.model.defaults?.providerOptions, request.providerOptions),
+  })
+  return SessionContextPressure.estimatedInputTokens(
+    LLMRequest.update(effective, { messages: OpenAIResponses.pruneMessagesForServerCompaction(effective) }),
+  )
+}
 
 const considerPercent = (policy: ConfigCompaction.Resolved) =>
   policy.advisory === false ? 70 : policy.advisory.considerPercent

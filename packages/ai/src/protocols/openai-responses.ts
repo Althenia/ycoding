@@ -129,6 +129,7 @@ const OpenAIResponsesInputItem = Schema.Union([
   }),
   OpenAIResponsesReasoningItem,
   OpenAIResponsesCompactionItem,
+  Schema.Struct({ type: Schema.tag("compaction_trigger") }),
   OpenAIResponsesItemReference,
   OpenAIResponsesHostedToolReplay,
   Schema.Struct({
@@ -217,6 +218,7 @@ const OpenAIResponsesCoreFields = {
   input: Schema.Array(OpenAIResponsesInputItem),
   instructions: Schema.optional(Schema.String),
   tools: optionalArray(OpenAIResponsesTools),
+  parallel_tool_calls: Schema.optional(Schema.Boolean),
   tool_choice: Schema.optional(OpenAIResponsesToolChoice),
   store: Schema.optional(Schema.Boolean),
   previous_response_id: Schema.optional(Schema.String),
@@ -355,6 +357,7 @@ const OpenAIResponsesEvent = Schema.Struct({
 type OpenAIResponsesEvent = Schema.Schema.Type<typeof OpenAIResponsesEvent>
 
 interface ParserState {
+  readonly remoteCompaction: boolean
   readonly tools: ToolStream.State<string>
   readonly hasFunctionCall: boolean
   readonly lifecycle: Lifecycle.State
@@ -467,7 +470,7 @@ const lowerReasoning = (
 }
 
 const isCompactionReasoning = (part: ReasoningPart) => {
-  const openai = part.providerMetadata?.openai
+  const openai = part.providerMetadata?.openai ?? part.providerMetadata?.copilot
   return (
     ProviderShared.isRecord(openai) &&
     (Schema.is(OpenAIResponsesCompactionItem)(openai.opaqueCompactionItem) ||
@@ -562,17 +565,25 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
 })
 
 export const pruneMessagesForServerCompaction = (request: LLMRequest) => {
-  if (OpenAIOptions.store(request) !== false) return request.messages
-  const boundary = request.messages
+  if (OpenAIOptions.store(request) !== false &&
+    !(request.model.route.id === "ai-sdk:@ai-sdk/github-copilot" && request.providerOptions?.copilot?.store === false))
+    return request.messages
+  const boundaries = request.messages
     .flatMap((message, messageIndex) =>
       message.role !== "assistant"
         ? []
         : message.content.flatMap((part, contentIndex) =>
-            part.type === "reasoning" && isCompactionReasoning(part) ? [{ messageIndex, contentIndex }] : [],
+            part.type === "reasoning" && isCompactionReasoning(part)
+              ? [{ messageIndex, contentIndex, remote: part.providerMetadata?.openai?.remoteCompactionV2 === true }]
+              : [],
           ),
     )
-    .at(-1)
+  const boundary = boundaries.at(-1)
   if (!boundary) return request.messages
+  if (boundary.remote) {
+    const previous = boundaries.at(-2)
+    return request.messages.slice(previous ? previous.messageIndex + 1 : 0)
+  }
   return request.messages.slice(boundary.messageIndex).map((message, messageIndex) =>
     messageIndex === 0 && message.role === "assistant"
       ? Message.make({
@@ -628,6 +639,13 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     previousResponseId === undefined ? 0 : Math.min(OpenAIOptions.continuationInputStart(request) ?? 0, request.messages.length)
 
   for (const message of pruneMessagesForServerCompaction(request).slice(continuationInputStart)) {
+    if (ProviderShared.isRecord(message.native?.openai) && message.native.openai.compactionTrigger === true) {
+      if (message.role !== "user" || message.content.length !== 0 ||
+        !["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id))
+        return yield* ProviderShared.invalidRequest("Codex remote compaction trigger requires an empty Codex input item")
+      input.push({ type: "compaction_trigger" })
+      continue
+    }
     if (message.role === "system") {
       if (
         ["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) ||
@@ -835,6 +853,9 @@ const fromRequest = Effect.fn("OpenAIResponses.fromRequest")(function* (request:
             lowerTool(tool, ToolSchemaProjection.modelCompatibility(tool.inputSchema, toolSchemaCompatibility)),
           ),
     tool_choice: request.toolChoice ? yield* lowerToolChoice(request.toolChoice, request.tools) : undefined,
+    parallel_tool_calls:
+      ["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) &&
+      request.providerOptions?.openai?.parallelToolCalls === true ? true : undefined,
     stream: true as const,
     max_output_tokens: generation?.maxTokens,
     temperature: generation?.temperature,
@@ -1322,10 +1343,11 @@ const onResponseFinish = (state: ParserState, event: OpenAIResponsesEvent): Step
     reason: mapFinishReason(event, state.hasFunctionCall),
     usage: mapUsage(event.response?.usage),
     providerMetadata:
-      event.response?.id || event.response?.service_tier
+      state.remoteCompaction || event.response?.id || event.response?.service_tier
         ? openaiMetadata({
-            responseId: event.response.id,
-            serviceTier: event.response.service_tier,
+            responseId: event.response?.id,
+            serviceTier: event.response?.service_tier,
+            ...(state.remoteCompaction ? { remoteCompactionCompleted: event.type === "response.completed" } : {}),
           })
         : undefined,
   })
@@ -1403,6 +1425,10 @@ export const protocol = Protocol.make({
   stream: {
     event: Protocol.jsonEvent(OpenAIResponsesEvent),
     initial: (request) => ({
+      remoteCompaction: (() => {
+        const openai = request.messages.at(-1)?.native?.openai
+        return ProviderShared.isRecord(openai) && openai.compactionTrigger === true
+      })(),
       hasFunctionCall: false,
       tools: ToolStream.empty<string>(),
       lifecycle: Lifecycle.initial(),

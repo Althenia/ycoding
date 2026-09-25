@@ -1,7 +1,7 @@
 export * as SessionRunnerModel from "./model";
 
 import { makeLocationNode } from "../../effect/app-node";
-import { Model } from "@ycoding-ai/ai";
+import { LLMRequest, Model } from "@ycoding-ai/ai";
 // ast-grep-ignore: no-star-import
 import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages";
 // ast-grep-ignore: no-star-import
@@ -10,7 +10,7 @@ import * as OpenAICompatibleChat from "@ycoding-ai/ai/protocols/openai-compatibl
 import * as OpenAICompatibleResponses from "@ycoding-ai/ai/protocols/openai-compatible-responses";
 // ast-grep-ignore: no-star-import
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses";
-import { Auth, type AnyRoute } from "@ycoding-ai/ai/route";
+import { Auth, Framing, HttpTransport, type AnyRoute } from "@ycoding-ai/ai/route";
 import { Context, Effect, Layer, Schema } from "effect";
 import { Headers } from "effect/unstable/http";
 import { produce } from "immer";
@@ -190,14 +190,20 @@ const providerOptions = (
   return undefined;
 };
 
-const normalizeVariant = (variantID: ModelV2.VariantID | undefined) =>
-  variantID === "default" || variantID === "none" ? undefined : variantID;
+const normalizeVariant = (
+  variantID: ModelV2.VariantID | undefined,
+  model?: ModelV2.Info,
+) => {
+  if (variantID === "default") return undefined;
+  if (variantID === "none" && !model?.variants?.some((item) => item.id === "none")) return undefined;
+  return variantID;
+};
 
 export const withVariant = (
   model: ModelV2.Info,
   variantID: ModelV2.VariantID | undefined,
 ): Effect.Effect<ModelV2.Info, VariantUnavailableError> => {
-  const id = normalizeVariant(variantID);
+  const id = normalizeVariant(variantID, model);
   const variant = model.variants?.find((item) => item.id === id);
   if (!variant && id !== undefined)
     return Effect.fail(
@@ -379,6 +385,33 @@ export const fromCatalogModel = (
   });
 };
 
+const codexTurnStates = new Map<string, string>();
+const CODEX_TURN_STATE_LIMIT = 512;
+const CODEX_TURN_STATE_HEADER = "x-codex-turn-state";
+
+const codexTurnStateKey = (messages: ReadonlyArray<unknown>, cacheKey: string | undefined, account: string | undefined) => {
+  if (!cacheKey) return undefined;
+  const userMessage = messages.filter((message) => isRecord(message) && message.role === "user" && typeof message.id === "string").at(-1);
+  if (!isRecord(userMessage) || typeof userMessage.id !== "string") return undefined;
+  return JSON.stringify([cacheKey, userMessage.id, account]);
+};
+
+const promptCacheKey = (providerOptions: unknown) => {
+  const openai = isRecord(providerOptions) && isRecord(providerOptions.openai) ? providerOptions.openai : undefined;
+  return typeof openai?.promptCacheKey === "string" ? openai.promptCacheKey : undefined;
+};
+
+const rememberCodexTurnState = (request: LLMRequest, headers: Headers.Headers, account: string | undefined) => {
+  const key = codexTurnStateKey(request.messages, promptCacheKey(request.providerOptions), account);
+  const token = headers[CODEX_TURN_STATE_HEADER];
+  if (key === undefined || !token || token.length > 4096 || codexTurnStates.has(key)) return;
+  if (codexTurnStates.size >= CODEX_TURN_STATE_LIMIT) {
+    const oldest = codexTurnStates.keys().next().value;
+    if (oldest !== undefined) codexTurnStates.delete(oldest);
+  }
+  codexTurnStates.set(key, token);
+};
+
 const isNativeOpenAI = (packageName: string | undefined) =>
   packageName === "@ycoding-ai/ai/providers/openai" ||
   packageName?.startsWith("@ycoding-ai/ai/providers/openai/") === true;
@@ -419,39 +452,40 @@ const codexModel = (
 ) => {
   const account = OpenAICodex.accountID(credential);
   const webSocket = model.settings?.transport === "websocket";
+  const transport = webSocket
+    ? undefined
+    : HttpTransport.httpJson({ framing: Framing.sse }).with({
+        onResponseHeaders: ({ request, headers }) =>
+          Effect.sync(() => rememberCodexTurnState(request, headers, account)),
+      });
   return withDefaults(model, webSocket ? OpenAIResponses.webSocketRoute : OpenAIResponses.route)
     .with({
       id: webSocket ? OpenAICodex.webSocketRouteID : OpenAICodex.routeID,
       endpoint: { baseURL: OpenAICodex.baseURL },
+      ...(transport === undefined ? {} : { transport }),
       ...(webSocket ? { headers: { "OpenAI-Beta": "responses_websockets=2026-02-06" } } : {}),
       auth: (key === undefined ? Auth.none : Auth.bearer(key)).andThen(
         account === undefined
           ? Auth.none
           : Auth.headers({ "chatgpt-account-id": account }),
-      ).andThen(codexAffinityAuth),
+      ).andThen(codexAffinityAuth(account, !webSocket)),
     })
     .model({ id: model.modelID ?? model.id });
 };
 
-const codexAffinityAuth = Auth.custom((input) => {
-  const providerOptions =
-    "providerOptions" in input.request ? input.request.providerOptions : undefined;
-  const openai =
-    isRecord(providerOptions) && isRecord(providerOptions.openai)
-      ? providerOptions.openai
-      : undefined;
-  const promptCacheKey =
-    typeof openai?.promptCacheKey === "string"
-      ? openai.promptCacheKey
-      : undefined;
-  if (promptCacheKey === undefined) return Effect.succeed(input.headers);
-  return Effect.succeed(
-    Headers.setAll(input.headers, {
-      "session-id": promptCacheKey,
-      "thread-id": promptCacheKey,
-      "x-client-request-id": promptCacheKey,
-    }),
-  );
+const codexAffinityAuth = (account: string | undefined, includeTurnState: boolean) => Auth.custom((input) => {
+  if (!("providerOptions" in input.request) || !("messages" in input.request) || !Array.isArray(input.request.messages))
+    return Effect.succeed(input.headers);
+  const cacheKey = promptCacheKey(input.request.providerOptions);
+  if (cacheKey === undefined) return Effect.succeed(input.headers);
+  const headers = Headers.setAll(input.headers, {
+    "session-id": cacheKey,
+    "thread-id": cacheKey,
+    "x-client-request-id": cacheKey,
+  });
+  const turnStateKey = includeTurnState ? codexTurnStateKey(input.request.messages, cacheKey, account) : undefined;
+  const token = turnStateKey === undefined ? undefined : codexTurnStates.get(turnStateKey);
+  return Effect.succeed(token === undefined ? headers : Headers.set(headers, CODEX_TURN_STATE_HEADER, token));
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -540,7 +574,7 @@ const layer = Layer.effect(
           },
           connection,
         );
-        const variant = normalizeVariant(session.model?.variant);
+        const variant = normalizeVariant(session.model?.variant, selected);
         return {
           model,
           ref: ModelV2.Ref.make({

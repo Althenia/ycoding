@@ -63,6 +63,7 @@ const COPILOT_KEY_ONLY_ROUTES = new Set(["github-copilot-chat", "github-copilot-
 const respectsInlineHints = (request: LLMRequest) =>
   RESPECTS_INLINE_HINTS.has(request.model.route.protocol) ||
   INLINE_HINT_ROUTES.has(request.model.route.id) ||
+  (request.model.route.id === "ai-sdk:@ai-sdk/github-copilot" && String(request.model.id).toLowerCase().includes("claude")) ||
   (!COPILOT_KEY_ONLY_ROUTES.has(request.model.route.id) &&
     OpenAIOptions.supportsPromptCacheBreakpoints(request.model.route.id, request.model.id) &&
     (["openai-codex-responses", "openai-codex-websocket-responses"].includes(request.model.route.id) ||

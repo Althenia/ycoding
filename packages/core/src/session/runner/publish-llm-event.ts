@@ -104,6 +104,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
     | {
         readonly finish: Extract<LLMEvent, { type: "step-finish" }>["reason"]
         readonly tokens: ReturnType<typeof SessionUsage.tokens>
+        readonly oneHourCacheWrites?: number
         readonly reporting: ReturnType<typeof SessionUsage.providerCache>
         readonly timing?: ReturnType<typeof SessionUsage.timing>
         readonly providerState?: Record<string, unknown>
@@ -570,6 +571,7 @@ export const createLLMEventPublisher = (events: Pick<EventV2.Interface, "publish
         stepSettlement = {
           finish: event.reason,
           tokens: SessionUsage.tokens(event.usage),
+          oneHourCacheWrites: SessionUsage.oneHourCacheWrites(event.usage),
           reporting: SessionUsage.providerCache(event.usage),
           timing: SessionUsage.timing(event.usage),
           providerState: providerState(event.providerMetadata),

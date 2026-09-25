@@ -469,9 +469,11 @@ function normalizeDeepseekEffort(effort: string): string {
 
 function settingsForEffort(npm: string, modelID: string, effort: string): ProviderV2.Settings | undefined {
   const normalized = modelID.includes("deepseek") ? normalizeDeepseekEffort(effort) : effort
+  // DeepSeek's OpenAI-format API accepts the requested effort and maps it
+  // server-side; Chat lowering reads `reasoningEffort` and `thinking`.
   if (npm === "@ai-sdk/openai-compatible" && modelID.includes("deepseek")) {
-    if (normalized === "none") return { thinking: { type: "disabled" } }
-    return { reasoning_effort: normalized, thinking: { type: "enabled" } }
+    if (effort === "none") return { thinking: { type: "disabled" } }
+    return { reasoningEffort: effort, thinking: { type: "enabled" } }
   }
   if (npm === "@openrouter/ai-sdk-provider") {
     if (modelID.includes("deepseek")) return { reasoning: { effort: normalized } }
@@ -563,7 +565,7 @@ function toggleVariants(npm: string, modelID: string): NonNullable<ModelV2.Info[
       { id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } },
       {
         id: ModelV2.VariantID.make("thinking"),
-        settings: { thinking: { type: "enabled" }, reasoning_effort: "high" },
+        settings: { thinking: { type: "enabled" }, reasoningEffort: "high" },
       },
     ]
   if (npm === "@ai-sdk/gateway") {

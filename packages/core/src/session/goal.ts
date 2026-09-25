@@ -154,6 +154,7 @@ const make = (dependencies: Dependencies) => {
     let failed = false
     let settled = false
     let usage: SessionUsage.Recorded | undefined
+    let recordedCost: Money.USD | undefined
     let timing: ReturnType<typeof SessionUsage.timing>
     const recordUsage = Effect.suspend(() =>
       usage
@@ -171,9 +172,7 @@ const make = (dependencies: Dependencies) => {
       }
       return tracker.complete({
         tokens: recorded.tokens,
-        ...(usage === undefined || SessionUsage.estimatedCost(resolved.cost, recorded.tokens) === undefined
-          ? {}
-          : { cost: SessionUsage.estimatedCost(resolved.cost, recorded.tokens)! }),
+        ...(recordedCost === undefined ? {} : { cost: recordedCost }),
         continuation: "full",
         ...(timing === undefined ? {} : { timing }),
         ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
@@ -188,6 +187,8 @@ const make = (dependencies: Dependencies) => {
           timing = SessionUsage.timing(event.usage)
           const step = SessionUsage.record(event.usage, resolved.cost)
           usage = usage ? SessionUsage.add(usage, step) : step
+          if (SessionUsage.estimatedCost(resolved.cost, step.tokens, SessionUsage.oneHourCacheWrites(event.usage)))
+            recordedCost = usage.cost
         }
         return Effect.void
       }),

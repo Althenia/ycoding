@@ -1176,6 +1176,43 @@ it.effect("repairs overlapping AI SDK cache-write usage", () =>
   }),
 )
 
+it.effect("retains validated Anthropic cache-write TTL buckets from AI SDK finish metadata", () =>
+  Effect.gen(function* () {
+    const aisdk = yield* AISDK.Service
+    yield* aisdk.hook.sdk((event) => {
+      event.sdk = {
+        languageModel: () => streamModel([
+          {
+            type: "finish",
+            finishReason: { unified: "stop", raw: "stop" },
+            usage: {
+              inputTokens: { total: 2_000, noCache: 0, cacheRead: 0, cacheWrite: 2_000 },
+              outputTokens: { total: 0, text: 0, reasoning: 0 },
+              raw: {},
+            },
+            providerMetadata: {
+              anthropic: { usage: { cache_creation: {
+                ephemeral_5m_input_tokens: 1_000,
+                ephemeral_1h_input_tokens: 1_000,
+                ignored: "raw response detail",
+              } } },
+            },
+          },
+        ]),
+      }
+    })
+
+    const resolved = yield* aisdk.model(model("@ai-sdk/anthropic"))
+    const response = yield* LLMClient.generate(LLM.request({ model: resolved, prompt: "Hello" })).pipe(
+      Effect.provide(client),
+    )
+
+    expect(response.usage?.providerMetadata).toEqual({
+      anthropic: { cache_creation: { ephemeral_5m_input_tokens: 1_000, ephemeral_1h_input_tokens: 1_000 } },
+    })
+  }),
+)
+
 it.effect("preserves missing AI SDK cache-write telemetry", () =>
   Effect.gen(function* () {
     const aisdk = yield* AISDK.Service

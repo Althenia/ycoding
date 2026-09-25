@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Schema, Stream } from "effect"
 import { LLM } from "../src"
-import { Endpoint, LLMClient, Protocol, Route, type FramingDef } from "../src/route"
+import { Endpoint, HttpTransport, LLMClient, Protocol, Route, type FramingDef } from "../src/route"
 import { Model } from "../src/schema"
 import { testEffect } from "./lib/effect"
 import { dynamicResponse } from "./lib/http"
@@ -55,6 +55,45 @@ const request = LLM.request({
 })
 
 describe("HTTP transport stream lifecycle", () => {
+  testEffect(
+    dynamicResponse(({ respond }) =>
+      Effect.succeed(respond(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"type":"finish","reason":"stop"}'))
+          controller.close()
+        },
+      }), {
+        headers: { "content-type": "text/event-stream", "x-codex-turn-state": "turn-token" },
+      })),
+    ),
+  ).effect("observes response headers once before streaming", () =>
+    Effect.gen(function* () {
+      const observed: Array<{ readonly request: typeof request; readonly token: string | null }> = []
+      const transport = HttpTransport.httpJson({ framing }).with({
+        onResponseHeaders: ({ request, headers }) =>
+          Effect.sync(() => observed.push({ request, token: headers["x-codex-turn-state"] ?? null })),
+      })
+      const observedRoute = Route.make({
+        id: "http-lifecycle-observed",
+        provider: "lifecycle-provider",
+        protocol,
+        endpoint: Endpoint.path("/stream", { baseURL: "https://lifecycle.test" }),
+        framing,
+        transport,
+      })
+      const observedRequest = LLM.request({
+        model: Model.make({ id: "lifecycle-model", provider: "lifecycle-provider", route: observedRoute }),
+        prompt: "hello",
+      })
+      const response = yield* (yield* LLMClient.Service).stream(observedRequest).pipe(Stream.runCollect)
+
+      expect(response.map((event) => event.type)).toEqual(["finish"])
+      expect(observed).toHaveLength(1)
+      expect(observed[0].request.messages[0]?.id).toBe(observedRequest.messages[0]?.id)
+      expect(observed[0].token).toBe("turn-token")
+    }),
+  )
+
   testEffect(
     dynamicResponse(({ respond }) => {
       const body = new ReadableStream<Uint8Array>({

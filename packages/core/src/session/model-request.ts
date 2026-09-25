@@ -149,11 +149,21 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const permissions = toolPermissions(agent.info, session.permissionCeiling ?? [])
         const executableTools = toolsDisabled ? undefined : yield* registry.materialize(permissions)
         const system = baseSystem(input.context)
+        const directOpenAIResponses =
+          model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
+        const effectiveProviderOptions = mergeProviderOptions(
+          model.route.defaults.providerOptions,
+          model.defaults?.providerOptions,
+          directOpenAIResponses ? { openai: { store: responsesState === "stored" } } : undefined,
+        )
+        const effectiveStore = model.route.id === "ai-sdk:@ai-sdk/github-copilot"
+          ? effectiveProviderOptions?.copilot?.store
+          : OpenAIOptions.store(LLM.request({ model, providerOptions: effectiveProviderOptions }))
         const materialized = yield* providerState.materialize({
           sessionID: session.id,
           provider: model.provider,
           modelID: resolved.ref.id,
-          stateless: responsesState === "stateless",
+          stateless: effectiveStore === false,
         })
         const attachmentFiles = input.context.messages.flatMap((message) =>
           message.type === "user" ? (message.files ?? []) : [],
@@ -287,8 +297,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           openaiExtendedRetention: efficiency.openaiExtendedRetention,
           generation,
         }, now)
-        const directOpenAIResponses =
-          model.provider === "openai" && SessionContinuation.isResponsesRoute(model.route.id)
         const baseRequest = LLM.request({
           model,
           http: {

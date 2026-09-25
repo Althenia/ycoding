@@ -36,7 +36,7 @@ function variants(value: unknown) {
 }
 
 export function normalizeModelVariant(value: string | undefined) {
-  return value === "default" || value === "none" ? undefined : value
+  return value === "default" ? undefined : value
 }
 
 export function modelPreferenceKey(model: ModelPreferenceModel) {
@@ -44,8 +44,6 @@ export function modelPreferenceKey(model: ModelPreferenceModel) {
 }
 
 export function cycleModelVariant(current: string | undefined, variants: string[]) {
-  // A sentinel id normalizes back to the base model, so cycling onto one would be a
-  // no-op step that repeats forever instead of advancing to the next real variant.
   const named = variants.filter((variant) => normalizeModelVariant(variant) !== undefined)
   if (named.length === 0) return undefined
   const value = normalizeModelVariant(current)

@@ -456,6 +456,107 @@ describe("SessionRunnerModel", () => {
     }),
   );
 
+  it.effect("applies an advertised none variant and preserves its cache identity", () =>
+    Effect.gen(function* () {
+      const catalog = model(ProviderV2.aisdk("@ai-sdk/openai"), {
+        id: "gpt-6-luna",
+        modelID: "gpt-6-luna",
+        providerID: "openai",
+        settings: { baseURL: "https://openai.example/v1" },
+        variants: [{
+          id: ModelV2.VariantID.make("none"),
+          settings: {
+            reasoningEffort: "none",
+            reasoningSummary: "auto",
+            include: ["reasoning.encrypted_content"],
+          },
+        }],
+      });
+      const selected = yield* SessionRunnerModel.withVariant(catalog, ModelV2.VariantID.make("none"));
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(selected);
+      const prepared = yield* LLMClient.prepare<OpenAIResponsesBody>(LLM.request({ model: resolved, prompt: "Hello" }));
+      const namespace = (variant = "default") => SessionRunnerCache.promptCacheNamespace({
+        projectID: "project",
+        directory: "/repo",
+        providerID: catalog.providerID,
+        modelID: catalog.id,
+        variant,
+        policyRevision: CACHE_POLICY_REVISION,
+        permissions: [],
+        system: cacheSystem,
+        tools: cacheTools,
+        routeID: "openai-responses",
+      });
+
+      expect(selected.settings).toMatchObject({ reasoningEffort: "none" });
+      expect(prepared.body.reasoning?.effort).toBe("none");
+      expect(namespace("none")).not.toBe(namespace());
+    }),
+  );
+
+  it.effect("applies an advertised DeepSeek none variant to the prepared chat request", () =>
+    Effect.gen(function* () {
+      const catalog = model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+        id: "deepseek-v4-pro",
+        modelID: "deepseek-v4-pro",
+        providerID: "deepseek",
+        settings: { baseURL: "https://api.deepseek.test" },
+        body: {},
+        variants: [{ id: ModelV2.VariantID.make("none"), settings: { thinking: { type: "disabled" } } }],
+      });
+      const selected = yield* SessionRunnerModel.withVariant(catalog, ModelV2.VariantID.make("none"));
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(selected);
+      const prepared = yield* LLMClient.prepare(LLM.request({ model: resolved, prompt: "Hello" }));
+
+      expect(prepared.body).toMatchObject({ thinking: { type: "disabled" } });
+    }),
+  );
+
+  it.effect("sends selected DeepSeek and native OpenRouter reasoning variants on the wire", () =>
+    Effect.gen(function* () {
+      const sessionWith = (id: string, catalog: ModelV2.Info, variant: string) =>
+        SessionV2.Info.make({
+          id: SessionV2.ID.make(id),
+          projectID: ProjectV2.ID.global,
+          title: "test",
+          model: { id: catalog.id, providerID: catalog.providerID, variant: ModelV2.VariantID.make(variant) },
+          cost: Money.USD.zero,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+          location: { directory: AbsolutePath.make("/project") },
+        })
+      const deepseek = model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+        id: "deepseek-v4-pro",
+        modelID: "deepseek-v4-pro",
+        providerID: "deepseek",
+        settings: { baseURL: "https://api.deepseek.test", apiKey: "fixture-key" },
+        body: {},
+        variants: [
+          { id: ModelV2.VariantID.make("low"), settings: { reasoningEffort: "low", thinking: { type: "enabled" } } },
+        ],
+      })
+      const openrouter = model("@ycoding-ai/ai/providers/openrouter", {
+        id: "openai/gpt-5.6-sol",
+        modelID: "openai/gpt-5.6-sol",
+        providerID: "openrouter",
+        settings: { apiKey: "fixture-key" },
+        body: {},
+        variants: [{ id: ModelV2.VariantID.make("high"), settings: { reasoning: { effort: "high" } } }],
+      })
+
+      const deepseekModel = yield* SessionRunnerModel.resolve(sessionWith("ses_deepseek_low", deepseek, "low"), deepseek)
+      const openrouterModel = yield* SessionRunnerModel.resolve(
+        sessionWith("ses_openrouter_high", openrouter, "high"),
+        openrouter,
+      )
+      const deepseekBody = (yield* LLMClient.prepare(LLM.request({ model: deepseekModel, prompt: "Hello" }))).body
+      const openrouterBody = (yield* LLMClient.prepare(LLM.request({ model: openrouterModel, prompt: "Hello" }))).body
+
+      expect(deepseekBody).toMatchObject({ reasoning_effort: "low", thinking: { type: "enabled" } })
+      expect(openrouterBody).toMatchObject({ reasoning: { effort: "high", context: "all_turns" } })
+    }),
+  )
+
   it.effect(
     "rejects an explicit unavailable Session variant during model resolution",
     () =>
@@ -1005,6 +1106,84 @@ describe("SessionRunnerModel", () => {
       expect(otherHeaders["session-id"]).toBe(otherCache.wirePromptCacheKey);
       expect(otherHeaders["thread-id"]).toBe(otherCache.wirePromptCacheKey);
       expect(otherHeaders["x-client-request-id"]).toBe(otherCache.wirePromptCacheKey);
+    }),
+  );
+
+  it.effect("sticks Codex HTTP turn state to the current user turn and auth account", () =>
+    Effect.gen(function* () {
+      const tokenByRequest = ["t1", "t2", "t3", "t4", "t5", undefined, undefined];
+      const headersByRequest: Array<string | null> = [];
+      const completed = JSON.stringify({
+        type: "response.completed",
+        response: { id: "resp_fixture", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 } },
+      });
+      const credential = (accountID: string) => Credential.OAuth.make({
+        type: "oauth",
+        methodID: Integration.MethodID.make("chatgpt-browser"),
+        access: "chatgpt-token",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+        metadata: { accountID },
+      });
+      const resolved = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai"), { providerID: "openai", modelID: "gpt-5.6-luna" }),
+        credential("acct_turn_state"),
+      );
+      const otherAccount = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai"), { providerID: "openai", modelID: "gpt-5.6-luna" }),
+        credential("acct_turn_state_other"),
+      );
+      const send = (selected: Model, messageID: string, cacheKey: string, index: number) =>
+        LLMClient.generate(LLM.request({
+          model: selected,
+          messages: [Message.make({ id: messageID, role: "user", content: "Hello" })],
+          providerOptions: { openai: { promptCacheKey: cacheKey } },
+        })).pipe(
+          Effect.provide(LLMClient.configured()),
+          Effect.provideService(RequestExecutor.Service, {
+            execute: (request) => Effect.sync(() => {
+              headersByRequest.push(request.headers["x-codex-turn-state"] ?? null);
+              return HttpClientResponse.fromWeb(request, new Response(`data: ${completed}\n\n`, {
+                headers: {
+                  "content-type": "text/event-stream",
+                  ...(tokenByRequest[index] === undefined ? {} : { "x-codex-turn-state": tokenByRequest[index] }),
+                },
+              }));
+            }),
+          }),
+        );
+
+      yield* send(resolved, "user-turn-one", "cache-turn-state", 0);
+      yield* send(resolved, "user-turn-one", "cache-turn-state", 1);
+      yield* send(resolved, "user-turn-one", "cache-turn-state", 2);
+      yield* send(resolved, "user-turn-two", "cache-turn-state", 3);
+      yield* send(otherAccount, "user-turn-one", "cache-turn-state", 4);
+      yield* send(resolved, "user-turn-never", "cache-no-token", 5);
+      yield* send(resolved, "user-turn-never", "cache-no-token", 6);
+
+      expect(headersByRequest).toEqual([null, "t1", "t1", null, null, null, null]);
+
+      const webSocket = yield* SessionRunnerModel.fromCatalogModel(
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "openai",
+          modelID: "gpt-5.6-luna",
+          settings: { transport: "websocket" },
+        }),
+        credential("acct_turn_state"),
+      );
+      const webSocketRequest = LLM.request({
+        model: webSocket,
+        messages: [Message.make({ id: "user-turn-one", role: "user", content: "Hello" })],
+        providerOptions: { openai: { promptCacheKey: "cache-turn-state" } },
+      });
+      const webSocketHeaders = yield* webSocket.route.auth.apply({
+        request: webSocketRequest,
+        method: "POST",
+        url: "wss://chatgpt.com/backend-api/codex/responses",
+        body: "{}",
+        headers: Headers.empty,
+      });
+      expect(webSocketHeaders["x-codex-turn-state"]).toBeUndefined();
     }),
   );
 

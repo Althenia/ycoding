@@ -23,6 +23,23 @@ export const providerCache = (usage: Usage | undefined) => ({
   writeReported: usage?.cacheWriteInputTokens !== undefined,
 })
 
+export const oneHourCacheWrites = (usage: Usage | undefined) => {
+  if (!usage) return undefined
+  const metadata = usage.providerMetadata?.anthropic
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return undefined
+  const creation = (metadata as Record<string, unknown>).cache_creation
+  if (typeof creation !== "object" || creation === null || Array.isArray(creation)) return undefined
+  const count = (creation as Record<string, unknown>).ephemeral_1h_input_tokens
+  if (
+    typeof count !== "number" ||
+    !Number.isFinite(count) ||
+    count < 0 ||
+    count > safe(usage.cacheWriteInputTokens)
+  )
+    return undefined
+  return count
+}
+
 export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undefined => {
   const duration = (value: number | undefined) =>
     value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined
@@ -38,18 +55,29 @@ export const timing = (usage: Usage | undefined): ProviderRequest.Timing | undef
 }
 
 // TODO(#35765): Use Copilot's reported billed amount once billing has a dedicated typed runtime contract.
-export function estimatedCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info): Money.USD | undefined {
+export function estimatedCost(
+  costs: ModelV2.Info["cost"],
+  usage: TokenUsage.Info,
+  oneHourWrites?: number,
+): Money.USD | undefined {
   const context = usage.input + usage.cache.read + usage.cache.write
   const tier = costs
     .filter((cost) => cost.tier?.type === "context" && context > cost.tier.size)
     .toSorted((a, b) => (b.tier?.size ?? 0) - (a.tier?.size ?? 0))[0]
   const cost = tier ?? costs.find((cost) => cost.tier === undefined)
   if (!cost) return undefined
+  const validOneHourWrites =
+    oneHourWrites !== undefined && Number.isFinite(oneHourWrites) && oneHourWrites >= 0 && oneHourWrites <= usage.cache.write
+      ? oneHourWrites
+      : undefined
   return Money.USD.make(
     (usage.input * cost.input +
       (usage.output + usage.reasoning) * cost.output +
       usage.cache.read * cost.cache.read +
-      usage.cache.write * cost.cache.write) /
+      (validOneHourWrites === undefined
+        ? usage.cache.write * cost.cache.write
+        : 2 * validOneHourWrites * cost.input +
+          (usage.cache.write - validOneHourWrites) * cost.cache.write)) /
       1_000_000,
   )
 }
@@ -65,15 +93,15 @@ export function estimatedCatalogCost(
   if (openrouter !== undefined) return { cost: openrouter, source: "openrouter" as const }
 }
 
-export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info) {
-  return estimatedCost(costs, usage) ?? Money.USD.zero
+export function calculateCost(costs: ModelV2.Info["cost"], usage: TokenUsage.Info, oneHourWrites?: number) {
+  return estimatedCost(costs, usage, oneHourWrites) ?? Money.USD.zero
 }
 
 export type Recorded = { readonly tokens: TokenUsage.Info; readonly cost: Money.USD }
 
 export const record = (usage: Usage | undefined, costs: ModelV2.Info["cost"]): Recorded => {
   const normalized = tokens(usage)
-  return { tokens: normalized, cost: calculateCost(costs, normalized) }
+  return { tokens: normalized, cost: calculateCost(costs, normalized, oneHourCacheWrites(usage)) }
 }
 
 export const add = (a: Recorded, b: Recorded): Recorded => ({

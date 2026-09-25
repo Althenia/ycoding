@@ -50,6 +50,27 @@ const providerFamilies = [
 ] as const
 
 describe("OpenAI-compatible Chat route", () => {
+  it.effect("lowers DeepSeek thinking mode and reasoning effort from provider options", () =>
+    Effect.gen(function* () {
+      const enabled = yield* LLMClient.prepare(
+        LLM.updateRequest(request, {
+          providerOptions: { openai: { reasoningEffort: "low", thinking: { type: "enabled" } } },
+        }),
+      )
+      const disabled = yield* LLMClient.prepare(
+        LLM.updateRequest(request, { providerOptions: { openai: { thinking: { type: "disabled" } } } }),
+      )
+      const invalid = yield* LLMClient.prepare(
+        LLM.updateRequest(request, { providerOptions: { openai: { thinking: { type: "sometimes" } } } }),
+      )
+
+      expect(enabled.body).toMatchObject({ reasoning_effort: "low", thinking: { type: "enabled" } })
+      expect(disabled.body).toMatchObject({ thinking: { type: "disabled" } })
+      expect(disabled.body).not.toHaveProperty("reasoning_effort")
+      expect(invalid.body).not.toHaveProperty("thinking")
+    }),
+  )
+
   it.effect("prepares generic Chat target", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(

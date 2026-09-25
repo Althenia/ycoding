@@ -209,6 +209,55 @@ describe("doGenerate", () => {
     })
   })
 
+  test("lowers Copilot compaction options and replays only after the latest boundary", async () => {
+    const mockFetch = createMockFetch({
+      id: "resp_compact",
+      created_at: 0,
+      model: "gpt-5.5",
+      output: [],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    const model = createModel(mockFetch)
+    const opaque = { type: "compaction", id: "cmp_2", encrypted_content: "secret" }
+    const firstBoundary = { type: "compaction", id: "cmp_1", encrypted_content: "old secret" }
+    await model.doGenerate({
+      prompt: [
+        { role: "system", content: "Current instructions" },
+        ...TEST_PROMPT,
+        { role: "assistant", content: [{ type: "text", text: "before" }] },
+        { role: "assistant", content: [{ type: "reasoning", text: "", providerOptions: { copilot: { opaqueCompactionItem: firstBoundary } } }] },
+        { role: "assistant", content: [{ type: "text", text: "between" }] },
+        { role: "assistant", content: [{ type: "reasoning", text: "", providerOptions: { copilot: { opaqueCompactionItem: opaque } } }] },
+        { role: "assistant", content: [{ type: "text", text: "after" }] },
+      ],
+      providerOptions: { copilot: { store: false, contextManagement: [{ type: "compaction", compactThreshold: 900 }] } },
+      includeRawChunks: false,
+    } as any)
+    const body = JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)
+    expect(body.context_management).toEqual([{ type: "compaction", compact_threshold: 900 }])
+    expect(body.input).toEqual([
+      { role: "system", content: "Current instructions" },
+      opaque,
+      { role: "assistant", content: [{ type: "output_text", text: "after" }] },
+    ])
+  })
+
+  test("returns compaction output as an empty reasoning part with opaque Copilot metadata", async () => {
+    const model = createModel(createMockFetch({
+      id: "resp_compact",
+      created_at: 0,
+      model: "gpt-5.5",
+      output: [{ type: "compaction", id: "cmp_1", encrypted_content: "opaque" }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }))
+    const result = await model.doGenerate({ prompt: TEST_PROMPT, includeRawChunks: false })
+    expect(result.content).toContainEqual({
+      type: "reasoning",
+      text: "",
+      providerMetadata: { copilot: { itemId: "cmp_1", opaqueCompactionItem: { type: "compaction", id: "cmp_1", encrypted_content: "opaque" } } },
+    })
+  })
+
   test("attaches item metadata under the copilot namespace, not openai", async () => {
     const mockFetch = createMockFetch({
       id: "resp_1",
@@ -263,6 +312,26 @@ describe("doGenerate", () => {
 })
 
 describe("doStream", () => {
+  test("emits a compaction boundary as an empty reasoning part", async () => {
+    const item = { type: "compaction", id: "cmp_stream", encrypted_content: "opaque" }
+    const model = createModel(
+      createMockStreamFetch([
+        { type: "response.output_item.done", output_index: 0, item },
+        {
+          type: "response.completed",
+          response: { incomplete_details: null, usage: { input_tokens: 1, output_tokens: 1 }, service_tier: null },
+        },
+      ]),
+    )
+    const { stream } = await model.doStream({ prompt: TEST_PROMPT, includeRawChunks: false })
+    const parts = await readStream(stream)
+    const metadata = { copilot: { itemId: "cmp_stream", opaqueCompactionItem: item } }
+    expect(parts.filter((part) => part.type.startsWith("reasoning-") )).toEqual([
+      { type: "reasoning-start", id: "cmp_stream:0", providerMetadata: metadata },
+      { type: "reasoning-end", id: "cmp_stream:0", providerMetadata: metadata },
+    ])
+  })
+
   test("closes each reasoning summary before starting the next", async () => {
     const model = createModel(
       createMockStreamFetch([
