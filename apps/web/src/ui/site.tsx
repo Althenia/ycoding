@@ -70,13 +70,13 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
             <BrandMark compact />
           </Link>
           <nav class="nav" aria-label="Primary">
-            <Link href="/" class={`nav__link${router.path() === "/" ? " nav__link--active" : ""}`}>
+            <Link href="/" class={`nav__link${router.path() === "/" ? " nav__link--active" : ""}`} ariaCurrent={router.path() === "/" ? "page" : undefined}>
               Home
             </Link>
-            <Link href="/docs" class={`nav__link${inDocs() ? " nav__link--active" : ""}`}>
+            <Link href="/docs" class={`nav__link${inDocs() ? " nav__link--active" : ""}`} ariaCurrent={inDocs() ? "page" : undefined}>
               Documentation
             </Link>
-            <Link href="/changelog" class={`nav__link${inChangelog() ? " nav__link--active" : ""}`}>
+            <Link href="/changelog" class={`nav__link${inChangelog() ? " nav__link--active" : ""}`} ariaCurrent={inChangelog() ? "page" : undefined}>
               Changelog
             </Link>
           </nav>
@@ -117,13 +117,13 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
         >
           <div class="primary-nav pane">
             <nav class="docs-nav primary-nav__routes" aria-label="Site">
-              <Link href="/" class={`docs-nav__link${router.path() === "/" ? " docs-nav__link--active" : ""}`} onClick={() => setOpen(false)}>
+              <Link href="/" class={`docs-nav__link${router.path() === "/" ? " docs-nav__link--active" : ""}`} ariaCurrent={router.path() === "/" ? "page" : undefined} onClick={() => setOpen(false)}>
                 Home
               </Link>
-              <Link href="/docs" class={`docs-nav__link${inDocs() ? " docs-nav__link--active" : ""}`} onClick={() => setOpen(false)}>
+              <Link href="/docs" class={`docs-nav__link${inDocs() ? " docs-nav__link--active" : ""}`} ariaCurrent={inDocs() ? "page" : undefined} onClick={() => setOpen(false)}>
                 Documentation
               </Link>
-              <Link href="/changelog" class={`docs-nav__link${inChangelog() ? " docs-nav__link--active" : ""}`} onClick={() => setOpen(false)}>
+              <Link href="/changelog" class={`docs-nav__link${inChangelog() ? " docs-nav__link--active" : ""}`} ariaCurrent={inChangelog() ? "page" : undefined} onClick={() => setOpen(false)}>
                 Changelog
               </Link>
             </nav>

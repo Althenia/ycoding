@@ -23,7 +23,7 @@ export const DOC_INDEX: DocPage = {
         {
           kind: "steps",
           items: [
-            { title: "Install", text: "Install a signed release build, or run from a checkout with Bun 1.4.2." },
+            { title: "Install", text: "Install a checksum-verified release build, or run from a checkout with Bun 1.4.2." },
             { title: "Connect a provider", text: "Add credentials for at least one model provider so requests can run." },
             { title: "Start a session", text: "Run `ycoding` for the terminal interface, or pass a prompt for one direct run." },
           ],

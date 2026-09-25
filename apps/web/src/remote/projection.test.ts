@@ -509,6 +509,31 @@ describe("previewText", () => {
 })
 
 describe("tool structured metadata", () => {
+  test("removes device-local capture paths from projected tool text without discarding other output", () => {
+    const text = "before\n... output truncated; full content saved to /private/fixture/a file.txt ...\nafter\n[output truncated; full output saved to: C:\\fixture\\shell.log]"
+    const parts = readSnapshotParts([
+      { type: "tool", id: "call_1", name: "read", state: { status: "completed", content: [{ type: "text", text }] } },
+    ])
+    const part = parts[0]
+    if (part?.kind !== "tool") throw new Error("expected a tool part")
+    expect(part.content[0]).toMatchObject({ kind: "text", sourceTruncated: true })
+    if (part.content[0]?.kind !== "text") throw new Error("expected text")
+    expect(part.content[0].text).toContain("before")
+    expect(part.content[0].text).toContain("after")
+    expect(part.content[0].text).toContain("retained on the device")
+    expect(part.content[0].text).not.toContain("/private/fixture/")
+    expect(part.content[0].text).not.toContain("C:\\fixture\\")
+  })
+
+  test("hides a capture marker cut short by the device output limit", () => {
+    const parts = readSnapshotParts([
+      { type: "tool", id: "call_1", name: "read", state: { status: "completed", content: [{ type: "text", text: "... output truncated; full content saved to /private/fixture/partial" }] } },
+    ])
+    const part = parts[0]
+    if (part?.kind !== "tool") throw new Error("expected a tool part")
+    expect(part.content[0]).toEqual({ kind: "text", text: "[full output retained on the device]", sourceTruncated: true })
+  })
+
   test("keeps the structured record the device sent, live and from a snapshot", () => {
     let view = createSessionView("ses_a")
     view = apply(view, "session.tool.success", {

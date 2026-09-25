@@ -287,7 +287,7 @@ export const usePages: readonly DocPage[] = [
             rows: [
               ["Devices", "List enrolled machines, their connection state, and last activity."],
               ["Session list", "Show all sessions on the connected backend, including running and archived state. New sessions appear while the device remains connected."],
-              ["Conversation", "Load the canonical conversation for a session and stream new output as it arrives."],
+              ["Conversation", "Load the canonical conversation for a session and stream new output as it arrives. The browser shows the first 4,000 characters of available tool text; device truncation is labeled separately, and shell captures can be loaded in pages."],
               ["Composer", "Send a prompt with an explicit delivery mode, and interrupt the active step."],
               ["Requests", "Answer permission, guardrail, question, and form requests. Forms support typed fields, defaults, conditional fields, and cancellation. External steps require your acknowledgement. Hard guardrail reviews accept only one-time approval or rejection."],
               ["Autonomy", "Read and change the session's autonomy state, including setting or stopping a goal."],
@@ -323,7 +323,7 @@ export const usePages: readonly DocPage[] = [
             items: [
               "A reconnect reloads the conversation read-only and re-subscribes to the session. Nothing is replayed automatically.",
               "An action that was in flight when the connection dropped is reported as an unknown outcome. Retry it deliberately if you want it sent again.",
-              "Your unsent draft stays in the composer across reconnects.",
+              "Your unsent prompt stays with its Session when you switch conversations or reconnect; it does not appear in another Session's composer.",
             ],
           },
           { kind: "related", slugs: ["usage/sessions", "configuration/yolo", "configuration/notifications"] },

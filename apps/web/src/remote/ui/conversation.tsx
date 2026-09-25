@@ -13,6 +13,7 @@ import {
   type RemoteMessageView,
   type ShellOutputFetch,
   type ShellOutputView,
+  type ToolContentBlock,
 } from "../projection"
 import { shellOutputPaging } from "../view-model"
 import { FormRequest } from "./form-request"
@@ -109,6 +110,22 @@ function ShellOutputSection(props: {
 function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
   const [touched, setTouched] = createSignal(false)
   const [manual, setManual] = createSignal(false)
+  const output = createMemo(() => {
+    let remaining = 4_000
+    const content = props.part().content.flatMap((block): readonly ToolContentBlock[] => {
+      if (block.kind !== "text") return [block]
+      if (remaining === 0) return []
+      const visible = block.text.slice(0, remaining)
+      remaining -= visible.length
+      return [{ ...block, text: visible }]
+    })
+    return {
+      content,
+      clientTruncated: props.part().content.reduce((length, block) => length + (block.kind === "text" ? block.text.length : 0), 0) > 4_000,
+      sourceTruncated: props.part().structured?.truncated === true ||
+        props.part().content.some((block) => block.kind === "text" && block.sourceTruncated === true),
+    }
+  })
   const expanded = () => toolPartExpanded({ touched: touched(), manual: manual(), status: props.part().status })
   const shellID = () => toolShellID(props.part())
   const statusLabel = () => {
@@ -141,7 +158,7 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             <code>{props.part().inputText ?? JSON.stringify(props.part().input, null, 2)}</code>
           </pre>
         </Show>
-        <For each={props.part().content}>
+        <For each={output().content}>
           {(block) =>
             block.kind === "text" ? (
               <pre class="output" tabindex="0">
@@ -154,6 +171,12 @@ function ToolPart(props: { readonly part: () => ToolPartView }): JSX.Element {
             )
           }
         </For>
+        <Show when={output().clientTruncated}>
+          <p class="tool__note">Showing the first 4,000 characters of available tool output in this browser.</p>
+        </Show>
+        <Show when={output().sourceTruncated}>
+          <p class="tool__note">Tool output was truncated on the device.</p>
+        </Show>
         <Show when={shellID()}>
           {(id) => <ShellOutputSection shellID={id()} output={props.part().shellOutput} fetch={props.part().shellOutputFetch} />}
         </Show>

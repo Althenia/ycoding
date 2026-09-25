@@ -1872,6 +1872,10 @@ body:has(.app) {
 }
 
 @media (max-width: 479px) {
+  .app--activity .remote-nav__link {
+    padding-inline: var(--yc-space-2);
+  }
+
   .app-header__inner {
     gap: var(--yc-space-2);
   }
@@ -1904,5 +1908,11 @@ body:has(.app) {
 
   .device__action .button {
     inline-size: 100%;
+  }
+}
+
+@media (max-width: 359px) {
+  .app--activity .remote-nav__link {
+    padding-inline: var(--yc-space-1);
   }
 }

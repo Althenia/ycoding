@@ -21,6 +21,7 @@ export function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Elemen
                 <Link
                   href={`/docs/${page.slug}`}
                   class={`docs-nav__link${current() === `/docs/${page.slug}` ? " docs-nav__link--active" : ""}`}
+                  ariaCurrent={current() === `/docs/${page.slug}` ? "page" : undefined}
                   onClick={props.onNavigate}
                 >
                   {page.title}

@@ -12,9 +12,15 @@ import { useRemote } from "../context"
  */
 export function Composer(props: { readonly sessionID?: string; readonly running: boolean; readonly canSend: boolean }): JSX.Element {
   const remote = useRemote()
-  const [draft, setDraft] = createSignal("")
+  const [drafts, setDrafts] = createSignal<Record<string, string>>({})
   const [delivery, setDelivery] = createSignal<"steer" | "queue">("steer")
 
+  const draft = () => props.sessionID === undefined ? "" : drafts()[props.sessionID] ?? ""
+  const setDraft = (text: string) => {
+    const sessionID = props.sessionID
+    if (sessionID === undefined) return
+    setDrafts((current) => ({ ...current, [sessionID]: text }))
+  }
   const disabled = () => !props.canSend || props.sessionID === undefined
   const send = () => {
     const text = draft().trim()

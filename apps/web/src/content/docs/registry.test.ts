@@ -67,6 +67,13 @@ describe("public docs allowlist", () => {
 })
 
 describe("documentation index", () => {
+  test("describes release installation without claiming a signature", () => {
+    const install = DOC_INDEX.sections.flatMap((section) =>
+      section.blocks.flatMap((block) => (block.kind === "steps" ? block.items : [])),
+    ).find((step) => step.title === "Install")
+    expect(install?.text).toBe("Install a checksum-verified release build, or run from a checkout with Bun 1.4.2.")
+  })
+
   test("describes every group and links the configuration domains", () => {
     expect(DOC_INDEX.slug).toBe("")
     expect(DOC_INDEX.sections.length).toBeGreaterThan(0)
@@ -77,6 +84,17 @@ describe("documentation index", () => {
       .map((page) => `/docs/${page.slug}`)
       .filter((href) => href !== "/docs/configuration")
     for (const href of configurationDomains) expect(linked).toContain(href)
+  })
+})
+
+describe("remote workspace documentation", () => {
+  test("distinguishes the browser tool display cap from device truncation", () => {
+    const remote = findDocPage("usage/remote")
+    const conversation = remote?.sections.flatMap((section) =>
+      section.blocks.flatMap((block) => (block.kind === "table" ? block.rows : [])),
+    ).find((row) => row[0] === "Conversation")
+    expect(conversation?.[1]).toContain("first 4,000 characters")
+    expect(conversation?.[1]).toContain("device truncation")
   })
 })
 

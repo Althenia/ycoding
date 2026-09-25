@@ -36,12 +36,40 @@ export async function launchBrowser(executable: string, width: number, height: n
       const target = await send<{ readonly targetId: string }>("Target.createTarget", { url: "about:blank" })
       const attached = await send<{ readonly sessionId: string }>("Target.attachToTarget", { targetId: target.targetId, flatten: true })
       const call = <T>(method: string, params: Record<string, unknown> = {}) => send<T>(method, params, attached.sessionId)
+      const requests = new Map<string, string>()
+      const failures: string[] = []
+      const observeFailure = (event: MessageEvent) => {
+        const message: unknown = JSON.parse(String(event.data))
+        if (!message || typeof message !== "object" || !("sessionId" in message) || message.sessionId !== attached.sessionId || !("method" in message)) return
+        const params = "params" in message && message.params && typeof message.params === "object" ? message.params : undefined
+        const requestID = params && "requestId" in params && typeof params.requestId === "string" ? params.requestId : undefined
+        if (message.method === "Network.requestWillBeSent" && requestID && params && "request" in params && params.request && typeof params.request === "object" && "url" in params.request && typeof params.request.url === "string") {
+          requests.set(requestID, new URL(params.request.url).pathname)
+        }
+        if (message.method === "Network.loadingFailed") {
+          failures.push(`${requests.get(requestID ?? "") ?? "unknown"}: ${params && "errorText" in params && typeof params.errorText === "string" ? params.errorText : "unknown"}`)
+        }
+        if ((message.method === "Network.loadingFailed" || message.method === "Network.loadingFinished") && requestID) requests.delete(requestID)
+      }
+      socket.addEventListener("message", observeFailure)
       await call("Page.enable")
       await call("Runtime.enable")
       await call("Network.enable")
       await call("Network.setBlockedURLs", { urls: ["*sw.js*"] })
       await call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false })
       return {
+        networkFailures: () => failures,
+        injectOnNewDocument: (source: string) => call("Page.addScriptToEvaluateOnNewDocument", { source }),
+        disableCache: () => call("Network.setCacheDisabled", { cacheDisabled: true }),
+        screenshot: async () => (await call<{ readonly data: string }>("Page.captureScreenshot", { format: "png" })).data,
+        allowServiceWorker: () => call("Network.setBlockedURLs", { urls: [] }),
+        installabilityErrors: async () => (await call<{ readonly installabilityErrors: readonly { readonly errorId: string }[] }>("Page.getInstallabilityErrors")).installabilityErrors,
+        setOffline: (offline: boolean) => call("Network.emulateNetworkConditions", {
+          offline,
+          latency: 0,
+          downloadThroughput: 0,
+          uploadThroughput: 0,
+        }),
         async navigate(url: string) {
           await call("Page.navigate", { url })
           await Bun.sleep(250)
@@ -49,6 +77,9 @@ export async function launchBrowser(executable: string, width: number, height: n
         async setViewport(nextWidth: number, nextHeight: number) {
           await call("Emulation.setDeviceMetricsOverride", { width: nextWidth, height: nextHeight, deviceScaleFactor: 1, mobile: false })
         },
+        setColorScheme: (scheme: "light" | "dark") => call("Emulation.setEmulatedMedia", {
+          features: [{ name: "prefers-color-scheme", value: scheme }],
+        }),
         async setCoarsePointer(enabled: boolean) {
           await call("Emulation.setTouchEmulationEnabled", { enabled, maxTouchPoints: enabled ? 1 : 0 })
           await call("Emulation.setEmulatedMedia", {
@@ -68,7 +99,10 @@ export async function launchBrowser(executable: string, width: number, height: n
           if (result.exceptionDetails) throw new Error(result.exceptionDetails.text)
           return result.result.value
         },
-        close: () => call("Target.closeTarget", { targetId: target.targetId }),
+        async close() {
+          socket.removeEventListener("message", observeFailure)
+          await call("Target.closeTarget", { targetId: target.targetId })
+        },
       }
     },
     async close() {

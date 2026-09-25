@@ -38,6 +38,17 @@ export function Modal(props: {
       aria-label={props.label}
       onClose={props.onClose}
       onCancel={props.onClose}
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return
+        const controls = [...event.currentTarget.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        )].filter((control) => control.getClientRects().length > 0)
+        const next = event.shiftKey && document.activeElement === controls[0] ? controls.at(-1)
+          : !event.shiftKey && document.activeElement === controls.at(-1) ? controls[0] : undefined
+        if (!next) return
+        event.preventDefault()
+        next.focus()
+      }}
     >
       <div class="overlay__surface">
         <div class="overlay__head">

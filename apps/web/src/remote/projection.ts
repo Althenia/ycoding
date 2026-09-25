@@ -32,7 +32,7 @@ export function modelLabel(model: ModelRefView | undefined): string | undefined 
 }
 
 export type ToolContentBlock =
-  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "text"; readonly text: string; readonly sourceTruncated?: boolean }
   | { readonly kind: "other"; readonly type: string; readonly summary: string }
 
 /**
@@ -781,7 +781,12 @@ export function readToolContent(content: unknown): readonly ToolContentBlock[] {
     const type = stringField(item.type) ?? "unknown"
     if (type === "text") {
       const text = stringField(item.text)
-      return text === undefined ? [] : [{ kind: "text" as const, text }]
+      if (text === undefined) return []
+      const visible = text.replace(
+        /\.\.\. output truncated; full content saved to [^\r\n]*|\[output truncated; full output saved to: [^\r\n]*/g,
+        "[full output retained on the device]",
+      )
+      return [{ kind: "text", text: visible, ...(visible === text ? {} : { sourceTruncated: true }) }]
     }
     const summary = Object.entries(item)
       .flatMap(([key, entry]) => (typeof entry === "string" ? [`${key}: ${boundedText(entry, 200).text}`] : []))

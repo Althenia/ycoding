@@ -25,7 +25,7 @@
 import { spawn } from "bun"
 import { createRequire } from "node:module"
 import { existsSync } from "node:fs"
-import { mkdtemp } from "node:fs/promises"
+import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSession, password, startServer } from "../../../../packages/cli/test/remote-harness"
@@ -64,15 +64,17 @@ const guardSessionID = "ses_real_flow_guard"
 
 const checks: string[] = []
 const diagnostics: string[] = []
-let wrangler: { kill: () => unknown } | undefined
+let wrangler: { kill: (signal?: NodeJS.Signals) => unknown; exited: Promise<number> } | undefined
 let google: { stop: (closeActive?: boolean) => unknown } | undefined
 let agent: RemoteAgent | undefined
 let disposals: (() => Promise<void>)[] = []
+let home: string | undefined
 
 try {
-  const home = await mkdtemp(join(tmpdir(), "ycoding-real-flow-"))
+  home = await mkdtemp(join(tmpdir(), "ycoding-real-flow-"))
   const workspace = join(home, "workspace")
   const serverConfig = join(home, "server-config")
+  const persist = join(home, "wrangler-state")
   await run("mkdir", ["-p", workspace, serverConfig])
 
   /* -------------------------------------- deterministic local provider stand-in */
@@ -245,7 +247,7 @@ try {
   })
   const googleOrigin = `http://127.0.0.1:${google.port}`
 
-  await run(wranglerBin, ["d1", "migrations", "apply", "ycoding-prod-db", "--local", "--config", configPath])
+  await run(wranglerBin, ["d1", "migrations", "apply", "ycoding-prod-db", "--local", "--config", configPath, "--persist-to", persist])
   // Refuse to silently reuse a stale dev server on this port: the proof must run
   // against the worker started by this process.
   const occupied = await fetch(`${workerOrigin}/health`).then(
@@ -259,6 +261,8 @@ try {
       "dev",
       "--config",
       configPath,
+      "--persist-to",
+      persist,
       "--port",
       String(workerPort),
       "--var",
@@ -296,7 +300,8 @@ try {
   const started = await fetch(`${workerOrigin}/api/auth/google/start?redirect_after=/remote/`, { redirect: "manual" })
   const oauthCookie = setCookiePair(started, "yc_oauth")
   const state = new URL(started.headers.get("location") ?? "").searchParams.get("state") ?? ""
-  const nonce = await readNonce(await sha256Hex(cookieValue(oauthCookie)))
+  const nonce = await readNonce(await sha256Hex(cookieValue(oauthCookie)), persist)
+  expect(nonce.length > 0, "OAuth transaction was not found in the isolated local D1 state")
   const issuedAt = Math.floor(Date.now() / 1000)
   idTokenHolder.value = await signedIdToken(identityKey.pair, {
     iss: googleOrigin,
@@ -312,6 +317,10 @@ try {
     headers: { cookie: oauthCookie },
     redirect: "manual",
   })
+  expect(
+    callback.headers.get("location") === "/remote/",
+    "Google callback refused sign-in",
+  )
   cookie = cookiePair(callback, "yc_session")
   expect(cookie.includes("yc_session="), "Google sign-in did not issue a browser session")
   checks.push("browser signed in through the real relay with a Google stand-in")
@@ -1007,8 +1016,10 @@ try {
   console.log("Composed real-flow proof passed")
 } finally {
   for (const dispose of disposals.reverse()) await dispose().catch(() => undefined)
-  wrangler?.kill()
+  wrangler?.kill("SIGTERM")
+  if (wrangler) await wrangler.exited
   google?.stop(true)
+  if (home) await rm(home, { recursive: true, force: true })
   if (diagnostics.length > 0) console.log(`agent diagnostics: ${diagnostics.slice(-4).join(" | ")}`)
 }
 
@@ -1091,7 +1102,7 @@ function cookieValue(pair: string): string {
 }
 
 /** Reads the one-use OIDC nonce the worker stored, proving the real D1 write. */
-async function readNonce(transactionID: string): Promise<string> {
+async function readNonce(transactionID: string, persist: string): Promise<string> {
   const output = await run(wranglerBin, [
     "d1",
     "execute",
@@ -1099,6 +1110,8 @@ async function readNonce(transactionID: string): Promise<string> {
     "--local",
     "--config",
     configPath,
+    "--persist-to",
+    persist,
     "--json",
     "--command",
     `SELECT nonce FROM oauth_transaction WHERE id = '${transactionID}'`,

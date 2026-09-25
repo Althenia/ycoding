@@ -892,6 +892,38 @@ describe("public Stitch fidelity", () => {
     await page.close()
   })
 
+  test("announces the current public route and documentation page in navigation", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(1440, 900)
+      await page.navigate(url("/docs/quickstart"))
+      expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.nav .nav__link--active, .docs-shell__nav .docs-nav__link--active')].map(link => link.getAttribute('aria-current') ?? '')`)).toEqual(["page", "page"])
+
+      await page.setViewport(390, 900)
+      await page.navigate(url("/changelog"))
+      await page.evaluate(`document.querySelector('.app-header__menu')?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.primary-nav__routes .docs-nav__link--active')?.getAttribute('aria-current') ?? ''`)).toBe("page")
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  test("keeps keyboard focus visible inside the open documentation search dialog", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(390, 900)
+      await page.navigate(url("/docs/quickstart"))
+      await page.evaluate(`document.querySelector('.docs-search-trigger')?.click()`)
+      expect(await page.evaluate<boolean>(`document.querySelector('.overlay--docs-search')?.hasAttribute('open') === true`)).toBe(true)
+      for (let step = 0; step < 6; step += 1) {
+        await page.pressKey("Tab", "Tab", 9)
+        expect(await page.evaluate<boolean>(`document.querySelector('.overlay--docs-search')?.contains(document.activeElement) === true`)).toBe(true)
+      }
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
   test("uses P12 state-specific navigation surfaces and approved public heading scales", async () => {
     const page = await requireBrowser().openPage()
     const heading = async (path: string, width: number, selector = "h1") => {

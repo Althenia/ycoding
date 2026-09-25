@@ -214,23 +214,25 @@ describe("web design contract inventory", () => {
 
   test("keeps the handoff viewport matrix usable on public and remote surfaces", async () => {
     const page = await requireBrowser().openPage()
-    for (const [width, height] of [[320, 568], [430, 932], [1024, 1366], [1280, 800], [1920, 1080]] as const) {
+    for (const [width, height] of [[320, 568], [360, 740], [430, 932], [1024, 1366], [1280, 800], [1920, 1080]] as const) {
       for (const theme of width === 1024 ? ["light", "dark"] as const : ["light"] as const) {
         await page.setViewport(width, height)
-        for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=settings"]) {
+        for (const path of ["/", "/docs/quickstart", "/changelog", "/verify/remote.html?view=chat", "/verify/remote.html?view=activity", "/verify/remote.html?view=settings"]) {
           await page.navigate(url(path))
-          const layout = await page.evaluate<{ readonly overflow: boolean; readonly escaped: readonly string[]; readonly composer: boolean }>(`(() => {
+          const layout = await page.evaluate<{ readonly overflow: boolean; readonly escaped: readonly string[]; readonly undersizedTabs: readonly string[]; readonly composer: boolean }>(`(() => {
             document.documentElement.dataset.theme = ${JSON.stringify(theme)}
             const visible = (element) => element instanceof HTMLElement && getComputedStyle(element).visibility !== 'hidden' && getComputedStyle(element).display !== 'none' && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0
-            const controls = [...document.querySelectorAll('.app-header button, .app-header a, .bottom-nav a, .site-header button, .site-header a')].filter(visible)
+            const controls = [...document.querySelectorAll('.app-header button, .app-header a, .remote-nav a, .bottom-nav a, .site-header button, .site-header a')].filter(visible)
             return {
               overflow: document.documentElement.scrollWidth > innerWidth,
               escaped: controls.filter(element => { const box = element.getBoundingClientRect(); return box.left < -1 || box.right > innerWidth + 1 }).map(element => element.getAttribute('aria-label') ?? element.textContent?.trim() ?? element.tagName),
+              undersizedTabs: [...document.querySelectorAll('.remote-nav a')].filter(visible).filter(element => { const box = element.getBoundingClientRect(); return box.width < 44 || box.height < 44 }).map(element => element.textContent?.trim() ?? ''),
               composer: visible(document.querySelector('.composer')),
             }
           })()`)
           expect(layout.overflow, `${path} ${width}/${theme}`).toBe(false)
           expect(layout.escaped, `${path} ${width}/${theme}`).toEqual([])
+          expect(layout.undersizedTabs, `${path} ${width}/${theme}`).toEqual([])
           if (path.includes("view=chat")) expect(layout.composer, `${path} ${width}/${theme}`).toBe(true)
         }
       }

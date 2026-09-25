@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { startRelayDouble } from "../test/relay-double"
 import { launchBrowser } from "./cdp"
 
 const port = 4196
@@ -27,6 +28,155 @@ afterAll(async () => {
 })
 
 describe("remote shell layout", () => {
+  test("keeps the selected Session and draft stable through a rendered reconnect", async () => {
+    const page = await fixture("view=chat", 390, "Stream remote output safely")
+    try {
+      const initial = await page.evaluate<{ readonly status: string; readonly title: string; readonly draft: string; readonly disabled: boolean }>(`(() => {
+        const input = document.querySelector('.composer__input');
+        input.value = 'Keep this unsent draft';
+        input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        const read = () => {
+          const strip = document.querySelector('.status-strip');
+          return {
+            status: strip?.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
+            title: document.querySelector('.conversation-breadcrumb strong')?.textContent?.trim() ?? '',
+            draft: document.querySelector('.composer__input')?.value ?? '',
+            disabled: document.querySelector('button[aria-label="Send prompt"]')?.disabled ?? true,
+            top: strip?.getBoundingClientRect().top ?? -1,
+            height: strip?.getBoundingClientRect().height ?? -1,
+          };
+        };
+        window.reconnectSamples = [read()];
+        window.reconnectObserver = new MutationObserver(() => {
+          const next = read();
+          if (JSON.stringify(window.reconnectSamples.at(-1)) !== JSON.stringify(next)) window.reconnectSamples.push(next);
+        });
+        window.reconnectObserver.observe(document.querySelector('.app'), { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'disabled'] });
+        return read();
+      })()`)
+      expect(initial).toMatchObject({ status: "Connected — Relay session active for Studio Mac.", title: "Stream remote output safely", draft: "Keep this unsent draft", disabled: false })
+
+      await page.evaluate(`document.querySelector('.fixture__controls button:nth-child(2)')?.click()`)
+      expect(await page.evaluate<{ readonly status: string; readonly disabled: boolean }>(`window.reconnectSamples.at(-1)`)).toMatchObject({ status: "Connecting — Opening the relay connection.", disabled: true })
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (await page.evaluate<boolean>(`document.querySelector('.notice-strip')?.textContent?.includes('Reconnected.') ?? false`)) break
+        await Bun.sleep(50)
+      }
+      expect(await page.evaluate<string>(`document.querySelector('.notice-strip')?.textContent ?? ''`)).toContain("Reconnected.")
+      const samples = await page.evaluate<readonly { readonly status: string; readonly title: string; readonly draft: string; readonly disabled: boolean; readonly top: number; readonly height: number }[]>(`(() => {
+        window.reconnectObserver.disconnect();
+        return window.reconnectSamples;
+      })()`)
+      expect(samples.at(-1)).toMatchObject({ status: initial.status, title: initial.title, draft: initial.draft, disabled: false })
+      expect(samples.some((sample) => sample.status.startsWith("Connecting"))).toBe(true)
+      expect(samples.every((sample) => sample.title === initial.title && sample.draft === initial.draft && !sample.status.startsWith("Signed out"))).toBe(true)
+      expect(samples.every((sample) => Math.abs(sample.top - samples[0]!.top) <= 1 && Math.abs(sample.height - samples[0]!.height) <= 1)).toBe(true)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  test("keeps unsent prompts with the Session where they were drafted", async () => {
+    const page = await fixture("view=chat", 390, "Stream remote output safely")
+    try {
+      await page.evaluate(`(() => {
+        const input = document.querySelector('.composer__input');
+        input.value = 'Work only in Session A';
+        input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        document.querySelectorAll('.session-row')[2]?.click();
+      })()`)
+      expect(await page.evaluate<string>(`document.querySelector('.conversation-breadcrumb strong')?.textContent ?? ''`)).toContain("Child: fix flaky suite")
+      expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("")
+      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Send prompt"]')?.disabled === true`)).toBe(true)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
+      await page.evaluate(`document.querySelectorAll('.session-row')[0]?.click()`)
+      expect(await page.evaluate<string>(`document.querySelector('.composer__input')?.value ?? ''`)).toBe("Work only in Session A")
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  test("loads Unicode shell output through the rendered page controls", async () => {
+    const page = await fixture("view=chat", 390, "bun test --verbose")
+    const output = () => page.evaluate<readonly { readonly command: string; readonly output?: string; readonly buttons: readonly string[] }[]>(`window.remoteShellOutputReport()`)
+    const paged = async () => (await output()).find((row) => row.command === "bun test --verbose")
+    const click = (label: string) => page.evaluate(`(() => {
+      const row = [...document.querySelectorAll('.shell')].find(shell => shell.querySelector('.shell__header code')?.textContent === 'bun test --verbose');
+      [...(row?.querySelectorAll('.shell__output button') ?? [])].find(button => button.textContent?.trim() === ${JSON.stringify(label)})?.click();
+    })()`)
+    try {
+      expect((await paged())?.buttons).toContain("Show more")
+      await click("Show more")
+      expect((await paged())?.output).toContain("line 30: compiled module 29.ts")
+      expect((await paged())?.output).not.toContain("λ unicode")
+      expect((await paged())?.buttons).toContain("Load more output")
+
+      await click("Load more output")
+      for (let attempt = 0; attempt < 30 && !(await paged())?.output?.includes("λ unicode"); attempt++) await Bun.sleep(50)
+      expect((await paged())?.output).toContain("λ unicode · page two arrived from the device")
+      expect((await paged())?.buttons).toContain("Load more output")
+
+      await click("Load more output")
+      for (let attempt = 0; attempt < 30 && !(await paged())?.output?.includes("final line"); attempt++) await Bun.sleep(50)
+      expect((await paged())?.output).toContain("final line")
+      expect((await paged())?.buttons).not.toContain("Load more output")
+      expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  test("pages rendered Unicode shell output over the browser relay wire", async () => {
+    const second = "λ unicode · page two arrived from the device\n"
+    const third = "final line\n"
+    const secondBytes = new TextEncoder().encode(second).length
+    let firstBytes = 0
+    const size = () => firstBytes + secondBytes + new TextEncoder().encode(third).length
+    const relay = await startRelayDouble({
+      handler: (request) => {
+        if (request.operation !== "session.shell.output") return "default"
+        if (request.input?.cursor === firstBytes) return { ok: true, value: { data: { output: second, cursor: firstBytes + secondBytes, size: size(), truncated: false } } }
+        if (request.input?.cursor === firstBytes + secondBytes) return { ok: true, value: { data: { output: third, cursor: size(), size: size(), truncated: false } } }
+        return "default"
+      },
+    })
+    try {
+      const page = await fixture(`view=chat&relay=${encodeURIComponent(relay.wsURL("dev_studio"))}`, 390, "bun test --verbose")
+      const output = () => page.evaluate<readonly { readonly command: string; readonly output?: string; readonly buttons: readonly string[] }[]>(`window.remoteShellOutputReport()`)
+      const paged = async () => (await output()).find((row) => row.command === "bun test --verbose")
+      const click = (label: string) => page.evaluate(`(() => {
+        const row = [...document.querySelectorAll('.shell')].find(shell => shell.querySelector('.shell__header code')?.textContent === 'bun test --verbose');
+        [...(row?.querySelectorAll('.shell__output button') ?? [])].find(button => button.textContent?.trim() === ${JSON.stringify(label)})?.click();
+      })()`)
+      try {
+        await click("Show more")
+        const first = (await paged())?.output ?? ""
+        expect(first).toContain("line 30: compiled module 29.ts")
+        firstBytes = new TextEncoder().encode(first).length
+        expect(secondBytes).toBeGreaterThan(second.length)
+
+        await click("Load more output")
+        for (let attempt = 0; attempt < 30 && (await paged())?.output !== first + second; attempt++) await Bun.sleep(50)
+        expect((await paged())?.output).toBe(first + second)
+        await click("Load more output")
+        for (let attempt = 0; attempt < 30 && (await paged())?.output !== first + second + third; attempt++) await Bun.sleep(50)
+        expect((await paged())?.output).toBe(first + second + third)
+        expect((await paged())?.buttons).not.toContain("Load more output")
+        expect(relay.rejectedFrames).toEqual([])
+        expect(relay.requests.map((request) => ({ operation: request.operation, sessionID: request.sessionID, input: request.input }))).toEqual([
+          { operation: "session.shell.output", sessionID: "ses_fixture", input: { shellID: "sh_paged", cursor: firstBytes, limit: 65_536 } },
+          { operation: "session.shell.output", sessionID: "ses_fixture", input: { shellID: "sh_paged", cursor: firstBytes + secondBytes, limit: 65_536 } },
+        ])
+        expect(await page.evaluate<boolean>(`document.documentElement.scrollWidth <= innerWidth`)).toBe(true)
+      } finally {
+        await page.close()
+      }
+    } finally {
+      await relay.stop()
+    }
+  }, 30_000)
+
   test("opens a recorded file patch in Activity without escaping the mobile viewport", async () => {
     const page = await fixture("view=activity&files=recorded", 320, "src/remote/store.ts")
     const button = await page.evaluate<boolean>(`[...document.querySelectorAll('.activity-row--file button')].some(button => button.textContent?.includes('View diff'))`)

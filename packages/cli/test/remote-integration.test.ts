@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test"
 import { parseAgentMessage, parseChunkedValue, type RemoteResponse } from "@ycoding-ai/remote"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { Guardrail } from "@ycoding-ai/schema/guardrail"
+import { Schema } from "effect"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { RemoteAgent, type ConnectionInput, type RelayConnection } from "../src/remote-bridge"
@@ -511,6 +513,131 @@ test("bridges authorized session operations against an isolated server", async (
     relay.deliver(request("unsubscribe_1", "session.unsubscribe", sessionID))
     valueOf(await answer(relay, "unsubscribe_1"))
     relay.deliver({ type: "subscriptions", clientID: "client-1", sessionIDs: [] })
+  } finally {
+    await bridge.close()
+    await server.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+}, 60_000)
+
+test("replies to real ordinary and hard guardrail reviews through the root Session relay", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ycoding-remote-guardrail-"))
+  const hardCommand = "echo guarded hard review"
+  await mkdir(join(directory, "guardrails"))
+  await writeFile(join(directory, "guardrails", "relay-hard.md"), `---
+id: relay-hard-review
+decision: hard_review
+actions: [shell]
+resources: ["${hardCommand}"]
+reason: Test-only hard review of a harmless command
+priority: 0
+---
+Require a fresh human decision in this isolated test.
+`)
+  const server = await startServer(directory)
+  const rootID = "ses_remote_guardrail_root"
+  const childID = "ses_remote_guardrail_child"
+  const unrelatedID = "ses_remote_guardrail_unrelated"
+  const relay = createRelay()
+  const bridge = new RemoteAgent({
+    relayURL: "https://relay.example",
+    local: createLocalServer({ url: server.base, auth: { type: "basic", username: "ycoding", password } }),
+    credentials: async () => ({ accessToken: "guardrail-token", accessExpiresAt: Date.now() + 600_000 }),
+    createConnection: relay.createConnection,
+    refreshIntervalMs: 3_600_000,
+  })
+  let reads = 0
+  const reviews = async (sessionID: string) => {
+    const id = `reviews_${++reads}`
+    relay.deliver(request(id, "session.guardrail.request.list", sessionID))
+    return Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Array(Guardrail.Request) }))(valueOf(await answer(relay, id))).data
+  }
+  const pendingReview = async () => {
+    const deadline = Date.now() + 15_000
+    for (;;) {
+      const pending = await reviews(rootID)
+      if (pending.length > 0) return pending[0]
+      if (Date.now() >= deadline) throw new Error("the real server did not create a guardrail review")
+      await Bun.sleep(20)
+    }
+  }
+  const startShell = (command: string) => server.request(`/api/session/${childID}/shell`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-ycoding-directory": encodeURIComponent(directory) },
+    body: JSON.stringify({ command }),
+  })
+
+  try {
+    await createSession(server, rootID, directory)
+    const child = await server.request("/api/session", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: childID, parentID: rootID }),
+    })
+    expect(child.status, await child.clone().text()).toBe(200)
+    await createSession(server, unrelatedID, directory)
+    await bridge.connect()
+
+    // The harmless echo matches the standard destructive-Git review, but cannot reset a repository.
+    const ordinaryCommand = "echo git reset --hard HEAD~1"
+    const ordinaryShell = startShell(ordinaryCommand)
+    const ordinary = await pendingReview()
+    expect(ordinary).toMatchObject({
+      rootSessionID: rootID,
+      sessionID: childID,
+      resources: [ordinaryCommand],
+      ruleIDs: ["standard.review.git-destructive"],
+    })
+    expect(ordinary.hardReview).not.toBe(true)
+    expect(await reviews(childID)).toEqual([ordinary])
+    expect(await reviews(unrelatedID)).toEqual([])
+
+    relay.deliver(request("ordinary_cross", "session.guardrail.reply", unrelatedID, { requestID: ordinary.id, reply: "once" }))
+    expect(errorOf(await answer(relay, "ordinary_cross")).code).toBe("invalid_message")
+    expect(await reviews(rootID)).toEqual([ordinary])
+
+    relay.deliver(request("ordinary_once", "session.guardrail.reply", rootID, { requestID: ordinary.id, reply: "once" }))
+    expect(valueOf(await answer(relay, "ordinary_once"))).toBeNull()
+    const ordinaryResult = await ordinaryShell
+    expect(ordinaryResult.status, await ordinaryResult.clone().text()).toBe(204)
+    expect(await reviews(rootID)).toEqual([])
+
+    const hardShell = startShell(hardCommand)
+    const hard = await pendingReview()
+    expect(hard).toMatchObject({
+      rootSessionID: rootID,
+      sessionID: childID,
+      resources: [hardCommand],
+      ruleIDs: ["relay-hard-review"],
+      hardReview: true,
+    })
+    relay.deliver(request("hard_always", "session.guardrail.reply", rootID, { requestID: hard.id, reply: "always" }))
+    expect(valueOf(await answer(relay, "hard_always"))).toBeNull()
+    const hardResult = await hardShell
+    expect(hardResult.ok).toBe(false)
+    expect(await hardResult.text()).toContain("Session guardrail review was rejected")
+    expect(await reviews(rootID)).toEqual([])
+
+    // Always on a hard review is treated as rejection; it neither executes nor grants reuse.
+    const repeatedShell = startShell(hardCommand)
+    const repeated = await pendingReview()
+    expect(repeated).toMatchObject({ rootSessionID: rootID, sessionID: childID, hardReview: true })
+    expect(repeated.id).not.toBe(hard.id)
+    relay.deliver(request("hard_reject", "session.guardrail.reply", childID, { requestID: repeated.id, reply: "reject" }))
+    expect(valueOf(await answer(relay, "hard_reject"))).toBeNull()
+    const repeatedResult = await repeatedShell
+    expect(repeatedResult.ok).toBe(false)
+    expect(await repeatedResult.text()).toContain("Session guardrail review was rejected")
+    expect(await reviews(rootID)).toEqual([])
+
+    const snapshot = await server.request(`/api/session/${childID}/snapshot`, {
+      headers: { "x-ycoding-directory": encodeURIComponent(directory) },
+    })
+    expect(snapshot.status, await snapshot.clone().text()).toBe(200)
+    const body = Schema.decodeUnknownSync(Schema.Struct({
+      messages: Schema.Array(Schema.Struct({ type: Schema.String, command: Schema.String.pipe(Schema.optional) })),
+    }))(await snapshot.json())
+    expect(body.messages.filter((message) => message.type === "shell").map((message) => message.command)).toEqual([ordinaryCommand])
   } finally {
     await bridge.close()
     await server.close()

@@ -14,6 +14,7 @@ import { ThemeProvider } from "../src/theme/theme-store"
 import { RemoteProvider } from "../src/remote/context"
 import { RemoteShell } from "../src/remote/ui/shell"
 import { createRemoteStore, type RemoteStore } from "../src/remote/store"
+import { createRemoteTransport } from "../src/remote/transport"
 import type { RemoteHttp, RemoteHttpResult } from "../src/remote/http"
 import type {
   RemoteRequestOutcome,
@@ -45,6 +46,9 @@ let devices: readonly RemoteDeviceInfo[] = [
 ]
 
 const accountParams = new URLSearchParams(window.location.search)
+const relayURL = accountParams.get("relay")
+const relayAddress = relayURL === null ? undefined : new URL(relayURL)
+if (relayAddress !== undefined && (relayAddress.protocol !== "ws:" || relayAddress.hostname !== "127.0.0.1")) throw new Error("Verification relay must be loopback")
 const stitchScenario = stitchRemoteScenario(accountParams)
 /** `?account=pending|signedout|unavailable` plus `?accountDelay=<ms>` for a slow answer. */
 const accountMode = stitchScenario?.account ?? accountParams.get("account") ?? "ok"
@@ -426,7 +430,7 @@ function createFixtureStore(): Fixture {
     operation: RemoteOperation,
     input?: Readonly<Record<string, unknown>>,
   ): RemoteRequestOutcome | Promise<RemoteRequestOutcome> => {
-    if (operation === "session.prompt" || operation === "session.autonomy.set") {
+    if (operation === "session.prompt" || operation === "session.autonomy.set" || operation === "session.guardrail.reply") {
       mutationRequests.push({ operation, input })
     }
     if (connectionMode === "offline" && (operation === "session.list" || operation === "session.active")) {
@@ -513,6 +517,18 @@ function createFixtureStore(): Fixture {
     http: syntheticHttp,
     createTransport: (_deviceID, transportHandlers) => {
       handlers = transportHandlers
+      if (relayAddress !== undefined) {
+        const wire = createRemoteTransport({ url: relayAddress.href, handlers: transportHandlers })
+        return {
+          ...wire,
+          request: async (operation, request) => {
+            if (operation !== "session.guardrail.reply" && operation !== "session.shell.output") return outcome(operation, request?.input)
+            const result = await wire.request(operation, request)
+            if (result.status === "ok" && typeof request?.input?.requestID === "string") answered.add(request.input.requestID)
+            return result
+          },
+        }
+      }
       return transport
     },
     deviceName: () => "Studio Mac",
@@ -718,7 +734,9 @@ function FixturePage() {
   return (
     <div class="fixture">
       <p class="fixture__banner" role="status">
-        Synthetic fixture build — transport and account calls are local stubs. Not a real session, account, or relay.
+        {relayAddress === undefined
+          ? "Synthetic fixture build — transport and account calls are local stubs. Not a real session, account, or relay."
+          : "Verification fixture — account and session reads are synthetic; guardrail replies and shell output use a loopback relay socket."}
       </p>
       <div class="fixture__controls">
         <button type="button" class="button button--secondary button--small" onClick={() => fixture.stream()}>

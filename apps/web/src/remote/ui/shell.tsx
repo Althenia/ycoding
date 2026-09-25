@@ -53,6 +53,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
 
   return (
     <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}`}>
+      <a class="skip-link" href="#remote-main">Skip to content</a>
       <RemoteHeader
         navOpen={navOpen()}
         activityOpen={activityOpen()}
@@ -70,7 +71,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
           </aside>
         </Show>
 
-        <div class="workspace__main">
+        <main id="remote-main" tabindex="-1" class="workspace__main">
           <div class="workspace__scroll">
             <Notices />
             <Show when={view === "/remote"}>
@@ -93,7 +94,7 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
               canSend={state().transport.kind === "open" && state().activeSessionID !== undefined}
             />
           </Show>
-        </div>
+        </main>
 
       </div>
 
@@ -944,6 +945,7 @@ function BottomNav(props: { readonly view: RemoteView }): JSX.Element {
             href={item.view}
             class={`bottom-nav__item${props.view === item.view ? " bottom-nav__item--active" : ""}`}
             ariaLabel={item.label}
+            ariaCurrent={props.view === item.view ? "page" : undefined}
           >
             <Icon name={item.icon} size={20} />
             <span>{item.label}</span>

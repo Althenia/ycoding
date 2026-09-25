@@ -1,3 +1,4 @@
+export const CACHE_PREFIX = "ycoding-web-shell-"
 export const CACHE_NAME = "ycoding-web-shell-v2"
 export const OFFLINE_FALLBACK_URL = "/offline.html"
 

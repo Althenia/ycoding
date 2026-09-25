@@ -36,6 +36,18 @@ const autonomyOptions = [
   { level: 3 as const, label: "YOLO 3", detail: "Also approves ordinary guardrail reviews." },
 ]
 
+function moveRadio(event: KeyboardEvent, index: number, count: number, select: (next: number) => void) {
+  const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? (index + 1) % count
+    : event.key === "ArrowLeft" || event.key === "ArrowUp" ? (index - 1 + count) % count
+    : event.key === "Home" ? 0 : event.key === "End" ? count - 1 : undefined
+  if (next === undefined) return
+  event.preventDefault()
+  select(next)
+  if (event.currentTarget instanceof HTMLButtonElement) {
+    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus()
+  }
+}
+
 function permissionDescription(): string {
   if (typeof Notification === "undefined") return describeNotificationPermission(undefined)
   return describeNotificationPermission(Notification.permission)
@@ -318,13 +330,18 @@ export function AppearanceSettings(): JSX.Element {
           </span>
           <span class="list__control filters" role="radiogroup" aria-labelledby="theme-label">
             <For each={themeOptions}>
-              {(option) => (
+              {(option, index) => (
                 <button
                   type="button"
                   role="radio"
                   aria-checked={theme.preference() === option.id}
+                  tabIndex={theme.preference() === option.id ? 0 : -1}
                   class={`filters__option${theme.preference() === option.id ? " filters__option--active" : ""}`}
                   onClick={() => theme.setPreference(option.id)}
+                  onKeyDown={(event) => moveRadio(event, index(), themeOptions.length, (next) => {
+                    const selected = themeOptions[next]
+                    if (selected) theme.setPreference(selected.id)
+                  })}
                 >
                   {option.label}
                 </button>
@@ -354,13 +371,18 @@ export function AutonomySettings(): JSX.Element {
         <div class="defs">
           <div class="autonomy-choices" role="radiogroup" aria-label="Autonomy level">
             <For each={autonomyOptions}>
-              {(option) => (
+              {(option, index) => (
                 <button
                   type="button"
                   role="radio"
                   aria-checked={(autonomy()?.yolo ?? 0) === option.level}
+                  tabIndex={(autonomy()?.yolo ?? 0) === option.level ? 0 : -1}
                   class={`autonomy-choice${(autonomy()?.yolo ?? 0) === option.level ? " autonomy-choice--active" : ""}`}
                   onClick={() => void remote.store.setYolo(option.level)}
+                  onKeyDown={(event) => moveRadio(event, index(), autonomyOptions.length, (next) => {
+                    const selected = autonomyOptions[next]
+                    if (selected) void remote.store.setYolo(selected.level)
+                  })}
                 >
                   <strong>{option.label}</strong>
                   <span>{option.detail}</span>

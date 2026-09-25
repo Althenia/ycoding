@@ -27,6 +27,47 @@ afterAll(async () => {
 })
 
 describe("approved remote fidelity invariants", () => {
+  test("exposes one remote main landmark and the active narrow navigation destination", async () => {
+    const page = await scenario("r01", 390, "Token expiry refactor")
+    try {
+      expect(await page.evaluate<{ readonly main: number; readonly skip: string | null; readonly current: string | null }>(`({
+        main: document.querySelectorAll('main').length,
+        skip: document.querySelector('.skip-link')?.getAttribute('href') ?? null,
+        current: document.querySelector('.bottom-nav__item--active')?.getAttribute('aria-current') ?? null,
+      })`)).toEqual({ main: 1, skip: "#remote-main", current: "page" })
+      await page.evaluate(`document.querySelector('.skip-link')?.focus()`)
+      await page.pressKey("Enter", "Enter", 13)
+      expect(await page.evaluate<string>(`document.activeElement?.id ?? ''`)).toBe("remote-main")
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  test("moves through theme and autonomy radios with one Tab stop per group", async () => {
+    const page = await scenario("r08", 390, "Mobile refactor")
+    try {
+      await page.evaluate(`document.querySelector('.appearance-segments [role="radio"]')?.click()`)
+      const group = (selector: string) => `(() => {
+        const radios = [...document.querySelectorAll(${JSON.stringify(selector)})];
+        return { checked: radios.findIndex(radio => radio.getAttribute('aria-checked') === 'true'),
+          tabs: radios.map(radio => radio.tabIndex), focus: radios.indexOf(document.activeElement) };
+      })()`
+      const radioState = (selector: string) => page.evaluate<{ readonly checked: number; readonly tabs: readonly number[]; readonly focus: number }>(group(selector))
+      expect(await radioState('.appearance-segments [role="radio"]')).toMatchObject({ checked: 0, tabs: [0, -1, -1] })
+      await page.evaluate(`document.querySelector('.appearance-segments [role="radio"]')?.focus()`)
+      await page.pressKey("ArrowRight", "ArrowRight", 39)
+      expect(await radioState('.appearance-segments [role="radio"]')).toEqual({ checked: 1, tabs: [-1, 0, -1], focus: 1 })
+      await page.pressKey("End", "End", 35)
+      expect(await radioState('.appearance-segments [role="radio"]')).toEqual({ checked: 2, tabs: [-1, -1, 0], focus: 2 })
+
+      await page.evaluate(`document.querySelector('.autonomy-choices [role="radio"]')?.focus()`)
+      await page.pressKey("ArrowRight", "ArrowRight", 39)
+      expect(await radioState('.autonomy-choices [role="radio"]')).toEqual({ checked: 1, tabs: [-1, 0, -1, -1], focus: 1 })
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
   test("matches the R01 adaptive workspace ownership and keeps Activity accessible", async () => {
     for (const width of [1440, 768, 390] as const) {
       for (const theme of ["dark", "light"] as const) {
@@ -494,6 +535,99 @@ describe("approved remote fidelity invariants", () => {
     await devices.close()
   }, 30_000)
 
+  test("keeps a delayed account check truthful through the signed-in transition", async () => {
+    const page = await requireBrowser().openPage()
+    try {
+      await page.setViewport(390, 844)
+      await page.injectOnNewDocument(`(() => {
+        window.accountSamples = [];
+        const read = () => ({
+          status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
+          account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
+          signIn: document.querySelector('.account-card .button--primary') !== null,
+        });
+        new MutationObserver(() => {
+          const next = read();
+          if (JSON.stringify(window.accountSamples.at(-1)) !== JSON.stringify(next)) window.accountSamples.push(next);
+        }).observe(document, { subtree: true, childList: true, characterData: true });
+      })()`)
+      await page.navigate(url("/verify/remote.html?view=settings&accountDelay=900"))
+      const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean }>(`({
+        status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
+        account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
+        signIn: document.querySelector('.account-card .button--primary') !== null,
+        overflow: document.documentElement.scrollWidth > innerWidth,
+      })`)
+      const pending = await read()
+      expect(pending.status).toContain("Checking account")
+      expect(pending.account).toContain("Checking account")
+      expect(pending.signIn).toBe(false)
+      await Bun.sleep(300)
+      expect((await read()).status).toContain("Checking account")
+      for (let attempt = 0; attempt < 40 && !(await read()).account.includes("user_fixture"); attempt++) await Bun.sleep(50)
+      const settled = await read()
+      expect(settled.status).toContain("Connected")
+      expect(settled.account).toContain("user_fixture")
+      expect(settled.signIn).toBe(false)
+      expect(settled.overflow).toBe(false)
+      const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
+      expect(samples.some((sample) => sample.status.includes("Checking account"))).toBe(true)
+      expect(samples.some((sample) => sample.status.includes("Connected") && sample.account.includes("user_fixture"))).toBe(true)
+      expect(samples.every((sample) => !sample.status.includes("Signed out") && !sample.account.includes("not signed in") && !sample.signIn)).toBe(true)
+      expect(await page.evaluate<number>(`window.remoteMutationReport().filter(request => request.operation === 'session.prompt').length`)).toBe(0)
+    } finally {
+      await page.close()
+    }
+  }, 30_000)
+
+  test("resolves delayed account rejection and unavailable responses without an early sign-in action", async () => {
+    for (const [mode, expectedStatus, expectedAccount, expectedSignIn] of [
+      ["signedout", "Signed out", "not signed in", true],
+      ["unavailable", "Remote access is not available yet", "not enabled", false],
+    ] as const) {
+      const page = await requireBrowser().openPage()
+      try {
+        await page.setViewport(390, 844)
+        await page.injectOnNewDocument(`(() => {
+          window.accountSamples = [];
+          const read = () => ({
+            status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
+            account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
+            signIn: document.querySelector('.account-card .button--primary') !== null,
+          });
+          new MutationObserver(() => {
+            const next = read();
+            if (JSON.stringify(window.accountSamples.at(-1)) !== JSON.stringify(next)) window.accountSamples.push(next);
+          }).observe(document, { subtree: true, childList: true, characterData: true });
+        })()`)
+        await page.navigate(url(`/verify/remote.html?view=settings&account=${mode}&accountDelay=900`))
+        const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean }>(`({
+          status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
+          account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
+          signIn: document.querySelector('.account-card .button--primary') !== null,
+          overflow: document.documentElement.scrollWidth > innerWidth,
+        })`)
+        expect(await read()).toMatchObject({ status: expect.stringContaining("Checking account"), signIn: false })
+        await Bun.sleep(300)
+        expect(await read()).toMatchObject({ status: expect.stringContaining("Checking account"), signIn: false })
+        for (let attempt = 0; attempt < 40 && !(await read()).status.includes(expectedStatus); attempt++) await Bun.sleep(50)
+        const settled = await read()
+        expect(settled.status).toContain(expectedStatus)
+        expect(settled.account).toContain(expectedAccount)
+        expect(settled.signIn).toBe(expectedSignIn)
+        expect(settled.overflow).toBe(false)
+        const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
+        const boundary = samples.findIndex((sample) => sample.status.includes(expectedStatus))
+        expect(boundary).toBeGreaterThan(0)
+        expect(samples.slice(0, boundary).every((sample) => !sample.signIn && !sample.status.includes("Signed out"))).toBe(true)
+        expect(samples.at(-1)?.signIn).toBe(expectedSignIn)
+        if (mode === "unavailable") expect(samples.every((sample) => !sample.signIn && !sample.status.includes("Signed out"))).toBe(true)
+      } finally {
+        await page.close()
+      }
+    }
+  }, 30_000)
+
   test("renders truthful permission and guardrail actions without unsupported controls", async () => {
     const page = await scenario("r05", 1440, "Clarify Disambiguation Query")
     const actions = await page.evaluate<{
@@ -515,6 +649,29 @@ describe("approved remote fidelity invariants", () => {
     expect(actions.permission).toEqual(["Approve once", "Always this session", "Deny"])
     expect(actions.unsupported).toEqual([])
     await page.close()
+  }, 30_000)
+
+  test("sends each rendered hard-review decision once and removes its pending card", async () => {
+    for (const [label, reply] of [["Reject", "reject"], ["Approve once", "once"]] as const) {
+      const page = await scenario("r05", 1440, "Clarify Disambiguation Query")
+      try {
+        expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])
+        await page.evaluate(`[...document.querySelectorAll('.request--hard .request__actions button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})?.click()`)
+        for (let attempt = 0; attempt < 30; attempt += 1) {
+          if (await page.evaluate<boolean>(`document.querySelector('.request--hard') === null`)) break
+          await Bun.sleep(50)
+        }
+        expect(await page.evaluate<{ readonly requests: readonly unknown[]; readonly pending: number }>(`({
+          requests: window.remoteMutationReport().filter(request => request.operation === 'session.guardrail.reply'),
+          pending: document.querySelectorAll('.request--hard').length,
+        })`)).toEqual({
+          requests: [{ operation: "session.guardrail.reply", input: { requestID: "grq_hard", reply } }],
+          pending: 0,
+        })
+      } finally {
+        await page.close()
+      }
+    }
   }, 30_000)
 
   test("supports keyboard and coarse-pointer operation for device, delivery, autonomy, and overlays", async () => {

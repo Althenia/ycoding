@@ -109,6 +109,18 @@ describe("foreground accent contrast", () => {
   }
 })
 
+describe("focus indicator token contrast", () => {
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme} focus color contrasts with page surfaces`, async () => {
+      const { themes } = await stylesheets()
+      const tokens = themes[theme]
+      for (const surface of ["--yc-bg", "--yc-surface", "--yc-surface-raised", "--yc-surface-sunken"]) {
+        expect(contrastRatio(required(tokens, "--yc-focus"), required(tokens, surface)), `${theme} ${surface}`).toBeGreaterThanOrEqual(3)
+      }
+    })
+  }
+})
+
 /**
  * The sixteen pairs `.aphrodite/redesign-audit/specs/tokens.toon` declares and
  * `tools/verify_contrast.py` measured — thirty-two checks across both themes. They
