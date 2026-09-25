@@ -3,6 +3,7 @@
   "name": "YCoding",
   "version": "0.1.0",
   "description": "Connects a paired Chrome profile or creates agent-owned background tabs for YCoding.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA2BchXNDoRWknY6s60p+bvwviGenNCgIUavYhQbCsagqbK/uX/lbLm/7TOtz7wSJA9+EKFUaSBRo0ibCpFxHiWcATZDbrygWLz3SJYC4Qi8VSjOLHkLDbatQrAb+TRC7orYH51rwSB4u//+kc0D+1Kha8Z9XedDOm5dIDNbRHhjOWNTFjFB7vReiJxTT5oVr9bQR7RaMKt3P/OzA0pJOYV2G7GYhZbD7lq/AyuNTce982jnjZFw/EouBCR9U7boMLQskjIHruKYWfaajmSXmMbYPyF3YolAXfpxOsIUbVylAKl0o9zFBYzPbQ/KlYn+BAx3ov6EHMkcaTcfqT7WfUZQIDAQAB",
   "permissions": ["alarms", "debugger", "storage", "tabs", "tabGroups"],
   "icons": {
     "16": "icons/ycoding-16.png",

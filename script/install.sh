@@ -11,10 +11,27 @@ app_candidate=
 binary_backup=
 helper_backup=
 app_backup=
+legacy_app_backup=
+legacy_helper_backup=
+app_name=
+app_executable=ycoding-computer-helper
+helper_required=true
+bundle_id=app.ycoding.computer-helper
+legacy_app=ycoding-computer-helper.app
+legacy_helper=ycoding-computer-helper
+extension_name=ycoding-chrome-extension
+extension_files="icons/ycoding-128.png icons/ycoding-16.png icons/ycoding-32.png icons/ycoding-48.png manifest.json popup.css popup.html popup.js protocol.js service-worker.js"
+extension_required=false
+extension_candidate=
+extension_backup=
 install_transaction=false
 binary_backed_up=false
 helper_backed_up=false
 app_backed_up=false
+legacy_app_backed_up=false
+legacy_helper_backed_up=false
+extension_backed_up=false
+extension_installed=false
 binary_installed=false
 helper_installed=false
 app_installed=false
@@ -29,10 +46,10 @@ cleanup() {
       rm -f "$install_dir/ycoding" || restore_status=1
     fi
     if [ "$helper_installed" = true ] || [ "$helper_backed_up" = true ]; then
-      rm -f "$install_dir/ycoding-computer-helper" || restore_status=1
+      rm -f "$install_dir/$legacy_helper" || restore_status=1
     fi
     if [ "$app_installed" = true ] || [ "$app_backed_up" = true ]; then
-      rm -rf "$install_dir/ycoding-computer-helper.app" || restore_status=1
+      rm -rf "$install_dir/$app_name" || restore_status=1
     fi
     if [ "$binary_backed_up" = true ]; then
       if mv -f "$binary_backup" "$install_dir/ycoding"; then
@@ -45,22 +62,55 @@ cleanup() {
       fi
     fi
     if [ "$helper_backed_up" = true ]; then
-      if mv -f "$helper_backup" "$install_dir/ycoding-computer-helper"; then
+      if mv -f "$helper_backup" "$install_dir/$legacy_helper"; then
         helper_backed_up=false
         helper_backup=
       else
         printf 'ycoding installer: Computer helper backup retained at %s\n' "$helper_backup" >&2
-        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/ycoding-computer-helper" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/$legacy_helper" >&2
         restore_status=1
       fi
     fi
     if [ "$app_backed_up" = true ]; then
-      if mv -f "$app_backup" "$install_dir/ycoding-computer-helper.app"; then
+      if mv -f "$app_backup" "$install_dir/$app_name"; then
         app_backed_up=false
         app_backup=
       else
         printf 'ycoding installer: Computer helper app backup retained at %s\n' "$app_backup" >&2
-        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/ycoding-computer-helper.app" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/$app_name" >&2
+        restore_status=1
+      fi
+    fi
+    if [ "$legacy_app_backed_up" = true ]; then
+      if mv -f "$legacy_app_backup" "$install_dir/$legacy_app"; then
+        legacy_app_backed_up=false
+        legacy_app_backup=
+      else
+        printf 'ycoding installer: Computer helper app backup retained at %s\n' "$legacy_app_backup" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/$legacy_app" >&2
+        restore_status=1
+      fi
+    fi
+    if [ "$extension_installed" = true ] || [ "$extension_backed_up" = true ]; then
+      rm -rf "$install_dir/$extension_name" || restore_status=1
+    fi
+    if [ "$extension_backed_up" = true ]; then
+      if mv -f "$extension_backup" "$install_dir/$extension_name"; then
+        extension_backed_up=false
+        extension_backup=
+      else
+        printf 'ycoding installer: Chrome extension backup retained at %s\n' "$extension_backup" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/$extension_name" >&2
+        restore_status=1
+      fi
+    fi
+    if [ "$legacy_helper_backed_up" = true ]; then
+      if mv -f "$legacy_helper_backup" "$install_dir/$legacy_helper"; then
+        legacy_helper_backed_up=false
+        legacy_helper_backup=
+      else
+        printf 'ycoding installer: Computer helper backup retained at %s\n' "$legacy_helper_backup" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/$legacy_helper" >&2
         restore_status=1
       fi
     fi
@@ -75,6 +125,10 @@ cleanup() {
   if [ -n "$binary_backup" ] && [ "$binary_backed_up" = false ]; then rm -f "$binary_backup"; fi
   if [ -n "$helper_backup" ] && [ "$helper_backed_up" = false ]; then rm -f "$helper_backup"; fi
   if [ -n "$app_backup" ] && [ "$app_backed_up" = false ]; then rm -rf "$app_backup"; fi
+  if [ -n "$legacy_app_backup" ] && [ "$legacy_app_backed_up" = false ]; then rm -rf "$legacy_app_backup"; fi
+  if [ -n "$legacy_helper_backup" ] && [ "$legacy_helper_backed_up" = false ]; then rm -f "$legacy_helper_backup"; fi
+  if [ -n "$extension_candidate" ]; then rm -rf "$extension_candidate"; fi
+  if [ -n "$extension_backup" ] && [ "$extension_backed_up" = false ]; then rm -rf "$extension_backup"; fi
   if [ -n "$temporary" ]; then rm -rf "$temporary"; fi
   exit "$status"
 }
@@ -167,33 +221,58 @@ fetch_verified "$asset"
 # The first bundled macOS release is 0.7.1; prereleases of that version
 # precede it, while prereleases of later versions follow it.
 app_required=false
+version_core=${version%%+*}
+# Releases after 0.7.1, including their prereleases, include the Chrome extension.
+if printf '%s\n' "${version_core%%-*}" | awk -F . '
+  $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 1))) { found=1 }
+  END { exit !found }
+'; then extension_required=true; fi
 if [ "$operating_system" = darwin ]; then
-  version_core=${version%%+*}
   prerelease=false
   case "$version_core" in *-*) prerelease=true ;; esac
   if printf '%s\n' "${version_core%%-*}" | awk -F . -v prerelease="$prerelease" '
     $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && ($3 > 1 || ($3 == 1 && prerelease == "false"))))) { found=1 }
     END { exit !found }
   '; then app_required=true; fi
+  # Releases after 0.7.1, including their prereleases, ship only the computer-use app;
+  # its filename is its macOS privacy-settings display name.
+  app_name=$legacy_app
+  if printf '%s\n' "${version_core%%-*}" | awk -F . '
+    $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && $3 > 1))) { found=1 }
+    END { exit !found }
+  '; then
+    app_name="YCoding Computer Use.app"
+    app_executable=ycoding-computer-use
+    helper_required=false
+    bundle_id=app.ycoding.computer-use
+  fi
 fi
 
 tar -tzf "$temporary/$asset" >"$temporary/entries" || fail "Failed to inspect $asset"
 entries=$(LC_ALL=C sort "$temporary/entries")
 expected_entries=ycoding
 if [ "$operating_system" = "darwin" ]; then
-  expected_entries=$(printf '%s\n' ycoding ycoding-computer-helper | LC_ALL=C sort)
+  bare_helper=
+  if [ "$helper_required" = true ]; then bare_helper=$legacy_helper; fi
+  expected_entries=$(printf '%s\n' ycoding ${bare_helper:+"$bare_helper"} | LC_ALL=C sort)
   if [ "$app_required" = true ]; then
-    expected_entries=$(printf '%s\n' ycoding ycoding-computer-helper \
-      ycoding-computer-helper.app/ \
-      ycoding-computer-helper.app/Contents/ \
-      ycoding-computer-helper.app/Contents/Info.plist \
-      ycoding-computer-helper.app/Contents/MacOS/ \
-      ycoding-computer-helper.app/Contents/MacOS/ycoding-computer-helper \
-      ycoding-computer-helper.app/Contents/Resources/ \
-      ycoding-computer-helper.app/Contents/Resources/YCoding.icns \
-      ycoding-computer-helper.app/Contents/_CodeSignature/ \
-      ycoding-computer-helper.app/Contents/_CodeSignature/CodeResources | LC_ALL=C sort)
+    expected_entries=$(printf '%s\n' ycoding ${bare_helper:+"$bare_helper"} \
+      "$app_name/" \
+      "$app_name/Contents/" \
+      "$app_name/Contents/Info.plist" \
+      "$app_name/Contents/MacOS/" \
+      "$app_name/Contents/MacOS/$app_executable" \
+      "$app_name/Contents/Resources/" \
+      "$app_name/Contents/Resources/YCoding.icns" \
+      "$app_name/Contents/_CodeSignature/" \
+      "$app_name/Contents/_CodeSignature/CodeResources" | LC_ALL=C sort)
   fi
+fi
+if [ "$extension_required" = true ]; then
+  expected_entries=$({
+    printf '%s\n' "$expected_entries" "$extension_name/" "$extension_name/icons/"
+    for file in $extension_files; do printf '%s\n' "$extension_name/$file"; done
+  } | LC_ALL=C sort)
 fi
 [ "$entries" = "$expected_entries" ] || fail "Release archive has invalid direct entries"
 # Check types and advertised uncompressed sizes before writing extracted files.
@@ -215,19 +294,19 @@ mkdir "$temporary/extract"
 tar -xzf "$temporary/$asset" -C "$temporary/extract" || fail "Failed to extract $asset"
 [ -f "$temporary/extract/ycoding" ] && [ ! -L "$temporary/extract/ycoding" ] && [ -s "$temporary/extract/ycoding" ] ||
   fail "Release archive did not contain a regular ycoding executable"
-if [ "$operating_system" = "darwin" ]; then
-  [ -f "$temporary/extract/ycoding-computer-helper" ] && [ ! -L "$temporary/extract/ycoding-computer-helper" ] && [ -s "$temporary/extract/ycoding-computer-helper" ] ||
+if [ "$operating_system" = "darwin" ] && [ "$helper_required" = true ]; then
+  [ -f "$temporary/extract/$legacy_helper" ] && [ ! -L "$temporary/extract/$legacy_helper" ] && [ -s "$temporary/extract/$legacy_helper" ] ||
     fail "Release archive did not contain a regular computer helper"
 fi
 if [ "$app_required" = true ]; then
-  app="$temporary/extract/ycoding-computer-helper.app"
+  app="$temporary/extract/$app_name"
   for directory in "$app" "$app/Contents" "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/_CodeSignature"; do
     [ -d "$directory" ] && [ ! -L "$directory" ] || fail "Release archive contains an invalid computer helper app directory"
   done
-  for file in "$app/Contents/Info.plist" "$app/Contents/MacOS/ycoding-computer-helper" "$app/Contents/Resources/YCoding.icns" "$app/Contents/_CodeSignature/CodeResources"; do
+  for file in "$app/Contents/Info.plist" "$app/Contents/MacOS/$app_executable" "$app/Contents/Resources/YCoding.icns" "$app/Contents/_CodeSignature/CodeResources"; do
     [ -f "$file" ] && [ ! -L "$file" ] && [ -s "$file" ] || fail "Release archive contains an invalid computer helper app file"
   done
-  grep -Fq '<key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string>' "$app/Contents/Info.plist" ||
+  grep -Fq "<key>CFBundleIdentifier</key><string>$bundle_id</string>" "$app/Contents/Info.plist" ||
     fail "Computer helper app has an invalid bundle identifier"
   grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist" ||
     fail "Computer helper app has an invalid display name"
@@ -235,10 +314,19 @@ if [ "$app_required" = true ]; then
     fail "Computer helper app has an invalid icon reference"
   /usr/bin/codesign --verify --deep --strict "$app" || fail "Computer helper app signature verification failed"
 fi
+if [ "$extension_required" = true ]; then
+  extension="$temporary/extract/$extension_name"
+  for directory in "$extension" "$extension/icons"; do
+    [ -d "$directory" ] && [ ! -L "$directory" ] || fail "Release archive contains an invalid Chrome extension directory"
+  done
+  for file in $extension_files; do
+    [ -f "$extension/$file" ] && [ ! -L "$extension/$file" ] && [ -s "$extension/$file" ] || fail "Release archive contains an invalid Chrome extension file"
+  done
+fi
 
 mkdir -p "$install_dir"
 [ -d "$install_dir" ] && [ ! -L "$install_dir" ] && [ -O "$install_dir" ] || fail "Install directory must be an owned directory"
-for existing_file in "$install_dir/ycoding" "$install_dir/ycoding-computer-helper"; do
+for existing_file in "$install_dir/ycoding" "$install_dir/$legacy_helper"; do
   if [ -e "$existing_file" ] || [ -L "$existing_file" ]; then
     [ -f "$existing_file" ] && [ ! -L "$existing_file" ] && [ -O "$existing_file" ] || fail "Installed executable must be an owned regular file: $existing_file"
   fi
@@ -246,17 +334,33 @@ done
 candidate=$(mktemp "$install_dir/.ycoding.XXXXXX") || fail "Failed to create an install candidate"
 cp "$temporary/extract/ycoding" "$candidate" || fail "Failed to prepare the ycoding executable"
 chmod 755 "$candidate" || fail "Failed to make the ycoding executable runnable"
+if [ "$extension_required" = true ]; then
+  extension_candidate=$(mktemp -d "$install_dir/.ycoding-chrome-extension.XXXXXX") || fail "Failed to create a Chrome extension install candidate"
+  cp -R "$extension/." "$extension_candidate/" || fail "Failed to prepare the Chrome extension"
+  if [ -e "$install_dir/$extension_name" ] || [ -L "$install_dir/$extension_name" ]; then
+    [ -d "$install_dir/$extension_name" ] && [ ! -L "$install_dir/$extension_name" ] && [ -O "$install_dir/$extension_name" ] || fail "Installed Chrome extension must be an owned directory"
+    extension_backup=$(mktemp -d "$install_dir/.ycoding-chrome-extension-backup.XXXXXX") || fail "Failed to reserve the Chrome extension rollback path"
+    rmdir "$extension_backup" || fail "Failed to prepare the Chrome extension rollback path"
+  fi
+fi
 if [ "$operating_system" = "darwin" ]; then
-  helper_candidate=$(mktemp "$install_dir/.ycoding-computer-helper.XXXXXX") || fail "Failed to create a computer helper install candidate"
-  cp "$temporary/extract/ycoding-computer-helper" "$helper_candidate" || fail "Failed to prepare the computer helper"
-  chmod 755 "$helper_candidate" || fail "Failed to make the computer helper runnable"
+  if [ "$helper_required" = true ]; then
+    helper_candidate=$(mktemp "$install_dir/.ycoding-computer-helper.XXXXXX") || fail "Failed to create a computer helper install candidate"
+    cp "$temporary/extract/$legacy_helper" "$helper_candidate" || fail "Failed to prepare the computer helper"
+    chmod 755 "$helper_candidate" || fail "Failed to make the computer helper runnable"
+  fi
   if [ "$app_required" = true ]; then
     app_candidate=$(mktemp -d "$install_dir/.ycoding-computer-helper-app.XXXXXX") || fail "Failed to create an app install candidate"
     cp -R "$app/." "$app_candidate/" || fail "Failed to prepare the computer helper app"
-    if [ -e "$install_dir/ycoding-computer-helper.app" ] || [ -L "$install_dir/ycoding-computer-helper.app" ]; then
-      [ -d "$install_dir/ycoding-computer-helper.app" ] && [ ! -L "$install_dir/ycoding-computer-helper.app" ] && [ -O "$install_dir/ycoding-computer-helper.app" ] || fail "Installed computer helper app must be an owned directory"
+    if [ -e "$install_dir/$app_name" ] || [ -L "$install_dir/$app_name" ]; then
+      [ -d "$install_dir/$app_name" ] && [ ! -L "$install_dir/$app_name" ] && [ -O "$install_dir/$app_name" ] || fail "Installed computer helper app must be an owned directory"
       app_backup=$(mktemp -d "$install_dir/.ycoding-computer-helper-app-backup.XXXXXX") || fail "Failed to reserve the app rollback path"
       rmdir "$app_backup" || fail "Failed to prepare the app rollback path"
+    fi
+    if [ "$app_name" != "$legacy_app" ] && { [ -e "$install_dir/$legacy_app" ] || [ -L "$install_dir/$legacy_app" ]; }; then
+      [ -d "$install_dir/$legacy_app" ] && [ ! -L "$install_dir/$legacy_app" ] && [ -O "$install_dir/$legacy_app" ] || fail "Installed computer helper app must be an owned directory"
+      legacy_app_backup=$(mktemp -d "$install_dir/.ycoding-computer-helper-legacy-app-backup.XXXXXX") || fail "Failed to reserve the legacy app rollback path"
+      rmdir "$legacy_app_backup" || fail "Failed to prepare the legacy app rollback path"
     fi
   fi
 
@@ -264,9 +368,13 @@ if [ "$operating_system" = "darwin" ]; then
     binary_backup=$(mktemp "$install_dir/.ycoding-backup.XXXXXX") || fail "Failed to reserve the ycoding rollback path"
     rm -f "$binary_backup" || fail "Failed to prepare the ycoding rollback path"
   fi
-  if [ -e "$install_dir/ycoding-computer-helper" ] || [ -L "$install_dir/ycoding-computer-helper" ]; then
+  if [ "$helper_required" = true ] && { [ -e "$install_dir/$legacy_helper" ] || [ -L "$install_dir/$legacy_helper" ]; }; then
     helper_backup=$(mktemp "$install_dir/.ycoding-computer-helper-backup.XXXXXX") || fail "Failed to reserve the computer helper rollback path"
     rm -f "$helper_backup" || fail "Failed to prepare the computer helper rollback path"
+  fi
+  if [ "$helper_required" = false ] && { [ -e "$install_dir/$legacy_helper" ] || [ -L "$install_dir/$legacy_helper" ]; }; then
+    legacy_helper_backup=$(mktemp "$install_dir/.ycoding-computer-helper-legacy-backup.XXXXXX") || fail "Failed to reserve the legacy computer helper rollback path"
+    rm -f "$legacy_helper_backup" || fail "Failed to prepare the legacy computer helper rollback path"
   fi
 
   install_transaction=true
@@ -275,21 +383,41 @@ if [ "$operating_system" = "darwin" ]; then
     binary_backed_up=true
   fi
   if [ -n "$helper_backup" ]; then
-    mv -f "$install_dir/ycoding-computer-helper" "$helper_backup" || fail "Failed to preserve the installed computer helper"
+    mv -f "$install_dir/$legacy_helper" "$helper_backup" || fail "Failed to preserve the installed computer helper"
     helper_backed_up=true
   fi
   if [ -n "$app_backup" ]; then
-    mv -f "$install_dir/ycoding-computer-helper.app" "$app_backup" || fail "Failed to preserve the installed computer helper app"
+    mv -f "$install_dir/$app_name" "$app_backup" || fail "Failed to preserve the installed computer helper app"
     app_backed_up=true
   fi
-  mv -f "$helper_candidate" "$install_dir/ycoding-computer-helper" || fail "Failed to install the computer helper"
-  helper_installed=true
-  helper_candidate=
+  if [ -n "$legacy_app_backup" ]; then
+    mv -f "$install_dir/$legacy_app" "$legacy_app_backup" || fail "Failed to preserve the superseded computer helper app"
+    legacy_app_backed_up=true
+  fi
+  if [ -n "$legacy_helper_backup" ]; then
+    mv -f "$install_dir/$legacy_helper" "$legacy_helper_backup" || fail "Failed to preserve the superseded computer helper"
+    legacy_helper_backed_up=true
+  fi
+  if [ "$helper_required" = true ]; then
+    mv -f "$helper_candidate" "$install_dir/$legacy_helper" || fail "Failed to install the computer helper"
+    helper_installed=true
+    helper_candidate=
+  fi
   if [ "$app_required" = true ]; then
-    mv -f "$app_candidate" "$install_dir/ycoding-computer-helper.app" || fail "Failed to install the computer helper app"
+    mv -f "$app_candidate" "$install_dir/$app_name" || fail "Failed to install the computer helper app"
     app_installed=true
     app_candidate=
   fi
+fi
+if [ "$extension_required" = true ]; then
+  install_transaction=true
+  if [ -n "$extension_backup" ]; then
+    mv -f "$install_dir/$extension_name" "$extension_backup" || fail "Failed to preserve the installed Chrome extension"
+    extension_backed_up=true
+  fi
+  mv -f "$extension_candidate" "$install_dir/$extension_name" || fail "Failed to install the Chrome extension"
+  extension_installed=true
+  extension_candidate=
 fi
 mv -f "$candidate" "$install_dir/ycoding" || fail "Failed to install ycoding"
 binary_installed=true
@@ -298,9 +426,15 @@ install_transaction=false
 if [ -n "$binary_backup" ]; then rm -f "$binary_backup"; fi
 if [ -n "$helper_backup" ]; then rm -f "$helper_backup"; fi
 if [ -n "$app_backup" ]; then rm -rf "$app_backup"; fi
+if [ -n "$legacy_app_backup" ]; then rm -rf "$legacy_app_backup"; fi
+if [ -n "$legacy_helper_backup" ]; then rm -f "$legacy_helper_backup"; fi
+if [ -n "$extension_backup" ]; then rm -rf "$extension_backup"; fi
 binary_backup=
 helper_backup=
 app_backup=
+legacy_app_backup=
+legacy_helper_backup=
+extension_backup=
 
 printf 'Installed ycoding %s to %s/ycoding\n' "$version" "$install_dir"
 

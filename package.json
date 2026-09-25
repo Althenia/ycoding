@@ -14,7 +14,7 @@
     "test:integration:web": "bun run --cwd apps/web test:integration",
     "test:integration:remote": "bun infra/cloudflare/test/integration/real-flow.ts",
     "test:remote": "bun run --cwd packages/remote test",
-    "build:computer-helper": "bun run --cwd packages/cli build:computer-helper",
+    "build:computer-use": "bun run --cwd packages/cli build:computer-use",
     "smoke:tui": "bun run --cwd packages/cli smoke:tui -- --dir=../../dist/tui",
     "smoke:runtime": "bun run --cwd packages/cli smoke:runtime -- --dir=../../dist/tui",
     "refresh:models": "bun run --cwd packages/cli refresh:models",

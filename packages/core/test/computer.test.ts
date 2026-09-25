@@ -72,7 +72,7 @@ describe("scoped desktop control", () => {
             "-n",
             "-g",
             "-a",
-            `${MacOSComputer.developmentHelperPath()}.app`,
+            path.resolve(import.meta.dir, "../.cache/computer-use/YCoding Computer Use.app"),
             "--args",
           ])
           expect(launched[5]).toEndWith("/request.json")
@@ -83,6 +83,29 @@ describe("scoped desktop control", () => {
       ),
     )
     expect(await stat(path.dirname(launched[5])).catch(() => undefined)).toBeUndefined()
+  })
+  test("launches iTerm and Finder requests through the YCoding Computer Use app", async () => {
+    const launched: string[] = []
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const locations = yield* makeLocationComputers(
+            (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-app" }),
+            Stream.never,
+            (args) => launched.push(args[3]),
+          )
+          yield* locations.first.inspect({ sessionID: owner, callID: "iterm-app", target })
+          yield* locations.first.inspect({
+            sessionID: owner,
+            callID: "finder-app",
+            target: { platform: "macos", application: "finder", path: "/workspace/fixture/file.txt" },
+          })
+          yield* locations.close
+        }),
+      ),
+    )
+    const application = path.resolve(import.meta.dir, "../.cache/computer-use/YCoding Computer Use.app")
+    expect(launched).toEqual([application, application])
   })
   test("requires an exact inspected app/window revision and invalidates uncertain mutation", async () => {
     const requests: Computer.NativeRequest[] = []
@@ -195,13 +218,13 @@ describe("scoped desktop control", () => {
 
 describe("native computer helper resolution", () => {
   test("uses the explicit source-development build instead of writing beside Bun", () => {
-    expect(MacOSComputer.helperPath("/opt/homebrew/bin/bun")).toBe(
-      path.resolve(import.meta.dir, "../.cache/computer-helper/ycoding-computer-helper"),
+    expect(MacOSComputer.applicationPath("/opt/homebrew/bin/bun")).toBe(
+      path.resolve(import.meta.dir, "../.cache/computer-use/YCoding Computer Use.app"),
     )
-    expect(MacOSComputer.helperPath("/opt/homebrew/bin/bun.exe")).toBe(
-      path.resolve(import.meta.dir, "../.cache/computer-helper/ycoding-computer-helper"),
+    expect(MacOSComputer.applicationPath("/opt/homebrew/bin/bun.exe")).toBe(
+      path.resolve(import.meta.dir, "../.cache/computer-use/YCoding Computer Use.app"),
     )
-    expect(MacOSComputer.helperPath("/opt/ycoding/bin/ycoding")).toBe("/opt/ycoding/bin/ycoding-computer-helper")
+    expect(MacOSComputer.applicationPath("/opt/ycoding/bin/ycoding")).toBe("/opt/ycoding/bin/YCoding Computer Use.app")
   })
 })
 
@@ -583,20 +606,7 @@ function makeLocationComputers(
             Effect.mapError((error) => new AppProcess.AppProcessError({ command: "computer-fixture", cause: error })),
           )
         }
-        if (typeof options?.stdin !== "string" || !options.signal)
-          return Effect.die(new Error("Computer fixture requires JSON stdin and an AbortSignal"))
-        const request = decodeFixtureRequest(options.stdin)
-        return invoke(request, options.signal).pipe(
-          Effect.map((result) => ({
-            command: "computer-fixture",
-            exitCode: 0,
-            stdout: Buffer.from(JSON.stringify(result)),
-            stderr: Buffer.alloc(0),
-            stdoutTruncated: false,
-            stderrTruncated: false,
-          })),
-          Effect.mapError((error) => new AppProcess.AppProcessError({ command: "computer-fixture", cause: error })),
-        )
+        return Effect.die(new Error("Computer fixture accepts only the LaunchServices app handoff"))
       }),
   })
   const split = LayerNode.hoist(Computer.node, Node.tags.values.global, [

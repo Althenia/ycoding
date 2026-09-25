@@ -6,6 +6,7 @@ import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { Schema } from "effect"
 import { createSignal, onMount, type Accessor, type JSX } from "solid-js"
 import { DialogSessionBrowser, SessionIsolatedBrowserCommand } from "../src/component/dialog-session-browser"
+import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
@@ -147,6 +148,11 @@ test("Chrome connection dialog describes profile-wide pairing without a separate
       "Pairing lets YCoding use eligible Chrome tabs, including the active tab.",
     )
     expect(result.app.captureCharFrame()).not.toContain("Full-profile access:")
+    const frame = result.app.captureCharFrame().replace(/\s+/g, " ")
+    expect(frame).toContain("In chrome://extensions, choose Load unpacked and select:")
+    expect(frame.replace(/\s+/g, "")).toContain(BrowserExtension.location().replace(/\s+/g, ""))
+    expect(frame).toContain("Model actions still require site permission.")
+    expect(frame).not.toContain("human review")
   } finally {
     result.app.renderer.destroy()
   }

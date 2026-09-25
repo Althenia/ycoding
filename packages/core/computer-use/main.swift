@@ -106,7 +106,7 @@ private enum HelperError: Error {
         case .appNotRunning:
             return failure("app_not_running", "The requested application is not running")
         case .automationDenied:
-            return failure("automation_denied", "Automation access is unavailable; no permission prompt was shown")
+            return failure("automation_denied", "Allow YCoding Computer Use to control the application in System Settings > Privacy & Security > Automation, then retry")
         case .targetNotFound:
             return failure("target_not_found", "The explicitly identified target is unavailable")
         case .staleRevision:
@@ -118,9 +118,9 @@ private enum HelperError: Error {
         case .unknownOutcome:
             return failure("unknown_outcome", "The native command may have been accepted; inspect before any further mutation", outcome: "unknown")
         case .accessibilityDenied:
-            return failure("accessibility_denied", "Accessibility permission is unavailable for the helper app")
+            return failure("accessibility_denied", "Allow YCoding Computer Use in System Settings > Privacy & Security > Accessibility, then retry")
         case .screenRecordingDenied:
-            return failure("screen_recording_denied", "Screen Recording permission is unavailable for the helper app")
+            return failure("screen_recording_denied", "Allow YCoding Computer Use in System Settings > Privacy & Security > Screen Recording, then retry")
         }
     }
 }
@@ -145,11 +145,12 @@ private func requireRunning(_ bundleID: String) throws -> ApplicationTarget {
 }
 
 private func requireAutomation(_ target: ApplicationTarget, eventClass: UInt32, eventID: UInt32) throws {
+    // Asking lets macOS list this app under Automation and show its own allow prompt; the call waits for that answer.
     let status = AEDeterminePermissionToAutomateTarget(
         target.descriptor.aeDesc,
         AEEventClass(eventClass),
         AEEventID(eventID),
-        false
+        true
     )
     guard status == noErr else { throw HelperError.automationDenied }
 }
@@ -297,18 +298,37 @@ private func children(_ element: AXUIElement) -> [AXUIElement] {
     (attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(16).map { $0 }
 }
 
-private func point(_ element: AXUIElement, _ name: String) -> CGPoint? {
-    guard let value = attribute(element, name), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-    var point = CGPoint.zero
-    guard AXValueGetValue(value as! AXValue, .cgPoint, &point) else { return nil }
-    return point
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: inout CGWindowID) -> AXError
+
+@_silgen_name("_AXUIElementCreateWithRemoteToken")
+private func _AXUIElementCreateWithRemoteToken(_ token: CFData) -> Unmanaged<AXUIElement>?
+
+private func windowID(_ element: AXUIElement) -> CGWindowID? {
+    var windowID = CGWindowID(0)
+    guard _AXUIElementGetWindow(element, &windowID) == .success else { return nil }
+    return windowID
 }
 
-private func size(_ element: AXUIElement) -> CGSize? {
-    guard let value = attribute(element, kAXSizeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-    var size = CGSize.zero
-    guard AXValueGetValue(value as! AXValue, .cgSize, &size) else { return nil }
-    return size
+// kAXWindowsAttribute omits windows on other Spaces; enumerate the app's remote element tokens instead.
+private func offSpaceWindows(_ target: DesktopTarget) -> [AXUIElement] {
+    var token = Data(count: 20)
+    token.withUnsafeMutableBytes { bytes in
+        bytes.storeBytes(of: target.pid, toByteOffset: 0, as: Int32.self)
+        bytes.storeBytes(of: Int32(0), toByteOffset: 4, as: Int32.self)
+        bytes.storeBytes(of: UInt32(0x636f_636f), toByteOffset: 8, as: UInt32.self)
+    }
+    let deadline = Date().addingTimeInterval(1)
+    var windows: [AXUIElement] = []
+    for elementID in UInt64(0)..<2000 {
+        guard Date() < deadline else { return [] }
+        token.withUnsafeMutableBytes { $0.storeBytes(of: elementID, toByteOffset: 12, as: UInt64.self) }
+        guard let element = _AXUIElementCreateWithRemoteToken(token as CFData)?.takeRetainedValue() else { continue }
+        AXUIElementSetMessagingTimeout(element, 0.1)
+        guard windowID(element) == target.windowID, stringAttribute(element, kAXRoleAttribute) == kAXWindowRole else { continue }
+        windows.append(element)
+    }
+    return windows
 }
 
 private struct DesktopWindow {
@@ -321,7 +341,8 @@ private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
           target.pid > 0, target.windowID > 0,
           let app = NSRunningApplication(processIdentifier: target.pid),
           app.bundleIdentifier == target.bundleID, !app.isTerminated else { throw HelperError.appNotRunning }
-    guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: false] as CFDictionary) else {
+    // Requesting trust lets macOS list this app under Accessibility and show its own allow prompt.
+    guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) else {
         throw HelperError.accessibilityDenied
     }
     guard let windows = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(target.windowID)) as? [[String: Any]],
@@ -334,13 +355,11 @@ private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
     }
     let application = AXUIElementCreateApplication(target.pid)
     AXUIElementSetMessagingTimeout(application, 5)
-    guard let candidates = attribute(application, kAXWindowsAttribute) as? [AXUIElement] else { throw HelperError.targetNotFound }
-    let matches = candidates.filter { window in
-        guard let origin = point(window, kAXPositionAttribute), let dimensions = size(window) else { return false }
-        return abs(origin.x - bounds.origin.x) < 2 && abs(origin.y - bounds.origin.y) < 2 &&
-            abs(dimensions.width - bounds.width) < 2 && abs(dimensions.height - bounds.height) < 2
-    }
+    let listed = (attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []).filter { windowID($0) == target.windowID }
+    let onscreen = (info[kCGWindowIsOnscreen as String] as? Bool) == true
+    let matches = listed.isEmpty && !onscreen ? offSpaceWindows(target) : listed
     guard matches.count == 1, let match = matches.first else { throw HelperError.targetNotFound }
+    AXUIElementSetMessagingTimeout(match, 5)
     return DesktopWindow(element: match, bounds: bounds)
 }
 
@@ -374,7 +393,7 @@ private func desktopElement(_ window: AXUIElement, path: [Int]) throws -> AXUIEl
 
 private func captureWindow(_ target: DesktopTarget) async throws -> String {
     guard #available(macOS 14, *) else { throw HelperError.nativeFailure }
-    guard CGPreflightScreenCaptureAccess() else { throw HelperError.screenRecordingDenied }
+    guard CGRequestScreenCaptureAccess() else { throw HelperError.screenRecordingDenied }
     _ = try desktopWindow(target)
     let windows: [SCWindow]
     do { windows = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false).windows }
@@ -514,23 +533,17 @@ private func encode(_ response: Response) -> Data? {
     try? JSONEncoder().encode(response)
 }
 
-private func write(_ response: Response) {
-    guard let data = encode(response) else { return }
-    FileHandle.standardOutput.write(data)
-    FileHandle.standardOutput.write(Data("\n".utf8))
-}
-
 let arguments = CommandLine.arguments
-let fileMode = arguments.count == 3
-let input = fileMode ? (try? Data(contentsOf: URL(fileURLWithPath: arguments[1]))) ?? Data() : FileHandle.standardInput.readDataToEndOfFile()
+guard arguments.count == 3 else { exit(64) }
+let input = (try? Data(contentsOf: URL(fileURLWithPath: arguments[1]))) ?? Data()
 private let response: Response
 do { response = try await handle(JSONDecoder().decode(Request.self, from: input)) }
 catch let error as HelperError { response = error.response }
 catch { response = HelperError.invalidRequest.response }
-if fileMode, let data = encode(response) {
+if let data = encode(response) {
     let destination = URL(fileURLWithPath: arguments[2])
     let temporary = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
     if FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) {
         try? FileManager.default.moveItem(at: temporary, to: destination)
     }
-} else if !fileMode { write(response) }
+}

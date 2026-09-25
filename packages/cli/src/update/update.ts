@@ -3,31 +3,31 @@ import path from "node:path"
 import { Readable } from "node:stream"
 import { createGunzip } from "node:zlib"
 import semver from "semver"
+import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
 const maxChecksumsBytes = 1024 * 1024
 const pairedMacOSRelease = "0.2.0"
 const appMacOSRelease = "0.7.1"
-const computerHelper = "ycoding-computer-helper"
-const computerApp = `${computerHelper}.app`
-const appFiles = [
-  `${computerApp}/Contents/Info.plist`,
-  `${computerApp}/Contents/MacOS/${computerHelper}`,
-  `${computerApp}/Contents/_CodeSignature/CodeResources`,
-  `${computerApp}/Contents/Resources/YCoding.icns`,
-]
+// Releases after 0.7.1, including their prereleases, ship YCoding Computer Use.app without a bare helper on macOS
+// (the app filename is its privacy-settings display name) and include the Chrome extension on every platform.
+const currentLayoutRelease = "0.7.2-0"
+const legacyComputerHelper = "ycoding-computer-helper"
+const legacyComputerApp = `${legacyComputerHelper}.app`
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 type Rename = (source: string, destination: string) => Promise<void>
 type InstallTransaction = {
   executableBackedUp: boolean
   helperBackedUp: boolean
-  appBackedUp: boolean
+  bundlesBackedUp: string[]
+  supersededBackedUp: string[]
   executableInstalled: boolean
   helperInstalled: boolean
-  appInstalled: boolean
+  bundlesInstalled: string[]
 }
+type Bundle = { readonly label: string; readonly target: string; readonly candidate: string; readonly exists: boolean }
 
 export type InstallReleaseInput = {
   readonly version: string
@@ -90,13 +90,39 @@ export async function installRelease(input: InstallReleaseInput) {
   let rollback: string | undefined
   let retainRollback = false
   try {
-    const installedNames =
-      input.platform === "darwin" && semver.gte(input.version, pairedMacOSRelease)
-        ? ["ycoding", computerHelper]
-        : ["ycoding"]
+    const currentLayout = semver.gte(input.version, currentLayoutRelease)
+    const appExecutable = currentLayout ? "ycoding-computer-use" : legacyComputerHelper
+    const computerApp = currentLayout ? "YCoding Computer Use.app" : legacyComputerApp
+    const bareHelper = input.platform === "darwin" && semver.gte(input.version, pairedMacOSRelease) && !currentLayout
+    const installedNames = bareHelper ? ["ycoding", legacyComputerHelper] : ["ycoding"]
     const appRequired = input.platform === "darwin" && semver.gte(input.version, appMacOSRelease)
-    const names = [...installedNames, ...(appRequired ? appFiles : [])].sort()
-    await inspectArchive(archive, names, appRequired)
+    const appFiles = [
+      `${computerApp}/Contents/Info.plist`,
+      `${computerApp}/Contents/MacOS/${appExecutable}`,
+      `${computerApp}/Contents/_CodeSignature/CodeResources`,
+      `${computerApp}/Contents/Resources/YCoding.icns`,
+    ]
+    const extension = BrowserExtension.directory
+    const appContents: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+      [computerApp, ["Contents"]],
+      [`${computerApp}/Contents`, ["Info.plist", "MacOS", "Resources", "_CodeSignature"]],
+      [`${computerApp}/Contents/MacOS`, [appExecutable]],
+      [`${computerApp}/Contents/Resources`, ["YCoding.icns"]],
+      [`${computerApp}/Contents/_CodeSignature`, ["CodeResources"]],
+    ]
+    const extensionContents: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+      [extension, [...new Set(BrowserExtension.files.map((file) => file.split("/")[0]))]],
+      [`${extension}/icons`, BrowserExtension.files.filter((file) => file.startsWith("icons/")).map((file) => path.basename(file))],
+    ]
+    const directoryContents = [...(appRequired ? appContents : []), ...(currentLayout ? extensionContents : [])]
+    const directories = directoryContents.map(([directory]) => directory)
+    const names = [
+      ...installedNames,
+      ...(appRequired ? appFiles : []),
+      ...(currentLayout ? BrowserExtension.files.map((file) => `${extension}/${file}`) : []),
+    ].sort()
+    const topLevel = [...installedNames, ...(appRequired ? [computerApp] : []), ...(currentLayout ? [extension] : [])].sort()
+    await inspectArchive(archive, names, directories)
     const releaseArchive = new Bun.Archive(archive)
     const archiveFiles = await releaseArchive.files()
     const files = [...archiveFiles.keys()].sort()
@@ -110,51 +136,25 @@ export async function installRelease(input: InstallReleaseInput) {
     ) {
       throw new Error("Release archive entries must be bounded regular nonempty direct files")
     }
-    if (appRequired) {
-      await Promise.all(
-        [
-          computerApp,
-          `${computerApp}/Contents`,
-          `${computerApp}/Contents/MacOS`,
-          `${computerApp}/Contents/Resources`,
-          `${computerApp}/Contents/_CodeSignature`,
-        ].map((directory) => mkdir(path.join(temporary, directory), { recursive: true })),
-      )
-    }
+    await Promise.all(directories.map((directory) => mkdir(path.join(temporary, directory), { recursive: true })))
     await Promise.all(names.map((name) => Bun.write(path.join(temporary, name), archiveFiles.get(name)!)))
     const entries = (await readdir(temporary)).sort()
-    if (
-      entries.length !== installedNames.length + Number(appRequired) ||
-      entries.some((entry, index) => entry !== [...installedNames, ...(appRequired ? [computerApp] : [])].sort()[index])
-    ) {
+    if (entries.length !== topLevel.length || entries.some((entry, index) => entry !== topLevel[index])) {
       throw new Error(`Release archive did not contain the exact direct entries: ${names.join(", ")}`)
     }
+    for (const [directory, expected] of directoryContents) {
+      const actual = (await readdir(path.join(temporary, directory))).sort()
+      const sorted = [...expected].sort()
+      if (actual.length !== sorted.length || actual.some((entry, index) => entry !== sorted[index])) {
+        throw new Error(`Release archive entry ${directory} contains unexpected files`)
+      }
+      const info = await lstat(path.join(temporary, directory))
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Release archive entry ${directory} must be a directory`)
+    }
     if (appRequired) {
-      for (const [directory, expected] of [
-        [computerApp, ["Contents"]],
-        [`${computerApp}/Contents`, ["Info.plist", "MacOS", "Resources", "_CodeSignature"]],
-        [`${computerApp}/Contents/MacOS`, [computerHelper]],
-        [`${computerApp}/Contents/Resources`, ["YCoding.icns"]],
-        [`${computerApp}/Contents/_CodeSignature`, ["CodeResources"]],
-      ] as const) {
-        const actual = (await readdir(path.join(temporary, directory))).sort()
-        if (actual.length !== expected.length || actual.some((entry, index) => entry !== [...expected].sort()[index])) {
-          throw new Error(`Release archive entry ${directory} contains unexpected files`)
-        }
-      }
-      for (const directory of [
-        computerApp,
-        `${computerApp}/Contents`,
-        `${computerApp}/Contents/MacOS`,
-        `${computerApp}/Contents/Resources`,
-        `${computerApp}/Contents/_CodeSignature`,
-      ]) {
-        const info = await lstat(path.join(temporary, directory))
-        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Release archive entry ${directory} must be a directory`)
-      }
       const metadata = await Bun.file(path.join(temporary, appFiles[0])).text()
       if (
-        !metadata.includes("<key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string>") ||
+        !metadata.includes(`<key>CFBundleIdentifier</key><string>app.ycoding.${currentLayout ? "computer-use" : "computer-helper"}</string>`) ||
         !metadata.includes("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>") ||
         !metadata.includes("<key>CFBundleIconFile</key><string>YCoding.icns</string>")
       )
@@ -167,7 +167,7 @@ export async function installRelease(input: InstallReleaseInput) {
         if (!file.isFile() || file.isSymbolicLink() || file.size === 0 || file.size > maxArchiveBytes) {
           throw new Error(`Release archive entry ${name} must be a bounded regular nonempty direct file`)
         }
-        if (name === "ycoding" || name === computerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
+        if (name === "ycoding" || name === legacyComputerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
       }),
     )
     if (appRequired) {
@@ -182,39 +182,49 @@ export async function installRelease(input: InstallReleaseInput) {
       }
     }
     const move = input.filesystem?.rename ?? rename
-    if (installedNames.length === 1) {
+    if (!bareHelper && !appRequired && !currentLayout) {
       await move(path.join(temporary, "ycoding"), input.executable)
       return { version: input.version, asset }
     }
-    const helper = path.join(path.dirname(input.executable), computerHelper)
-    const installedHelper = await statIfExists(helper)
+    const installDirectory = path.dirname(input.executable)
+    const helper = bareHelper ? path.join(installDirectory, legacyComputerHelper) : undefined
+    const installedHelper = helper ? await statIfExists(helper) : undefined
     if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.())) {
       throw new Error("Installed computer helper must be a regular file owned by the current user")
     }
-    const app = path.join(path.dirname(input.executable), computerApp)
-    const installedApp = appRequired ? await statIfExists(app) : undefined
-    if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== process.getuid?.())) {
-      throw new Error("Installed computer helper app must be an owned directory")
-    }
-    rollback = await mkdtemp(path.join(path.dirname(input.executable), ".ycoding-update-backup-"))
-    const transaction = {
+    const bundles: ReadonlyArray<Bundle> = await Promise.all(
+      [
+        ...(appRequired ? [{ label: "Computer helper app", name: computerApp }] : []),
+        ...(currentLayout ? [{ label: "Chrome extension", name: extension }] : []),
+      ].map(async (bundle) => {
+        const target = path.join(installDirectory, bundle.name)
+        const installed = await statIfExists(target)
+        if (installed && (!installed.isDirectory() || installed.isSymbolicLink() || installed.uid !== process.getuid?.())) {
+          throw new Error(`Installed ${bundle.label} must be an owned directory`)
+        }
+        return { label: bundle.label, target, candidate: path.join(temporary, bundle.name), exists: installed !== undefined }
+      }),
+    )
+    const superseded = currentLayout && input.platform === "darwin" ? await installedSuperseded(installDirectory) : []
+    rollback = await mkdtemp(path.join(installDirectory, ".ycoding-update-backup-"))
+    const transaction: InstallTransaction = {
       executableBackedUp: false,
       helperBackedUp: false,
-      appBackedUp: false,
+      bundlesBackedUp: [],
+      supersededBackedUp: [],
       executableInstalled: false,
       helperInstalled: false,
-      appInstalled: false,
+      bundlesInstalled: [],
     }
     try {
       await replaceRelease({
         executable: input.executable,
         helper,
-        app: appRequired ? app : undefined,
-        appExists: installedApp !== undefined,
         helperExists: installedHelper !== undefined,
+        bundles,
+        superseded,
         candidate: path.join(temporary, "ycoding"),
-        helperCandidate: path.join(temporary, computerHelper),
-        appCandidate: path.join(temporary, computerApp),
+        helperCandidate: path.join(temporary, legacyComputerHelper),
         rollback,
         rename: move,
         transaction,
@@ -223,7 +233,7 @@ export async function installRelease(input: InstallReleaseInput) {
       const recovery = await restoreRelease({
         executable: input.executable,
         helper,
-        app: appRequired ? app : undefined,
+        bundles,
         rollback,
         rename: move,
         transaction,
@@ -241,32 +251,37 @@ export async function installRelease(input: InstallReleaseInput) {
 
 async function replaceRelease(input: {
   readonly executable: string
-  readonly helper: string
-  readonly app?: string
-  readonly appExists: boolean
+  readonly helper?: string
   readonly helperExists: boolean
+  readonly bundles: ReadonlyArray<Bundle>
+  readonly superseded: ReadonlyArray<string>
   readonly candidate: string
   readonly helperCandidate: string
-  readonly appCandidate: string
   readonly rollback: string
   readonly rename: Rename
   readonly transaction: InstallTransaction
 }) {
   await input.rename(input.executable, path.join(input.rollback, "ycoding"))
   input.transaction.executableBackedUp = true
-  if (input.helperExists) {
-    await input.rename(input.helper, path.join(input.rollback, computerHelper))
+  if (input.helper && input.helperExists) {
+    await input.rename(input.helper, path.join(input.rollback, path.basename(input.helper)))
     input.transaction.helperBackedUp = true
   }
-  if (input.app && input.appExists) {
-    await input.rename(input.app, path.join(input.rollback, computerApp))
-    input.transaction.appBackedUp = true
+  for (const bundle of input.bundles.filter((bundle) => bundle.exists)) {
+    await input.rename(bundle.target, path.join(input.rollback, path.basename(bundle.target)))
+    input.transaction.bundlesBackedUp.push(bundle.target)
   }
-  await input.rename(input.helperCandidate, input.helper)
-  input.transaction.helperInstalled = true
-  if (input.app) {
-    await input.rename(input.appCandidate, input.app)
-    input.transaction.appInstalled = true
+  for (const file of input.superseded) {
+    await input.rename(file, path.join(input.rollback, path.basename(file)))
+    input.transaction.supersededBackedUp.push(file)
+  }
+  if (input.helper) {
+    await input.rename(input.helperCandidate, input.helper)
+    input.transaction.helperInstalled = true
+  }
+  for (const bundle of input.bundles) {
+    await input.rename(bundle.candidate, bundle.target)
+    input.transaction.bundlesInstalled.push(bundle.target)
   }
   await input.rename(input.candidate, input.executable)
   input.transaction.executableInstalled = true
@@ -274,15 +289,14 @@ async function replaceRelease(input: {
 
 async function restoreRelease(input: {
   readonly executable: string
-  readonly helper: string
-  readonly app?: string
+  readonly helper?: string
+  readonly bundles: ReadonlyArray<Bundle>
   readonly rollback: string
   readonly rename: Rename
   readonly transaction: InstallTransaction
 }) {
   const executableBackup = path.join(input.rollback, "ycoding")
-  const helperBackup = path.join(input.rollback, computerHelper)
-  const appBackup = path.join(input.rollback, computerApp)
+  const helperBackup = input.helper ? path.join(input.rollback, path.basename(input.helper)) : undefined
   const recovery: string[] = []
   if (input.transaction.executableInstalled || input.transaction.executableBackedUp) {
     await rm(input.executable, { force: true }).catch(() => {})
@@ -293,31 +307,53 @@ async function restoreRelease(input: {
       recovery.push(`Move that backup to ${input.executable} before retrying`)
     })
   }
-  if (input.transaction.helperInstalled || input.transaction.helperBackedUp) {
+  if (input.helper && (input.transaction.helperInstalled || input.transaction.helperBackedUp)) {
     await rm(input.helper, { force: true }).catch(() => {})
   }
-  if (input.transaction.helperBackedUp && (await exists(helperBackup))) {
+  if (input.helper && helperBackup && input.transaction.helperBackedUp && (await exists(helperBackup))) {
     await input.rename(helperBackup, input.helper).catch(() => {
       recovery.push(`Computer helper backup retained at ${helperBackup}`)
       recovery.push(`Move that backup to ${input.helper} before retrying`)
     })
-  } else if (input.transaction.helperInstalled) {
+  } else if (input.helper && input.transaction.helperInstalled) {
     await rm(input.helper, { force: true }).catch(() => {
       recovery.push(`Failed to remove the newly installed computer helper at ${input.helper}`)
     })
   }
-  if (input.app && (input.transaction.appInstalled || input.transaction.appBackedUp)) {
-    await rm(input.app, { recursive: true, force: true }).catch(() => {
-      recovery.push(`Failed to remove the newly installed computer helper app at ${input.app}`)
-    })
+  for (const bundle of input.bundles) {
+    const backup = path.join(input.rollback, path.basename(bundle.target))
+    const backedUp = input.transaction.bundlesBackedUp.includes(bundle.target)
+    if (backedUp || input.transaction.bundlesInstalled.includes(bundle.target)) {
+      await rm(bundle.target, { recursive: true, force: true }).catch(() => {
+        recovery.push(`Failed to remove the newly installed ${bundle.label} at ${bundle.target}`)
+      })
+    }
+    if (backedUp && (await exists(backup))) {
+      await input.rename(backup, bundle.target).catch(() => {
+        recovery.push(`${bundle.label} backup retained at ${backup}`)
+        recovery.push(`Move that backup to ${bundle.target} before retrying`)
+      })
+    }
   }
-  if (input.app && input.transaction.appBackedUp && (await exists(appBackup))) {
-    await input.rename(appBackup, input.app).catch(() => {
-      recovery.push(`Computer helper app backup retained at ${appBackup}`)
-      recovery.push(`Move that backup to ${input.app} before retrying`)
+  for (const file of input.transaction.supersededBackedUp) {
+    const backup = path.join(input.rollback, path.basename(file))
+    await input.rename(backup, file).catch(() => {
+      recovery.push(`Computer helper backup retained at ${backup}`)
+      recovery.push(`Move that backup to ${file} before retrying`)
     })
   }
   return recovery
+}
+
+async function installedSuperseded(directory: string) {
+  const helper = path.join(directory, legacyComputerHelper)
+  const app = path.join(directory, legacyComputerApp)
+  const [installedHelper, installedApp] = await Promise.all([statIfExists(helper), statIfExists(app)])
+  if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.()))
+    throw new Error("Installed computer helper must be a regular file owned by the current user")
+  if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== process.getuid?.()))
+    throw new Error("Installed computer helper app must be an owned directory")
+  return [...(installedHelper ? [helper] : []), ...(installedApp ? [app] : [])]
 }
 
 const exists = (file: string) => statIfExists(file).then((value) => value !== undefined)
@@ -385,16 +421,8 @@ function checksum(text: string, asset: string) {
   return matches[0][1]
 }
 
-async function inspectArchive(archive: Uint8Array, files: string[], appRequired: boolean) {
-  const directories = appRequired
-    ? [
-        computerApp,
-        `${computerApp}/Contents`,
-        `${computerApp}/Contents/MacOS`,
-        `${computerApp}/Contents/Resources`,
-        `${computerApp}/Contents/_CodeSignature`,
-      ].map((directory) => `${directory}/`)
-    : []
+async function inspectArchive(archive: Uint8Array, files: string[], directoryNames: ReadonlyArray<string>) {
+  const directories = directoryNames.map((directory) => `${directory}/`)
   const expected = [...files, ...directories].sort()
   const entries: string[] = []
   const header = new Uint8Array(512)

@@ -16,9 +16,10 @@ macTest("builds and smokes a macOS Node CLI with its complete signed computer ap
     expect(status, error.slice(-2048)).toBe(0)
     expect(
       await Bun.file(
-        path.join(directory, "cli-node-darwin-arm64/bin/ycoding-computer-helper.app/Contents/Resources/YCoding.icns"),
+        path.join(directory, "cli-node-darwin-arm64/bin/YCoding Computer Use.app/Contents/Resources/YCoding.icns"),
       ).exists(),
     ).toBe(true)
+    expect(await Bun.file(path.join(directory, "cli-node-darwin-arm64/bin/ycoding-chrome-extension/manifest.json")).exists()).toBe(true)
   } finally {
     await rm(directory, { recursive: true, force: true })
   }

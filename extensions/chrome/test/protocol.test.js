@@ -2,6 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { MAX_SHARED_TABS, VERSION, connectURL, reconnectDelay, safePage, validateServerURL } from "../protocol.js"
 
 describe("Chrome bridge protocol", () => {
+  test("declares a public key that fixes the extension ID wherever it is loaded from", async () => {
+    const manifest = await Bun.file(new URL("../manifest.json", import.meta.url)).json()
+    const digest = new Bun.CryptoHasher("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex")
+    const id = digest.slice(0, 32).replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)))
+    expect(id).toBe("emlogajckgpjjigcbcbfbpbeencgghfb")
+  })
+
   test("identifies YCoding in Chrome and ships toolbar and popup icons at the declared sizes", async () => {
     const manifest = await Bun.file(new URL("../manifest.json", import.meta.url)).json()
     expect(manifest.name).toBe("YCoding")

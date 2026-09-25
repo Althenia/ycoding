@@ -32,35 +32,30 @@ describe("SessionGuardrailMatch", () => {
     })
   })
 
-  test("requires human review for desktop window access despite custom allow rules", () => {
+  test("desktop window access has no standard review and still honors custom policy", () => {
+    const input = { action: "computer", resources: ["macos.bundle_id/app.synthetic/123/4"] }
+    expect(SessionGuardrailMatch.evaluate(input)).toMatchObject({ decision: "allow", ruleIDs: [] })
     expect(
       SessionGuardrailMatch.evaluate({
-        action: "computer",
-        resources: ["macos.bundle_id/app.synthetic/123/4"],
-        custom: [layer([custom({ id: "allow-computer", decision: "allow", actions: ["computer"], resources: ["*"] })])],
+        ...input,
+        custom: [layer([custom({ id: "deny-computer", decision: "deny", actions: ["computer"], resources: ["*"] })])],
       }),
-    ).toMatchObject({
-      decision: "ask",
-      hardReview: true,
-      standard: true,
-      ruleIDs: ["standard.review.desktop-access"],
-    })
+    ).toMatchObject({ decision: "deny", ruleIDs: ["deny-computer"] })
   })
 
-  test("requires human review before an agent-owned Chrome tab opens despite custom allow rules", () => {
-    expect(
-      SessionGuardrailMatch.evaluate({
-        action: "browser_owned_open",
-        resources: ["https://example.test"],
-        custom: [layer([custom({ id: "allow-owned-browser", decision: "allow", actions: ["browser_owned_open"], resources: ["*"] })])],
-      }),
-    ).toMatchObject({
-      decision: "ask",
-      hardReview: true,
-      standard: true,
-      ruleIDs: ["standard.review.browser-owned-open"],
-    })
-  })
+  test.each(["browser_owned_open", "browser_profile_mutation"])(
+    "%s has no standard review and still honors custom policy",
+    (action) => {
+      const input = { action, resources: ["https://example.test"] }
+      expect(SessionGuardrailMatch.evaluate(input)).toMatchObject({ decision: "allow", ruleIDs: [] })
+      expect(
+        SessionGuardrailMatch.evaluate({
+          ...input,
+          custom: [layer([custom({ id: "deny-browser", decision: "deny", actions: [action], resources: ["*"] })])],
+        }),
+      ).toMatchObject({ decision: "deny", ruleIDs: ["deny-browser"] })
+    },
+  )
 
   test("profile reads have no standard review and still honor custom policy", () => {
     const input = { action: "browser_profile_access", resources: ["https://example.test"] }
@@ -69,14 +64,6 @@ describe("SessionGuardrailMatch", () => {
       custom: [layer([custom({ id: "deny-profile-read", decision: "deny", actions: [input.action],
         resources: ["*"] })])],
     })).toMatchObject({ decision: "deny", ruleIDs: ["deny-profile-read"] })
-  })
-
-  test("requires hard human review for profile mutations despite custom allow rules", () => {
-    expect(SessionGuardrailMatch.evaluate({ action: "browser_profile_mutation", resources: ["https://example.test"],
-      custom: [layer([custom({ id: "allow-profile-browser", decision: "allow",
-        actions: ["browser_profile_mutation"], resources: ["*"] })])],
-    })).toMatchObject({ decision: "ask", hardReview: true, standard: true,
-      ruleIDs: ["standard.review.browser-profile-mutation"] })
   })
 
   test.each([

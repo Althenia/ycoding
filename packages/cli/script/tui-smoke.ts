@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { BUN_BINARY, platformBinary } from "../src/binary"
-import { verifyPackagedComputerHelper } from "./computer-helper"
+import { verifyPackagedComputerHelper } from "./computer-use"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const outdir = path.resolve(dir, process.argv.find((arg) => arg.startsWith("--dir="))?.slice("--dir=".length) ?? "dist")

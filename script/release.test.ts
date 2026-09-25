@@ -9,7 +9,7 @@ const checks = workflow.split("\n").filter((line) => line.trim().startsWith("tar
 
 for (const valid of [true, false])
   test(
-    valid ? "archive checks consume complete listings" : "archive checks reject missing executable and helper",
+    valid ? "archive checks consume complete listings" : "archive checks reject a missing executable and app",
     async () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "ycoding-release-check-"))
       try {
@@ -18,8 +18,9 @@ for (const valid of [true, false])
         await Bun.write(path.join(entries, "ycoding"), "synthetic executable\n")
         if (valid) {
           await fs.chmod(path.join(entries, "ycoding"), 0o755)
-          await Bun.write(path.join(entries, "ycoding-computer-helper"), "synthetic helper\n")
-          await fs.chmod(path.join(entries, "ycoding-computer-helper"), 0o755)
+          await Bun.write(path.join(entries, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "synthetic app\n")
+          await fs.chmod(path.join(entries, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), 0o755)
+          await Bun.write(path.join(entries, "ycoding-chrome-extension/manifest.json"), "{}\n")
         }
         // Exceed the pipe buffer after the first match to expose an early-closing grep.
         for (let index = 0; index < 500; index++)
@@ -33,8 +34,8 @@ for (const valid of [true, false])
             "-C",
             entries,
             "ycoding",
-            ...(valid ? ["ycoding-computer-helper"] : []),
-            ...(await fs.readdir(entries)).filter((name) => !name.startsWith("ycoding")),
+            ...(valid ? ["YCoding Computer Use.app", "ycoding-chrome-extension"] : []),
+            ...(await fs.readdir(entries)).filter((name) => !name.toLowerCase().startsWith("ycoding")),
           ],
           { stdout: "pipe", stderr: "pipe" },
         )
@@ -75,17 +76,54 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(workflow).toContain(
     'tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding',
   )
-  expect(workflow).toContain('zip "../../release/ycoding-$version-windows-x64.zip" ycoding.exe')
+  expect(workflow).toContain('zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension')
   expect(workflow).toContain(
     '(cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")',
   )
   expect(workflow).toContain("needs: [build, isolated-browser-acceptance]")
 })
 
+test("macOS release builds sign the app with the configured Developer ID identity", () => {
+  expect(workflow).toContain("MACOS_SIGNING_CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}")
+  expect(workflow).toContain("MACOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}")
+  expect(workflow).toContain("MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}")
+  expect(workflow).toContain('echo "YCODING_MACOS_SIGNING_IDENTITY=$MACOS_SIGNING_IDENTITY" >>"$GITHUB_ENV"')
+  expect(workflow).toContain('{ echo "Missing MACOS_SIGNING_CERTIFICATE Actions secret" >&2; exit 1; }')
+  expect(workflow).toContain("designated => cdhash")
+  expect(workflow.indexOf("Import macOS signing identity")).toBeLessThan(workflow.indexOf("Build TUI artifact"))
+})
+
+test("isolated-browser acceptance accepts installed Chrome 152 or newer", () => {
+  const check = /\n(\s*major="\$\(printf[\s\S]*?\n\s*\})\n/.exec(workflow)?.[1]
+  expect(check).toBeDefined()
+  const accepts = (version: string) =>
+    Bun.spawnSync(["bash", "-euo", "pipefail", "-c", `version=${JSON.stringify(version)}\n${check}`], { stdout: "pipe", stderr: "pipe" })
+      .exitCode === 0
+  expect(accepts("Google Chrome 151.0.7000.10")).toBe(false)
+  expect(accepts("Google Chrome 152.0.7100.20")).toBe(true)
+  expect(accepts("Google Chrome 153.0.8010.54")).toBe(true)
+  expect(accepts("Google Chrome 1000.0.1.2")).toBe(true)
+  expect(accepts("Google Chrome")).toBe(false)
+  expect(workflow).not.toContain("Chrome 152)")
+})
+
+test("release archives include the Chrome extension beside the executable", () => {
+  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"')
+  expect(workflow).toContain('tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding ycoding-chrome-extension')
+  expect(workflow).toContain('zip -r "../../release/ycoding-$version-windows-x64.zip" ycoding.exe ycoding-chrome-extension')
+  for (const target of ["darwin-arm64", "darwin-x64", "linux-x64"])
+    expect(workflow).toContain(`tar -tzf "release/ycoding-$version-${target}.tar.gz" | grep -x 'ycoding-chrome-extension/manifest.json' >/dev/null`)
+})
+
 test("macOS release archives stage the signed app and preserve its bundle tree", () => {
-  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-computer-helper.app" "$staging/"')
-  expect(workflow).toContain('mac_entries=(ycoding ycoding-computer-helper)')
-  expect(workflow).toContain('mac_entries+=(ycoding-computer-helper.app)')
+  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Computer Use.app" "$staging/"')
+  expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
+  expect(workflow).toContain('"unpacked/ycoding-darwin-arm64/YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"')
+  expect(workflow).toContain('app="unpacked/ycoding-$target/YCoding Computer Use.app"')
+  expect(workflow).toContain("mac_entries=(ycoding ycoding-chrome-extension)")
+  expect(workflow).toContain(`grep -x 'YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use'`)
+  expect(workflow).not.toContain("bin/ycoding-computer-use")
+  expect(workflow).toContain('mac_entries+=("YCoding Computer Use.app")')
   expect(workflow).toContain("Contents/Resources/YCoding.icns")
   expect(workflow).toContain(
     'test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"',

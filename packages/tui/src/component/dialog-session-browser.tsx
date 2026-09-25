@@ -6,6 +6,7 @@ import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "sol
 import { Keymap } from "../context/keymap"
 import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
+import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 import { DialogHeader, DialogTitle, useDialog } from "../ui/dialog"
 import { DialogPrompt } from "../ui/dialog-prompt"
 
@@ -141,7 +142,11 @@ function DialogChromeConnection(props: { sessionID: string }) {
     <box paddingBottom={1} flexDirection="column">
       <DialogHeader title={<DialogTitle>Chrome connection</DialogTitle>} />
       <box paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} flexDirection="column">
-        <text wrapMode="word">Install the YCoding Chrome extension, then enter this one-time code in its popup.</text>
+        <box flexDirection="column">
+          <text wrapMode="word">In chrome://extensions, choose Load unpacked and select:</text>
+          <text>{BrowserExtension.location()}</text>
+          <text wrapMode="word">Then enter this one-time code in the YCoding extension popup.</text>
+        </box>
         <Show
           when={localAddress}
           fallback={<text wrapMode="word">Connect YCoding to a local loopback service before pairing Chrome.</text>}
@@ -154,10 +159,8 @@ function DialogChromeConnection(props: { sessionID: string }) {
           )}
         </Show>
         <text fg={themeV2.text.subdued} wrapMode="word">
-          Pairing lets YCoding use eligible Chrome tabs, including the active tab.
-        </text>
-        <text fg={themeV2.text.subdued} wrapMode="word">
-          Model actions still require site permission and human review.
+          Pairing lets YCoding use eligible Chrome tabs, including the active tab. Model actions still require site
+          permission.
         </text>
         <text>
           {failure()

@@ -164,10 +164,13 @@ export function actionRequest(
   return undefined
 }
 
-export const helperBinary = "ycoding-computer-helper"
-export const developmentHelperPath = () => path.resolve(import.meta.dir, "../../.cache/computer-helper", helperBinary)
-export const helperPath = (executable = process.execPath) =>
-  path.parse(executable).name === "bun" ? developmentHelperPath() : path.join(path.dirname(executable), helperBinary)
+export const helperBinary = "ycoding-computer-use"
+// macOS privacy settings display an app bundle by its filename.
+export const helperApplication = "YCoding Computer Use.app"
+export const applicationPath = (executable = process.execPath) =>
+  path.parse(executable).name === "bun"
+    ? path.resolve(import.meta.dir, "../../.cache/computer-use", helperApplication)
+    : path.join(path.dirname(executable), helperApplication)
 
 const Response = Schema.Union([
   Schema.Struct({
@@ -202,9 +205,9 @@ const decodeResponse = Schema.decodeUnknownEffect(Schema.fromJsonString(Response
 export function invokeWith(
   processes: AppProcess.Interface,
   platform: NodeJS.Platform = process.platform,
-  executable = helperPath(),
+  application = applicationPath(),
 ): Invoke {
-  return (request, signal) => {
+  return (request) => {
     if (platform !== "darwin")
       return Effect.fail(
         new NativeError({
@@ -219,60 +222,46 @@ export function invokeWith(
       (request.action.startsWith("desktop.") &&
         request.action !== "desktop.inspect" &&
         request.action !== "desktop.capture")
-    const output = request.action.startsWith("desktop.")
-      ? Effect.uninterruptible(
-          Effect.scoped(
-            Effect.acquireRelease(
-              Effect.tryPromise({
-                try: () => mkdtemp(path.join(os.tmpdir(), "ycoding-computer-")),
-                catch: (cause) => cause,
-              }),
-              (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
-            ).pipe(
-              Effect.flatMap((directory) =>
-                Effect.tryPromise({
-                  try: () => writeFile(path.join(directory, "request.json"), JSON.stringify(request), { mode: 0o600 }),
-                  catch: (cause) => cause,
-                }).pipe(
-                  Effect.andThen(
-                    processes.run(
-                      ChildProcess.make("/usr/bin/open", [
-                        "-n",
-                        "-g",
-                        "-a",
-                        `${executable}.app`,
-                        "--args",
-                        path.join(directory, "request.json"),
-                        path.join(directory, "response.json"),
-                      ]),
-                      {
-                        timeout: "10 seconds",
-                        maxOutputBytes: 1024,
-                        maxErrorBytes: 1024,
-                      },
-                    ),
-                  ),
-                  Effect.flatMap(AppProcess.requireSuccess),
-                  Effect.flatMap(() =>
-                    Effect.tryPromise({ try: () => awaitDesktopResponse(directory), catch: (cause) => cause }),
-                  ),
+    // Every request runs inside the app so its Accessibility, Screen Recording, and Automation grants apply.
+    const output = Effect.uninterruptible(
+      Effect.scoped(
+        Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => mkdtemp(path.join(os.tmpdir(), "ycoding-computer-")),
+            catch: (cause) => cause,
+          }),
+          (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+        ).pipe(
+          Effect.flatMap((directory) =>
+            Effect.tryPromise({
+              try: () => writeFile(path.join(directory, "request.json"), JSON.stringify(request), { mode: 0o600 }),
+              catch: (cause) => cause,
+            }).pipe(
+              Effect.andThen(
+                processes.run(
+                  ChildProcess.make("/usr/bin/open", [
+                    "-n",
+                    "-g",
+                    "-a",
+                    application,
+                    "--args",
+                    path.join(directory, "request.json"),
+                    path.join(directory, "response.json"),
+                  ]),
+                  {
+                    timeout: "10 seconds",
+                    maxOutputBytes: 1024,
+                    maxErrorBytes: 1024,
+                  },
                 ),
               ),
+              Effect.flatMap(AppProcess.requireSuccess),
+              Effect.flatMap(() => Effect.tryPromise({ try: () => awaitResponse(directory), catch: (cause) => cause })),
             ),
           ),
-        )
-      : processes
-          .run(ChildProcess.make(executable, [], { stdin: "pipe" }), {
-            stdin: JSON.stringify(request),
-            signal,
-            timeout: "30 seconds",
-            maxOutputBytes: 64 * 1024,
-            maxErrorBytes: 8 * 1024,
-          })
-          .pipe(
-            Effect.flatMap(AppProcess.requireSuccess),
-            Effect.map((result) => result.stdout.toString("utf8")),
-          )
+        ),
+      ),
+    )
     return output.pipe(
       Effect.flatMap(decodeResponse),
       Effect.mapError((error) =>
@@ -309,7 +298,7 @@ export function invokeWith(
   }
 }
 
-function awaitDesktopResponse(directory: string): Promise<string> {
+function awaitResponse(directory: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const responsePath = path.join(directory, "response.json")
     const observer = watch(directory, (_event, filename) => {

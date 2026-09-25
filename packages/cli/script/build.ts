@@ -6,7 +6,8 @@ import { Script } from "@ycoding-ai/script"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import { modelsData } from "./generate"
 import { BUN_BINARY } from "../src/binary"
-import { buildComputerHelper, computerHelperBuildAvailable } from "./computer-helper"
+import { buildComputerHelper, computerHelperBuildAvailable } from "./computer-use"
+import { copyChromeExtension } from "./chrome-extension"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const binary = BUN_BINARY
@@ -114,6 +115,7 @@ for (const item of targets) {
   }
 
   await buildComputerHelper({ platform: item.os, arch: item.arch }, path.join(outdir, name, "bin"))
+  await copyChromeExtension(path.join(outdir, name, "bin"))
 
   await Bun.write(
     path.join(outdir, name, "package.json"),

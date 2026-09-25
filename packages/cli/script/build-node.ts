@@ -16,9 +16,11 @@ import { NODE_BINARY, platformBinary } from "../src/binary"
 import {
   buildComputerHelper,
   computerHelperBuildAvailable,
+  COMPUTER_HELPER_APPLICATION,
   COMPUTER_HELPER_BINARY,
   verifyPackagedComputerHelper,
-} from "./computer-helper"
+} from "./computer-use"
+import { copyChromeExtension } from "./chrome-extension"
 
 const NODE_VERSION = "26.4.0"
 const dir = path.resolve(import.meta.dirname, "..")
@@ -113,6 +115,7 @@ for (const target of targets) {
   run(builder, ["--build-sea", "dist-node/sea.json"])
   if (target.platform !== "win32") await chmod(output, 0o755)
   await buildComputerHelper(target, path.dirname(output))
+  await copyChromeExtension(path.dirname(output))
   if (target.platform === "darwin" && process.platform === "darwin") run("codesign", ["--sign", "-", output])
   if (target.platform === "darwin" && process.platform !== "darwin") {
     console.warn(`${output} must be signed on macOS before it can run`)
@@ -206,8 +209,7 @@ async function smoke(output: string, target: NodeTarget) {
   const executable = path.join(root, path.basename(output))
   await copyFile(output, executable)
   if (target.platform === "darwin") {
-    await copyFile(path.join(path.dirname(output), COMPUTER_HELPER_BINARY), path.join(root, COMPUTER_HELPER_BINARY))
-    const app = `${COMPUTER_HELPER_BINARY}.app`
+    const app = COMPUTER_HELPER_APPLICATION
     const contents = path.join(root, app, "Contents")
     await mkdir(path.join(contents, "MacOS"), { recursive: true })
     await mkdir(path.join(contents, "_CodeSignature"))

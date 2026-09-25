@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
@@ -8,8 +8,9 @@ import {
   computerHelperBuild,
   computerHelperBuildAvailable,
   developmentComputerHelperBuild,
+  signingArguments,
   verifyPackagedComputerHelper,
-} from "../script/computer-helper"
+} from "../script/computer-use"
 
 const macTest = process.platform === "darwin" ? test : test.skip
 
@@ -20,7 +21,8 @@ describe("macOS computer helper packaging", () => {
       const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-brand-"))
       try {
         await buildComputerHelper({ platform: "darwin", arch: process.arch === "x64" ? "x64" : "arm64" }, bin)
-        const application = path.join(bin, "ycoding-computer-helper.app")
+        const application = path.join(bin, "YCoding Computer Use.app")
+        expect(await readdir(bin)).toEqual(["YCoding Computer Use.app"])
         const plist = path.join(application, "Contents", "Info.plist")
         const displayName = Bun.spawnSync([
           "/usr/bin/plutil",
@@ -33,6 +35,13 @@ describe("macOS computer helper packaging", () => {
         ])
         expect(displayName.exitCode).toBe(0)
         expect(displayName.stdout.toString().trim()).toBe("YCoding Computer Use")
+        const identifier = Bun.spawnSync(["/usr/bin/plutil", "-extract", "CFBundleIdentifier", "raw", "-o", "-", plist])
+        expect(identifier.stdout.toString().trim()).toBe("app.ycoding.computer-use")
+        const executable = Bun.spawnSync(["/usr/bin/plutil", "-extract", "CFBundleExecutable", "raw", "-o", "-", plist])
+        expect(executable.stdout.toString().trim()).toBe("ycoding-computer-use")
+        const automation = Bun.spawnSync(["/usr/bin/plutil", "-extract", "NSAppleEventsUsageDescription", "raw", "-o", "-", plist])
+        expect(automation.exitCode).toBe(0)
+        expect(automation.stdout.toString().trim()).toContain("YCoding Computer Use")
         const icon = Bun.spawnSync(["/usr/bin/plutil", "-extract", "CFBundleIconFile", "raw", "-o", "-", plist])
         expect(icon.exitCode).toBe(0)
         expect(icon.stdout.toString().trim()).toBe("YCoding.icns")
@@ -60,16 +69,33 @@ describe("macOS computer helper packaging", () => {
   test("plans a sibling helper for each supported macOS architecture", () => {
     const arm64 = computerHelperBuild({ platform: "darwin", arch: "arm64" }, "/tmp/bin")
     expect(arm64).toEqual({
-      source: path.resolve(import.meta.dir, "../../core/computer-helper/main.swift"),
-      output: "/tmp/bin/ycoding-computer-helper",
-      application: "/tmp/bin/ycoding-computer-helper.app",
+      source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
+      application: "/tmp/bin/YCoding Computer Use.app",
       target: "arm64-apple-macosx13.0",
     })
-    expect(arm64?.output).toBe(MacOSComputer.helperPath("/tmp/bin/ycoding"))
+    expect(arm64?.application).toBe(MacOSComputer.applicationPath("/tmp/bin/ycoding"))
     expect(computerHelperBuild({ platform: "darwin", arch: "x64" }, "/tmp/bin")).toMatchObject({
-      output: "/tmp/bin/ycoding-computer-helper",
+      application: "/tmp/bin/YCoding Computer Use.app",
       target: "x86_64-apple-macosx13.0",
     })
+  })
+
+  test("signs with a configured stable identity and a secure timestamp, otherwise ad hoc", () => {
+    expect(signingArguments("/tmp/bin/YCoding Computer Use.app", "Developer ID Application: Example (TEAM123456)")).toEqual([
+      "/usr/bin/codesign",
+      "--force",
+      "--sign",
+      "Developer ID Application: Example (TEAM123456)",
+      "--timestamp",
+      "/tmp/bin/YCoding Computer Use.app",
+    ])
+    expect(signingArguments("/tmp/bin/YCoding Computer Use.app", "")).toEqual([
+      "/usr/bin/codesign",
+      "--force",
+      "--sign",
+      "-",
+      "/tmp/bin/YCoding Computer Use.app",
+    ])
   })
 
   test("keeps only complete artifacts when the host cannot compile the macOS helper", () => {
@@ -80,9 +106,8 @@ describe("macOS computer helper packaging", () => {
 
   test("plans the explicit source-development helper in Core's ignored cache", () => {
     expect(developmentComputerHelperBuild()).toEqual({
-      source: path.resolve(import.meta.dir, "../../core/computer-helper/main.swift"),
-      output: path.resolve(import.meta.dir, "../../core/.cache/computer-helper/ycoding-computer-helper"),
-      application: path.resolve(import.meta.dir, "../../core/.cache/computer-helper/ycoding-computer-helper.app"),
+      source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
+      application: path.resolve(import.meta.dir, "../../core/.cache/computer-use/YCoding Computer Use.app"),
       target: `${process.arch === "x64" ? "x86_64" : process.arch}-apple-macosx13.0`,
     })
   })
@@ -90,9 +115,6 @@ describe("macOS computer helper packaging", () => {
   test("rejects a macOS package without the signed application bundle", async () => {
     const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-package-"))
     try {
-      const helper = path.join(bin, "ycoding-computer-helper")
-      await Bun.write(helper, '#!/bin/sh\nprintf \'{"status":"error","code":"invalid_request","outcome":"not_started"}\\n\'\n')
-      await chmod(helper, 0o755)
       await expect(verifyPackagedComputerHelper(bin, "darwin")).rejects.toThrow("Computer helper application")
     } finally {
       await rm(bin, { recursive: true, force: true })
@@ -102,7 +124,7 @@ describe("macOS computer helper packaging", () => {
   test("rejects an unexpected macOS application bundle in a non-macOS package", async () => {
     const bin = await mkdtemp(path.join(os.tmpdir(), "ycoding-computer-package-"))
     try {
-      await mkdir(path.join(bin, "ycoding-computer-helper.app"))
+      await mkdir(path.join(bin, "YCoding Computer Use.app"))
       await expect(verifyPackagedComputerHelper(bin, "linux")).rejects.toThrow("Unexpected macOS computer helper")
     } finally {
       await rm(bin, { recursive: true, force: true })

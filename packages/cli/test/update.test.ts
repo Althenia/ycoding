@@ -3,6 +3,7 @@ import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, 
 import os from "node:os"
 import path from "node:path"
 import { installRelease, latestRelease, releaseTarget, validVersion } from "../src/update/update"
+import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 
 const temporary: string[] = []
 const fixtureVersion = process.env.YCODING_TEST_VERSION ?? "9.9.9"
@@ -124,9 +125,58 @@ describe("release updater", () => {
     const early = await setup({ version: "0.7.1-beta.1" })
     await installRelease({ version: early.version, executable: early.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(early) })
     expect(await readFile(early.helper, "utf8")).toBe("new helper\n")
-    const later = await setup({ version: "0.7.2-beta.1", app: true })
+    const later = await setup({ version: "0.7.2-beta.1", app: true, renamed: true })
     await installRelease({ version: later.version, executable: later.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(later), filesystem: { rename, verifyApplication: async () => {} } })
-    expect(await readFile(path.join(later.root, "ycoding-computer-helper.app/Contents/Info.plist"), "utf8")).toContain("app.ycoding.computer-helper")
+    expect(await readFile(path.join(later.root, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toContain("app.ycoding.computer-use")
+  })
+
+  test("installs releases after v0.7.1 with only YCoding Computer Use.app and removes superseded helpers", async () => {
+    const fixture = await setup({ version: "0.7.2", app: true, renamed: true })
+    const legacy = path.join(fixture.root, "ycoding-computer-helper.app/Contents")
+    await mkdir(legacy, { recursive: true })
+    await writeFile(path.join(legacy, "Info.plist"), "old app\n")
+    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } })
+    expect(await readFile(path.join(fixture.root, "YCoding Computer Use.app/Contents/MacOS/ycoding-computer-use"), "utf8")).toBe("app helper\n")
+    expect(await readFile(path.join(fixture.root, "YCoding Computer Use.app/Contents/Info.plist"), "utf8")).toContain("<key>CFBundleIdentifier</key><string>app.ycoding.computer-use</string>")
+    expect(await Bun.file(fixture.helper).exists()).toBe(false)
+    expect(await Bun.file(fixture.legacyHelper).exists()).toBe(false)
+    expect(await readFile(path.join(fixture.root, "ycoding-chrome-extension/manifest.json"), "utf8")).toBe("new manifest.json\n")
+    expect(await Bun.file(path.join(legacy, "Info.plist")).exists()).toBe(false)
+    expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
+    expect(await updatePaths(fixture.root)).toEqual([])
+  })
+
+  test("rejects a bare computer-use executable in a later release", async () => {
+    const fixture = await setup({ version: "0.7.2", app: true, renamed: true, entries: ["ycoding", "ycoding-computer-use", "YCoding Computer Use.app"] })
+    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } }).then(() => "", (cause) => String(cause))
+    expect(error).toContain("exact direct entries")
+    expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
+  })
+
+  test("rejects v0.7.1 helper names in a later release", async () => {
+    const fixture = await setup({ version: "0.7.2", app: true })
+    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } }).then(() => "", (cause) => String(cause))
+    expect(error).toContain("exact direct entries")
+    expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
+  })
+
+  test("restores superseded helpers when a renamed release fails its final replacement", async () => {
+    const fixture = await setup({ version: "0.7.2", app: true, renamed: true })
+    const legacy = path.join(fixture.root, "ycoding-computer-helper.app/Contents")
+    await mkdir(legacy, { recursive: true })
+    await writeFile(path.join(legacy, "Info.plist"), "old app\n")
+    let failed = false
+    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { verifyApplication: async () => {}, rename: async (source, destination) => {
+      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
+      await rename(source, destination)
+    } } }).then(() => "", (cause) => String(cause))
+    expect(error).toContain("injected replacement failure")
+    expect(await readFile(path.join(legacy, "Info.plist"), "utf8")).toBe("old app\n")
+    expect(await Bun.file(path.join(fixture.root, "YCoding Computer Use.app/Contents/Info.plist")).exists()).toBe(false)
+    expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
+    expect(await readFile(fixture.legacyHelper, "utf8")).toBe("old helper\n")
+    expect(await Bun.file(fixture.helper).exists()).toBe(false)
+    expect(await updatePaths(fixture.root)).toEqual([])
   })
 
   test("rejects existing app symlinks without changing their target", async () => {
@@ -260,6 +310,34 @@ describe("release updater", () => {
     expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
     expect((await lstat(fixture.helper)).isSymbolicLink()).toBe(true)
     expect(await readFile(target, "utf8")).toBe("target\n")
+    expect(await updatePaths(fixture.root)).toEqual([])
+  })
+
+  test("installs the Chrome extension beside the executable for releases after v0.7.1", async () => {
+    const fixture = await setup({ version: "0.7.2", target: "linux-x64", extension: true, entries: ["ycoding", "ycoding-chrome-extension"] })
+    const installed = path.join(fixture.root, "ycoding-chrome-extension")
+    await mkdir(installed)
+    await writeFile(path.join(installed, "stale.js"), "old\n")
+    await installRelease({ version: fixture.version, executable: fixture.executable, platform: "linux", arch: "x64", fetch: fixtureFetch(fixture) })
+    expect(await readFile(fixture.executable, "utf8")).toBe("new executable\n")
+    expect(await readFile(path.join(installed, "manifest.json"), "utf8")).toBe("new manifest.json\n")
+    expect(await Bun.file(path.join(installed, "stale.js")).exists()).toBe(false)
+    expect(await updatePaths(fixture.root)).toEqual([])
+  })
+
+  test("restores the installed Chrome extension when the final executable replacement fails", async () => {
+    const fixture = await setup({ version: "0.7.2", target: "linux-x64", extension: true, entries: ["ycoding", "ycoding-chrome-extension"] })
+    const installed = path.join(fixture.root, "ycoding-chrome-extension")
+    await mkdir(installed)
+    await writeFile(path.join(installed, "manifest.json"), "old manifest\n")
+    let failed = false
+    const error = await installRelease({ version: fixture.version, executable: fixture.executable, platform: "linux", arch: "x64", fetch: fixtureFetch(fixture), filesystem: { rename: async (source, destination) => {
+      if (destination === fixture.executable && !failed) { failed = true; throw new Error("injected replacement failure") }
+      await rename(source, destination)
+    } } }).then(() => "", (cause) => String(cause))
+    expect(error).toContain("injected replacement failure")
+    expect(await readFile(path.join(installed, "manifest.json"), "utf8")).toBe("old manifest\n")
+    expect(await readFile(fixture.executable, "utf8")).toBe("old executable\n")
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
@@ -526,41 +604,50 @@ async function setup(
     icon?: boolean
     appSymlink?: boolean
     signedApp?: boolean
+    renamed?: boolean
+    extension?: boolean
   } = {},
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-update-test-"))
   temporary.push(root)
+  const appName = options.renamed ? "YCoding Computer Use.app" : "ycoding-computer-helper.app"
+  const helperName = options.renamed ? "ycoding-computer-use" : "ycoding-computer-helper"
+  const bundleID = options.renamed ? "app.ycoding.computer-use" : "app.ycoding.computer-helper"
   const source = path.join(root, "source")
   await mkdir(path.join(source, "nested"), { recursive: true })
   await writeFile(path.join(source, "ycoding"), "new executable\n")
   await writeFile(path.join(source, "extra"), "extra\n")
   await writeFile(path.join(source, "nested/file"), "nested\n")
-  if (options.helperSymlink) await symlink("ycoding", path.join(source, "ycoding-computer-helper"))
-  else await writeFile(path.join(source, "ycoding-computer-helper"), options.emptyHelper ? "" : "new helper\n")
+  if (options.helperSymlink) await symlink("ycoding", path.join(source, helperName))
+  else await writeFile(path.join(source, helperName), options.emptyHelper ? "" : "new helper\n")
   await chmod(path.join(source, "ycoding"), 0o755)
-  if (!options.helperSymlink) await chmod(path.join(source, "ycoding-computer-helper"), 0o755)
+  if (!options.helperSymlink) await chmod(path.join(source, helperName), 0o755)
   if (options.app) {
-    const contents = path.join(source, "ycoding-computer-helper.app/Contents")
+    const contents = path.join(source, appName, "Contents")
     await mkdir(path.join(contents, "MacOS"), { recursive: true })
     await mkdir(path.join(contents, "_CodeSignature"))
     if (options.icon !== false) await mkdir(path.join(contents, "Resources"))
-    await writeFile(path.join(contents, "Info.plist"), options.signedApp ? '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>ycoding-computer-helper</string><key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>' : '<key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string>\n')
+    await writeFile(path.join(contents, "Info.plist"), options.signedApp ? `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>${helperName}</string><key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>` : `<key>CFBundleIdentifier</key><string>${bundleID}</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string>\n`)
     if (options.icon !== false) await writeFile(path.join(contents, "Resources/YCoding.icns"), "fixture icon\n")
     if (!options.signedApp) await writeFile(path.join(contents, "_CodeSignature/CodeResources"), "signature\n")
-    if (options.appSymlink) await symlink("../../../ycoding-computer-helper", path.join(contents, "MacOS/ycoding-computer-helper"))
+    if (options.appSymlink) await symlink(`../../../${helperName}`, path.join(contents, `MacOS/${helperName}`))
     else {
-      if (options.signedApp) await copyFile("/usr/bin/true", path.join(contents, "MacOS/ycoding-computer-helper"))
-      else await writeFile(path.join(contents, "MacOS/ycoding-computer-helper"), "app helper\n")
-      await chmod(path.join(contents, "MacOS/ycoding-computer-helper"), 0o755)
-      if (options.signedApp) expect(Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", "-", path.join(source, "ycoding-computer-helper.app")]).exitCode).toBe(0)
+      if (options.signedApp) await copyFile("/usr/bin/true", path.join(contents, `MacOS/${helperName}`))
+      else await writeFile(path.join(contents, `MacOS/${helperName}`), "app helper\n")
+      await chmod(path.join(contents, `MacOS/${helperName}`), 0o755)
+      if (options.signedApp) expect(Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", "-", path.join(source, appName)]).exitCode).toBe(0)
     }
+  }
+  if (options.extension ?? options.renamed) {
+    await mkdir(path.join(source, "ycoding-chrome-extension/icons"), { recursive: true })
+    for (const file of BrowserExtension.files) await writeFile(path.join(source, "ycoding-chrome-extension", file), `new ${file}\n`)
   }
   const version = options.version ?? "0.7.0"
   const target = options.target ?? "darwin-arm64"
   const asset = `ycoding-${version}-${target}.tar.gz`
   const archiveFile = path.join(root, asset)
   const tar = Bun.spawnSync(
-    ["tar", "-C", source, "-czf", archiveFile, ...(options.entries ?? ["ycoding", "ycoding-computer-helper", ...(options.app ? ["ycoding-computer-helper.app"] : [])])],
+    ["tar", "-C", source, "-czf", archiveFile, ...(options.entries ?? ["ycoding", ...(options.renamed ? [] : [helperName]), ...(options.app ? [appName] : []), ...(options.extension ?? options.renamed ? ["ycoding-chrome-extension"] : [])])],
     {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     },
@@ -569,13 +656,15 @@ async function setup(
   const archive = new Uint8Array(await Bun.file(archiveFile).arrayBuffer())
   const digest = new Bun.CryptoHasher("sha256").update(archive).digest("hex")
   const executable = path.join(root, "ycoding")
-  const helper = path.join(root, "ycoding-computer-helper")
+  const helper = path.join(root, helperName)
+  const legacyHelper = path.join(root, "ycoding-computer-helper")
   await writeFile(executable, "old executable\n")
-  if (options.existingHelper !== false) await writeFile(helper, "old helper\n")
+  if (options.existingHelper !== false) await writeFile(legacyHelper, "old helper\n")
   return {
     root,
     executable,
     helper,
+    legacyHelper,
     archive,
     asset,
     version,
