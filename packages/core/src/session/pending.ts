@@ -142,6 +142,21 @@ const promotedFromHistory = Effect.fn("SessionPending.promotedFromHistory")(func
   return yield* Effect.die(new LifecycleConflict({ id }))
 })
 
+/**
+ * Resolve an already-admitted input for a retry or wake: the pending inbox row
+ * while it is unconsumed, otherwise the projected record after promotion.
+ * Undefined means the message ID has not been admitted yet.
+ */
+export const lookup = Effect.fn("SessionPending.lookup")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  id: SessionMessage.ID,
+) {
+  const pending = yield* find(db, id)
+  if (pending !== undefined) return pending
+  return yield* promotedFromHistory(db, sessionID, id)
+})
+
 export const admit = Effect.fn("SessionPending.admit")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -371,23 +386,6 @@ export const has = Effect.fn("SessionPending.has")(function* (
     .pipe(Effect.orDie)
   return row !== undefined
 })
-
-export const equivalent = (
-  input: User | Synthetic,
-  expected: { readonly sessionID: SessionSchema.ID; readonly input: Message },
-) => {
-  if (
-    input.type !== expected.input.type ||
-    input.delivery !== expected.input.delivery ||
-    input.sessionID !== expected.sessionID
-  )
-    return false
-  if (input.type === "user" && expected.input.type === "user")
-    return JSON.stringify(encodeUser(input.data)) === JSON.stringify(encodeUser(expected.input.data))
-  if (input.type === "synthetic" && expected.input.type === "synthetic")
-    return JSON.stringify(encodeSynthetic(input.data)) === JSON.stringify(encodeSynthetic(expected.input.data))
-  return false
-}
 
 const publish = Effect.fn("SessionPending.publish")(function* (
   db: DatabaseService,

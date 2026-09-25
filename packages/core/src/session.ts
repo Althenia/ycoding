@@ -1171,36 +1171,48 @@ const layer = Layer.effect(
             // continues from the reverted boundary rather than stale post-boundary history.
             if (session.revert)
               yield* SessionRevert.commit(session).pipe(Effect.provideService(EventV2.Service, events))
-            // Resolved lazily so prompt admission only boots location services when an
-            // image attachment actually needs the resizer.
-            const image = Image.Service.pipe(Effect.provide(locations.get(session.location)))
-            const prompt = yield* resolvePrompt(
-              { text: input.text, files: input.files, agents: input.agents },
-              image,
-              attachments,
-            ).pipe(Effect.provideService(FSUtil.Service, fs))
             const messageID = input.id ?? SessionMessage.ID.create()
-            const admittedInput = SessionPending.Message.make({
-              type: "user",
-              data: { ...prompt, metadata: input.metadata },
-              delivery: input.delivery ?? "steer",
-            })
-            const admitted = yield* SessionPending.admit(db, events, {
-              id: messageID,
-              sessionID: input.sessionID,
-              input: admittedInput,
-            }).pipe(
+            // A reused prompt message ID is the same input: return the durable record and
+            // wake without re-resolving attachments, whose re-derived shape can differ from
+            // the admitted record (a directory attachment's derived mime, for example).
+            const prior = yield* SessionPending.lookup(db, input.sessionID, messageID).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionPending.LifecycleConflict
                   ? new PromptConflictError({ sessionID: input.sessionID, messageID })
                   : Effect.die(defect),
               ),
             )
-            if (
-              admitted.type !== "user" ||
-              !SessionPending.equivalent(admitted, { sessionID: input.sessionID, input: admittedInput })
-            )
-              return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+            const admitted =
+              prior?.type === "user" && prior.sessionID === input.sessionID
+                ? prior
+                : yield* Effect.gen(function* () {
+                    // Resolved lazily so prompt admission only boots location services when an
+                    // image attachment actually needs the resizer.
+                    const image = Image.Service.pipe(Effect.provide(locations.get(session.location)))
+                    const prompt = yield* resolvePrompt(
+                      { text: input.text, files: input.files, agents: input.agents },
+                      image,
+                      attachments,
+                    ).pipe(Effect.provideService(FSUtil.Service, fs))
+                    const admitted = yield* SessionPending.admit(db, events, {
+                      id: messageID,
+                      sessionID: input.sessionID,
+                      input: SessionPending.Message.make({
+                        type: "user",
+                        data: { ...prompt, metadata: input.metadata },
+                        delivery: input.delivery ?? "steer",
+                      }),
+                    }).pipe(
+                      Effect.catchDefect((defect) =>
+                        defect instanceof SessionPending.LifecycleConflict
+                          ? new PromptConflictError({ sessionID: input.sessionID, messageID })
+                          : Effect.die(defect),
+                      ),
+                    )
+                    if (admitted.type !== "user" || admitted.sessionID !== input.sessionID)
+                      return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+                    return admitted
+                  })
             if (input.resume !== false) {
               if (activeShells.has(admitted.sessionID)) {
                 // Admit-only during an active shell strands the prompt until
@@ -1738,31 +1750,42 @@ const layer = Layer.effect(
           Effect.gen(function* () {
             yield* result.get(input.sessionID)
             const inputID = input.id ?? SessionMessage.ID.create()
-            const admittedInput = SessionPending.Message.make({
-              type: "synthetic",
-              data: {
-                text: input.text,
-                description: input.description,
-                metadata: input.metadata,
-              },
-              delivery: input.delivery ?? "steer",
-            })
-            const admitted = yield* SessionPending.admit(db, events, {
-              id: inputID,
-              sessionID: input.sessionID,
-              input: admittedInput,
-            }).pipe(
+            // A reused input ID is the same input: return the durable record and wake without
+            // re-deriving content, matching prompt admission's idempotent retry semantics.
+            const prior = yield* SessionPending.lookup(db, input.sessionID, inputID).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionPending.LifecycleConflict
                   ? new SyntheticConflictError({ sessionID: input.sessionID, inputID })
                   : Effect.die(defect),
               ),
             )
-            if (
-              admitted.type !== "synthetic" ||
-              !SessionPending.equivalent(admitted, { sessionID: input.sessionID, input: admittedInput })
-            )
-              return yield* new SyntheticConflictError({ sessionID: input.sessionID, inputID })
+            const admitted =
+              prior?.type === "synthetic" && prior.sessionID === input.sessionID
+                ? prior
+                : yield* Effect.gen(function* () {
+                    const admitted = yield* SessionPending.admit(db, events, {
+                      id: inputID,
+                      sessionID: input.sessionID,
+                      input: SessionPending.Message.make({
+                        type: "synthetic",
+                        data: {
+                          text: input.text,
+                          description: input.description,
+                          metadata: input.metadata,
+                        },
+                        delivery: input.delivery ?? "steer",
+                      }),
+                    }).pipe(
+                      Effect.catchDefect((defect) =>
+                        defect instanceof SessionPending.LifecycleConflict
+                          ? new SyntheticConflictError({ sessionID: input.sessionID, inputID })
+                          : Effect.die(defect),
+                      ),
+                    )
+                    if (admitted.type !== "synthetic" || admitted.sessionID !== input.sessionID)
+                      return yield* new SyntheticConflictError({ sessionID: input.sessionID, inputID })
+                    return admitted
+                  })
             if (input.resume !== false && !(yield* result.get(input.sessionID)).revert)
               yield* execution.wake(input.sessionID)
             return admitted

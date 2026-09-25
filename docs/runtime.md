@@ -12,7 +12,7 @@ The built-in `memory` tool accesses explicit linked Markdown knowledge. Reposito
 
 A prompt is durably admitted before execution is scheduled. The durable pending row represents unconsumed work only. Promotion into the visible transcript and removal from pending state occur at a safe execution boundary.
 
-Reusing a Session ID adopts the existing session. Reusing a prompt message ID is accepted only for an exact retry with matching session, content, and delivery mode; conflicting reuse fails.
+Reusing a Session ID adopts the existing session. Reusing a prompt message ID returns the admitted durable record and wakes execution; the first admission wins and sending a prompt never fails on ID reuse. A prompt message ID belongs to one Session and one input kind, so reuse across Sessions or across input kinds is rejected.
 
 ### Archive and unarchive
 

@@ -14,7 +14,7 @@ Automatic retention deletion is deferred for v0.1.1 pending cross-process safety
 
 `SessionV2.prompt(...)` records one durable `session.input.admitted` fact and one `session_pending` row before advisory execution begins. Pending input remains outside model-visible Session History until promotion. The promotion transaction publishes `session.input.promoted`, projects the visible message, and consumes the pending row atomically.
 
-Reusing a Session ID adopts the existing Session. Reusing a prompt message ID reconciles an exact retry only when Session, prompt, and delivery mode match; conflicting reuse fails. A retry of an already-promoted input reconciles against projected history and its durable admission event.
+Reusing a Session ID adopts the existing Session. Reusing a prompt message ID returns the admitted durable record and wakes execution; the first admission wins and sending a prompt never fails on ID reuse. A prompt message ID belongs to one Session and one input kind, so reuse across Sessions or across input kinds is rejected. A retry of an already-promoted input reconciles against projected history and its durable admission event.
 
 `resume` controls scheduling, not durability:
 

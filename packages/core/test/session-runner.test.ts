@@ -2760,6 +2760,36 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("returns the admitted record for a prompt wake that resends a retained folder attachment", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const messageID = SessionMessage.ID.create()
+      const first = yield* session.prompt({
+        id: messageID,
+        sessionID,
+        text: "Inspect this folder",
+        files: [{ uri: `file://${runnerDirectory}`, name: "test" }],
+        resume: false,
+      })
+      // The wake resends the retained managed attachment (projectedPromptInput form),
+      // whose re-derived mime differs from the admitted record for a directory mention.
+      const admitted = yield* session.prompt({
+        id: messageID,
+        sessionID,
+        text: "Inspect this folder",
+        files: [
+          {
+            uri: `ycoding-attachment://sha256/${first.data.files?.[0]?.content.digest}`,
+            name: first.data.files?.[0]?.name,
+          },
+        ],
+        resume: true,
+      })
+      yield* session.wait(sessionID)
+      expect(admitted.id).toBe(messageID)
+    }),
+  )
+
   it.effect("interrupts a source Location runner after a Session moves", () =>
     Effect.gen(function* () {
       const session = yield* setup
