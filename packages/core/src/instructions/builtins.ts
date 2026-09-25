@@ -79,6 +79,14 @@ const layer = Layer.effect(
               read: Effect.succeed("At a safe boundary after the primary task is complete and validated, create or update at most one Project Artifact for each newly learned reusable insight. The insight must be repeated, durable, repository-specific, and useful in future work. Never persist transient task state, current todos, user preferences, prompts, logs, secrets, credentials, private paths/URLs, customer data, or speculation. Search existing artifacts first and update the owned project version rather than duplicating it. Prefer a skill; use a command only for an invokable instruction-only template; use a least-privilege agent only for a genuine reusable role. Workflows are not a first-class artifact. Never create or enable a plugin automatically. Do not interrupt the primary task to author an artifact."),
               render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
             }),
+            Instructions.make({
+              key: Instructions.Key.make("core/git-worktree"),
+              codec: Schema.toCodecJson(Schema.String),
+              read: Effect.succeed(
+                "When working with a Git worktree, create it at `<main repository root>/.worktrees/<name>`, creating the `.worktrees` directory first if it does not exist. Give every worktree a named branch identical to its worktree name, for example `git worktree add -b <name> .worktrees/<name>`; never create a detached HEAD worktree.",
+              ),
+              render: { initial: (instruction) => instruction, changed: (_previous, instruction) => instruction },
+            }),
           ]),
         ),
     })
