@@ -19,7 +19,8 @@ export const description = `Use this tool when you need to ask the user question
 Usage notes:
 - When \`custom\` is enabled (default), a "Type your own answer" option is added automatically; don't include "Other" or catch-all options
 - Answers are returned as arrays of labels; set \`multiple: true\` to allow selecting more than one
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label`
+- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
+- Recommend the option that best matches the user's stated requirements and expectations; do not introduce new solutions or problems in the recommendation`
 
 export const Input = Schema.Struct({
   questions: Schema.NonEmptyArray(QuestionV2.Prompt).annotate({ description: "Questions to ask" }),

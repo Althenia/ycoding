@@ -92,6 +92,17 @@ const it = testEffect(
 )
 
 describe("QuestionTool", () => {
+  it.effect("advertises recommendations that follow the user's stated requirements", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const definition = (yield* toolDefinitions(registry)).find((tool) => tool.name === "question")
+
+      expect(definition?.description).toContain(
+        "Recommend the option that best matches the user's stated requirements and expectations; do not introduce new solutions or problems in the recommendation",
+      )
+    }),
+  )
+
   it.effect("omits a catalog-denied question and enforces its leaf permission", () =>
     Effect.gen(function* () {
       captured = undefined
