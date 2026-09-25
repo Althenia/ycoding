@@ -13,7 +13,7 @@ YCoding reduces provider usage without changing the logical agent result by:
 - measuring logical requests separately from physical transport attempts;
 - reporting raw provider tokens and estimated cost without treating missing pricing as zero.
 
-Prompt-cache promotion remains a bounded runtime optimization, but a recreated runtime restores recent adaptive Anthropic evidence from the existing durable provider-request ledger. Stored Responses continuation and opaque stateless replay state are durable but are never authoritative Session transcript content.
+Adaptive Anthropic TTL is chosen from the request source alone and needs no runtime or durable state. Stored Responses continuation and opaque stateless replay state are durable but are never authoritative Session transcript content.
 
 Terminal-response silence recovery is a bounded correctness path, not an efficiency retry: one valid settled silent response may create one additional logical `step` request. That request sends canonical durable history as a full request with tools disabled and no stored Responses continuation; it can therefore receive an existing tool-prefix or provider-cache invalidation label. It never counts as a physical retry or `fallback`.
 
@@ -45,7 +45,7 @@ The default efficiency policy is:
 | `title`                                      | `local`    | Generates deterministic Session titles without a provider request.                                                                                                                                     |
 | `helper_models.title`, `.goal`               | `session`  | Selects each helper independently; a hidden agent's explicit model still takes precedence.                                                                                                             |
 | `helper_models.compaction.main`, `.subagent` | `session`  | The owner selects the ContextManifest model before creating its helper child; an explicit configured value wins over an agent-pinned model, while `session` uses the owner Session's model precedence. |
-| `prompt_cache.anthropic_ttl`                 | `adaptive` | Starts at five minutes and promotes a stable namespace to one hour after two reusable provider reports within five minutes.                                                                            |
+| `prompt_cache.anthropic_ttl`                 | `adaptive` | One hour for root Session steps; five minutes for child Sessions and helper requests. The TTL never changes within a request source.                                                                   |
 | `prompt_cache.openai_mode`                   | `auto`     | Combines explicit stable-prefix breakpoints with OpenAI's managed latest-message breakpoint on supported direct GPT-5.6-and-later routes.                                                              |
 | `prompt_cache.openai_extended_retention`     | `false`    | Does not request pre-GPT-5.6 `24h` retention unless explicitly enabled.                                                                                                                                |
 | `openai_responses_continuation`              | `auto`     | Allows compatible durable response-ID continuation when direct OpenAI Responses uses `stored` state and effective storage is enabled.                                                                  |
@@ -114,20 +114,17 @@ Direct GPT-5.6 Responses requests send `reasoning.context: "all_turns"` and `con
 
 ## Adaptive Anthropic TTL
 
-The adaptive working set is bounded to 1024 process-local namespaces. Promotion evidence is already present in the durable `session_provider_request` ledger, so a recreated runtime folds that Session and namespace's ordered request history without a schema or second persistence authority. An empty restore is memoized for five minutes in the bounded working set.
+Adaptive TTL depends only on the request source and the model profile, and a source never changes its TTL. Changing a breakpoint's TTL partway through a Session misses every cache entry written earlier and rewrites the whole prefix.
 
-A namespace starts with a five-minute TTL. It is promoted for later requests only after two eligible observations for the same namespace within five minutes where the provider reports reusable cache reads or writes. A promotion remains valid for one hour after the latest reusable observation. Missing or zero telemetry neither creates a promotion nor erases an existing unexpired promotion.
+| Request source                                          | Adaptive TTL |
+| ------------------------------------------------------- | ------------ |
+| Root Session step (human-paced)                         | one hour     |
+| Child Session step (subagent, machine-paced)            | five minutes |
+| Title, goal, and compaction helper requests (one-shot)  | five minutes |
 
-The following conditions retain or return to the five-minute bucket:
+The one-hour bucket lets a root Session's cached conversation survive think-time gaps between prompts, and it costs more per written token. Machine-paced and one-shot requests use the cheaper five-minute bucket.
 
-- a different prompt-cache namespace;
-- initial reusable observations more than five minutes apart;
-- an unknown model profile;
-- expiration one hour after the latest reusable observation.
-
-Process restart and bounded working-set eviction fold ordered promotion evidence from the provider-request ledger on the next policy decision. Ledger rows contain normalized counts and stable identifiers, not prompt or response content.
-
-Explicit `5m` and `1h` settings bypass adaptive promotion, while unsupported models remain on the safe five-minute behavior.
+Explicit `5m` and `1h` settings apply to every request source. Models without a published extended-TTL profile always use five minutes.
 
 ## OpenAI Responses continuation
 

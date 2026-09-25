@@ -41,7 +41,6 @@ import { makeLocationNode } from "../../effect/app-node"
 import { llmClient } from "../../effect/app-node-platform"
 import { StepFailedError } from "../error"
 import { toSessionError } from "../to-session-error"
-import { SessionCacheRuntime } from "./cache-runtime"
 import { SessionCompactionGate } from "./compaction-gate"
 import { SessionContinuation } from "./continuation"
 import { SessionProviderState } from "../provider-state"
@@ -95,7 +94,6 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const title = yield* SessionTitle.Service
     const providerRequests = yield* SessionProviderRequest.Service
-    const cacheRuntime = yield* SessionCacheRuntime.Service
     const continuation = yield* SessionContinuation.Service
     const liveState = yield* SessionLiveState.Service
     let executionGeneration = 0
@@ -530,30 +528,19 @@ const layer = Layer.effect(
                 : cache && !cache.readReported
                   ? "provider-not-reported"
                   : undefined)
-        return Effect.all(
-          [
-            requestTracker.complete({
-              tokens: usage.tokens,
-              ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
-              continuation:
-                requestTrackerState.continuationFallback === true
-                  ? "fallback"
-                  : originalPrepared.continuation.used
-                    ? "continued"
-                    : "full",
-              ...(invalidation === undefined ? {} : { invalidation }),
-              ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
-              ...(settlement?.timing === undefined ? {} : { timing: settlement.timing }),
-            }),
-            cacheRuntime.observe({
-              namespace: originalPrepared.cache.promptCacheKey,
-              cacheRead: usage.tokens.cache.read,
-              cacheWrite: usage.tokens.cache.write,
-              eligible: usage.tokens.input + usage.tokens.cache.read + usage.tokens.cache.write,
-            }),
-          ],
-          { discard: true },
-        )
+        return requestTracker.complete({
+          tokens: usage.tokens,
+          ...(estimatedCost === undefined ? {} : { cost: estimatedCost }),
+          continuation:
+            requestTrackerState.continuationFallback === true
+              ? "fallback"
+              : originalPrepared.continuation.used
+                ? "continued"
+                : "full",
+          ...(invalidation === undefined ? {} : { invalidation }),
+          ...(cache === undefined ? {} : { cacheReadReported: cache.readReported }),
+          ...(settlement?.timing === undefined ? {} : { timing: settlement.timing }),
+        })
       }
 
       const captureStepEnd = Effect.fnUntraced(function* () {
@@ -1040,7 +1027,6 @@ export const node = makeLocationNode({
     SessionLiveState.node,
     SessionModelRequest.node,
     SessionProviderRequest.node,
-    SessionCacheRuntime.node,
     SessionContinuation.node,
     SessionProviderState.node,
     SessionCompactionJob.node,

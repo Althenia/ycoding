@@ -263,12 +263,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         const systemDigest = SessionRunnerCache.systemDigest(contextEvent.system)
         const toolDigest = SessionRunnerCache.toolDigest(hookedTools)
         const efficiency = SessionRunnerCache.efficiencySettings(efficiencyInfo)
-        const ttl = yield* cacheRuntime.policy({
-          sessionID: session.id,
-          namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
-          modelID: model.id,
-          configured: efficiency.anthropicTtl,
-        })
         const generation = yield* cacheRuntime.generation({
           sessionID: session.id,
           model: resolved.ref,
@@ -284,7 +278,11 @@ export const layer = (options?: SessionModelHeaders.Options) =>
           apiModelID: model.id,
           sessionID: session.id,
           routeID: resolved.model.route.id,
-          anthropicTtlSeconds: ttl.ttlSeconds,
+          anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+            modelID: model.id,
+            configured: efficiency.anthropicTtl,
+            interactive: session.parentID === undefined,
+          }),
           openaiMode: efficiency.openaiMode,
           openaiExtendedRetention: efficiency.openaiExtendedRetention,
           generation,

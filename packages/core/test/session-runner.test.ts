@@ -1798,7 +1798,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("promotes a stable Anthropic prefix from five minutes to one hour after observed reuse", () =>
+  it.effect("keeps the one-hour Anthropic TTL for every request of an adaptive root Session", () =>
     Effect.gen(function* () {
       const session = yield* setup
       currentModel = anthropicCacheModel
@@ -1816,11 +1816,37 @@ describe("SessionRunnerLLM", () => {
         yield* session.resume(sessionID)
       }
 
-      expect(requests.map((request) => request.cache)).toEqual([
-        { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 },
-        { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 },
-        { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 3600 },
-      ])
+      expect(requests.map((request) => request.cache)).toEqual(
+        Array.from({ length: 3 }, () => ({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 3600 })),
+      )
+    }),
+  )
+
+  it.effect("keeps the five-minute Anthropic TTL for every request of an adaptive child Session", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      const parentID = SessionV2.ID.make("ses_runner_cache_parent")
+      const { db } = yield* Database.Service
+      yield* insertSession(parentID)
+      yield* db.update(SessionTable).set({ parent_id: parentID }).where(eq(SessionTable.id, sessionID)).run().pipe(Effect.orDie)
+      currentModel = anthropicCacheModel
+      efficiencyConfig = new ConfigEfficiency.Info({
+        prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: "adaptive" }),
+      })
+      responses = [
+        reply.textWithCache("First", "cache-child-first", 0, 1_200),
+        reply.textWithCache("Second", "cache-child-second", 900, 0),
+        reply.textWithCache("Third", "cache-child-third", 900, 0),
+      ]
+
+      for (const prompt of ["First child turn", "Second child turn", "Third child turn"]) {
+        yield* admit(session, prompt)
+        yield* session.resume(sessionID)
+      }
+
+      expect(requests.map((request) => request.cache)).toEqual(
+        Array.from({ length: 3 }, () => ({ tools: true, system: true, messages: { tail: 2 }, ttlSeconds: 300 })),
+      )
     }),
   )
 

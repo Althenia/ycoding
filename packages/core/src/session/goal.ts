@@ -18,7 +18,6 @@ import { SessionMessage } from "./message"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionRunnerCache } from "./runner/cache"
-import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionSchema } from "./schema"
 import { SessionUsage } from "./usage"
 
@@ -50,7 +49,6 @@ type Dependencies = {
   readonly config: Config.Interface
   readonly helpers: SessionHelperPolicy.Interface
   readonly requests: SessionProviderRequest.Interface
-  readonly cacheRuntime: SessionCacheRuntime.Interface
 }
 
 export interface Interface {
@@ -123,18 +121,16 @@ const make = (dependencies: Dependencies) => {
     const efficiency = SessionRunnerCache.efficiencySettings(
       Config.latest(yield* dependencies.config.entries(), "efficiency"),
     )
-    const ttl = yield* dependencies.cacheRuntime.policy({
-      sessionID: input.session.id,
-      namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
-      modelID: resolved.model.id,
-      configured: efficiency.anthropicTtl,
-    })
     const cache = SessionRunnerCache.providerOptions({
       ...namespaceInput,
       apiModelID: resolved.model.id,
       sessionID: input.session.id,
       routeID: resolved.model.route.id,
-      anthropicTtlSeconds: ttl.ttlSeconds,
+      anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+        modelID: resolved.model.id,
+        configured: efficiency.anthropicTtl,
+        interactive: false,
+      }),
       openaiMode: efficiency.openaiMode,
       openaiExtendedRetention: efficiency.openaiExtendedRetention,
     })
@@ -173,26 +169,15 @@ const make = (dependencies: Dependencies) => {
         cost: Money.USD.zero,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       }
-      return Effect.all(
-        [
-          tracker.complete({
-            tokens: recorded.tokens,
-            ...(usage === undefined || SessionUsage.estimatedCost(resolved.cost, recorded.tokens) === undefined
-              ? {}
-              : { cost: SessionUsage.estimatedCost(resolved.cost, recorded.tokens)! }),
-            continuation: "full",
-            ...(timing === undefined ? {} : { timing }),
-            ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
-          }),
-          dependencies.cacheRuntime.observe({
-            namespace: cache.promptCacheKey,
-            cacheRead: recorded.tokens.cache.read,
-            cacheWrite: recorded.tokens.cache.write,
-            eligible: recorded.tokens.input + recorded.tokens.cache.read + recorded.tokens.cache.write,
-          }),
-        ],
-        { discard: true },
-      )
+      return tracker.complete({
+        tokens: recorded.tokens,
+        ...(usage === undefined || SessionUsage.estimatedCost(resolved.cost, recorded.tokens) === undefined
+          ? {}
+          : { cost: SessionUsage.estimatedCost(resolved.cost, recorded.tokens)! }),
+        continuation: "full",
+        ...(timing === undefined ? {} : { timing }),
+        ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+      })
     })
     const streamed = yield* dependencies.llm.stream(request).pipe(
       Stream.runForEach((event) => {
@@ -259,9 +244,8 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const config = yield* Config.Service
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
-      const cacheRuntime = yield* SessionCacheRuntime.Service
       const database = yield* Database.Service
-      const goal = make({ events, llm, agents, config, helpers, requests, cacheRuntime, headers: options })
+      const goal = make({ events, llm, agents, config, helpers, requests, headers: options })
       return Service.of({
         synthesize: (input) =>
           goal
@@ -294,7 +278,6 @@ export function configured(options?: SessionModelHeaders.Options) {
       Config.node,
       SessionHelperPolicy.node,
       SessionProviderRequest.node,
-      SessionCacheRuntime.node,
       Database.node,
     ],
   })

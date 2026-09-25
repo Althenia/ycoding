@@ -25,7 +25,6 @@ import { SessionLiveState } from "./live-state"
 import { SessionModelHeaders } from "./model-headers"
 import { SessionProviderRequest } from "./provider-request"
 import { SessionRunnerCache } from "./runner/cache"
-import { SessionCacheRuntime } from "./runner/cache-runtime"
 import { SessionRunnerModel } from "./runner/model"
 import { SessionSchema } from "./schema"
 import { SessionMessageTable } from "./sql"
@@ -86,7 +85,6 @@ type Dependencies = {
   readonly agents: AgentV2.Interface
   readonly helpers: SessionHelperPolicy.Interface
   readonly requests: SessionProviderRequest.Interface
-  readonly cacheRuntime: SessionCacheRuntime.Interface
   readonly config: ConfigCompaction.Resolved
   readonly configService: Config.Interface
   readonly store: SessionStore.Interface
@@ -124,18 +122,16 @@ const make = (dependencies: Dependencies): Interface => {
     const efficiency = SessionRunnerCache.efficiencySettings(
       Config.latest(yield* dependencies.configService.entries(), "efficiency"),
     )
-    const ttl = yield* dependencies.cacheRuntime.policy({
-      sessionID: input.session.id,
-      namespace: SessionRunnerCache.promptCacheNamespace(namespaceInput),
-      modelID: input.resolved.model.id,
-      configured: efficiency.anthropicTtl,
-    })
     const cache = SessionRunnerCache.providerOptions({
       ...namespaceInput,
       apiModelID: input.resolved.model.id,
       sessionID: input.session.id,
       routeID: input.resolved.model.route.id,
-      anthropicTtlSeconds: ttl.ttlSeconds,
+      anthropicTtlSeconds: SessionRunnerCache.anthropicTtlSeconds({
+        modelID: input.resolved.model.id,
+        configured: efficiency.anthropicTtl,
+        interactive: false,
+      }),
       openaiMode: efficiency.openaiMode,
       openaiExtendedRetention: efficiency.openaiExtendedRetention,
     })
@@ -164,24 +160,13 @@ const make = (dependencies: Dependencies): Interface => {
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
       }
       const cost = SessionUsage.estimatedCost(input.resolved.cost, recorded.tokens)
-      return Effect.all(
-        [
-          tracker.complete({
-            tokens: recorded.tokens,
-            ...(cost === undefined ? {} : { cost }),
-            continuation: "full",
-            ...(timing === undefined ? {} : { timing }),
-            ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
-          }),
-          dependencies.cacheRuntime.observe({
-            namespace: cache.promptCacheKey,
-            cacheRead: recorded.tokens.cache.read,
-            cacheWrite: recorded.tokens.cache.write,
-            eligible: recorded.tokens.input + recorded.tokens.cache.read + recorded.tokens.cache.write,
-          }),
-        ],
-        { discard: true },
-      )
+      return tracker.complete({
+        tokens: recorded.tokens,
+        ...(cost === undefined ? {} : { cost }),
+        continuation: "full",
+        ...(timing === undefined ? {} : { timing }),
+        ...(usage && usage.tokens.cache.read > 0 ? { invalidation: "stable-hit" as const } : {}),
+      })
     })
     const streamed = startStreamed(dependencies, request, {
       cost: input.resolved.cost,
@@ -1082,7 +1067,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
       const agents = yield* AgentV2.Service
       const helpers = yield* SessionHelperPolicy.Service
       const requests = yield* SessionProviderRequest.Service
-      const cacheRuntime = yield* SessionCacheRuntime.Service
       const store = yield* SessionStore.Service
       const liveState = yield* SessionLiveState.Service
       const events = yield* EventV2.Service
@@ -1093,7 +1077,6 @@ export const layer = (options?: SessionModelHeaders.Options) =>
         agents,
         helpers,
         requests,
-        cacheRuntime,
         config: ConfigCompaction.resolve(
           (yield* config.entries())
             .filter((entry): entry is Config.Document => entry.type === "document")
@@ -1118,7 +1101,6 @@ export function configured(options?: SessionModelHeaders.Options) {
       AgentV2.node,
       SessionHelperPolicy.node,
       SessionProviderRequest.node,
-      SessionCacheRuntime.node,
       SessionStore.node,
       SessionLiveState.node,
       EventV2.node,

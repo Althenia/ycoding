@@ -168,6 +168,20 @@ export const efficiencySettings = (input?: ConfigEfficiency.Info): EfficiencySet
   openaiExtendedRetention: input?.prompt_cache?.openai_extended_retention ?? false,
 })
 
+// Changing a breakpoint's TTL within a Session misses every earlier cache
+// write, so one TTL is chosen per request source and never changes. Adaptive
+// gives human-paced root Sessions the one-hour bucket, which survives
+// think-time gaps. Machine-paced child Sessions and one-shot background
+// requests use the cheaper five-minute bucket.
+export const anthropicTtlSeconds = (input: {
+  readonly modelID: string
+  readonly configured: EfficiencySettings["anthropicTtl"]
+  readonly interactive: boolean
+}): 300 | 3600 => {
+  if (cacheProfile(input.modelID)?.extendedTtl !== true || input.configured === "5m") return 300
+  return input.configured === "1h" || input.interactive ? 3600 : 300
+}
+
 export interface ProviderOptionsInput extends PromptCacheNamespaceInput {
   readonly apiModelID: string
   readonly sessionID: string

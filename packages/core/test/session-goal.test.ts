@@ -23,7 +23,6 @@ import { SessionHelperPolicy, localTitle } from "@ycoding-ai/core/session/helper
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionExecution } from "@ycoding-ai/core/session/execution"
-import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -96,20 +95,6 @@ const helperPolicy = Layer.succeed(
         : Effect.succeed(undefined),
   }),
 )
-const cachePolicies: SessionCacheRuntime.PolicyInput[] = []
-const cacheObservations: SessionCacheRuntime.Observation[] = []
-const cacheRuntime = Layer.succeed(
-  SessionCacheRuntime.Service,
-  SessionCacheRuntime.Service.of({
-    policy: (input) =>
-      Effect.sync(() => {
-        cachePolicies.push(input)
-        return { ttlSeconds: 300 as const, promoted: false }
-      }),
-    observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
-    generation: () => Effect.succeed(0),
-  }),
-)
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -143,7 +128,6 @@ const it = testEffect(
       [SessionRunnerModel.node, models],
       [SessionHelperPolicy.node, helperPolicy],
       [Config.node, config],
-      [SessionCacheRuntime.node, cacheRuntime],
     ],
   ),
 )
@@ -300,8 +284,6 @@ it.effect("fails with goal.model_unavailable instead of falling back to the Sess
 it.effect("preserves conversation-aware goal synthesis", () =>
   Effect.gen(function* () {
     requests = []
-    cachePolicies.length = 0
-    cacheObservations.length = 0
     modelAvailable = true
     yield* configureGoalAgent
     const sessionID = SessionV2.ID.make("ses_goal_synthesis")
@@ -328,19 +310,6 @@ it.effect("preserves conversation-aware goal synthesis", () =>
     const promptCacheKey = requests[0]?.providerOptions?.openai?.promptCacheKey
     expect(typeof promptCacheKey).toBe("string")
     if (typeof promptCacheKey !== "string") return yield* Effect.die("prompt cache key missing")
-    expect(cachePolicies).toHaveLength(1)
-    expect(cachePolicies[0]).toMatchObject({
-      modelID: "goal-model",
-      configured: "adaptive",
-    })
-    expect(cacheObservations).toEqual([
-      {
-        namespace: promptCacheKey,
-        cacheRead: 3,
-        cacheWrite: 2,
-        eligible: 15,
-      },
-    ])
   }),
 )
 

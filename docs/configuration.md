@@ -431,7 +431,7 @@ The optional `efficiency` block controls provider-request amplification and prom
 | `openai_responses_continuation`          | `auto`, `on`, `off`            | `auto`     | Reuse compatible durable direct OpenAI Responses state when state mode is `stored` and effective storage allows. |
 | `openai_responses_state`                 | `stored`, `stateless`          | `stored`   | Select provider-stored response-ID continuation or stateless opaque replay for direct OpenAI Responses.          |
 
-`prompt_cache.anthropic_ttl: "adaptive"` starts every namespace at five minutes. After two provider-reported reusable cache reads or writes for the same stable namespace within five minutes, later requests use the one-hour bucket. Missing cache telemetry, a namespace change, a stale observation, or a model without published extended-TTL support keeps the five-minute bucket. This process-local optimization is bounded and is not required for correctness.
+`prompt_cache.anthropic_ttl: "adaptive"` gives root Session steps the one-hour bucket from their first request. Child Sessions and title, goal, and compaction requests get the five-minute bucket. A request source never changes its TTL, because changing it misses every cache entry written earlier. Models without published extended-TTL support always use five minutes.
 
 ## Image analysis fallback
 

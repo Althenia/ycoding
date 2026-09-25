@@ -31,7 +31,6 @@ import { SessionHistory } from "@ycoding-ai/core/session/history"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
 import { SessionProviderRequest } from "@ycoding-ai/core/session/provider-request"
-import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionSchema } from "@ycoding-ai/core/session/schema"
@@ -73,14 +72,6 @@ const client = Layer.mock(LLMClient.Service)({
   generate: () => Effect.die("unused"),
 })
 
-const cacheRuntime = Layer.succeed(
-  SessionCacheRuntime.Service,
-  SessionCacheRuntime.Service.of({
-    policy: () => Effect.succeed({ ttlSeconds: 300, promoted: false }),
-    observe: () => Effect.void,
-    generation: () => Effect.succeed(0),
-  }),
-)
 const models = Layer.mock(SessionRunnerModel.Service)({
   resolve: () => Effect.succeed(SessionRunnerModel.resolved(model)),
 })
@@ -146,7 +137,6 @@ const testWithConfig = (compaction = new ConfigCompaction.Info({ keep_recent_mes
       [
         [llmClient, client],
         [Config.node, configLayer(compaction)],
-        [SessionCacheRuntime.node, cacheRuntime],
         [SessionRunnerModel.node, models],
         [SessionHelperPolicy.node, helperPolicy],
         [Project.node, projects],

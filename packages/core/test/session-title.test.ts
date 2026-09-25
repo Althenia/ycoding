@@ -12,7 +12,6 @@ import { EventV2 } from "@ycoding-ai/core/event"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { SessionProjector } from "@ycoding-ai/core/session/projector"
-import { SessionCacheRuntime } from "@ycoding-ai/core/session/runner/cache-runtime"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
 import { SessionProviderRequestTable, SessionTable } from "@ycoding-ai/core/session/sql"
 import { SessionStore } from "@ycoding-ai/core/session/store"
@@ -74,21 +73,6 @@ const models = Layer.mock(SessionRunnerModel.Service)({
   resolve: () => Effect.succeed(SessionRunnerModel.resolved(model, undefined, cost)),
 })
 let titleMode: SessionHelperPolicy.TitleMode = "local"
-let anthropicTtl: NonNullable<ConfigEfficiency.PromptCache["anthropic_ttl"]> = "adaptive"
-const cachePolicies: SessionCacheRuntime.PolicyInput[] = []
-const cacheObservations: SessionCacheRuntime.Observation[] = []
-const cacheRuntime = Layer.succeed(
-  SessionCacheRuntime.Service,
-  SessionCacheRuntime.Service.of({
-    policy: (input) =>
-      Effect.sync(() => {
-        cachePolicies.push(input)
-        return { ttlSeconds: 300 as const, promoted: false }
-      }),
-    observe: (input) => Effect.sync(() => void cacheObservations.push(input)),
-    generation: () => Effect.succeed(0),
-  }),
-)
 const config = Layer.succeed(
   Config.Service,
   Config.Service.of({
@@ -98,7 +82,7 @@ const config = Layer.succeed(
           type: "document",
           info: new Config.Info({
             efficiency: new ConfigEfficiency.Info({
-              prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: anthropicTtl }),
+              prompt_cache: new ConfigEfficiency.PromptCache({ anthropic_ttl: "adaptive" }),
             }),
           }),
         }),
@@ -131,7 +115,6 @@ const it = testEffect(
       [SessionRunnerModel.node, models],
       [SessionHelperPolicy.node, helperPolicy],
       [Config.node, config],
-      [SessionCacheRuntime.node, cacheRuntime],
     ],
   ),
 )
@@ -198,10 +181,7 @@ it.effect("uses a deterministic local title by default without a provider call",
 it.effect("preserves model-generated titles when explicitly enabled", () =>
   Effect.gen(function* () {
     requests = []
-    cachePolicies.length = 0
-    cacheObservations.length = 0
     titleMode = "model"
-    anthropicTtl = "1h"
     const agentService = yield* AgentV2.Service
     yield* agentService.transform((editor) => {
       editor.update(AgentV2.ID.make("title"), (agent) => {
@@ -239,11 +219,6 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
       .where(eq(SessionProviderRequestTable.session_id, sessionID)).get()).toMatchObject({
       timing: { promptEvalDurationNs: 4_000_000 },
     })
-    expect(cachePolicies).toHaveLength(1)
-    expect(cachePolicies[0]).toMatchObject({
-      modelID: "title-model",
-      configured: "1h",
-    })
     const promptCacheKey = requests[0]?.providerOptions?.openai?.promptCacheKey
     expect(typeof promptCacheKey).toBe("string")
     if (typeof promptCacheKey !== "string") {
@@ -251,15 +226,6 @@ it.effect("preserves model-generated titles when explicitly enabled", () =>
       return
     }
     expect(promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
-    expect(promptCacheKey).toBe(cachePolicies[0]?.namespace)
-    expect(cacheObservations).toEqual([
-      {
-        namespace: promptCacheKey,
-        cacheRead: 3,
-        cacheWrite: 2,
-        eligible: 15,
-      },
-    ])
   }),
 )
 

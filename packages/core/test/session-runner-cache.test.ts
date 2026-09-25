@@ -545,7 +545,7 @@ test("rotation is per-provider and stable for non-supporting routes", () => {
   const anthropicMsg1 = SessionRunnerCache.promptCacheNamespace({ ...base, providerID: "anthropic", routeID: "anthropic-messages" }, t1)
   expect(anthropicMsg0).toBe(anthropicMsg1)
 
-  // Generic namespace without routeID stays stable (used for cache-runtime policy)
+  // Generic namespace without routeID stays stable
   const generic0 = SessionRunnerCache.promptCacheNamespace(base, t0)
   const generic1 = SessionRunnerCache.promptCacheNamespace(base, t1)
   expect(generic0).toBe(generic1)
@@ -553,4 +553,14 @@ test("rotation is per-provider and stable for non-supporting routes", () => {
   // Window helper is deprecated — now always 0 (stable namespace, no time rotation)
   expect(SessionRunnerCache.promptCacheRotationWindow(t0)).toBe(0)
   expect(SessionRunnerCache.promptCacheRotationWindow(t1)).toBe(0)
+})
+
+test("anthropicTtlSeconds fixes one TTL per request source", () => {
+  const ttl = (configured: "adaptive" | "5m" | "1h", interactive: boolean, modelID = "claude-sonnet-4-5") =>
+    SessionRunnerCache.anthropicTtlSeconds({ modelID, configured, interactive })
+
+  expect([ttl("adaptive", true), ttl("adaptive", false)]).toEqual([3600, 300])
+  expect([ttl("1h", true), ttl("1h", false)]).toEqual([3600, 3600])
+  expect([ttl("5m", true), ttl("5m", false)]).toEqual([300, 300])
+  expect([ttl("adaptive", true, "custom-model"), ttl("1h", true, "custom-model")]).toEqual([300, 300])
 })
