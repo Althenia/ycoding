@@ -8,7 +8,7 @@ type FetchInput = Parameters<typeof fetch>[0]
 type FetchInit = NonNullable<Parameters<typeof fetch>[1]>
 type FetchBody = FetchInit["body"]
 
-const defaultVersion = "2.1.220"
+const defaultVersion = "2.1.280"
 const systemIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
 const billingPrefix = "x-anthropic-billing-header"
 const toolPrefix = "mcp_"
@@ -18,6 +18,9 @@ const oauthBeta = "oauth-2025-04-20"
 const interleavedThinkingBeta = "interleaved-thinking-2025-05-14"
 const contextManagementBeta = "context-management-2025-06-27"
 const promptCachingScopeBeta = "prompt-caching-scope-2026-01-05"
+const advisorToolBeta = "advisor-tool-2026-03-01"
+const thinkingTokenCountBeta = "thinking-token-count-2026-05-13"
+const extendedCacheTtlBeta = "extended-cache-ttl-2025-04-11"
 const effortBeta = "effort-2025-11-24"
 const longContextBetas = ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"] as const
 const claudeCodeSessionID = randomUUID()
@@ -40,16 +43,19 @@ export function getClaudeCodeModelBetas(modelID: string, excluded = new Set<stri
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean)
-  const defaults = [
+  let defaults = [
     claudeCodeBeta,
     oauthBeta,
-    ...(capabilities.adaptiveThinking !== "unsupported" || capabilities.manualThinking
-      ? [interleavedThinkingBeta]
-      : []),
-    ...(model.generation !== undefined && model.generation >= 4 ? [contextManagementBeta] : []),
+    interleavedThinkingBeta,
+    contextManagementBeta,
     promptCachingScopeBeta,
-    ...(capabilities.effort.length > 0 ? [effortBeta] : []),
+    advisorToolBeta,
+    thinkingTokenCountBeta,
+    extendedCacheTtlBeta,
   ]
+  if (capabilities.effort.length > 0) defaults = [...defaults, effortBeta]
+  const lower = modelID.toLowerCase()
+  if (/opus-4-5|4-6|4-7/.test(lower) && !defaults.includes(effortBeta)) defaults = [...defaults, effortBeta]
   return [...new Set([...defaults, ...configured])].filter(
     (beta) => !excluded.has(beta) && beta !== "context-1m-2025-08-07",
   )

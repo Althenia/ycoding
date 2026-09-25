@@ -60,13 +60,16 @@ export function capabilities(modelID: string): Capabilities {
       sampling: "default-only" as const,
       midConversationSystem: true,
     }
-    if (id !== "claude-opus-5") return shared
-    return {
-      ...shared,
-      cacheMinimumTokens: 512,
-      maxContextTokens: 1_000_000,
-      maxOutputTokens: 128_000,
+    if (id === "claude-opus-5") {
+      return {
+        ...shared,
+        cacheMinimumTokens: 512,
+        maxContextTokens: 1_000_000,
+        maxOutputTokens: 128_000,
+      }
     }
+    if (id === "claude-opus-5-5") return shared
+    return shared
   }
 
   if (parsed.generation === 5 && (parsed.family === "fable" || parsed.family === "mythos")) {
@@ -78,13 +81,16 @@ export function capabilities(modelID: string): Capabilities {
       sampling: "default-only" as const,
       midConversationSystem: true,
     }
-    if (id !== "claude-fable-5") return shared
-    return {
-      ...shared,
-      cacheMinimumTokens: 512,
-      maxContextTokens: 1_000_000,
-      maxOutputTokens: 128_000,
+    if (id === "claude-fable-5") {
+      return {
+        ...shared,
+        cacheMinimumTokens: 512,
+        maxContextTokens: 1_000_000,
+        maxOutputTokens: 128_000,
+      }
     }
+    if (id === "claude-fable-5-1") return shared
+    return shared
   }
 
   if (parsed.generation === 5) {
