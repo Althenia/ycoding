@@ -904,6 +904,65 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  it.effect("defaults GPT-5.6 direct Responses retained reasoning context", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAIResponses.route.with({ auth: Auth.bearer("test") }).model({ id: "gpt-5.6" }),
+          prompt: "Think.",
+          providerOptions: { openai: { promptCacheKey: "session-key" } },
+        }),
+      )
+
+      expect(prepared.body.reasoning?.context).toBe("all_turns")
+    }),
+  )
+
+  it.effect("does not default retained reasoning context before GPT-5.6 or on the Codex route", () =>
+    Effect.gen(function* () {
+      const oldModel = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.5"),
+          prompt: "Think.",
+        }),
+      )
+      const codex = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" }).responses("gpt-5.6")
+      const codexRoute = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.update(codex, { route: codex.route.with({ id: "openai-codex-responses" }) }),
+          prompt: "Think.",
+        }),
+      )
+
+      expect(oldModel.body.reasoning?.context).toBeUndefined()
+      expect(codexRoute.body.reasoning?.context).toBeUndefined()
+    }),
+  )
+
+  it.effect("supports 24h prompt-cache retention for Meta Muse Spark", () =>
+    Effect.gen(function* () {
+      const route = OpenAI.configure({ baseURL: "https://api.openai.test/v1/", apiKey: "test" })
+        .responses("muse-spark-1.3").route
+      const supported = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.make({ id: "muse-spark-1.3", provider: "meta", route }),
+          prompt: "Think.",
+          providerOptions: { openai: { promptCacheRetention: "24h" } },
+        }),
+      )
+      const unsupported = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          model: Model.make({ id: "meta/unsupported-model", provider: "meta", route }),
+          prompt: "Think.",
+          providerOptions: { openai: { promptCacheRetention: "24h" } },
+        }),
+      )
+
+      expect(supported.body.prompt_cache_retention).toBe("24h")
+      expect(unsupported.body.prompt_cache_retention).toBeUndefined()
+    }),
+  )
+
   describe("prompt_cache_retention / prompt_cache_options family gating", () => {
     // GPT-5.6+ uses cache_options. Earlier models only receive retention when
     // OpenAI lists that exact family as supporting it; unsupported fields return

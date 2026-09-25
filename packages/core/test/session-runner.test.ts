@@ -1869,7 +1869,7 @@ describe("SessionRunnerLLM", () => {
         .map((request) => request.providerOptions?.openai?.promptCacheKey)
         .filter((key): key is string => typeof key === "string")
       expect(keys.length).toBe(5)
-      expect(records.map((record) => record.promptCacheKey)).toEqual(keys)
+      expect(new Set(records.map((record) => record.promptCacheKey)).size).toBe(1)
       expect(new Set(records.map((record) => record.systemDigest)).size).toBe(1)
       expect(new Set(records.map((record) => record.toolDigest)).size).toBe(1)
       expect(keys.every((key) => key === keys[0])).toBe(true)
@@ -4876,7 +4876,8 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       const namespaces = requests.map((request) => request.providerOptions?.openai?.promptCacheKey)
-      expect(namespaces[0]).toBe(namespaces[1])
+      // Concurrent Sessions never pool their request rate under one provider key.
+      expect(namespaces[0]).not.toBe(namespaces[1])
       expect(namespaces[0]).toMatch(/^[0-9a-f]{64}$/)
       const sessionIDs = requests.map((request) => request.providerOptions?.openrouter?.sessionID)
       expect(sessionIDs[0]).not.toBe(namespaces[0])
@@ -4913,7 +4914,11 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
       yield* session.resume(otherSessionID)
 
-      const namespaces = requests.map((request) => request.providerOptions?.openai?.promptCacheKey)
+      const ledger = yield* SessionProviderRequest.Service
+      const namespaces = [
+        ...(yield* ledger.list(sessionID)).map((record) => record.promptCacheKey),
+        ...(yield* ledger.list(otherSessionID)).map((record) => record.promptCacheKey),
+      ]
       expect(namespaces).toHaveLength(2)
       expect(namespaces[0]).not.toBe(namespaces[1])
       expect(requests[1]?.system.map((part) => part.text)).toEqual(["Session-specific hook output"])
@@ -4921,7 +4926,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("shares a stable cache namespace across long session IDs", () =>
+  it.effect("shares a stable cache namespace across long session IDs with Session-scoped wire keys", () =>
     Effect.gen(function* () {
       const session = yield* setup
       const longSessionID = SessionV2.ID.make(`ses_${"a".repeat(64)}`)
@@ -4942,8 +4947,15 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(longSessionID)
       yield* session.resume(otherLongSessionID)
 
+      const ledger = yield* SessionProviderRequest.Service
+      const namespaces = [
+        ...(yield* ledger.list(longSessionID)).map((record) => record.promptCacheKey),
+        ...(yield* ledger.list(otherLongSessionID)).map((record) => record.promptCacheKey),
+      ]
+      expect(namespaces).toHaveLength(2)
+      expect(namespaces[0]).toBe(namespaces[1])
       const keys = requests.map((request) => request.providerOptions?.openai?.promptCacheKey)
-      expect(keys[0]).toBe(keys[1])
+      expect(keys[0]).not.toBe(keys[1])
       expect(keys.every((key) => typeof key === "string" && key.length === 64)).toBe(true)
       const sessionIDs = requests.map((request) => request.providerOptions?.openrouter?.sessionID)
       expect(sessionIDs[0]).not.toBe(keys[0])

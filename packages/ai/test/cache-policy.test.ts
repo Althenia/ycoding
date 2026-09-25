@@ -132,7 +132,132 @@ describe("auto TTL split", () => {
 })
 
 describe("auto message anchors", () => {
-  it.effect("anchors the two most recent cacheable messages on direct Anthropic", () =>
+  const cacheType = (message: Message | undefined) => {
+    const part = message?.content[0]
+    return part !== undefined && "cache" in part ? part.cache?.type : undefined
+  }
+
+  const fanOutMessages = () => {
+    const ids = Array.from({ length: 12 }, (_, index) => `call_${index}`)
+    return [
+      Message.user("task"),
+      Message.assistant([
+        Message.text("working"),
+        ...ids.map((id) => ToolCallPart.make({ id, name: "lookup", input: {} })),
+      ]),
+      ...ids.map((id) => Message.tool({ id, name: "lookup", result: "ok" })),
+    ]
+  }
+
+  it.effect("keeps explicit tail anchors on the prior assistant boundary and final fan-out result", () =>
+    Effect.gen(function* () {
+      const request = LLM.request({
+        model: anthropicModel,
+        messages: fanOutMessages(),
+        cache: { tools: true, system: true, messages: { tail: 2 } },
+      })
+      const applied = applyCachePolicy(request)
+      expect(applied.messages[0]?.content[0]).toMatchObject({ text: "task" })
+      expect(cacheType(applied.messages[0])).toBe("ephemeral")
+      expect(cacheType(applied.messages.at(-2))).toBeUndefined()
+      expect(cacheType(applied.messages.at(-1))).toBe("ephemeral")
+
+      const prepared = yield* LLMClient.prepare(request)
+      const body = prepared.body as {
+        messages: ReadonlyArray<{
+          content: ReadonlyArray<{ type: string; text?: string; cache_control?: unknown; tool_use_id?: string }>
+        }>
+      }
+      expect(body.messages[0]?.content[0]).toMatchObject({
+        type: "text",
+        text: "task",
+        cache_control: { type: "ephemeral" },
+      })
+      const results = body.messages.flatMap((message) => message.content.filter((block) => block.type === "tool_result"))
+      expect(results.at(-2)?.cache_control).toBeUndefined()
+      expect(results.at(-1)).toMatchObject({ type: "tool_result", cache_control: { type: "ephemeral" } })
+      expect(
+        body.messages.flatMap((message) => message.content).filter((block) => block.cache_control !== undefined),
+      ).toHaveLength(2)
+    }),
+  )
+
+  it.effect("keeps auto anchors on the prior assistant boundary and final fan-out result", () =>
+    Effect.sync(() => {
+      const applied = applyCachePolicy(
+        LLM.request({ model: anthropicModel, messages: fanOutMessages(), cache: "auto" }),
+      )
+      expect(applied.messages[0]?.content[0]).toMatchObject({ text: "task" })
+      expect(cacheType(applied.messages[0])).toBe("ephemeral")
+      expect(cacheType(applied.messages.at(-2))).toBeUndefined()
+      expect(cacheType(applied.messages.at(-1))).toBe("ephemeral")
+    }),
+  )
+
+  it.effect("anchors a single tool result and a new user turn at both boundaries", () =>
+    Effect.gen(function* () {
+      const single = applyCachePolicy(
+        LLM.request({
+          model: anthropicModel,
+          messages: [
+            Message.user("task"),
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "lookup", input: {} })]),
+            Message.tool({ id: "call_1", name: "lookup", result: "ok" }),
+          ],
+          cache: { messages: { tail: 2 } },
+        }),
+      )
+      expect(single.messages[0]?.content[0]).toMatchObject({ text: "task" })
+      expect(cacheType(single.messages[0])).toBe("ephemeral")
+      expect(cacheType(single.messages[2])).toBe("ephemeral")
+
+      const nextTurn = applyCachePolicy(
+        LLM.request({
+          model: anthropicModel,
+          messages: [Message.user("user1"), Message.assistant("answer"), Message.user("user2")],
+          cache: { messages: { tail: 2 } },
+        }),
+      )
+      expect(nextTurn.messages.map((message) => message.content[0]?.type === "text" && message.content[0].text)).toEqual([
+        "user1",
+        "answer",
+        "user2",
+      ])
+      expect(cacheType(nextTurn.messages[0])).toBe("ephemeral")
+      expect(cacheType(nextTurn.messages[1])).toBeUndefined()
+      expect(cacheType(nextTurn.messages[2])).toBe("ephemeral")
+    }),
+  )
+
+  it.effect("keeps newest-first selection without an assistant and excludes trailing volatile messages", () =>
+    Effect.sync(() => {
+      const noAssistant = applyCachePolicy(
+        LLM.request({
+          model: anthropicModel,
+          messages: [Message.user("older"), Message.user("newest")],
+          cache: { messages: { tail: 1 } },
+        }),
+      )
+      expect(noAssistant.messages.map((message) => message.content[0]?.type === "text" && message.content[0].text)).toEqual([
+        "older",
+        "newest",
+      ])
+      expect(cacheType(noAssistant.messages[0])).toBeUndefined()
+      expect(cacheType(noAssistant.messages[1])).toBe("ephemeral")
+
+      const volatile = applyCachePolicy(
+        LLM.request({
+          model: anthropicModel,
+          messages: [Message.user("stable"), new Message({ role: "user", content: [{ type: "text", text: "volatile" }], volatile: true })],
+          cache: { messages: { tail: 2 } },
+        }),
+      )
+      expect(cacheType(volatile.messages[0])).toBe("ephemeral")
+      expect(cacheType(volatile.messages[1])).toBeUndefined()
+    }),
+  )
+
+  it.effect("anchors the prior assistant boundary and latest message on direct Anthropic", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare(
         LLM.request({
@@ -151,8 +276,8 @@ describe("auto message anchors", () => {
         messages: ReadonlyArray<{ content: ReadonlyArray<{ cache_control?: unknown }> }>
       }
       expect(body.messages.map((message) => message.content.at(-1)?.cache_control)).toEqual([
-        undefined,
         { type: "ephemeral" },
+        undefined,
         { type: "ephemeral" },
       ])
     }),
@@ -645,10 +770,10 @@ describe("applyCachePolicy", () => {
         },
         system: [{ text: "Sys" }, { cachePoint: { type: "default" } }],
         messages: [
-          { role: "user", content: [{ text: "first user" }] },
+          { role: "user", content: [{ text: "first user" }, { cachePoint: { type: "default" } }] },
           {
             role: "assistant",
-            content: [{ text: "reply" }, { cachePoint: { type: "default" } }],
+            content: [{ text: "reply" }],
           },
           {
             role: "user",
@@ -854,10 +979,8 @@ describe("applyCachePolicy", () => {
       const body = prepared.body as {
         messages: Array<{ content: Array<{ cachePoint?: unknown }> }>
       }
-      expect(body.messages[0]?.content[0]?.cachePoint).toBeUndefined()
-      expect(body.messages[1]?.content[1]?.cachePoint).toEqual({
-        type: "default",
-      })
+      expect(body.messages[0]?.content[1]?.cachePoint).toEqual({ type: "default" })
+      expect(body.messages[1]?.content[1]?.cachePoint).toBeUndefined()
       expect(body.messages[2]?.content.at(-1)?.cachePoint).toEqual({
         type: "default",
       })
@@ -1240,8 +1363,8 @@ describe("volatile messages", () => {
     )
 
     expect(placement(applied.messages)).toEqual([
-      [undefined],
       [new CacheHint({ type: "ephemeral" })],
+      [undefined],
       [new CacheHint({ type: "ephemeral" })],
       [undefined],
     ])
@@ -1371,8 +1494,8 @@ describe("volatile messages", () => {
     )
 
     expect(placement(applied.messages)).toEqual([
-      [undefined],
       [new CacheHint({ type: "ephemeral" })],
+      [undefined],
       [new CacheHint({ type: "ephemeral" })],
       [undefined],
       [undefined],
@@ -1401,8 +1524,8 @@ describe("volatile messages", () => {
     )
 
     expect(placement(applied.messages)).toEqual([
-      [undefined],
       [new CacheHint({ type: "ephemeral" })],
+      [undefined],
       [new CacheHint({ type: "ephemeral" })],
     ])
   })

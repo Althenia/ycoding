@@ -203,6 +203,22 @@ const lastMarkableMessages = (
   return found.reverse()
 }
 
+const rollingMarkableMessages = (messages: ReadonlyArray<Message>, count: number) => {
+  if (count <= 0) return []
+  const candidates = lastMarkableMessages(messages, messages.length)
+  const latestAssistant = messages.findLastIndex((message) => message.role === "assistant")
+  if (latestAssistant < 0) return candidates.slice(-count)
+
+  const last = candidates.at(-1)
+  const previous = candidates.findLast((index) => index < latestAssistant)
+  const selected = [...new Set([last, previous].filter((index): index is number => index !== undefined))]
+  for (const index of candidates.slice().reverse()) {
+    if (selected.length >= count) break
+    if (!selected.includes(index)) selected.push(index)
+  }
+  return selected.sort((left, right) => left - right).slice(-count)
+}
+
 const firstMarkableMessages = (
   messages: ReadonlyArray<Message>,
   count: number,
@@ -268,7 +284,8 @@ const markAutoMessages = (
   let next: Message[] | undefined
   // Ascending so the budget is spent in wire order: when manual hints leave
   // fewer slots than requested, the older anchor survives and the tail is shed.
-  for (const index of lastMarkableMessages(messages, anchors, gpt56Roles)) {
+  for (const index of
+    gpt56Roles === undefined ? rollingMarkableMessages(messages, anchors) : lastMarkableMessages(messages, anchors, gpt56Roles)) {
     const current = (next ?? messages)[index]!
     const marked = markMessage(current, index, hint, reserve, gpt56Roles)
     if (marked === current) continue
@@ -321,7 +338,7 @@ const markMessages = (
     return next ?? messages
   }
   let next: Message[] | undefined
-  for (const index of lastMarkableMessages(messages, strategy.tail)) {
+  for (const index of rollingMarkableMessages(messages, strategy.tail)) {
     const current = (next ?? messages)[index]!
     const marked = markMessage(current, index, hint, reserve, gpt56Roles)
     if (marked === current) continue

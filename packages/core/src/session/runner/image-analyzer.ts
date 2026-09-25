@@ -146,6 +146,32 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/ImageAnalyzer") {}
 
+export const createAnalysisMemo = () => {
+  const analyses = new Map<string, string>()
+  return {
+    analyze: (
+      modelLabel: string,
+      prompt: string,
+      digest: string,
+      run: () => Effect.Effect<string>,
+    ): Effect.Effect<string> => {
+      const key = JSON.stringify([modelLabel, prompt, digest])
+      const cached = analyses.get(key)
+      if (cached !== undefined) return Effect.succeed(cached)
+      return Effect.map(run(), (analysis) => {
+        if (analysis.length === 0 || analysis === "[analysis failed]" || analysis === "[no description returned]") {
+          return analysis
+        }
+        const existing = analyses.get(key)
+        if (existing !== undefined) return existing
+        analyses.set(key, analysis)
+        if (analyses.size > 512) analyses.delete(analyses.keys().next().value!)
+        return analysis
+      })
+    },
+  }
+}
+
 const resolveVisionModel = Effect.fn("ImageAnalyzer.resolveVisionModel")(function* () {
   const config = yield* Config.Service
   const catalog = yield* Catalog.Service
@@ -182,6 +208,7 @@ const layer = Layer.effect(
     const config = yield* Config.Service
     const catalog = yield* Catalog.Service
     const integrations = yield* Integration.Service
+    const memo = createAnalysisMemo()
 
     const resolveLocal = Effect.fn("ImageAnalyzer.resolveVisionModel.local")(function* () {
       const entries = yield* config.entries()
@@ -252,20 +279,23 @@ const layer = Layer.effect(
                   }),
                 ],
               })
-              const text = yield* Effect.gen(function* () {
-                const response = yield* llm.generate(request)
-                const joined = response.events
-                  .filter((event) => event.type === "text-delta" || event.type === "text-end")
-                  .map((event) => (event.type === "text-delta" ? (event as { text: string }).text : ""))
-                  .join("")
-                  .trim()
-                return joined
-              }).pipe(Effect.orElseSucceed(() => "[analysis failed]"))
-              const raw = text.length > 0 ? text : "[no description returned]"
-              const normalized = normalizeToonAnalysis(raw)
-              // Validate via decode for telemetry; keep verbatim even if invalid to avoid dropping content
-              if (normalized.length > 0) isValidToon(normalized)
-              const analysis = normalized.length > 0 ? normalized : raw.trim()
+              const analysis = yield* memo.analyze(label, prompt, input.file.content.digest, () =>
+                Effect.gen(function* () {
+                  const text = yield* Effect.gen(function* () {
+                    const response = yield* llm.generate(request)
+                    return response.events
+                      .filter((event) => event.type === "text-delta" || event.type === "text-end")
+                      .map((event) => (event.type === "text-delta" ? (event as { text: string }).text : ""))
+                      .join("")
+                      .trim()
+                  }).pipe(Effect.orElseSucceed(() => "[analysis failed]"))
+                  const raw = text.length > 0 ? text : "[no description returned]"
+                  const normalized = normalizeToonAnalysis(raw)
+                  // Validate via decode for telemetry; keep verbatim even if invalid to avoid dropping content
+                  if (normalized.length > 0) isValidToon(normalized)
+                  return normalized.length > 0 ? normalized : raw.trim()
+                }),
+              )
               return [input.file.content.digest, formatFallbackBlock({ file: input.file, analysis, modelLabel: label })] as const
             }),
           { concurrency: 3 },

@@ -143,7 +143,11 @@ function normalize(input: Record<string, SourceProvider>): readonly Snapshot[] {
       const baseCost = cost(model.cost)
       const variants = reasoningVariants(item, model)
       const id = ModelV2.ID.make(model.id)
-      models.push(modelInfo(providerID, id, model, { cost: baseCost, variants }))
+      models.push(modelInfo(providerID, id, model, {
+        cost: baseCost,
+        variants,
+        providerNpm: model.provider?.npm ?? item.npm,
+      }))
       for (const [mode, options] of Object.entries(model.experimental?.modes ?? {})) {
         const modeID = ModelV2.ID.make(`${model.id}-${mode}`)
         models.push(
@@ -152,6 +156,7 @@ function normalize(input: Record<string, SourceProvider>): readonly Snapshot[] {
             cost: mergeCost(baseCost, options.cost),
             request: options.provider,
             variants,
+            providerNpm: model.provider?.npm ?? item.npm,
           }),
         )
       }
@@ -748,6 +753,7 @@ function modelInfo(
     readonly cost?: ModelV2.Info["cost"]
     readonly request?: NonNullable<NonNullable<SourceModel["experimental"]>["modes"]>[string]["provider"]
     readonly variants?: NonNullable<ModelV2.Info["variants"]>
+    readonly providerNpm?: string
   } = {},
 ): ModelV2.Info {
   return {
@@ -757,7 +763,15 @@ function modelInfo(
     name: input.name ?? model.name,
     family: model.family ? ModelV2.Family.make(model.family) : undefined,
     package: model.provider?.npm ? ProviderV2.aisdk(model.provider.npm) : undefined,
-    settings: model.provider?.api ? { baseURL: model.provider.api } : undefined,
+    settings:
+      model.provider?.api || (input.providerNpm === "@ai-sdk/openai" && model.reasoning)
+        ? {
+            ...(model.provider?.api ? { baseURL: model.provider.api } : {}),
+            ...(input.providerNpm === "@ai-sdk/openai" && model.reasoning
+              ? { include: OPENAI_INCLUDE_ENCRYPTED_REASONING }
+              : {}),
+          }
+        : undefined,
     capabilities: {
       tools: model.tool_call,
       input: [...(model.modalities?.input ?? [])],

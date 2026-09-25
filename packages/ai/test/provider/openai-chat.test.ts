@@ -732,6 +732,47 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  it.effect("normalizes DeepSeek top-level cache usage and prefers nested cached tokens", () =>
+    Effect.gen(function* () {
+      const fromTopLevel = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              deltaChunk({}, "stop"),
+              usageChunk({
+                prompt_tokens: 100,
+                prompt_cache_hit_tokens: 80,
+                prompt_cache_miss_tokens: 20,
+                completion_tokens: 1,
+              }),
+            ),
+          ),
+        ),
+      )
+      const withNested = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              deltaChunk({}, "stop"),
+              usageChunk({
+                prompt_tokens: 100,
+                prompt_cache_hit_tokens: 80,
+                prompt_cache_miss_tokens: 20,
+                prompt_tokens_details: { cached_tokens: 60 },
+                completion_tokens: 1,
+              }),
+            ),
+          ),
+        ),
+      )
+
+      expect(fromTopLevel.usage?.cacheReadInputTokens).toBe(80)
+      expect(fromTopLevel.usage?.nonCachedInputTokens).toBe(20)
+      expect(withNested.usage?.cacheReadInputTokens).toBe(60)
+      expect(withNested.usage?.nonCachedInputTokens).toBe(40)
+    }),
+  )
+
   it.effect("surfaces a top-level cache_discount (OpenRouter) without failing decode", () =>
     Effect.gen(function* () {
       const body = sseEvents(

@@ -1,4 +1,6 @@
 import path from "path"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { describe, expect } from "bun:test"
 import { Money } from "@ycoding-ai/schema/money"
 import { Effect, Layer } from "effect"
@@ -29,6 +31,80 @@ const models = (file: string) =>
   AppNodeBuilder.build(ModelsDev.node, [[ModelsDev.node, ModelsDev.configured({ file, fetch: false })]])
 
 describe("ModelsDevPlugin", () => {
+  it.effect("requests encrypted reasoning only for reasoning OpenAI base models", () =>
+    Effect.promise(() => mkdtemp(path.join(tmpdir(), "ycoding-models-dev-"))).pipe(
+      Effect.flatMap((directory) => Effect.gen(function* () {
+      const file = path.join(directory, "models.json")
+      yield* Effect.promise(() => Bun.write(file, JSON.stringify({
+        openai: {
+          id: "openai",
+          name: "OpenAI",
+          env: [],
+          npm: "@ai-sdk/openai",
+          api: "https://api.openai.com/v1",
+          models: {
+            reasoning: {
+              id: "reasoning",
+              name: "Reasoning",
+              release_date: "2026-01-01",
+              attachment: false,
+              reasoning: true,
+              tool_call: true,
+              limit: { context: 1000, output: 100 },
+            },
+            plain: {
+              id: "plain",
+              name: "Plain",
+              release_date: "2026-01-01",
+              attachment: false,
+              reasoning: false,
+              tool_call: true,
+              limit: { context: 1000, output: 100 },
+            },
+          },
+        },
+        xai: {
+          id: "xai",
+          name: "xAI",
+          env: [],
+          npm: "@ai-sdk/xai",
+          models: {
+            reasoning: {
+              id: "reasoning",
+              name: "Reasoning",
+              release_date: "2026-01-01",
+              attachment: false,
+              reasoning: true,
+              tool_call: true,
+              limit: { context: 1000, output: 100 },
+            },
+          },
+        },
+      })))
+      const catalog = yield* Catalog.Service
+      const integrations = yield* Integration.Service
+      yield* ModelsDevPlugin.effect(
+        host({
+          catalog: catalogHost(catalog),
+          integration: integrationHost(integrations),
+        }),
+      )
+
+      expect((yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("reasoning")))?.settings).toEqual({
+        baseURL: "https://api.openai.com/v1",
+        include: ["reasoning.encrypted_content"],
+      })
+      expect((yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("plain")))?.settings).toEqual({
+        baseURL: "https://api.openai.com/v1",
+      })
+      expect((yield* catalog.model.get(ProviderV2.ID.make("xai"), ModelV2.ID.make("reasoning")))?.settings).toBeUndefined()
+      }).pipe(
+        Effect.provide(models(path.join(directory, "models.json"))),
+        Effect.ensuring(Effect.promise(() => rm(directory, { recursive: true, force: true }))),
+      )),
+    ),
+  )
+
   it.effect("projects normalized models.dev snapshots into the catalog", () =>
     Effect.gen(function* () {
       const integrations = yield* Integration.Service
@@ -233,6 +309,10 @@ describe("ModelsDevPlugin", () => {
       )
 
       const model = yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-reasoning"))
+      expect(model?.settings).toEqual({
+        baseURL: "https://api.openai.com/v1",
+        include: ["reasoning.encrypted_content"],
+      })
       expect(model?.variants?.map((variant) => variant.id)).toEqual([
         ModelV2.VariantID.make("low"),
         ModelV2.VariantID.make("high"),
@@ -273,6 +353,8 @@ describe("ModelsDevPlugin", () => {
       })
 
       const budgetModel = yield* catalog.model.get(ProviderV2.ID.anthropic, ModelV2.ID.make("claude-budget"))
+      expect(budgetModel?.settings).toEqual({ baseURL: "https://api.anthropic.com/v1" })
+      expect(budgetModel?.variants?.[0]?.settings).not.toHaveProperty("include")
       expect(budgetModel?.variants).toContainEqual({
         id: ModelV2.VariantID.make("high"),
         settings: { thinking: { type: "enabled", budgetTokens: 16000 } },

@@ -26,6 +26,7 @@ import { SessionRunCoordinator } from "@ycoding-ai/core/session/run-coordinator"
 import { SessionRunner } from "@ycoding-ai/core/session/runner"
 import * as SessionRunnerLLM from "@ycoding-ai/core/session/runner/llm"
 import { SessionRunnerModel } from "@ycoding-ai/core/session/runner/model"
+import { SessionRunnerCache } from "@ycoding-ai/core/session/runner/cache"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { SessionTable } from "@ycoding-ai/core/session/sql"
@@ -50,8 +51,13 @@ import { agentHost, catalogHost, host } from "./plugin/host"
 
 const cassetteName = "session-runner/openai-chat-streams-text"
 const cassetteDirectory = path.resolve(import.meta.dir, "fixtures/recordings")
-// provider-native/v8 owns this stable namespace for the recorded prompt.
-const expectedPromptCacheKey = "37a99799f1e7e76bea634e42c89228f923b9ce7b1b37792ff5cee024371c5474"
+const sessionID = SessionV2.ID.make("ses_runner_recorded")
+// provider-native/v8 owns this stable namespace for the recorded prompt; the
+// wire key is scoped to the recorded Session.
+const expectedPromptCacheKey = SessionRunnerCache.promptCacheKeyForGeneration(
+  sessionID,
+  "37a99799f1e7e76bea634e42c89228f923b9ce7b1b37792ff5cee024371c5474",
+)
 if (process.env.RECORD === "true") {
   if (process.env.CI !== undefined) throw new Error("Unset CI before recording HTTP cassettes")
   HttpRecorder.removeCassetteSync(cassetteName, { directory: cassetteDirectory })
@@ -190,7 +196,6 @@ const it = testEffect(
     ],
   ),
 )
-const sessionID = SessionV2.ID.make("ses_runner_recorded")
 
 describe("SessionRunnerLLM recorded", () => {
   it.effect("executes one recorded V2 prompt through the recorded HTTP transport", () =>

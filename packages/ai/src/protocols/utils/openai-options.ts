@@ -244,6 +244,10 @@ export const supportsOriginalImageDetail = (modelID: string): boolean => {
 export const DefaultCompactionThreshold = 200_000
 
 const DIRECT_OPENAI_RESPONSE_ROUTES = new Set(["openai-responses", "openai-responses-websocket"])
+const RETAINED_REASONING_CONTEXT_ROUTES = new Set([
+  ...DIRECT_OPENAI_RESPONSE_ROUTES,
+  "openrouter-responses",
+])
 
 const supportsDirectGpt56 = (routeID: string, modelID: string) =>
   DIRECT_OPENAI_RESPONSE_ROUTES.has(routeID) && isGpt56OrLater(modelID)
@@ -256,8 +260,13 @@ export const defaultContextManagement = (
     ? [{ type: "compaction", compactThreshold: DefaultCompactionThreshold }]
     : undefined
 
-export const resolvedReasoningContext = (request: LLMRequest) =>
-  supportsDirectGpt56(request.model.route.id, request.model.id) ? reasoningContext(request) : undefined
+// Replayed GPT-5.6+ reasoning must stay usable across turns. The provider
+// default may vary by model, so these routes state `all_turns` explicitly.
+export const resolvedReasoningContext = (request: LLMRequest) => {
+  if (!RETAINED_REASONING_CONTEXT_ROUTES.has(request.model.route.id) || !isGpt56OrLater(request.model.id))
+    return undefined
+  return reasoningContext(request) ?? "all_turns"
+}
 
 export const resolvedContextManagement = (request: LLMRequest) => {
   if (!supportsDirectGpt56(request.model.route.id, request.model.id)) return undefined
@@ -266,7 +275,7 @@ export const resolvedContextManagement = (request: LLMRequest) => {
 
 export const supportsExtendedPromptCacheRetention = (modelID: string): boolean => {
   const normalized = modelID.toLowerCase().split("/").at(-1)?.replace(MODEL_SNAPSHOT_SUFFIX, "")
-  return normalized !== undefined && EXTENDED_PROMPT_CACHE_MODELS.has(normalized)
+  return normalized !== undefined && (EXTENDED_PROMPT_CACHE_MODELS.has(normalized) || normalized.startsWith("muse-spark-"))
 }
 
 export type PublicOpenAIPromptCacheCapability = "key-only" | "legacy" | "gpt-5.6"

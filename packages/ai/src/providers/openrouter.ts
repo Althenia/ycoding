@@ -158,15 +158,33 @@ export const protocol: any = Protocol.make({
         const body = (yield* OpenAIResponses.protocol.body.from(sanitized)) as unknown as Record<string, unknown>
         const extras = bodyOptions(request.providerOptions?.openrouter)
         const cacheControl = autoPlacementHint(request)
+        const anthropicModel = /^(?:~?anthropic)\//i.test(request.model.id)
         const promptExtra = promptCacheKey && !body.prompt_cache_key ? { prompt_cache_key: promptCacheKey } : {}
         const sessionExtra = sessionID && !(body as Record<string, unknown>).session_id ? { session_id: sessionID } : {}
-        const { store: _store, previous_response_id: _prev, ...rest } = body
+        const { store: _store, previous_response_id: _prev, prompt_cache_options: _cacheOptions, reasoning: _reasoning, ...rest } = body
+        const reasoning = {
+          ...(isRecord(body.reasoning) ? body.reasoning : {}),
+          ...(isRecord(extras.reasoning) ? extras.reasoning : {}),
+        }
+        const { reasoning: _openrouterReasoning, ...otherExtras } = extras
+        const include =
+          OpenAIOptions.include(request) ??
+          (request.providerOptions?.openai?.include === undefined &&
+          request.model.id.startsWith("openai/") &&
+          OpenAIOptions.isGpt56OrLater(request.model.id)
+            ? ["reasoning.encrypted_content"]
+            : undefined)
         return {
           ...rest,
+          ...(include ? { include } : {}),
+          ...(Object.keys(reasoning).length > 0 ? { reasoning } : {}),
           ...promptExtra,
           ...sessionExtra,
-          ...extras,
-          ...(cacheControl
+          ...otherExtras,
+          ...(OpenAIOptions.promptCacheOptions(request)?.mode === "explicit" && _cacheOptions
+            ? { prompt_cache_options: _cacheOptions }
+            : {}),
+          ...(anthropicModel && cacheControl
             ? {
                 cache_control: {
                   type: "ephemeral",
@@ -188,6 +206,8 @@ export const route = Route.make({
   protocol,
   endpoint: Endpoint.path("/responses", { baseURL: profile.baseURL }),
   framing: Framing.sse,
+  providerMetadataKey: "openai",
+  defaults: { providerOptions: { openai: { store: false } } },
 })
 
 export const routes = [route]

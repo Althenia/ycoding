@@ -81,6 +81,7 @@ const PROMPT_CACHE_KEY_ROUTES = new Set([
   "openai-compatible-responses",
   "github-copilot-chat",
   "github-copilot-responses",
+  "ai-sdk:@ai-sdk/github-copilot",
   "ai-sdk:@openrouter/ai-sdk-provider",
   "openrouter",
   "openrouter-responses",
@@ -129,7 +130,6 @@ export const promptCacheNamespace = (
   )
 
 export const promptCacheKeyForGeneration = (sessionID: string, baselineKey: string, generation = 0): string => {
-  if (generation === 0) return baselineKey
   return Hash.sha256(
     canonicalJson({
       namespace: "session-prompt-cache-generation/v1",
@@ -211,7 +211,7 @@ const PROFILE_GATED_ANTHROPIC_CACHE_ROUTES = new Set([
 
 export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) => {
   const baselineKey = promptCacheNamespace(input, now)
-  const promptCacheKey = supportsPromptCacheKey(input.routeID)
+  const wirePromptCacheKey = supportsPromptCacheKey(input.routeID)
     ? promptCacheKeyForGeneration(input.sessionID, baselineKey, input.generation)
     : baselineKey
   const providerSessionID = providerSessionNamespace({
@@ -225,12 +225,12 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
     input.routeID === "openrouter"
   const openrouter = isOpenRouter
     ? {
-        prompt_cache_key: promptCacheKey,
+        prompt_cache_key: wirePromptCacheKey,
         session_id: providerSessionID,
-        promptCacheKey,
+        promptCacheKey: wirePromptCacheKey,
         sessionID: providerSessionID,
       }
-    : { promptCacheKey, sessionID: providerSessionID }
+    : { promptCacheKey: wirePromptCacheKey, sessionID: providerSessionID }
   const isCopilotGpt56 =
     (input.routeID === "github-copilot-chat" || input.routeID === "github-copilot-responses") &&
     OpenAIOptions.isGpt56OrLater(input.apiModelID)
@@ -245,7 +245,7 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
     (input.openaiMode === "auto" || input.openaiMode === "explicit")
   const controlledOpenAI = openaiCacheCapability === "gpt-5.6" && breakpointOpenAI
   const openai = {
-    promptCacheKey,
+    promptCacheKey: wirePromptCacheKey,
     ...(controlledOpenAI
       ? {
           promptCacheOptions: {
@@ -274,7 +274,8 @@ export const providerOptions = (input: ProviderOptionsInput, now = Date.now()) =
       ? { tools: true, system: true, messages: { tail: 2 }, ttlSeconds: input.anthropicTtlSeconds }
       : undefined
   return {
-    promptCacheKey,
+    promptCacheKey: baselineKey,
+    wirePromptCacheKey,
     systemDigest: systemDigest(input.system),
     toolDigest: toolDigest(input.tools),
     providerOptions: { openai, openrouter },

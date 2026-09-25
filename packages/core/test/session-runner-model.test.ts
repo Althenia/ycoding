@@ -922,7 +922,7 @@ describe("SessionRunnerModel", () => {
     Effect.gen(function* () {
       const resolved = yield* SessionRunnerModel.fromCatalogModel(
         model(ProviderV2.aisdk("@ai-sdk/openai"), {
-          settings: { baseURL: "https://openai.example/v1" },
+          settings: { baseURL: "https://openai.example/v1", include: ["reasoning.encrypted_content"] },
           headers: {},
           body: {},
         }),
@@ -954,6 +954,7 @@ describe("SessionRunnerModel", () => {
         prompt: "Hello",
         providerOptions: cache.providerOptions,
       });
+      const prepared = yield* LLMClient.prepare<OpenAIResponsesBody>(request);
       const headers = yield* resolved.route.auth.apply({
         request,
         method: "POST",
@@ -973,8 +974,9 @@ describe("SessionRunnerModel", () => {
       expect(resolved.route.defaults.headers).not.toHaveProperty("OpenAI-Beta");
       expect(headers.authorization).toBe("Bearer chatgpt-token");
       expect(headers["chatgpt-account-id"]).toBe("acct_123");
-      expect(headers["session-id"]).toBe(cache.promptCacheKey);
-      expect(headers["thread-id"]).toBe(cache.promptCacheKey);
+      expect(prepared.body.include).toContain("reasoning.encrypted_content");
+      expect(headers["session-id"]).toBe(cache.wirePromptCacheKey);
+      expect(headers["thread-id"]).toBe(cache.wirePromptCacheKey);
       expect(headers["x-client-request-id"]).toBe(headers["thread-id"]);
 
       const otherCache = SessionRunnerCache.providerOptions({
@@ -999,9 +1001,10 @@ describe("SessionRunnerModel", () => {
         headers: Headers.empty,
       });
       expect(otherCache.promptCacheKey).toBe(cache.promptCacheKey);
-      expect(otherHeaders["session-id"]).toBe(cache.promptCacheKey);
-      expect(otherHeaders["thread-id"]).toBe(cache.promptCacheKey);
-      expect(otherHeaders["x-client-request-id"]).toBe(cache.promptCacheKey);
+      expect(otherCache.wirePromptCacheKey).not.toBe(cache.wirePromptCacheKey);
+      expect(otherHeaders["session-id"]).toBe(otherCache.wirePromptCacheKey);
+      expect(otherHeaders["thread-id"]).toBe(otherCache.wirePromptCacheKey);
+      expect(otherHeaders["x-client-request-id"]).toBe(otherCache.wirePromptCacheKey);
     }),
   );
 
@@ -1072,7 +1075,7 @@ describe("SessionRunnerModel", () => {
         }),
       );
 
-      expect(prepared.body).toMatchObject({ prompt_cache_key: cache.promptCacheKey });
+      expect(prepared.body).toMatchObject({ prompt_cache_key: cache.wirePromptCacheKey });
       expect(prepared.body).not.toHaveProperty("prompt_cache_options");
       expect(prepared.body).not.toHaveProperty("prompt_cache_retention");
       expect(prepared.body.input[0]).toEqual({

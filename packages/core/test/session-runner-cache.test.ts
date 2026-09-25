@@ -60,7 +60,7 @@ test("keeps ordinary keys stable while isolating compaction cache scope", () => 
   expect(compaction).not.toBe(normal)
 })
 
-test("preserves generation zero and derives a generated provider key", () => {
+test("derives Session-scoped provider keys for every generation", () => {
   const now = SessionRunnerCache.PROMPT_CACHE_ROTATION_INTERVAL_MS * 5
   const input = {
     ...base,
@@ -72,15 +72,20 @@ test("preserves generation zero and derives a generated provider key", () => {
   const generationOne = SessionRunnerCache.providerOptions({ ...input, generation: 1 }, now)
 
   expect(generationZero.promptCacheKey).toBe(baseline)
-  expect(generationOne.promptCacheKey).not.toBe(baseline)
-  expect(generationOne.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
-  expect(generationOne.providerOptions.openai.promptCacheKey).toBe(generationOne.promptCacheKey)
-  expect(generationOne.providerOptions.openrouter.promptCacheKey).toBe(generationOne.promptCacheKey)
+  expect(generationZero.providerOptions.openai.promptCacheKey).not.toBe(baseline)
+  expect(
+    SessionRunnerCache.providerOptions({ ...input, generation: 0 }, now).providerOptions.openai.promptCacheKey,
+  ).toBe(generationZero.providerOptions.openai.promptCacheKey)
+  expect(generationOne.promptCacheKey).toBe(baseline)
+  expect(generationOne.providerOptions.openai.promptCacheKey).not.toBe(baseline)
+  expect(generationOne.providerOptions.openai.promptCacheKey).not.toBe(generationZero.providerOptions.openai.promptCacheKey)
+  expect(generationOne.providerOptions.openai.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
+  expect(generationOne.providerOptions.openrouter.promptCacheKey).toBe(generationOne.providerOptions.openai.promptCacheKey)
 
   const other = { ...input, sessionID: "ses_other_generation" }
   expect(SessionRunnerCache.providerOptions({ ...other, generation: 0 }, now).promptCacheKey).toBe(baseline)
   expect(SessionRunnerCache.providerOptions({ ...other, generation: 1 }, now).promptCacheKey).not.toBe(
-    generationOne.promptCacheKey,
+    generationOne.providerOptions.openai.promptCacheKey,
   )
 })
 
@@ -235,7 +240,7 @@ test("separates provider session namespace from the shared prefix key", () => {
   expect(second).toMatch(/^[0-9a-f]{64}$/)
 })
 
-test("different sessions share a prompt cache key but not an OpenRouter session identity", () => {
+test("different sessions keep the baseline key but use distinct wire keys and OpenRouter identities", () => {
   const input = {
     ...base,
     sessionID: "ses_aaa",
@@ -258,13 +263,37 @@ test("different sessions share a prompt cache key but not an OpenRouter session 
   expect(first.promptCacheKey).toBe(third.promptCacheKey)
   expect(first.promptCacheKey).toMatch(/^[0-9a-f]{64}$/)
   expect(first.providerOptions.openrouter.session_id).not.toBe(third.providerOptions.openrouter.session_id)
-  expect(first.providerOptions.openrouter.prompt_cache_key).toBe(third.providerOptions.openrouter.prompt_cache_key)
+  expect(first.providerOptions.openrouter.prompt_cache_key).not.toBe(third.providerOptions.openrouter.prompt_cache_key)
   expect(first.providerOptions.openrouter.session_id).toMatch(/^[0-9a-f]{64}$/)
   expect(first.providerOptions.openrouter.prompt_cache_key).toMatch(/^[0-9a-f]{64}$/)
-  expect(first.providerOptions.openai.promptCacheKey).toBe(third.providerOptions.openai.promptCacheKey)
+  expect(first.providerOptions.openai.promptCacheKey).not.toBe(third.providerOptions.openai.promptCacheKey)
+  expect(first.providerOptions.openai.promptCacheKey).toBe(first.providerOptions.openrouter.promptCacheKey)
 
   expect(first.providerOptions.openrouter.session_id).toBe(second.providerOptions.openrouter.session_id)
   expect(first.providerOptions.openrouter.prompt_cache_key).toBe(second.providerOptions.openrouter.prompt_cache_key)
+})
+
+test("isolates key-carrying sibling Sessions while retaining the shared non-key baseline", () => {
+  const first = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_sibling_a", routeID: "openai-responses" })
+  const sibling = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_sibling_b", routeID: "openai-responses" })
+  const copilot = SessionRunnerCache.providerOptions({
+    ...base,
+    sessionID: "ses_sibling_b",
+    routeID: "ai-sdk:@ai-sdk/github-copilot",
+  })
+  const anthropic = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_sibling_b", routeID: "anthropic-messages" })
+
+  expect(first.promptCacheKey).toBe(sibling.promptCacheKey)
+  expect(first.providerOptions.openai.promptCacheKey).not.toBe(sibling.providerOptions.openai.promptCacheKey)
+  expect(copilot.providerOptions.openai.promptCacheKey).not.toBe(first.providerOptions.openai.promptCacheKey)
+  expect(first.promptCacheKey).toBe(
+    SessionRunnerCache.promptCacheNamespace(base),
+  )
+  expect(anthropic.promptCacheKey).toBe(
+    SessionRunnerCache.promptCacheNamespace(base),
+  )
+  expect(anthropic.providerOptions.openai.promptCacheKey).toBe(anthropic.promptCacheKey)
+  expect(anthropic.providerOptions.openrouter.promptCacheKey).toBe(anthropic.promptCacheKey)
 })
 
 test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () => {
@@ -275,7 +304,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiMode: "auto",
   })
   expect(automatic.providerOptions.openai).toEqual({
-    promptCacheKey: automatic.promptCacheKey,
+    promptCacheKey: automatic.providerOptions.openai.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
   expect(automatic.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
@@ -293,7 +322,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     aliasedNow,
   )
   expect(aliased.providerOptions.openai).toEqual({
-    promptCacheKey: aliased.promptCacheKey,
+    promptCacheKey: aliased.providerOptions.openai.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
   expect(aliased.promptCacheKey).toBe(
@@ -312,7 +341,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiMode: "auto",
   })
   expect(directRoute.providerOptions.openai).toEqual({
-    promptCacheKey: directRoute.promptCacheKey,
+    promptCacheKey: directRoute.providerOptions.openai.promptCacheKey,
     promptCacheOptions: { mode: "implicit", ttl: "30m" },
   })
   expect(directRoute.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
@@ -324,7 +353,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiMode: "explicit",
   })
   expect(webSocket.providerOptions.openai).toEqual({
-    promptCacheKey: webSocket.promptCacheKey,
+    promptCacheKey: webSocket.providerOptions.openai.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
   expect(webSocket.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
@@ -336,7 +365,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiMode: "explicit",
   })
   expect(explicit.providerOptions.openai).toEqual({
-    promptCacheKey: explicit.promptCacheKey,
+    promptCacheKey: explicit.providerOptions.openai.promptCacheKey,
     promptCacheOptions: { mode: "explicit", ttl: "30m" },
   })
   expect(explicit.cache).toEqual({ tools: false, system: true, messages: { tail: 50 } })
@@ -351,7 +380,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiExtendedRetention: true,
   })
   expect(legacy.providerOptions.openai).toEqual({
-    promptCacheKey: legacy.promptCacheKey,
+    promptCacheKey: legacy.providerOptions.openai.promptCacheKey,
     promptCacheRetention: "24h",
   })
   expect(legacy.cache).toBeUndefined()
@@ -366,7 +395,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiExtendedRetention: true,
   })
   expect(unsupportedLegacy.providerOptions.openai).toEqual({
-    promptCacheKey: unsupportedLegacy.promptCacheKey,
+    promptCacheKey: unsupportedLegacy.providerOptions.openai.promptCacheKey,
   })
   expect(unsupportedLegacy.cache).toBeUndefined()
 
@@ -377,7 +406,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiMode: "explicit",
     openaiExtendedRetention: true,
   })
-  expect(compatible.providerOptions.openai).toEqual({ promptCacheKey: compatible.promptCacheKey })
+  expect(compatible.providerOptions.openai).toEqual({ promptCacheKey: compatible.wirePromptCacheKey })
   expect(compatible.cache).toBeUndefined()
 
   const codexBackend = SessionRunnerCache.providerOptions({
@@ -387,7 +416,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     openaiMode: "auto",
   })
   expect(codexBackend.providerOptions.openai).toEqual({
-    promptCacheKey: codexBackend.promptCacheKey,
+    promptCacheKey: codexBackend.providerOptions.openai.promptCacheKey,
   })
   expect(codexBackend.cache).toBeUndefined()
 
@@ -400,7 +429,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
       openaiMode: "auto",
     })
     expect(unsupportedCodex.providerOptions.openai).toMatchObject({
-      promptCacheKey: unsupportedCodex.promptCacheKey,
+      promptCacheKey: unsupportedCodex.wirePromptCacheKey,
     })
     expect(unsupportedCodex.providerOptions.openai).not.toHaveProperty("promptCacheOptions")
     expect(unsupportedCodex.providerOptions.openai).not.toHaveProperty("promptCacheRetention")
@@ -413,7 +442,7 @@ test("selects breakpoint caching only for supported GPT-5.6 OpenAI routes", () =
     routeID: "openai-chat",
     openaiMode: "implicit",
   })
-  expect(implicit.providerOptions.openai).toEqual({ promptCacheKey: implicit.promptCacheKey })
+  expect(implicit.providerOptions.openai).toEqual({ promptCacheKey: implicit.wirePromptCacheKey })
   expect(implicit.cache).toBeUndefined()
 })
 
@@ -517,8 +546,8 @@ test("rotates prompt_cache_key every 15m for providers that support it", () => {
   const openAIOptionsNext = SessionRunnerCache.providerOptions({ ...base, sessionID: "ses_rot", routeID: "openai-responses", apiModelID: "gpt-5.6" }, t1)
   expect(openAIOptions0.promptCacheKey).toBe(openAIKey0)
   expect(openAIOptions0.promptCacheKey).toBe(openAIOptionsNext.promptCacheKey)
-  expect(openAIOptions0.providerOptions.openai.promptCacheKey).toBe(openAIKey0)
-  expect(openAIOptions0.providerOptions.openrouter.promptCacheKey).toBe(openAIKey0)
+  expect(openAIOptions0.providerOptions.openai.promptCacheKey).not.toBe(openAIOptions0.promptCacheKey)
+  expect(openAIOptions0.providerOptions.openrouter.promptCacheKey).toBe(openAIOptions0.providerOptions.openai.promptCacheKey)
 
   // OpenRouter routes are also stable now (no time rotation)
   const openRouter0 = SessionRunnerCache.promptCacheNamespace({ ...base, routeID: "openrouter" }, t0)

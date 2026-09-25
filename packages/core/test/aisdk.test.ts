@@ -405,12 +405,12 @@ it.effect("rolls both message cache breakpoints on the Anthropic AI SDK route", 
       }),
     )
 
-    // The two most recent cacheable messages are anchored so the older marker
-    // stays inside the provider's 20-block lookback.
+    // The previous request's final anchor ("first") stays marked so the next
+    // read hits it exactly, and the newest cacheable message writes the tail.
     const rolling = { anthropic: { cacheControl: { type: "ephemeral", ttl: "5m" } } }
     expect(prepared.body.prompt).toEqual([
-      { role: "user", content: [{ type: "text", text: "first" }] },
-      { role: "assistant", content: [{ type: "text", text: "reply", providerOptions: rolling }] },
+      { role: "user", content: [{ type: "text", text: "first", providerOptions: rolling }] },
+      { role: "assistant", content: [{ type: "text", text: "reply" }] },
       {
         role: "user",
         content: [

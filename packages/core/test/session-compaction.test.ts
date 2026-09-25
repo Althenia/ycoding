@@ -600,23 +600,35 @@ it.effect("uses bounded checkpoint TOON requests without asking the model to aut
     expect(requests.every((request) => systemText(request).length > 0)).toBe(true)
     expect(new Set(requests.map(systemText)).size).toBe(1)
     expect(new Set(requests.map(promptText)).size).toBe(requests.length)
+    const db = (yield* Database.Service).db
+    const helpers = yield* db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.parent_id, sessionID))
+      .all()
+      .pipe(Effect.orDie)
+    expect(helpers).toHaveLength(1)
+    const helperID = SessionSchema.ID.make(helpers[0].id)
     expect(
       requests.every(
         (request) =>
           request.providerOptions?.openai?.promptCacheKey ===
-          SessionRunnerCache.promptCacheNamespace({
-            scope: "compaction",
-            routeID: model.route.id,
-            projectID: Project.ID.global,
-            directory: "/project",
-            providerID: model.provider,
-            modelID: model.id,
-            variant: "default",
-            policyRevision: CACHE_POLICY_REVISION,
-            permissions: [],
-            system: request.system,
-            tools: request.tools,
-          }),
+          SessionRunnerCache.promptCacheKeyForGeneration(
+            helperID,
+            SessionRunnerCache.promptCacheNamespace({
+              scope: "compaction",
+              routeID: model.route.id,
+              projectID: Project.ID.global,
+              directory: "/project",
+              providerID: model.provider,
+              modelID: model.id,
+              variant: "default",
+              policyRevision: CACHE_POLICY_REVISION,
+              permissions: [],
+              system: request.system,
+              tools: request.tools,
+            }),
+          ),
       ),
     ).toBe(true)
     expect(requests.every((request) => Token.estimate(helperInputText(request)) <= budget)).toBe(true)

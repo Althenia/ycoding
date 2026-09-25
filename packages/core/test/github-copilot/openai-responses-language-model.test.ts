@@ -53,6 +53,37 @@ function createModel(fetchFn: ReturnType<typeof mock>) {
 // from forking the OpenAI Responses model), which left it unreachable by anything reading the
 // "copilot" namespace and let stale itemIds slip past stripping meant for that namespace.
 describe("doGenerate", () => {
+  test("reports cached reads, cache writes, and remaining input tokens", async () => {
+    const mockFetch = createMockFetch({
+      id: "resp_usage",
+      created_at: 0,
+      model: "gpt-5.6",
+      output: [],
+      usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 }, output_tokens: 5 },
+    })
+    const model = createModel(mockFetch)
+
+    const result = await model.doGenerate({ prompt: TEST_PROMPT, includeRawChunks: false })
+
+    expect(result.usage.inputTokens).toMatchObject({ total: 100, noCache: 50, cacheRead: 20, cacheWrite: 30 })
+  })
+
+  test("leaves cache writes unreported when the response omits them", async () => {
+    const mockFetch = createMockFetch({
+      id: "resp_usage",
+      created_at: 0,
+      model: "gpt-5.6",
+      output: [],
+      usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 20 }, output_tokens: 5 },
+    })
+    const model = createModel(mockFetch)
+
+    const result = await model.doGenerate({ prompt: TEST_PROMPT, includeRawChunks: false })
+
+    expect(result.usage.inputTokens).toMatchObject({ total: 100, noCache: 80, cacheRead: 20 })
+    expect(result.usage.inputTokens.cacheWrite).toBeUndefined()
+  })
+
   test("replays a tool follow-up statelessly with encrypted reasoning", async () => {
     const responses = [
       {

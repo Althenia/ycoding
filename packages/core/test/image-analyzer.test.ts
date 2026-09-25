@@ -8,13 +8,14 @@ import {
   IMAGE_ANALYSIS_TOON_EXAMPLE,
   stripToonFences,
   isValidToon,
+  createAnalysisMemo,
 } from "@ycoding-ai/core/session/runner/image-analyzer"
 import { toLLMMessages, isProviderImage } from "@ycoding-ai/core/session/runner/to-llm-message"
 import { SessionMessage } from "@ycoding-ai/core/session/message"
 import { FileAttachment } from "@ycoding-ai/schema/prompt"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { DateTime } from "effect"
+import { DateTime, Effect } from "effect"
 import { decode, encode } from "@toon-format/toon"
 
 const created = DateTime.makeUnsafe(0)
@@ -162,6 +163,33 @@ describe("ImageAnalyzer multimodal detection", () => {
     expect(isValidToon(plain)).toBe(true)
     expect(isValidToon("not toon at all")).toBe(false)
     expect(isValidToon(fenced)).toBe(true)
+  })
+})
+
+describe("ImageAnalyzer analysis memo", () => {
+  test("reuses successful analyses by model, prompt, and image digest", async () => {
+    const memo = createAnalysisMemo()
+    let calls = 0
+    const analyze = () => Effect.sync(() => `analysis ${++calls}`)
+
+    const first = await Effect.runPromise(memo.analyze("vision/model", "prompt", "digest-a", analyze))
+    const repeated = await Effect.runPromise(memo.analyze("vision/model", "prompt", "digest-a", analyze))
+    const differentImage = await Effect.runPromise(memo.analyze("vision/model", "prompt", "digest-b", analyze))
+
+    expect(first).toBe("analysis 1")
+    expect(repeated).toBe(first)
+    expect(differentImage).toBe("analysis 2")
+    expect(calls).toBe(2)
+  })
+
+  test("does not memoize failed analyses", async () => {
+    const memo = createAnalysisMemo()
+    let calls = 0
+    const analyze = () => Effect.sync(() => (++calls === 1 ? "[analysis failed]" : "recovered"))
+
+    expect(await Effect.runPromise(memo.analyze("vision/model", "prompt", "digest", analyze))).toBe("[analysis failed]")
+    expect(await Effect.runPromise(memo.analyze("vision/model", "prompt", "digest", analyze))).toBe("recovered")
+    expect(calls).toBe(2)
   })
 })
 

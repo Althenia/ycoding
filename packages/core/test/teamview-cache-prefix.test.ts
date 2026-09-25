@@ -19,10 +19,11 @@ const input = {
   routeID: "github-copilot-responses",
 }
 
-test("rotates Copilot prompt-cache keys by generation", () => {
+test("rotates Copilot wire prompt-cache keys by generation", () => {
   const first = SessionRunnerCache.providerOptions({ ...input, generation: 0 })
   const second = SessionRunnerCache.providerOptions({ ...input, generation: 1 })
 
-  expect(second.promptCacheKey).not.toBe(first.promptCacheKey)
-  expect(second.providerOptions.openai.promptCacheKey).toBe(second.promptCacheKey)
+  expect(second.providerOptions.openai.promptCacheKey).not.toBe(first.providerOptions.openai.promptCacheKey)
+  expect(second.providerOptions.openai.promptCacheKey).toBe(second.wirePromptCacheKey)
+  expect(second.promptCacheKey).toBe(first.promptCacheKey)
 })

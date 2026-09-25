@@ -90,6 +90,7 @@ test("defensively syncs advertised Copilot models", async () => {
     expect(requests[0]?.get("Copilot-Integration-Id")).toBe("vscode-chat")
     expect(model?.name).toBe("GPT-5 local")
     expect(model?.settings).toMatchObject({ baseURL: server.url.origin, endpoint: "responses", store: false })
+    expect(model?.settings?.include).toEqual(["reasoning.encrypted_content"])
     expect(model?.cost[0]).toMatchObject({ input: 0, output: 0, cache: { read: 0, write: 0 } })
     expect(model?.variants.map((variant) => variant.id)).toEqual([
       ModelV2.VariantID.make("low"),

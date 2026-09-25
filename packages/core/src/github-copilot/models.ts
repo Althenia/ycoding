@@ -145,7 +145,16 @@ function build(id: ModelV2.ID, remote: UsableModel, baseURL: string, previous?: 
     settings: ProviderV2.mergeOverlay(previous?.settings, {
       baseURL: messages ? `${baseURL}/v1` : baseURL,
       ...(endpoint ? { endpoint } : {}),
-      ...(messages ? { toolStreaming: false } : endpoint === "responses" ? { store: false } : {}),
+      ...(messages
+        ? { toolStreaming: false }
+        : endpoint === "responses"
+          ? {
+              store: false,
+              ...(remote.capabilities.supports.reasoning_effort?.length
+                ? { include: ["reasoning.encrypted_content"] }
+                : {}),
+            }
+          : {}),
     }),
     headers: previous?.headers,
     body: previous?.body,

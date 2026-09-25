@@ -396,7 +396,7 @@ export const layer = (options?: SessionModelHeaders.Options) =>
                 providerOptions: mergeProviderOptions(baseRequest.providerOptions, {
                   openai: {
                     responsesWebSocket: {
-                      sessionKey: cache.promptCacheKey,
+                      sessionKey: cache.wirePromptCacheKey,
                       fingerprint: SessionContinuation.transportFingerprint(continuationFingerprint),
                       messageBoundary: baseRequest.messages.length - 1,
                       fullReplay: input.disableContinuation === true,
