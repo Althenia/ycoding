@@ -1,20 +1,22 @@
 import { describe, expect, test } from "bun:test"
-import {
-  MAX_SHARED_TABS,
-  VERSION,
-  actionGuardFailure,
-  connectURL,
-  reconnectDelay,
-  safePage,
-  validateServerURL,
-} from "../protocol.js"
+import { MAX_SHARED_TABS, VERSION, connectURL, reconnectDelay, safePage, validateServerURL } from "../protocol.js"
 
 describe("Chrome bridge protocol", () => {
+  test("identifies YCoding in Chrome and ships toolbar and popup icons at the declared sizes", async () => {
+    const manifest = await Bun.file(new URL("../manifest.json", import.meta.url)).json()
+    expect(manifest.name).toBe("YCoding")
+    expect(manifest.permissions).toEqual(["alarms", "debugger", "storage", "tabs", "tabGroups"])
+    expect(manifest.host_permissions).toEqual(["http://127.0.0.1/*", "http://localhost/*"])
+    expect(manifest.action.default_icon).toMatchObject({ 16: manifest.icons["16"], 32: manifest.icons["32"] })
+    for (const size of [16, 32, 48, 128]) {
+      const image = new DataView(await Bun.file(new URL(`../${manifest.icons[size]}`, import.meta.url)).arrayBuffer())
+      expect(image.getUint32(16)).toBe(size)
+      expect(image.getUint32(20)).toBe(size)
+    }
+  })
   test("keeps pairing and reconnect credentials in first frames rather than URLs", () => {
-    expect(VERSION).toBe(2)
-    expect(connectURL("http://127.0.0.1:4096", "ses_selected")).toBe(
-      "ws://127.0.0.1:4096/api/session/ses_selected/browser/connect",
-    )
+    expect(VERSION).toBe(3)
+    expect(connectURL("http://127.0.0.1:4096")).toBe("ws://127.0.0.1:4096/api/browser/connect")
     expect(reconnectDelay(0)).toBe(1_000)
     expect(reconnectDelay(4)).toBe(16_000)
     expect(reconnectDelay(20)).toBe(30_000)
@@ -37,17 +39,7 @@ describe("Chrome bridge protocol", () => {
     expect(() => safePage("chrome://settings")).toThrow()
   })
 
-  test("caps explicitly shared tabs", () => {
+  test("caps paired profile tabs", () => {
     expect(MAX_SHARED_TABS).toBe(8)
-  })
-
-  test("fails guarded mutations closed when Chrome cannot enforce no downloads", () => {
-    const message =
-      "Chrome's extension debugger API cannot enforce the required no-download guard; navigate, click, and type are unavailable"
-    expect(actionGuardFailure("navigate")).toBe(message)
-    expect(actionGuardFailure("click")).toBe(message)
-    expect(actionGuardFailure("type")).toBe(message)
-    expect(actionGuardFailure("scroll")).toBeUndefined()
-    expect(actionGuardFailure("capture")).toBeUndefined()
   })
 })

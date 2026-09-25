@@ -7,13 +7,17 @@ install_dir="$HOME/.local/bin"
 temporary=
 candidate=
 helper_candidate=
+app_candidate=
 binary_backup=
 helper_backup=
+app_backup=
 install_transaction=false
 binary_backed_up=false
 helper_backed_up=false
+app_backed_up=false
 binary_installed=false
 helper_installed=false
+app_installed=false
 
 cleanup() {
   status=$?
@@ -26,6 +30,9 @@ cleanup() {
     fi
     if [ "$helper_installed" = true ] || [ "$helper_backed_up" = true ]; then
       rm -f "$install_dir/ycoding-computer-helper" || restore_status=1
+    fi
+    if [ "$app_installed" = true ] || [ "$app_backed_up" = true ]; then
+      rm -rf "$install_dir/ycoding-computer-helper.app" || restore_status=1
     fi
     if [ "$binary_backed_up" = true ]; then
       if mv -f "$binary_backup" "$install_dir/ycoding"; then
@@ -47,15 +54,27 @@ cleanup() {
         restore_status=1
       fi
     fi
+    if [ "$app_backed_up" = true ]; then
+      if mv -f "$app_backup" "$install_dir/ycoding-computer-helper.app"; then
+        app_backed_up=false
+        app_backup=
+      else
+        printf 'ycoding installer: Computer helper app backup retained at %s\n' "$app_backup" >&2
+        printf 'ycoding installer: Move that backup to %s before retrying\n' "$install_dir/ycoding-computer-helper.app" >&2
+        restore_status=1
+      fi
+    fi
     if [ "$restore_status" -ne 0 ]; then
-      printf 'ycoding installer: Failed to restore the previously installed executable pair\n' >&2
+      printf 'ycoding installer: Failed to restore the previously installed release\n' >&2
       status=1
     fi
   fi
   if [ -n "$candidate" ]; then rm -f "$candidate"; fi
   if [ -n "$helper_candidate" ]; then rm -f "$helper_candidate"; fi
+  if [ -n "$app_candidate" ]; then rm -rf "$app_candidate"; fi
   if [ -n "$binary_backup" ] && [ "$binary_backed_up" = false ]; then rm -f "$binary_backup"; fi
   if [ -n "$helper_backup" ] && [ "$helper_backed_up" = false ]; then rm -f "$helper_backup"; fi
+  if [ -n "$app_backup" ] && [ "$app_backed_up" = false ]; then rm -rf "$app_backup"; fi
   if [ -n "$temporary" ]; then rm -rf "$temporary"; fi
   exit "$status"
 }
@@ -118,8 +137,9 @@ temporary=$(mktemp -d "${TMPDIR:-/tmp}/ycoding-install.XXXXXX") || fail "Failed 
 # Download the release asset and verify it against the release checksum file.
 fetch_verified() {
   file=$1
-  curl --proto '=https' --proto-redir '=https' -fsSL -o "$temporary/$file" "$release_url/$file" ||
+  curl --proto '=https' --proto-redir '=https' --max-filesize 536870912 -fsSL -o "$temporary/$file" "$release_url/$file" ||
     fail "Failed to download $file"
+  [ "$(wc -c < "$temporary/$file")" -le 536870912 ] || fail "Download is too large: $file"
   expected=$(awk -v wanted="$file" '
     ($2 == wanted || $2 == "*" wanted) {
       if (found) exit 2
@@ -140,16 +160,57 @@ fetch_verified() {
   [ "$actual" = "$expected" ] || fail "Checksum verification failed for $file"
 }
 
-curl --proto '=https' --proto-redir '=https' -fsSL -o "$temporary/$checksums" "$release_url/$checksums" || fail "Failed to download $checksums"
+curl --proto '=https' --proto-redir '=https' --max-filesize 1048576 -fsSL -o "$temporary/$checksums" "$release_url/$checksums" || fail "Failed to download $checksums"
+[ "$(wc -c < "$temporary/$checksums")" -le 1048576 ] || fail "Checksum file is too large"
 fetch_verified "$asset"
+
+# The first bundled macOS release is 0.7.1; prereleases of that version
+# precede it, while prereleases of later versions follow it.
+app_required=false
+if [ "$operating_system" = darwin ]; then
+  version_core=${version%%+*}
+  prerelease=false
+  case "$version_core" in *-*) prerelease=true ;; esac
+  if printf '%s\n' "${version_core%%-*}" | awk -F . -v prerelease="$prerelease" '
+    $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && ($3 > 1 || ($3 == 1 && prerelease == "false"))))) { found=1 }
+    END { exit !found }
+  '; then app_required=true; fi
+fi
 
 tar -tzf "$temporary/$asset" >"$temporary/entries" || fail "Failed to inspect $asset"
 entries=$(LC_ALL=C sort "$temporary/entries")
 expected_entries=ycoding
 if [ "$operating_system" = "darwin" ]; then
   expected_entries=$(printf '%s\n' ycoding ycoding-computer-helper | LC_ALL=C sort)
+  if [ "$app_required" = true ]; then
+    expected_entries=$(printf '%s\n' ycoding ycoding-computer-helper \
+      ycoding-computer-helper.app/ \
+      ycoding-computer-helper.app/Contents/ \
+      ycoding-computer-helper.app/Contents/Info.plist \
+      ycoding-computer-helper.app/Contents/MacOS/ \
+      ycoding-computer-helper.app/Contents/MacOS/ycoding-computer-helper \
+      ycoding-computer-helper.app/Contents/Resources/ \
+      ycoding-computer-helper.app/Contents/Resources/YCoding.icns \
+      ycoding-computer-helper.app/Contents/_CodeSignature/ \
+      ycoding-computer-helper.app/Contents/_CodeSignature/CodeResources | LC_ALL=C sort)
+  fi
 fi
 [ "$entries" = "$expected_entries" ] || fail "Release archive has invalid direct entries"
+# Check types and advertised uncompressed sizes before writing extracted files.
+tar -tvzf "$temporary/$asset" >"$temporary/details" || fail "Failed to inspect archive entry types"
+awk '
+  substr($1, 1, 1) == "d" { next }
+  { size = $3 ~ /^[0-9]+$/ ? $3 : $5 }
+  substr($1, 1, 1) != "-" || size !~ /^[0-9]+$/ || size < 1 || size > 536870912 { exit 1 }
+  { total += size; if (total > 536870912) exit 1 }
+' "$temporary/details" || fail "Release archive has invalid entry types or sizes"
+awk '{ print substr($1, 1, 1) }' "$temporary/details" >"$temporary/types" || fail "Failed to inspect archive entry types"
+paste "$temporary/entries" "$temporary/types" | while IFS="$(printf '\t')" read -r entry type; do
+  case "$entry" in
+    */) [ "$type" = d ] || exit 1 ;;
+    *) [ "$type" = - ] || exit 1 ;;
+  esac
+done || fail "Release archive has invalid entry types"
 mkdir "$temporary/extract"
 tar -xzf "$temporary/$asset" -C "$temporary/extract" || fail "Failed to extract $asset"
 [ -f "$temporary/extract/ycoding" ] && [ ! -L "$temporary/extract/ycoding" ] && [ -s "$temporary/extract/ycoding" ] ||
@@ -158,8 +219,30 @@ if [ "$operating_system" = "darwin" ]; then
   [ -f "$temporary/extract/ycoding-computer-helper" ] && [ ! -L "$temporary/extract/ycoding-computer-helper" ] && [ -s "$temporary/extract/ycoding-computer-helper" ] ||
     fail "Release archive did not contain a regular computer helper"
 fi
+if [ "$app_required" = true ]; then
+  app="$temporary/extract/ycoding-computer-helper.app"
+  for directory in "$app" "$app/Contents" "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/_CodeSignature"; do
+    [ -d "$directory" ] && [ ! -L "$directory" ] || fail "Release archive contains an invalid computer helper app directory"
+  done
+  for file in "$app/Contents/Info.plist" "$app/Contents/MacOS/ycoding-computer-helper" "$app/Contents/Resources/YCoding.icns" "$app/Contents/_CodeSignature/CodeResources"; do
+    [ -f "$file" ] && [ ! -L "$file" ] && [ -s "$file" ] || fail "Release archive contains an invalid computer helper app file"
+  done
+  grep -Fq '<key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string>' "$app/Contents/Info.plist" ||
+    fail "Computer helper app has an invalid bundle identifier"
+  grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist" ||
+    fail "Computer helper app has an invalid display name"
+  grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist" ||
+    fail "Computer helper app has an invalid icon reference"
+  /usr/bin/codesign --verify --deep --strict "$app" || fail "Computer helper app signature verification failed"
+fi
 
 mkdir -p "$install_dir"
+[ -d "$install_dir" ] && [ ! -L "$install_dir" ] && [ -O "$install_dir" ] || fail "Install directory must be an owned directory"
+for existing_file in "$install_dir/ycoding" "$install_dir/ycoding-computer-helper"; do
+  if [ -e "$existing_file" ] || [ -L "$existing_file" ]; then
+    [ -f "$existing_file" ] && [ ! -L "$existing_file" ] && [ -O "$existing_file" ] || fail "Installed executable must be an owned regular file: $existing_file"
+  fi
+done
 candidate=$(mktemp "$install_dir/.ycoding.XXXXXX") || fail "Failed to create an install candidate"
 cp "$temporary/extract/ycoding" "$candidate" || fail "Failed to prepare the ycoding executable"
 chmod 755 "$candidate" || fail "Failed to make the ycoding executable runnable"
@@ -167,6 +250,15 @@ if [ "$operating_system" = "darwin" ]; then
   helper_candidate=$(mktemp "$install_dir/.ycoding-computer-helper.XXXXXX") || fail "Failed to create a computer helper install candidate"
   cp "$temporary/extract/ycoding-computer-helper" "$helper_candidate" || fail "Failed to prepare the computer helper"
   chmod 755 "$helper_candidate" || fail "Failed to make the computer helper runnable"
+  if [ "$app_required" = true ]; then
+    app_candidate=$(mktemp -d "$install_dir/.ycoding-computer-helper-app.XXXXXX") || fail "Failed to create an app install candidate"
+    cp -R "$app/." "$app_candidate/" || fail "Failed to prepare the computer helper app"
+    if [ -e "$install_dir/ycoding-computer-helper.app" ] || [ -L "$install_dir/ycoding-computer-helper.app" ]; then
+      [ -d "$install_dir/ycoding-computer-helper.app" ] && [ ! -L "$install_dir/ycoding-computer-helper.app" ] && [ -O "$install_dir/ycoding-computer-helper.app" ] || fail "Installed computer helper app must be an owned directory"
+      app_backup=$(mktemp -d "$install_dir/.ycoding-computer-helper-app-backup.XXXXXX") || fail "Failed to reserve the app rollback path"
+      rmdir "$app_backup" || fail "Failed to prepare the app rollback path"
+    fi
+  fi
 
   if [ -e "$install_dir/ycoding" ] || [ -L "$install_dir/ycoding" ]; then
     binary_backup=$(mktemp "$install_dir/.ycoding-backup.XXXXXX") || fail "Failed to reserve the ycoding rollback path"
@@ -186,9 +278,18 @@ if [ "$operating_system" = "darwin" ]; then
     mv -f "$install_dir/ycoding-computer-helper" "$helper_backup" || fail "Failed to preserve the installed computer helper"
     helper_backed_up=true
   fi
+  if [ -n "$app_backup" ]; then
+    mv -f "$install_dir/ycoding-computer-helper.app" "$app_backup" || fail "Failed to preserve the installed computer helper app"
+    app_backed_up=true
+  fi
   mv -f "$helper_candidate" "$install_dir/ycoding-computer-helper" || fail "Failed to install the computer helper"
   helper_installed=true
   helper_candidate=
+  if [ "$app_required" = true ]; then
+    mv -f "$app_candidate" "$install_dir/ycoding-computer-helper.app" || fail "Failed to install the computer helper app"
+    app_installed=true
+    app_candidate=
+  fi
 fi
 mv -f "$candidate" "$install_dir/ycoding" || fail "Failed to install ycoding"
 binary_installed=true
@@ -196,8 +297,10 @@ candidate=
 install_transaction=false
 if [ -n "$binary_backup" ]; then rm -f "$binary_backup"; fi
 if [ -n "$helper_backup" ]; then rm -f "$helper_backup"; fi
+if [ -n "$app_backup" ]; then rm -rf "$app_backup"; fi
 binary_backup=
 helper_backup=
+app_backup=
 
 printf 'Installed ycoding %s to %s/ycoding\n' "$version" "$install_dir"
 

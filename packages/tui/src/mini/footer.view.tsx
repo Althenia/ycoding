@@ -26,6 +26,7 @@ import { RunFooterSubagentBody } from "./footer.subagent"
 import { RunPromptBody, createPromptState } from "./footer.prompt"
 import { RunPermissionBody } from "./footer.permission"
 import { RunFormBody } from "./footer.form"
+import { RunChromePairingBody } from "./footer.chrome"
 import { createFormBodyState, type FormBodyState } from "./form.shared"
 import { footerWidthPolicy } from "./footer.width"
 import { Keymap } from "../context/keymap"
@@ -103,6 +104,8 @@ type RunFooterViewProps = {
   onSubagentSelect?: (sessionID: string | undefined) => void
   onSubagentInterrupt?: (sessionID: string) => void
   onQueuedRemove: (messageID: string) => Promise<boolean>
+  browserAddress?: () => string | undefined
+  onChromePair?: (signal: AbortSignal) => Promise<{ secret: string; expiresAt: number }>
 }
 
 export function RunFooterView(props: RunFooterViewProps) {
@@ -129,6 +132,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const selectingQueued = createMemo(() => active().type === "prompt" && route().type === "queued-menu")
   const inspecting = createMemo(() => active().type === "prompt" && route().type === "subagent")
   const commanding = createMemo(() => active().type === "prompt" && route().type === "command")
+  const chrome = createMemo(() => active().type === "prompt" && route().type === "chrome")
   const skilling = createMemo(() => active().type === "prompt" && route().type === "skill")
   const modeling = createMemo(() => active().type === "prompt" && route().type === "model")
   const varianting = createMemo(() => active().type === "prompt" && route().type === "variant")
@@ -695,7 +699,16 @@ export function RunFooterView(props: RunFooterViewProps) {
                               composer.submitText("/new")
                               closePanel()
                             }}
+                            onChrome={props.onChromePair ? () => setRoute({ type: "chrome" }) : undefined}
                             onExit={props.onExit}
+                          />
+                        </Match>
+                        <Match when={chrome() && props.onChromePair}>
+                          <RunChromePairingBody
+                            theme={theme}
+                            address={props.browserAddress}
+                            onStart={props.onChromePair!}
+                            onClose={closePanel}
                           />
                         </Match>
                         <Match when={skilling()}>

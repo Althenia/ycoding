@@ -20,6 +20,13 @@ const ItermTarget = {
   tab_index: Schema.Int.check(Schema.isGreaterThan(0)),
   session_id: Schema.String,
 }
+const DesktopTarget = {
+  ...MacOS,
+  bundle_id: Schema.String.check(Schema.isMinLength(1)),
+  pid: Schema.Int.check(Schema.isGreaterThan(0)),
+  window_id: Schema.Int.check(Schema.isGreaterThan(0)),
+}
+const Element = Schema.Array(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))).check(Schema.isMaxLength(8))
 
 export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("status") }),
@@ -33,6 +40,35 @@ export const Input = Schema.Union([
     newline: Schema.Boolean.pipe(Schema.optional),
   }),
   Schema.Struct({ action: Schema.Literal("finder.inspect"), ...MacOS, path: Schema.String }),
+  Schema.Struct({ action: Schema.Literal("desktop.inspect"), ...DesktopTarget }),
+  Schema.Struct({ action: Schema.Literal("desktop.capture"), ...DesktopTarget }),
+  Schema.Struct({
+    action: Schema.Literal("desktop.click"),
+    ...DesktopTarget,
+    element: Element,
+    expected_revision: Schema.String,
+  }),
+  Schema.Struct({
+    action: Schema.Literal("desktop.type"),
+    ...DesktopTarget,
+    element: Element,
+    expected_revision: Schema.String,
+    text: Schema.String.check(Schema.isMaxLength(4096)),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("desktop.scroll"),
+    ...DesktopTarget,
+    element: Element,
+    expected_revision: Schema.String,
+    direction: Schema.Literals(["up", "down"]),
+  }),
+  Schema.Struct({
+    action: Schema.Literal("desktop.key"),
+    ...DesktopTarget,
+    element: Element,
+    expected_revision: Schema.String,
+    key: Schema.Literal("enter"),
+  }),
   Schema.Struct({
     action: Schema.Literal("finder.move"),
     ...MacOS,
@@ -59,8 +95,23 @@ export const Output = Schema.Union([
   Schema.Struct({ type: Schema.Literal("cancelled"), callID: Schema.String, cancelled: Schema.Boolean }),
   Schema.Struct({
     type: Schema.Literal("result"),
-    action: Schema.Literals(["iterm.inspect", "iterm.send_text", "finder.inspect", "finder.move"]),
+    action: Schema.Literals([
+      "iterm.inspect",
+      "iterm.send_text",
+      "finder.inspect",
+      "finder.move",
+      "desktop.inspect",
+      "desktop.capture",
+      "desktop.click",
+      "desktop.type",
+      "desktop.scroll",
+      "desktop.key",
+    ]),
     revision: Schema.String,
+    elements: Schema.Array(
+      Schema.Struct({ path: Schema.Array(Schema.Int), role: Schema.String, label: Schema.String }),
+    ).pipe(Schema.optional),
+    image: Schema.String.pipe(Schema.optional),
   }),
 ])
 
@@ -81,6 +132,8 @@ const result = (output: Computer.NativeSuccess) => ({
   type: "result" as const,
   action: output.action,
   revision: output.revision,
+  ...(output.elements ? { elements: output.elements } : {}),
+  ...(output.image ? { image: output.image } : {}),
 })
 
 export const Plugin = {
@@ -97,10 +150,24 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Inspect status, cancel an active call, or control one explicit target through an available OS provider. The current macOS provider supports iTerm sessions and Finder paths without activating apps. Inspect first and pass its exact revision to mutation. The tool never launches apps, targets frontmost UI, reads unrelated sessions, uses global input/clipboard, opens/reveals Finder items, or captures the host screen.",
+              "Inspect status, cancel an active call, or control one explicit target through an available OS provider. macOS supports iTerm sessions, Finder paths, and one explicitly identified running app/window through Accessibility; desktop.capture returns a bounded image of that window. Inspect first and pass its exact revision to mutation. No app launch, frontmost targeting, global input, clipboard, or other-app capture.",
             input: Input,
             output: Output,
-            toModelOutput: ({ output }) => [{ type: "text", text: JSON.stringify(output) }],
+            toModelOutput: ({ output }) =>
+              output.type === "result" && output.image
+                ? [
+                    {
+                      type: "text",
+                      text: JSON.stringify({
+                        type: output.type,
+                        action: output.action,
+                        revision: output.revision,
+                        image: "image/jpeg",
+                      }),
+                    },
+                    { type: "file", data: output.image, mime: "image/jpeg", name: "desktop-window.jpg" },
+                  ]
+                : [{ type: "text", text: JSON.stringify(output) }],
             execute: (input, context) =>
               Effect.gen(function* () {
                 if (input.action === "status") {
@@ -115,6 +182,78 @@ export const Plugin = {
                   type: "tool" as const,
                   messageID: context.messageID,
                   callID: context.callID,
+                }
+                if (
+                  input.action === "desktop.inspect" ||
+                  input.action === "desktop.capture" ||
+                  input.action === "desktop.click" ||
+                  input.action === "desktop.type" ||
+                  input.action === "desktop.scroll" ||
+                  input.action === "desktop.key"
+                ) {
+                  const target = {
+                    platform: "macos" as const,
+                    application: "desktop" as const,
+                    bundleID: input.bundle_id,
+                    pid: input.pid,
+                    windowID: input.window_id,
+                  }
+                  const resource = `macos.bundle_id/${target.bundleID}/${target.pid}/${target.windowID}`
+                  yield* permission.assert({
+                    action: name,
+                    resources: [resource],
+                    save: [resource],
+                    metadata: { platform: target.platform, application: target.application },
+                    sessionID: context.sessionID,
+                    agent: context.agent,
+                    source,
+                  })
+                  const reviewResources =
+                    input.action === "desktop.inspect" || input.action === "desktop.capture"
+                      ? [resource]
+                      : [
+                          resource,
+                          `element/${input.element.join("/")}`,
+                          ...(input.action === "desktop.type" ? [input.text] : []),
+                          ...(input.action === "desktop.scroll" ? [input.direction] : []),
+                        ]
+                  const reservation = yield* guardrail.assert({
+                    sessionID: context.sessionID,
+                    action: "computer",
+                    resources: reviewResources,
+                    metadata: { operation: input.action, platform: target.platform, application: target.application },
+                  })
+                  if (input.action === "desktop.inspect")
+                    return result(
+                      yield* computer
+                        .inspect({ sessionID: context.sessionID, callID: context.callID, target })
+                        .pipe(Effect.ensuring(reservation.release)),
+                    )
+                  if (input.action === "desktop.capture")
+                    return result(
+                      yield* computer
+                        .capture({ sessionID: context.sessionID, callID: context.callID, target })
+                        .pipe(Effect.ensuring(reservation.release)),
+                    )
+                  const action: Computer.Action =
+                    input.action === "desktop.click"
+                      ? { type: input.action, element: input.element }
+                      : input.action === "desktop.type"
+                        ? { type: input.action, element: input.element, text: input.text }
+                        : input.action === "desktop.scroll"
+                          ? { type: input.action, element: input.element, direction: input.direction }
+                          : { type: input.action, element: input.element, key: input.key }
+                  return result(
+                    yield* computer
+                      .act({
+                        sessionID: context.sessionID,
+                        callID: context.callID,
+                        target,
+                        expectedRevision: input.expected_revision,
+                        action,
+                      })
+                      .pipe(Effect.ensuring(reservation.release)),
+                  )
                 }
                 if (input.action === "iterm.inspect" || input.action === "iterm.send_text") {
                   const target = itermTarget(input)

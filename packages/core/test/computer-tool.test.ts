@@ -30,12 +30,25 @@ const computer = Layer.mock(Computer.Service, {
     })
   },
   act: (input) => {
+    if (input.action.type.startsWith("desktop.")) {
+      calls.push(`native:${input.action.type}`)
+      return Effect.succeed({ status: "ok" as const, action: input.action.type, revision: "rev-2" })
+    }
     if (input.action.type === "finder.move") {
       calls.push("native:finder.move")
       return Effect.succeed({ status: "ok" as const, action: "finder.move" as const, revision: "rev-2" })
     }
     calls.push("native:iterm.send_text")
     return Effect.succeed({ status: "ok" as const, action: "iterm.send_text" as const, revision: "rev-2" })
+  },
+  capture: () => {
+    calls.push("native:desktop.capture")
+    return Effect.succeed({
+      status: "ok" as const,
+      action: "desktop.capture" as const,
+      revision: "rev-1",
+      image: "base64",
+    })
   },
   cancel: () => Effect.succeed(false),
   releaseSession: () => Effect.void,
@@ -148,6 +161,93 @@ describe("computer tool policy ordering", () => {
         "permission:computer:fixture/old.txt,moved/old.txt",
         "guardrail:file_mutation:/workspace/fixture/old.txt,/workspace/moved/old.txt",
         "native:finder.move",
+        "guardrail:release",
+      ])
+    }),
+  )
+
+  it.effect("reviews an explicit desktop click before dispatch", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(
+        registry,
+        call(
+          {
+            action: "desktop.click",
+            platform: "macos",
+            bundle_id: "com.example.fixture",
+            pid: 451,
+            window_id: 73,
+            element: [0],
+            expected_revision: "rev-1",
+          },
+          "desktop-click",
+        ),
+      )
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/451/73",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/0",
+        "native:desktop.click",
+        "guardrail:release",
+      ])
+    }),
+  )
+
+  it.effect("reviews a desktop screenshot and sends it as an image instead of base64 text", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(
+        registry,
+        call(
+          { action: "desktop.capture", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73 },
+          "desktop-capture",
+        ),
+      )
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/451/73",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73",
+        "native:desktop.capture",
+        "guardrail:release",
+      ])
+      expect(settlement.output?.content).toEqual([
+        {
+          type: "text",
+          text: JSON.stringify({ type: "result", action: "desktop.capture", revision: "rev-1", image: "image/jpeg" }),
+        },
+        { type: "file", uri: "data:image/jpeg;base64,base64", mime: "image/jpeg", name: "desktop-window.jpg" },
+      ])
+    }),
+  )
+
+  it.effect("shows desktop text content and element path in the human review before native input", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(
+        registry,
+        call(
+          {
+            action: "desktop.type",
+            platform: "macos",
+            bundle_id: "com.example.fixture",
+            pid: 451,
+            window_id: 73,
+            element: [1, 2],
+            expected_revision: "rev-1",
+            text: "safe input",
+          },
+          "desktop-type",
+        ),
+      )
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/451/73",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/1/2,safe input",
+        "native:desktop.type",
         "guardrail:release",
       ])
     }),

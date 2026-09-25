@@ -15,7 +15,16 @@ type Pending = "pause" | "resume" | "stop"
 export function SessionIsolatedBrowserCommand(props: Props) {
   const dialog = useDialog()
   Keymap.createLayer(() => ({
+    mode: "global",
     commands: [
+      {
+        id: "session.browser.chrome",
+        title: "Connect Chrome",
+        group: "Session",
+        palette: true,
+        bind: false,
+        run: () => dialog.replace(() => <DialogChromeConnection sessionID={props.sessionID} />),
+      },
       {
         id: "session.browser.isolated",
         title: "Isolated browser",
@@ -27,6 +36,131 @@ export function SessionIsolatedBrowserCommand(props: Props) {
     ],
   }))
   return null
+}
+
+function DialogChromeConnection(props: { sessionID: string }) {
+  const client = useClient()
+  const { themeV2 } = useTheme().contextual("elevated")
+  const baseUrl = client.baseUrl()
+  const address = baseUrl && URL.canParse(baseUrl) ? new URL(baseUrl) : undefined
+  const localAddress =
+    address?.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(address.hostname)
+      ? address.origin
+      : undefined
+  const [status, setStatus] = createSignal<"loading" | "connected" | "pairing" | "unavailable">("loading")
+  const [secret, setSecret] = createSignal<string>()
+  const [failure, setFailure] = createSignal(false)
+  const [pending, setPending] = createSignal(false)
+  let request: AbortController | undefined
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined
+
+  const refresh = () => {
+    request?.abort()
+    clearTimeout(expiryTimer)
+    const controller = new AbortController()
+    request = controller
+    setSecret()
+    setFailure(false)
+    setStatus("loading")
+    void client.api.browser
+      .status({ sessionID: props.sessionID }, { signal: controller.signal })
+      .then((value) => {
+        if (!controller.signal.aborted) {
+          setStatus(value.state === "paused" ? "connected" : value.state)
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFailure(true)
+      })
+  }
+
+  const pair = () => {
+    if (pending() || status() === "loading" || status() === "connected") return
+    request?.abort()
+    clearTimeout(expiryTimer)
+    const controller = new AbortController()
+    request = controller
+    setPending(true)
+    setSecret()
+    setFailure(false)
+    void client.api.browser
+      .start({ sessionID: props.sessionID }, { signal: controller.signal })
+      .then((value) => {
+        if (controller.signal.aborted) return
+        setSecret(value.secret)
+        setStatus("pairing")
+        expiryTimer = setTimeout(() => setSecret(), Math.max(0, value.expiresAt - Date.now()))
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFailure(true)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPending(false)
+      })
+  }
+
+  onCleanup(() => {
+    request?.abort()
+    clearTimeout(expiryTimer)
+    setSecret()
+  })
+  Keymap.createLayer(() => ({
+    mode: "modal",
+    commands: [
+      { bind: "p", title: "Create Chrome pairing code", group: "Dialog", run: pair },
+      { bind: "r", title: "Refresh Chrome connection", group: "Dialog", run: () => !pending() && refresh() },
+    ],
+  }))
+  createEffect(on(() => props.sessionID, refresh))
+
+  return (
+    <box paddingBottom={1} flexDirection="column">
+      <DialogHeader title={<DialogTitle>Chrome connection</DialogTitle>} />
+      <box paddingLeft={4} paddingRight={4} paddingTop={1} gap={1} flexDirection="column">
+        <text wrapMode="word">Install the YCoding Chrome extension, then enter this one-time code in its popup.</text>
+        <Show
+          when={localAddress}
+          fallback={<text wrapMode="word">Connect YCoding to a local loopback service before pairing Chrome.</text>}
+        >
+          {(url) => (
+            <box flexDirection="column">
+              <text>Local service address (enter once in the extension):</text>
+              <text>{url()}</text>
+            </box>
+          )}
+        </Show>
+        <text fg={themeV2.text.subdued} wrapMode="word">
+          Pairing lets YCoding use eligible Chrome tabs, including the active tab.
+        </text>
+        <text fg={themeV2.text.subdued} wrapMode="word">
+          Model actions still require site permission and human review.
+        </text>
+        <text>
+          {failure()
+            ? "Chrome connection status unavailable"
+            : status() === "connected"
+              ? "Connected to YCoding"
+              : status() === "loading"
+                ? "Loading"
+                : "Not connected"}
+        </text>
+        <Show when={secret()}>
+          {(code) => <text wrapMode="word">Pairing code (expires in two minutes): {code()}</text>}
+        </Show>
+        <Show when={failure()}>
+          <text fg={themeV2.text.feedback.error.default}>
+            Unable to load or create Chrome pairing. Press r to refresh.
+          </text>
+        </Show>
+        <text>
+          <Show when={!failure() && !pending() && ["pairing", "unavailable"].includes(status())}>
+            <b>p</b> create pairing code{" "}
+          </Show>
+          <b>r</b> refresh
+        </text>
+      </box>
+    </box>
+  )
 }
 
 export function DialogSessionBrowser(props: Props) {

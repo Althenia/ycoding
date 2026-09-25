@@ -309,6 +309,10 @@ import type {
   BrowserStartOutput,
   BrowserObserveInput,
   BrowserObserveOutput,
+  BrowserOpenInput,
+  BrowserOpenOutput,
+  BrowserCloseInput,
+  BrowserCloseOutput,
   BrowserActionInput,
   BrowserActionOutput,
   BrowserControlInput,
@@ -2574,6 +2578,30 @@ export function make(options: ClientOptions) {
           },
           requestOptions,
         ).then((value) => value.data),
+      open: (input: BrowserOpenInput, requestOptions?: RequestOptions) =>
+        request<{ readonly data: BrowserOpenOutput }>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/open`,
+            body: { generation: input["generation"], url: input["url"], callID: input["callID"] },
+            successStatus: 200,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: false,
+          },
+          requestOptions,
+        ).then((value) => value.data),
+      close: (input: BrowserCloseInput, requestOptions?: RequestOptions) =>
+        request<BrowserCloseOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/browser/close`,
+            body: { tabID: input["tabID"], generation: input["generation"], callID: input["callID"] },
+            successStatus: 204,
+            declaredStatuses: [404, 403, 409, 400, 503, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
       action: (input: BrowserActionInput, requestOptions?: RequestOptions) =>
         request<{ readonly data: BrowserActionOutput }>(
           {

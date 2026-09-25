@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test"
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
 const temporary: string[] = []
 const installer = path.join(import.meta.dir, "install.sh")
-const fixtureVersion = process.env.YCODING_TEST_VERSION ?? "9.9.9"
+const fixtureVersion = "0.7.0"
+const macTest = process.platform === "darwin" ? test : test.skip
 setDefaultTimeout(30_000)
 
 afterEach(async () => {
@@ -150,6 +151,84 @@ exec /bin/mv "$@"
     expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan(install))).toEqual([])
   })
 
+  macTest("installs the signed app bundle alongside the executable pair from v0.7.1", async () => {
+    const fixture = await setup({ version: "0.7.1" })
+    await appArchive(fixture)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).toBe(0)
+    expect(Bun.spawnSync(["/usr/bin/codesign", "--verify", "--deep", "--strict", path.join(fixture.home, ".local/bin/ycoding-computer-helper.app")]).exitCode).toBe(0)
+    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding-computer-helper.app/Contents/Resources/YCoding.icns"), "utf8")).toBe("fixture icon\n")
+    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding-computer-helper.app/Contents/Info.plist"), "utf8")).toContain("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>")
+    expect(await readFile(path.join(fixture.home, ".local/bin/ycoding-computer-helper"), "utf8")).toBe("#!/bin/sh\nexit 0\n")
+  })
+
+  macTest("rejects a signed app without its icon before replacing the installed pair", async () => {
+    const fixture = await setup({ version: "0.7.1" })
+    await appArchive(fixture, false, false)
+    const install = path.join(fixture.home, ".local/bin")
+    await mkdir(install, { recursive: true })
+    await writeFile(path.join(install, "ycoding"), "old executable\n")
+    await writeFile(path.join(install, "ycoding-computer-helper"), "old helper\n")
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(result.stderr).toContain("invalid direct entries")
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old executable\n")
+    expect(await Bun.file(path.join(install, "ycoding-computer-helper.app")).exists()).toBe(false)
+  })
+
+  test("keeps the published pair format for a prerelease below v0.7.1", async () => {
+    const fixture = await setup({ version: "0.7.1-beta.1" })
+    const result = await runInstaller(fixture)
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(false)
+  })
+
+  test("rejects missing app and app symlinks without modifying installed files", async () => {
+    const fixture = await setup({ version: "0.7.1" })
+    const install = path.join(fixture.home, ".local/bin")
+    await mkdir(install, { recursive: true })
+    await writeFile(path.join(install, "ycoding"), "old executable\n")
+    expect((await runInstaller(fixture)).stderr).toContain("invalid")
+    await appArchive(fixture, true)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old executable\n")
+    expect(await Bun.file(path.join(install, "ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(false)
+  })
+
+  macTest("restores an existing app bundle when final executable replacement fails", async () => {
+    const fixture = await setup({ version: "0.7.1" })
+    await appArchive(fixture)
+    const install = path.join(fixture.home, ".local/bin")
+    const oldApp = path.join(install, "ycoding-computer-helper.app/Contents")
+    await mkdir(oldApp, { recursive: true })
+    await writeFile(path.join(oldApp, "Info.plist"), "old app\n")
+    await writeFile(path.join(install, "ycoding"), "old executable\n")
+    await writeFile(path.join(install, "ycoding-computer-helper"), "old helper\n")
+    await writeExecutable(path.join(fixture.path.split(":")[0]!, "mv"), `#!/bin/sh\ndestination=\nfor argument do destination=$argument; done\nif [ "$destination" = "$HOME/.local/bin/ycoding" ] && [ ! -e "$FIXTURE/mv-failed" ]; then touch "$FIXTURE/mv-failed"; exit 70; fi\nexec /bin/mv "$@"\n`)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(await readFile(path.join(oldApp, "Info.plist"), "utf8")).toBe("old app\n")
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old executable\n")
+    expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan(install))).toEqual([])
+  })
+
+  macTest("removes a newly added app bundle when final executable replacement fails", async () => {
+    const fixture = await setup({ version: "0.7.1" })
+    await appArchive(fixture)
+    const install = path.join(fixture.home, ".local/bin")
+    await mkdir(install, { recursive: true })
+    await writeFile(path.join(install, "ycoding"), "old executable\n")
+    await writeFile(path.join(install, "ycoding-computer-helper"), "old helper\n")
+    await writeExecutable(path.join(fixture.path.split(":")[0]!, "mv"), `#!/bin/sh\ndestination=\nfor argument do destination=$argument; done\nif [ "$destination" = "$HOME/.local/bin/ycoding" ] && [ ! -e "$FIXTURE/mv-failed" ]; then touch "$FIXTURE/mv-failed"; exit 70; fi\nexec /bin/mv "$@"\n`)
+    const result = await runInstaller(fixture)
+    expect(result.exitCode).not.toBe(0)
+    expect(await readFile(path.join(install, "ycoding"), "utf8")).toBe("old executable\n")
+    expect(await readFile(path.join(install, "ycoding-computer-helper"), "utf8")).toBe("old helper\n")
+    expect(await Bun.file(path.join(install, "ycoding-computer-helper.app/Contents/Info.plist")).exists()).toBe(false)
+    expect(await Array.fromAsync(new Bun.Glob(".ycoding*").scan(install))).toEqual([])
+  })
+
   test("retains an old helper backup with recovery guidance when rollback also fails", async () => {
     const fixture = await setup()
     const install = path.join(fixture.home, ".local/bin")
@@ -215,7 +294,7 @@ exec /bin/mv "$@"
     const fixture = await setup({ system: "Linux", machine: "x86_64" })
     const result = await runInstaller(fixture)
 
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode, result.stderr).toBe(0)
     expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding")).exists()).toBe(true)
     expect(await Bun.file(path.join(fixture.home, ".local/bin/ycoding-computer-helper")).exists()).toBe(false)
   })
@@ -254,7 +333,10 @@ exec /bin/mv "$@"
   })
 })
 
-async function setup(platform: { system: string; machine: string } = { system: "Darwin", machine: "arm64" }) {
+async function setup(platform: { system?: string; machine?: string; version?: string } = {}) {
+  const system = platform.system ?? "Darwin"
+  const machine = platform.machine ?? "arm64"
+  const version = platform.version ?? fixtureVersion
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-installer-test-"))
   temporary.push(root)
   const home = path.join(root, "home")
@@ -267,16 +349,16 @@ async function setup(platform: { system: string; machine: string } = { system: "
   await writeFile(path.join(fixture, "ycoding-computer-helper"), "#!/bin/sh\nexit 0\n")
   await chmod(path.join(fixture, "ycoding"), 0o755)
   await chmod(path.join(fixture, "ycoding-computer-helper"), 0o755)
-  const target = `${platform.system === "Darwin" ? "darwin" : "linux"}-${["arm64", "aarch64"].includes(platform.machine) ? "arm64" : "x64"}`
-  const asset = `ycoding-${fixtureVersion}-${target}.tar.gz`
+  const target = `${system === "Darwin" ? "darwin" : "linux"}-${["arm64", "aarch64"].includes(machine) ? "arm64" : "x64"}`
+  const asset = `ycoding-${version}-${target}.tar.gz`
   const archive = path.join(fixture, asset)
-  const entries = platform.system === "Darwin" ? ["ycoding", "ycoding-computer-helper"] : ["ycoding"]
+  const entries = system === "Darwin" ? ["ycoding", "ycoding-computer-helper"] : ["ycoding"]
   const tar = Bun.spawnSync(["tar", "-C", fixture, "-czf", archive, ...entries])
   expect(tar.exitCode).toBe(0)
   await writeChecksum(fixture, asset)
   await writeExecutable(
     path.join(bin, "uname"),
-    `#!/bin/sh\ncase "$1" in\n  -s) printf '%s\\n' '${platform.system}' ;;\n  -m) printf '%s\\n' '${platform.machine}' ;;\n  *) exit 1 ;;\nesac\n`,
+    `#!/bin/sh\ncase "$1" in\n  -s) printf '%s\\n' '${system}' ;;\n  -m) printf '%s\\n' '${machine}' ;;\n  *) exit 1 ;;\nesac\n`,
   )
   await writeExecutable(
     path.join(bin, "curl"),
@@ -293,6 +375,7 @@ while [ "$#" -gt 0 ]; do
     -w) shift 2 ;;
     --proto) [ "$2" = '=https' ] || exit 43; proto=true; shift 2 ;;
     --proto-redir) [ "$2" = '=https' ] || exit 44; proto_redir=true; shift 2 ;;
+    --max-filesize) shift 2 ;;
     -*) shift ;;
     *) url=$1; shift ;;
   esac
@@ -300,10 +383,10 @@ done
 [ "$proto" = true ] && [ "$proto_redir" = true ] || exit 45
 case "$url" in
   https://github.com/Althenia/ycoding/releases/latest)
-    printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v${fixtureVersion}' ;;
-  https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/ycoding-${fixtureVersion}-checksums.txt)
+    printf '%s' 'https://github.com/Althenia/ycoding/releases/tag/v${version}' ;;
+  https://github.com/Althenia/ycoding/releases/download/v${version}/ycoding-${version}-checksums.txt)
     cp "$FIXTURE/checksums" "$output" ;;
-  https://github.com/Althenia/ycoding/releases/download/v${fixtureVersion}/${asset})
+  https://github.com/Althenia/ycoding/releases/download/v${version}/${asset})
     cp "$FIXTURE/${asset}" "$output" ;;
   *)
     printf 'unexpected URL: %s\\n' "$url" >&2
@@ -311,7 +394,7 @@ case "$url" in
 esac
 `,
   )
-  return { home, fixture, tmp, asset, path: `${bin}:/usr/bin:/bin` }
+  return { home, fixture, tmp, asset, version, path: `${bin}:/usr/bin:/bin` }
 }
 
 async function runInstaller(
@@ -326,7 +409,7 @@ async function runInstaller(
       PATH: fixture.path,
       TMPDIR: fixture.tmp,
       FIXTURE: fixture.fixture,
-      YCODING_VERSION: fixtureVersion,
+      YCODING_VERSION: fixture.version,
       ...environment,
     },
     stdout: "pipe",
@@ -350,4 +433,24 @@ async function writeChecksum(fixture: string, asset: string) {
     .update(await Bun.file(path.join(fixture, asset)).arrayBuffer())
     .digest("hex")
   await writeFile(path.join(fixture, "checksums"), `${digest}  ${asset}\n`)
+}
+
+async function appArchive(fixture: Awaited<ReturnType<typeof setup>>, linked = false, icon = true) {
+  const contents = path.join(fixture.fixture, "ycoding-computer-helper.app/Contents")
+  await mkdir(path.join(contents, "MacOS"), { recursive: true })
+  await mkdir(path.join(contents, "_CodeSignature"))
+  if (icon) await mkdir(path.join(contents, "Resources"))
+  await writeFile(path.join(contents, "Info.plist"), '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>ycoding-computer-helper</string><key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string><key>CFBundleDisplayName</key><string>YCoding Computer Use</string><key>CFBundleIconFile</key><string>YCoding.icns</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleVersion</key><string>1</string></dict></plist>')
+  if (icon) await writeFile(path.join(contents, "Resources/YCoding.icns"), "fixture icon\n")
+  if (linked) await symlink("../../../ycoding-computer-helper", path.join(contents, "MacOS/ycoding-computer-helper"))
+  else {
+    await copyFile("/usr/bin/true", path.join(contents, "MacOS/ycoding-computer-helper"))
+    await chmod(path.join(contents, "MacOS/ycoding-computer-helper"), 0o755)
+    const sign = Bun.spawnSync(["/usr/bin/codesign", "--force", "--sign", "-", path.join(fixture.fixture, "ycoding-computer-helper.app")])
+    expect(sign.exitCode).toBe(0)
+  }
+  if (linked) await writeFile(path.join(contents, "_CodeSignature/CodeResources"), "signature\n")
+  const tar = Bun.spawnSync(["tar", "-C", fixture.fixture, "-czf", path.join(fixture.fixture, fixture.asset), "ycoding", "ycoding-computer-helper", "ycoding-computer-helper.app"], { env: { ...process.env, COPYFILE_DISABLE: "1" } })
+  expect(tar.exitCode).toBe(0)
+  await writeChecksum(fixture.fixture, fixture.asset)
 }

@@ -110,6 +110,8 @@ The code-owned standard profile:
 
 - hard-denies recognized catastrophic host-destruction commands before process creation, including recursive deletion of a filesystem root or the home directory;
 - requires hard human review for recognized recursive deletion of a complete current project, its ancestors, or a direct child of the home directory, unoverrideable by custom allow rules, while retaining stricter root/home catastrophic denials;
+- requires a fresh hard human review before each model-driven agent-owned Chrome tab open and before each desktop window inspect, capture, or action;
+- requires a fresh hard human review for model-driven Chrome profile mutations; profile listing, observation, scrolling, and capture use site read permissions without a standard profile-access review;
 - requires an ordinary human review for recognized recursive deletion of multiple narrow targets;
 - requires a human review for recognized destructive Git operations, bulk deletion, publishing and deployment, destructive database operations, access-control changes, likely secret transmission, and other high-impact mutation patterns;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;

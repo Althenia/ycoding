@@ -79,7 +79,7 @@ test("rendered explicit Start and Stop cross the real Session API and isolated C
         expect(initial.reason).toBeTruthy()
         await app.waitForFrame((frame) => frame.includes("Unavailable"))
         expect(app.captureCharFrame()).not.toContain("Ready")
-        throw new Error("Real isolated-browser integration requires macOS arm64 with installed Chrome 152")
+        throw new Error("Real isolated-browser integration requires macOS arm64 with installed Chrome 152 or newer")
       }
 
       expect(initial).toEqual({ mode: "isolated", state: "stopped" })

@@ -43,6 +43,7 @@ type RunRuntimeInput = {
   replayLimit?: number
   demo?: RunInput["demo"]
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
+  browserAddress?: () => string
 }
 
 export type RunDeferredInput = {
@@ -62,6 +63,7 @@ export type RunDeferredInput = {
   replayLimit?: number
   demo?: RunInput["demo"]
   tuiConfig?: RunTuiConfig | Promise<RunTuiConfig>
+  browserAddress?: () => string
 }
 
 type StreamTransportModule = Pick<
@@ -226,6 +228,23 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
     model: state.model,
     variant: state.activeVariant,
     tuiConfig: tuiConfigTask,
+    browserAddress: () => {
+      const value = input.browserAddress?.()
+      if (!value || !URL.canParse(value)) return
+      const address = new URL(value)
+      return address.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(address.hostname)
+        ? address.origin
+        : undefined
+    },
+    onChromePair: input.browserAddress
+      ? async (signal) => {
+          const sdk = state.sdk
+          if (!state.sessionID) throw new Error("Session is not ready")
+          const result = await sdk.browser.start({ sessionID: state.sessionID }, { signal })
+          if (sdk !== state.sdk) throw new Error("Service changed during pairing")
+          return result
+        }
+      : undefined,
     onPermissionReply: async (next) => {
       if (state.demo?.permission(next)) {
         return
@@ -1002,6 +1021,7 @@ export async function runInteractiveDeferredMode(input: RunDeferredInput, deps?:
       replayLimit: input.replayLimit,
       demo: input.demo,
       tuiConfig: input.tuiConfig,
+      browserAddress: input.browserAddress,
       reconnect: input.reconnect,
       resolveSession: input.target,
       createSession: input.createSession,

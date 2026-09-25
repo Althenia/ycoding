@@ -17,7 +17,7 @@ const HeaderWebSocket = WebSocket as unknown as new (
   options: { readonly headers: Readonly<Record<string, string>> },
 ) => WebSocket
 
-test("pairs an exact Chrome extension origin without URL secrets and exposes only its explicitly shared tab", async () => {
+test("pairs an exact Chrome extension origin without URL secrets and exposes an active profile tab", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ycoding-server-browser-"))
   const port = await availablePort()
   const scope = await Effect.runPromise(Scope.make())
@@ -53,16 +53,40 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes onl
         })
       ).status,
     ).toBe(200)
+    const anotherSessionID = "ses_browser_server_other"
+    const otherDirectory = await mkdtemp(join(directory, "other-"))
+    expect(
+      (
+        await request("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id: anotherSessionID, location: { directory: otherDirectory } }),
+        })
+      ).status,
+    ).toBe(200)
     const pairingHTTP = await request(`/api/session/${sessionID}/browser/start`, { method: "POST" })
     expect(pairingHTTP.status).toBe(200)
     const pairing = Schema.decodeUnknownSync(pairingResponse)(await pairingHTTP.json()).data
 
-    const website = await fetch(`${base}/api/session/${sessionID}/browser/connect`, {
+    const website = await fetch(`${base}/api/browser/connect`, {
       headers: { origin: "http://localhost:3000" },
     })
     expect(website.status).toBe(403)
 
-    const socket = new HeaderWebSocket(`${base.replace("http://", "ws://")}/api/session/${sessionID}/browser/connect`, {
+    const stale = new HeaderWebSocket(`${base.replace("http://", "ws://")}/api/browser/connect`, {
+      headers: { Origin: `chrome-extension://${extensionID}` },
+    })
+    const staleClosed = new Promise<CloseEvent>((resolve) =>
+      stale.addEventListener("close", (event) => resolve(event), { once: true }),
+    )
+    await opened(stale)
+    stale.send(JSON.stringify({ type: "pair", version: 2, extensionID, secret: pairing.secret }))
+    expect((await staleClosed).code).toBe(4403)
+    expect((await (await request(`/api/session/${sessionID}/browser`)).json()).data).toMatchObject({
+      state: "pairing",
+    })
+
+    const socket = new HeaderWebSocket(`${base.replace("http://", "ws://")}/api/browser/connect`, {
       headers: { Origin: `chrome-extension://${extensionID}` },
     })
     const closed = new Promise<void>((resolve) => socket.addEventListener("close", () => resolve(), { once: true }))
@@ -78,26 +102,54 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes onl
       socket.addEventListener("open", () => resolve(), { once: true })
       socket.addEventListener("error", () => reject(new Error("browser websocket failed to open")), { once: true })
     })
-    socket.send(JSON.stringify({ type: "pair", version: 2, extensionID, secret: pairing.secret }))
+    socket.send(JSON.stringify({ type: "pair", version: 3, extensionID, secret: pairing.secret }))
     const paired = await next(messages, waiters)
     const trust = Schema.decodeUnknownSync(Schema.Struct({ serverID: Schema.String, credential: Schema.String }))(
       paired,
     )
     expect(paired).toMatchObject({
       type: "paired",
-      version: 2,
+      version: 3,
       generation: 1,
       serverID: expect.any(String),
       credential: expect.any(String),
     })
+    const opening = request(`/api/session/${sessionID}/browser/open`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ generation: 1, url: "https://example.test/owned?private=value", callID: "open-server" }),
+    })
+    const openFrame = await next(messages, waiters)
+    expect(openFrame).toMatchObject({ type: "open", callID: "open-server", url: "https://example.test/owned?private=value" })
+    if (!openFrame || typeof openFrame !== "object" || !("tabID" in openFrame) || typeof openFrame.tabID !== "string")
+      throw new Error("expected tab identity")
+    socket.send(JSON.stringify({ type: "opened", callID: "open-server", tabID: openFrame.tabID,
+      generation: 1, title: "Owned", url: "https://example.test/owned?private=value",
+      documentGeneration: 1, active: false }))
+    const openedHTTP = await opening
+    expect(openedHTTP.status).toBe(200)
+    const owned = Schema.decodeUnknownSync(Schema.Struct({ data: Browser.Tab }))(await openedHTTP.json()).data
+    expect(owned).toMatchObject({ sessionID, mode: "owned", page: { origin: "https://example.test", path: "/owned" } })
+    expect((await request(`/api/session/${anotherSessionID}/browser/tabs`)).status).toBe(200)
+    expect(Schema.decodeUnknownSync(tabsResponse)(
+      await (await request(`/api/session/${anotherSessionID}/browser/tabs`)).json(),
+    ).data).toEqual([])
+    const closing = request(`/api/session/${sessionID}/browser/close`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tabID: owned.id, generation: owned.generation, callID: "close-server" }),
+    })
+    expect(await next(messages, waiters)).toMatchObject({ type: "close", tabID: owned.id, callID: "close-server" })
+    socket.send(JSON.stringify({ type: "closed", callID: "close-server", tabID: owned.id, generation: 1 }))
+    expect((await closing).status).toBe(204)
+    socket.send(JSON.stringify({ type: "profile_access", enabled: true }))
     socket.send(
       JSON.stringify({
         type: "shared",
+        mode: "profile",
         tabID: "btab_server_fixture",
         title: "Server fixture",
         url: "https://example.test/form?secret=hidden#private",
         documentGeneration: 1,
-        active: false,
+        active: true,
       }),
     )
 
@@ -114,18 +166,30 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes onl
       expect.objectContaining({
         id: "btab_server_fixture",
         sessionID,
+        mode: "profile",
         page: { origin: "https://example.test", path: "/form" },
         status: "shared",
       }),
     ])
 
+    expect(
+      Schema.decodeUnknownSync(tabsResponse)(
+        await (await request(`/api/session/${anotherSessionID}/browser/tabs`)).json(),
+      ).data,
+    ).toEqual([expect.objectContaining({ id: "btab_server_fixture", sessionID: anotherSessionID })])
+
+    expect((await request(`/api/session/${sessionID}/archive`, { method: "POST" })).status).toBe(204)
+    expect(
+      Schema.decodeUnknownSync(tabsResponse)(
+        await (await request(`/api/session/${anotherSessionID}/browser/tabs`)).json(),
+      ).data,
+    ).toHaveLength(1)
     socket.close()
     await closed
 
-    const reconnect = new HeaderWebSocket(
-      `${base.replace("http://", "ws://")}/api/session/${sessionID}/browser/connect`,
-      { headers: { Origin: `chrome-extension://${extensionID}` } },
-    )
+    const reconnect = new HeaderWebSocket(`${base.replace("http://", "ws://")}/api/browser/connect`, {
+      headers: { Origin: `chrome-extension://${extensionID}` },
+    })
     const reconnectClosed = new Promise<void>((resolve) =>
       reconnect.addEventListener("close", () => resolve(), { once: true }),
     )
@@ -141,7 +205,7 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes onl
     reconnect.send(
       JSON.stringify({
         type: "authenticate",
-        version: 2,
+        version: 3,
         extensionID,
         serverID: trust.serverID,
         credential: trust.credential,
@@ -149,23 +213,23 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes onl
     )
     expect(await next(reconnectMessages, reconnectWaiters)).toMatchObject({
       type: "paired",
-      version: 2,
+      version: 3,
       generation: 2,
       serverID: trust.serverID,
     })
     expect(
-      Schema.decodeUnknownSync(tabsResponse)(await (await request(`/api/session/${sessionID}/browser/tabs`)).json())
-        .data,
+      Schema.decodeUnknownSync(tabsResponse)(
+        await (await request(`/api/session/${anotherSessionID}/browser/tabs`)).json(),
+      ).data,
     ).toEqual([])
 
-    const forgotten = await request(`/api/session/${sessionID}/browser/pairing`, { method: "DELETE" })
+    const forgotten = await request(`/api/session/${anotherSessionID}/browser/pairing`, { method: "DELETE" })
     expect(forgotten.status).toBe(204)
     await reconnectClosed
 
-    const revoked = new HeaderWebSocket(
-      `${base.replace("http://", "ws://")}/api/session/${sessionID}/browser/connect`,
-      { headers: { Origin: `chrome-extension://${extensionID}` } },
-    )
+    const revoked = new HeaderWebSocket(`${base.replace("http://", "ws://")}/api/browser/connect`, {
+      headers: { Origin: `chrome-extension://${extensionID}` },
+    })
     const revokedClosed = new Promise<CloseEvent>((resolve) =>
       revoked.addEventListener("close", (event) => resolve(event), { once: true }),
     )
@@ -173,7 +237,7 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes onl
     revoked.send(
       JSON.stringify({
         type: "authenticate",
-        version: 2,
+        version: 3,
         extensionID,
         serverID: trust.serverID,
         credential: trust.credential,
@@ -228,10 +292,9 @@ test("authenticates the approved Session after a server restart without restorin
     const pairing = Schema.decodeUnknownSync(pairingResponse)(
       await (await request(firstBase, `/api/session/${sessionID}/browser/start`, { method: "POST" })).json(),
     ).data
-    const firstSocket = new HeaderWebSocket(
-      `${firstBase.replace("http://", "ws://")}/api/session/${sessionID}/browser/connect`,
-      { headers: { Origin: `chrome-extension://${extensionID}` } },
-    )
+    const firstSocket = new HeaderWebSocket(`${firstBase.replace("http://", "ws://")}/api/browser/connect`, {
+      headers: { Origin: `chrome-extension://${extensionID}` },
+    })
     const firstMessages: unknown[] = []
     const firstWaiters: Array<(message: unknown) => void> = []
     firstSocket.addEventListener("message", (event) => {
@@ -241,7 +304,7 @@ test("authenticates the approved Session after a server restart without restorin
       else firstMessages.push(message)
     })
     await opened(firstSocket)
-    firstSocket.send(JSON.stringify({ type: "pair", version: 2, extensionID, secret: pairing.secret }))
+    firstSocket.send(JSON.stringify({ type: "pair", version: 3, extensionID, secret: pairing.secret }))
     const trust = Schema.decodeUnknownSync(Schema.Struct({ serverID: Schema.String, credential: Schema.String }))(
       await next(firstMessages, firstWaiters),
     )
@@ -249,10 +312,9 @@ test("authenticates the approved Session after a server restart without restorin
     await Effect.runPromise(Scope.close(firstScope, Exit.void))
 
     const secondBase = await start(secondScope, await availablePort())
-    const secondSocket = new HeaderWebSocket(
-      `${secondBase.replace("http://", "ws://")}/api/session/${sessionID}/browser/connect`,
-      { headers: { Origin: `chrome-extension://${extensionID}` } },
-    )
+    const secondSocket = new HeaderWebSocket(`${secondBase.replace("http://", "ws://")}/api/browser/connect`, {
+      headers: { Origin: `chrome-extension://${extensionID}` },
+    })
     const secondMessages: unknown[] = []
     const secondWaiters: Array<(message: unknown) => void> = []
     secondSocket.addEventListener("message", (event) => {
@@ -265,7 +327,7 @@ test("authenticates the approved Session after a server restart without restorin
     secondSocket.send(
       JSON.stringify({
         type: "authenticate",
-        version: 2,
+        version: 3,
         extensionID,
         serverID: trust.serverID,
         credential: trust.credential,
@@ -273,7 +335,7 @@ test("authenticates the approved Session after a server restart without restorin
     )
     expect(await next(secondMessages, secondWaiters)).toMatchObject({
       type: "paired",
-      version: 2,
+      version: 3,
       serverID: trust.serverID,
     })
     expect(

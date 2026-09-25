@@ -6,6 +6,7 @@ import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { Schema } from "effect"
 import { createSignal, onMount, type Accessor, type JSX } from "solid-js"
 import { DialogSessionBrowser, SessionIsolatedBrowserCommand } from "../src/component/dialog-session-browser"
+import { CommandPaletteDialog } from "../src/component/command-palette"
 import { ConfigProvider } from "../src/config"
 import { ClientProvider } from "../src/context/client"
 import { Keymap, type KeymapCommand } from "../src/context/keymap"
@@ -25,6 +26,34 @@ const second = {
   location: { directory: "/tmp/isolated-second", workspaceID: "workspace_second" },
 }
 const stopped = status({ mode: "isolated", state: "stopped" })
+
+test("Session browser commands appear in the modal command palette without starting pairing", async () => {
+  const requests: Request[] = []
+  const result = await renderBrowser({
+    fetch: (url, request) => {
+      if (url.pathname.includes("/browser")) requests.push(request)
+      return undefined
+    },
+    fixture: () => {
+      const dialog = useDialog()
+      onMount(() => dialog.replace(() => <CommandPaletteDialog />))
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitForFrame((frame) => frame.includes("Commands"))
+    expect(result.commands().map((command) => command.id)).toContain("session.browser.chrome")
+    expect(result.commands().map((command) => command.id)).toContain("session.browser.isolated")
+    await result.app.mockInput.typeText("Chrome")
+    await result.app.waitForFrame((frame) => frame.includes("Connect Chrome"))
+    expect(requests).toHaveLength(0)
+    result.app.mockInput.pressEnter()
+    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
+    expect(requests.filter((request) => request.method === "POST")).toHaveLength(0)
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
 
 test("production Session command is available and opens isolated browser for its current Session", async () => {
   let commands!: Accessor<readonly KeymapCommand[]>
@@ -51,6 +80,73 @@ test("production Session command is available and opens isolated browser for its
     expect(requests.map((request) => [request.method, new URL(request.url).pathname])).toEqual([
       ["GET", `/api/session/${first.sessionID}/browser/isolated`],
     ])
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+test("Session command creates a one-time Chrome pairing code only on explicit request", async () => {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  const requests: Request[] = []
+  const result = await renderBrowser({
+    command: true,
+    baseUrl: "http://127.0.0.1:43210",
+    fetch: (url, request) => {
+      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET")
+        return json({ data: { state: "unavailable" } })
+      if (url.pathname !== `/api/session/${first.sessionID}/browser/start`) return undefined
+      requests.push(request)
+      return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
+    },
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+    expect(requests).toHaveLength(0)
+    void commands()
+      .find((command) => command.id === "session.browser.chrome")!
+      .run()
+    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
+    expect(result.app.captureCharFrame()).toContain("http://127.0.0.1:43210")
+    expect(result.app.captureCharFrame().replace(/\s+/g, " ")).toContain(
+      "Pairing lets YCoding use eligible Chrome tabs, including the active tab.",
+    )
+    expect(result.app.captureCharFrame()).toContain("one-time")
+    expect(requests).toHaveLength(0)
+    result.app.mockInput.pressKey("p")
+    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
+    expect(requests.map((request) => request.method)).toEqual(["POST"])
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+test("Chrome connection dialog describes profile-wide pairing without a separate grant", async () => {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  const result = await renderBrowser({
+    command: true,
+    fetch: (url, request) =>
+      url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET"
+        ? json({ data: { state: "connected", generation: 1, profileGranted: true } })
+        : undefined,
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+    void commands()
+      .find((command) => command.id === "session.browser.chrome")!
+      .run()
+    await result.app.waitForFrame((frame) => frame.includes("Connected to YCoding"))
+    expect(result.app.captureCharFrame().replace(/\s+/g, " ")).toContain(
+      "Pairing lets YCoding use eligible Chrome tabs, including the active tab.",
+    )
+    expect(result.app.captureCharFrame()).not.toContain("Full-profile access:")
   } finally {
     result.app.renderer.destroy()
   }
@@ -478,6 +574,7 @@ type BrowserApi = Partial<YCodingClient["isolatedBrowser"]>
 
 async function renderBrowser(input: {
   api?: BrowserApi
+  baseUrl?: string
   command?: boolean
   fetch?: FetchHandler
   owner?: Accessor<typeof first | typeof second>
@@ -514,7 +611,7 @@ async function renderBrowser(input: {
         <ConfigProvider config={createTuiResolvedConfig()}>
           <Keymap.Provider>
             <ThemeProvider mode="dark" source={{ discover: () => Promise.resolve({}) }}>
-              <ClientProvider api={api}>
+              <ClientProvider api={api} baseUrl={input.baseUrl}>
                 <ToastProvider>
                   <DialogProvider>
                     <Fixture />

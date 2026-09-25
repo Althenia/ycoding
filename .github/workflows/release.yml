@@ -199,6 +199,8 @@ jobs:
           cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding${{ runner.os == 'Windows' && '.exe' || '' }}" "$staging/"
           if [ "${{ runner.os }}" = "macOS" ]; then
             cp "dist/tui/tui-${{ matrix.target }}/bin/ycoding-computer-helper" "$staging/"
+            cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-computer-helper.app" "$staging/"
+            codesign --verify --deep --strict "$staging/ycoding-computer-helper.app"
           fi
 
       - name: Upload native executables
@@ -295,14 +297,34 @@ jobs:
           set -euo pipefail
           version="$RELEASE_VERSION"
           mkdir release
-          chmod +x unpacked/ycoding-darwin-arm64/ycoding unpacked/ycoding-darwin-arm64/ycoding-computer-helper unpacked/ycoding-darwin-x64/ycoding unpacked/ycoding-darwin-x64/ycoding-computer-helper unpacked/ycoding-linux-x64/ycoding
+          chmod +x unpacked/ycoding-darwin-arm64/ycoding unpacked/ycoding-darwin-arm64/ycoding-computer-helper unpacked/ycoding-darwin-arm64/ycoding-computer-helper.app/Contents/MacOS/ycoding-computer-helper unpacked/ycoding-darwin-x64/ycoding unpacked/ycoding-darwin-x64/ycoding-computer-helper unpacked/ycoding-darwin-x64/ycoding-computer-helper.app/Contents/MacOS/ycoding-computer-helper unpacked/ycoding-linux-x64/ycoding
           test -x unpacked/ycoding-darwin-arm64/ycoding
           test -x unpacked/ycoding-darwin-arm64/ycoding-computer-helper
           test -x unpacked/ycoding-darwin-x64/ycoding
           test -x unpacked/ycoding-darwin-x64/ycoding-computer-helper
+          for target in darwin-arm64 darwin-x64; do
+            app="unpacked/ycoding-$target/ycoding-computer-helper.app"
+            test -d "$app" && test ! -L "$app"
+            test "$(find "$app" -mindepth 1 -printf '%P\n' | LC_ALL=C sort)" = "$(printf '%s\n' Contents Contents/Info.plist Contents/MacOS Contents/MacOS/ycoding-computer-helper Contents/Resources Contents/Resources/YCoding.icns Contents/_CodeSignature Contents/_CodeSignature/CodeResources | LC_ALL=C sort)"
+            test -f "$app/Contents/Info.plist" && test ! -L "$app/Contents/Info.plist" && test -s "$app/Contents/Info.plist"
+            test -f "$app/Contents/_CodeSignature/CodeResources" && test ! -L "$app/Contents/_CodeSignature/CodeResources" && test -s "$app/Contents/_CodeSignature/CodeResources"
+            test -f "$app/Contents/MacOS/ycoding-computer-helper" && test ! -L "$app/Contents/MacOS/ycoding-computer-helper" && test -x "$app/Contents/MacOS/ycoding-computer-helper"
+            test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"
+            grep -Fq '<key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string>' "$app/Contents/Info.plist"
+            grep -Fq '<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>' "$app/Contents/Info.plist"
+            grep -Fq '<key>CFBundleIconFile</key><string>YCoding.icns</string>' "$app/Contents/Info.plist"
+          done
           test -x unpacked/ycoding-linux-x64/ycoding
-          tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" ycoding ycoding-computer-helper
-          tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" ycoding ycoding-computer-helper
+          mac_entries=(ycoding ycoding-computer-helper)
+          version_core="${version%%+*}"
+          prerelease=false
+          if [[ "$version_core" == *-* ]]; then prerelease=true; fi
+          if printf '%s\n' "${version_core%%-*}" | awk -F . -v prerelease="$prerelease" '
+            $1 > 0 || ($1 == 0 && ($2 > 7 || ($2 == 7 && ($3 > 1 || ($3 == 1 && prerelease == "false"))))) { found=1 }
+            END { exit !found }
+          '; then mac_entries+=(ycoding-computer-helper.app); fi
+          tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}"
+          tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}"
           tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding
           (cd unpacked/ycoding-windows-x64 && zip "../../release/ycoding-$version-windows-x64.zip" ycoding.exe)
           tar -tzvf "release/ycoding-$version-darwin-arm64.tar.gz" | grep '^-rwx' >/dev/null

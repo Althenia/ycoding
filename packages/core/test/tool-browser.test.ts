@@ -13,12 +13,13 @@ import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { Effect, Layer } from "effect"
 import { imagePassthrough } from "./lib/image"
-import { executeTool, registerToolPlugin, toolIdentity } from "./lib/tool"
+import { executeTool, registerToolPlugin, settleTool, toolIdentity } from "./lib/tool"
 import { testEffect } from "./lib/effect"
 
 const sessionID = SessionV2.ID.make("ses_browser_tool")
 const tabID = Browser.TabID.make("btab_browser_tool")
 const sequence: string[] = []
+const requests: PermissionV2.AssertInput[] = []
 
 const tab: Browser.Tab = {
   id: tabID,
@@ -30,15 +31,38 @@ const tab: Browser.Tab = {
   documentGeneration: 1,
   observationRevision: 1,
 }
+const ownedTab: Browser.Tab = { ...tab, id: Browser.TabID.make("btab_owned_tool"), mode: "owned" }
+const profileTab: Browser.Tab = { ...tab, id: Browser.TabID.make("btab_profile_tool"), mode: "profile" }
+const anotherProfileTab: Browser.Tab = { ...tab, id: Browser.TabID.make("btab_profile_second"),
+  mode: "profile", page: { origin: "https://other.test", path: "/page" } }
 const isolatedInstanceID = IsolatedBrowser.InstanceID.make("ibrowser_tool")
 
 const browser = Layer.mock(Browser.Service, {
   status: () => Effect.succeed({ state: "unavailable" }),
-  list: () => Effect.succeed([tab]),
+  list: () => Effect.succeed([tab, ownedTab, profileTab, anotherProfileTab]),
+  observe: (input) => Effect.succeed({
+    tabID, generation: 1, documentGeneration: 1, revision: 2, title: "Fixture",
+    page: input.callID === "unexpected-observation"
+      ? { origin: "https://unapproved.test", path: "/private" }
+      : input.callID === "changed-path-observation"
+        ? { origin: "https://example.test", path: "/changed" }
+      : tab.page,
+    elements: [], truncated: false,
+  }),
+  clickDestination: () => Effect.succeed({ origin: "https://other.test", path: "/arrive" }),
+  open: (input) => Effect.sync(() => {
+    sequence.push(`open:${input.callID}`)
+    return { ...ownedTab, page: { origin: "https://example.test", path: "/new" } }
+  }),
+  close: (input) => Effect.sync(() => { sequence.push(`close:${input.callID}:${input.tabID}`) }),
   action: (input) =>
     Effect.sync(() => {
       sequence.push(`action:${input.callID}`)
-      return { callID: input.callID, tab, status: "completed" as const }
+      return { callID: input.callID,
+        tab: input.callID === "unexpected-result"
+          ? { ...tab, page: { origin: "https://unapproved.test", path: "/private" } }
+          : input.tabID === profileTab.id ? profileTab : tab,
+        status: "completed" as const }
     }),
 })
 const isolatedBrowser = Layer.mock(IsolatedBrowser.Service, {
@@ -58,7 +82,10 @@ const isolatedBrowser = Layer.mock(IsolatedBrowser.Service, {
     }),
 })
 const permission = Layer.mock(PermissionV2.Service, {
-  assert: (input) => Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
+  assert: (input) => Effect.sync(() => {
+    requests.push(input)
+    sequence.push(`permission:${input.action}:${input.resources[0]}`)
+  }),
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: (input) =>
@@ -72,13 +99,14 @@ const browserToolNode = makeLocationNode({
   layer: Layer.effectDiscard(registerToolPlugin(BrowserTool.Plugin)),
   deps: [ToolRegistry.toolsNode, Browser.node, IsolatedBrowser.node, PermissionV2.node, SessionGuardrail.node],
 })
-const browserTests = (permissionLayer: typeof permission) =>
+const browserTests = (permissionLayer: typeof permission, guardrailLayer: typeof guardrail = guardrail,
+  browserLayer: typeof browser = browser) =>
   testEffect(
     AppNodeBuilder.build(LayerNode.group([ToolRegistry.node, ToolRegistry.toolsNode, browserToolNode]), [
-      [Browser.node, browser],
+      [Browser.node, browserLayer],
       [IsolatedBrowser.node, isolatedBrowser],
       [PermissionV2.node, permissionLayer],
-      [SessionGuardrail.node, guardrail],
+      [SessionGuardrail.node, guardrailLayer],
       [ToolOutputStore.node, ToolOutputStore.nodeWithoutConfig],
       [Image.node, imagePassthrough],
     ]),
@@ -94,6 +122,370 @@ const denied = browserTests(
 )
 
 describe("BrowserTool", () => {
+  it.effect("defaults to paired profile tabs with site permissions and no read review", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const listing = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "default-profile-list", name: "browser", input: { operation: "tabs" } } })
+      expect(JSON.stringify(listing)).toContain(profileTab.id)
+      expect(JSON.stringify(listing)).not.toContain(tabID)
+      expect(JSON.stringify(listing)).not.toContain(ownedTab.id)
+      expect(sequence).toEqual(["permission:browser_read:https://example.test/form"])
+      expect(requests.find((entry) => entry.action === "browser_read")?.resources)
+        .toEqual(["https://example.test/form", "https://other.test/page"])
+    }),
+  )
+  const reviewDenied = browserTests(permission, Layer.mock(SessionGuardrail.Service, {
+    assert: (input) => Effect.fail(new SessionGuardrail.BlockedError({
+      rootSessionID: sessionID, sessionID, action: input.action, ruleIDs: ["test"], reason: "Human review denied",
+    })),
+  }))
+  reviewDenied.effect("lists profile tabs without invoking the mutation review", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "default-profile-denied", name: "browser", input: { operation: "tabs" } } })
+      expect(JSON.stringify(result)).toContain(profileTab.id)
+      expect(sequence).toEqual(["permission:browser_read:https://example.test/form"])
+    }),
+  )
+  reviewDenied.effect("does not dispatch a default profile mutation when hard review is denied", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "default-mutation-denied", name: "browser",
+          input: { operation: "action", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1,
+            action: { type: "navigate", url: "https://other.test/arrive" } } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).not.toContain("action:default-mutation-denied")
+    }),
+  )
+  it.effect("applies site permissions without hard review for explicit profile listing", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const listing = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "profile-list", name: "browser",
+          input: { operation: "tabs", mode: "profile" } } })
+      expect(JSON.stringify(listing)).toContain(profileTab.id)
+      expect(JSON.stringify(listing)).not.toContain(ownedTab.id)
+      expect(sequence).toEqual(["permission:browser_read:https://example.test/form"])
+      expect(requests.find((entry) => entry.action === "browser_read")?.resources)
+        .toEqual(["https://example.test/form", "https://other.test/page"])
+    }),
+  )
+
+  const profileCapture = browserTests(permission, guardrail, Layer.mock(Browser.Service, {
+    list: () => Effect.succeed([profileTab]),
+    action: (input) => Effect.sync(() => {
+      sequence.push(`action:${input.callID}`)
+      return { callID: input.callID, tab: profileTab, status: "completed" as const,
+        capture: { mediaType: "image/png" as const, data: "aW1hZ2U=", bytes: 5 } }
+    }),
+  }))
+  profileCapture.effect("captures a profile tab with site permission and projects an image without read review", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const settlement = yield* settleTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "profile-capture", name: "browser",
+          input: { operation: "action", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "capture" } } } })
+      expect(sequence).toEqual([
+        "permission:browser_read:https://example.test/form",
+        "permission:browser_read:https://example.test/form",
+        "action:profile-capture",
+        "permission:browser_read:https://example.test/form",
+      ])
+      expect(settlement.output?.content).toEqual([
+        { type: "text", text: JSON.stringify({ type: "action", result: { callID: "profile-capture",
+          tab: profileTab, status: "completed", capture: { mediaType: "image/png", bytes: 5 } } }) },
+        { type: "file", uri: "data:image/png;base64,aW1hZ2U=", mime: "image/png", name: "shared-tab.png" },
+      ])
+    }),
+  )
+  it.effect("requires group control, both sites, and hard mutation review before profile grouping", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "profile-group", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1,
+            action: { type: "group", tabIDs: [profileTab.id, anotherProfileTab.id], title: "Task" } } } })
+      expect(requests.some((entry) => entry.action === "browser_control" && entry.resources[0] === "group")).toBe(true)
+      expect(requests.find((entry) => entry.action === "browser_read" && entry.resources.length === 2)?.resources)
+        .toEqual(["https://example.test/form", "https://other.test/page"])
+      expect(sequence).toContain("guardrail:browser_profile_mutation:https://example.test/form")
+      expect(sequence).toContain("action:profile-group")
+    }),
+  )
+  const profileSiteDenied = browserTests(Layer.mock(PermissionV2.Service, {
+    assert: (input) => input.resources.some((resource) => resource.startsWith("https://other.test"))
+      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Profile site denied" }))
+      : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
+  }))
+  profileSiteDenied.effect("does not group when one granted member site is denied", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "denied-profile-group", name: "browser",
+          input: { operation: "action", mode: "profile", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1,
+            action: { type: "group", tabIDs: [profileTab.id, anotherProfileTab.id], title: "Task" } } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).not.toContain("action:denied-profile-group")
+    }),
+  )
+  it.effect("keeps personal profile tabs out of owned mode and rejects their actions", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const listing = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "owned-list", name: "browser", input: { operation: "tabs", mode: "owned" } } })
+      expect(JSON.stringify(listing)).toContain(ownedTab.id)
+      expect(JSON.stringify(listing)).not.toContain(profileTab.id)
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "personal-action", name: "browser",
+          input: { operation: "action", mode: "owned", tabID: profileTab.id, generation: 1,
+            documentGeneration: 1, observationRevision: 1, action: { type: "click", ref: "b1" } } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).not.toContain("action:personal-action")
+    }),
+  )
+  it.effect("opens a background owned tab only after target-site permission and distinct hard-review action", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "new-owned", name: "browser",
+          input: { operation: "open", mode: "owned", generation: 1, url: "https://example.test/new" } } })
+      expect(sequence).toEqual([
+        "permission:browser_navigate:https://example.test/new",
+        "permission:browser_read:https://example.test/new",
+        "guardrail:browser_owned_open:https://example.test/new",
+        "open:new-owned", "release", "permission:browser_read:https://example.test/new",
+      ])
+    }),
+  )
+  denied.effect("does not open an owned tab when target-site read permission is denied", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "denied-owned", name: "browser",
+          input: { operation: "open", mode: "owned", generation: 1, url: "https://example.test/new" } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).not.toContain("open:denied-owned")
+    }),
+  )
+  const returnedPageDenied = browserTests(Layer.mock(PermissionV2.Service, {
+    assert: (input) => input.action === "browser_read" && input.resources[0] === "https://example.test/new"
+      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Returned page denied" }))
+      : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
+  }))
+  returnedPageDenied.effect("closes the inactive owned tab when returned page access is denied", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "returned-denied", name: "browser",
+          input: { operation: "open", mode: "owned", generation: 1, url: "https://example.test/start" } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).toContain("open:returned-denied")
+      expect(sequence.filter((entry) => entry.startsWith("close:"))).toEqual([
+        `close:cleanup-${ownedTab.id}:${ownedTab.id}`,
+      ])
+      expect(JSON.stringify(result)).not.toContain("https://example.test/new")
+    }),
+  )
+  const activeReturnedDenied = browserTests(Layer.mock(PermissionV2.Service, {
+    assert: (input) => input.action === "browser_read" && input.resources[0] === "https://example.test/new"
+      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Returned page denied" }))
+      : Effect.void,
+  }), guardrail, Layer.mock(Browser.Service, {
+    open: () => Effect.succeed({ ...ownedTab, page: { origin: "https://example.test", path: "/new" }, status: "paused" }),
+    close: (input) => Effect.sync(() => sequence.push(`close:${input.callID}:${input.tabID}`)).pipe(
+      Effect.flatMap(() => Effect.fail(new Browser.FenceError({ message: "Chrome tab is active under user control" }))),
+    ),
+  }))
+  activeReturnedDenied.effect("reports manual reconciliation when an active owned tab cannot be cleaned up", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "returned-active", name: "browser",
+          input: { operation: "open", mode: "owned", generation: 1, url: "https://example.test/start" } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence.filter((entry) => entry.startsWith("close:"))).toEqual([
+        `close:cleanup-${ownedTab.id}:${ownedTab.id}`,
+      ])
+      expect(JSON.stringify(result)).toContain("close it manually")
+      expect(JSON.stringify(result)).not.toContain("https://example.test/new")
+    }),
+  )
+  const blocked = browserTests(permission, Layer.mock(SessionGuardrail.Service, {
+    assert: () => Effect.fail(new SessionGuardrail.BlockedError({
+      rootSessionID: sessionID, sessionID, action: "browser_owned_open", ruleIDs: ["test"], reason: "Human review required",
+    })),
+  }))
+  blocked.effect("does not open an owned tab when a Session guardrail blocks it", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "blocked-owned", name: "browser",
+          input: { operation: "open", mode: "owned", generation: 1, url: "https://example.test/new" } } })
+      expect(result).toMatchObject({ type: "error" })
+      expect(sequence).not.toContain("open:blocked-owned")
+    }),
+  )
+  it.effect("closes only an owned tab after control, site read, and mutation guardrail", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, { sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "owned-close", name: "browser",
+          input: { operation: "close", mode: "owned", tabID: ownedTab.id, generation: 1 } } })
+      expect(result).toMatchObject({ type: "text" })
+      expect(sequence).toEqual([
+        "permission:browser_control:close", "permission:browser_read:https://example.test/form",
+        "guardrail:browser_mutation:https://example.test/form", `close:owned-close:${ownedTab.id}`, "release",
+      ])
+    }),
+  )
+  it.effect("approves the source and static click destination before dispatch with an incidental-download warning", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call", id: "site-click", name: "browser",
+          input: { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1,
+            observationRevision: 1, action: { type: "click", ref: "b1" } },
+        },
+      })
+      expect(sequence).toEqual([
+        "permission:browser_read:https://example.test/form",
+        "permission:browser_interact:https://example.test/form",
+        "permission:browser_navigate:https://other.test/arrive",
+        "permission:browser_read:https://other.test/arrive",
+        "guardrail:browser_profile_mutation:https://example.test/form",
+        "action:site-click", "release",
+        "permission:browser_read:https://example.test/form",
+      ])
+      expect(requests.filter((request) => request.metadata?.incidentalDownloads)).toMatchObject([
+        { action: "browser_interact", metadata: { mode: "profile", site: "https://example.test", incidentalDownloads: true } },
+        { action: "browser_navigate", metadata: { mode: "profile", site: "https://other.test", incidentalDownloads: true } },
+      ])
+    }),
+  )
+
+  const destinationDenied = browserTests(Layer.mock(PermissionV2.Service, {
+    assert: (input) => input.resources[0]?.startsWith("https://other.test")
+      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Destination site denied" }))
+      : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
+  }))
+  destinationDenied.effect("does not dispatch cross-site click when destination approval is denied", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, {
+        sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "denied-site-click", name: "browser",
+          input: { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1,
+            observationRevision: 1, action: { type: "click", ref: "b1" } } },
+      })
+      expect(result).toMatchObject({ type: "error" })
+      expect(JSON.stringify(result)).not.toContain("other.test")
+      expect(sequence).not.toContain("action:denied-site-click")
+    }),
+  )
+
+  it.effect("authorizes source read and navigation target before navigating", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      requests.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* executeTool(registry, {
+        sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "navigate-approved", name: "browser",
+          input: { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1,
+            observationRevision: 1, action: { type: "navigate", url: "https://other.test/arrive" } } },
+      })
+      expect(sequence.slice(0, 4)).toEqual([
+        "permission:browser_read:https://example.test/form",
+        "permission:browser_navigate:https://other.test/arrive",
+        "permission:browser_read:https://other.test/arrive",
+        "guardrail:browser_profile_mutation:https://other.test/arrive",
+      ])
+      expect(requests.find((request) => request.action === "browser_navigate")?.metadata).toMatchObject({
+        mode: "profile", incidentalDownloads: true, site: "https://other.test",
+      })
+    }),
+  )
+
+  it.effect("does not expose an unexpected action-result site to the model", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, {
+        sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "unexpected-result", name: "browser",
+          input: { operation: "action", tabID: profileTab.id, generation: 1, documentGeneration: 1,
+            observationRevision: 1, action: { type: "type", ref: "b1", text: "hello" } } },
+      })
+      expect(result).toMatchObject({ type: "error" })
+      expect(JSON.stringify(result)).not.toContain("unapproved.test")
+      expect(sequence).toContain("action:unexpected-result")
+    }),
+  )
+
+  it.effect("does not expose a changed observation site to the model", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, {
+        sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "unexpected-observation", name: "browser",
+          input: { operation: "observe", tabID: profileTab.id, generation: 1 } },
+      })
+      expect(result).toMatchObject({ type: "error" })
+      expect(JSON.stringify(result)).not.toContain("unapproved.test")
+      expect(sequence).toContain("permission:browser_read:https://example.test/form")
+    }),
+  )
+
+  const changedPathDenied = browserTests(Layer.mock(PermissionV2.Service, {
+    assert: (input) => input.resources[0] === "https://example.test/changed"
+      ? Effect.fail(new PermissionV2.CorrectedError({ feedback: "Read denied" }))
+      : Effect.sync(() => sequence.push(`permission:${input.action}:${input.resources[0]}`)),
+  }))
+  changedPathDenied.effect("checks changed same-site observation path before returning it", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, {
+        sessionID, ...toolIdentity,
+        call: { type: "tool-call", id: "changed-path-observation", name: "browser",
+          input: { operation: "observe", tabID: profileTab.id, generation: 1 } },
+      })
+      expect(result).toMatchObject({ type: "error" })
+      expect(JSON.stringify(result)).not.toContain("/changed")
+      expect(sequence).toEqual(["permission:browser_read:https://example.test/form"])
+    }),
+  )
   for (const input of [
     { operation: "status", mode: "isolated" },
     { operation: "control", mode: "isolated", action: "pause" },
@@ -125,7 +517,7 @@ describe("BrowserTool", () => {
           name: "browser",
           input: {
             operation: "action",
-            tabID,
+            tabID: profileTab.id,
             generation: 1,
             documentGeneration: 1,
             observationRevision: 1,
@@ -137,14 +529,18 @@ describe("BrowserTool", () => {
         type: "text",
         value: JSON.stringify({
           type: "action",
-          result: { callID: "call-browser-mutation", tab, status: "completed" },
+          result: { callID: "call-browser-mutation", tab: profileTab, status: "completed" },
         }),
       })
       expect(sequence).toEqual([
+        "permission:browser_read:https://example.test/form",
         "permission:browser_interact:https://example.test/form",
-        "guardrail:browser_mutation:https://example.test/form",
+        "permission:browser_navigate:https://other.test/arrive",
+        "permission:browser_read:https://other.test/arrive",
+        "guardrail:browser_profile_mutation:https://example.test/form",
         "action:call-browser-mutation",
         "release",
+        "permission:browser_read:https://example.test/form",
       ])
     }),
   )
@@ -167,7 +563,7 @@ describe("BrowserTool", () => {
     }),
   )
 
-  it.effect("authorizes shared-tab metadata before exposing it to the model", () =>
+  it.effect("authorizes profile-tab metadata before exposing it to the model", () =>
     Effect.gen(function* () {
       sequence.length = 0
       const registry = yield* ToolRegistry.Service
@@ -177,7 +573,7 @@ describe("BrowserTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-browser-tabs", name: "browser", input: { operation: "tabs" } },
         }),
-      ).toEqual({ type: "text", value: JSON.stringify({ type: "tabs", tabs: [tab] }) })
+      ).toEqual({ type: "text", value: JSON.stringify({ type: "tabs", tabs: [profileTab, anotherProfileTab] }) })
       expect(sequence).toEqual(["permission:browser_read:https://example.test/form"])
     }),
   )

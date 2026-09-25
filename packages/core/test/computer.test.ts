@@ -10,6 +10,8 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { Cause, Context, DateTime, Effect, Exit, Fiber, Layer, PubSub, Schema, Scope, Stream } from "effect"
 import path from "node:path"
+import { readFile, stat, writeFile } from "node:fs/promises"
+import { statSync } from "node:fs"
 
 const owner = SessionV2.ID.make("ses_computer_owner")
 const other = SessionV2.ID.make("ses_computer_other")
@@ -20,6 +22,176 @@ const target = {
   tabIndex: 2,
   sessionID: "iterm-session-guid",
 }
+const desktop = {
+  platform: "macos" as const,
+  application: "desktop" as const,
+  bundleID: "com.example.fixture",
+  pid: 451,
+  windowID: 73,
+}
+
+describe("scoped desktop control", () => {
+  test("waits for the app response after LaunchServices returns", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const locations = yield* makeLocationComputers(
+            (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-delayed" }),
+            Stream.never,
+            undefined,
+            undefined,
+            true,
+          )
+          expect(
+            yield* locations.first.inspect({ sessionID: owner, callID: "delayed-app", target: desktop }),
+          ).toMatchObject({ revision: "rev-delayed" })
+          yield* locations.close
+        }),
+      ),
+    )
+  })
+  test("uses a private LaunchServices handoff and removes it on settlement", async () => {
+    const launched: string[] = []
+    const modes: number[] = []
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const locations = yield* makeLocationComputers(
+            (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-desktop" }),
+            Stream.never,
+            (args, signal) => {
+              expect(signal).toBeUndefined()
+              launched.push(...args)
+              modes.push(statSync(path.dirname(args[5])).mode & 0o777, statSync(args[5]).mode & 0o777)
+            },
+          )
+          expect(
+            yield* locations.first.inspect({ sessionID: owner, callID: "desktop-app", target: desktop }),
+          ).toMatchObject({ action: "desktop.inspect", revision: "rev-desktop" })
+          expect(launched.slice(0, 5)).toEqual([
+            "-n",
+            "-g",
+            "-a",
+            `${MacOSComputer.developmentHelperPath()}.app`,
+            "--args",
+          ])
+          expect(launched[5]).toEndWith("/request.json")
+          expect(launched[6]).toEndWith("/response.json")
+          expect(modes).toEqual([0o700, 0o600])
+          yield* locations.close
+        }),
+      ),
+    )
+    expect(await stat(path.dirname(launched[5])).catch(() => undefined)).toBeUndefined()
+  })
+  test("requires an exact inspected app/window revision and invalidates uncertain mutation", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "desktop.click")
+        return Effect.fail(
+          new Computer.NativeError({ code: "unknown_outcome", message: "uncertain", outcome: "unknown" }),
+        )
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-desktop" })
+    }, "darwin")
+    expect(
+      await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "observe", target: desktop })),
+    ).toMatchObject({ action: "desktop.inspect" })
+    const otherWindow = { ...desktop, windowID: 74 }
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(
+          computer.act({
+            sessionID: owner,
+            callID: "wrong-window",
+            target: otherWindow,
+            expectedRevision: "rev-desktop",
+            action: { type: "desktop.click", element: [0] },
+          }),
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(
+          computer.act({
+            sessionID: other,
+            callID: "wrong-owner",
+            target: desktop,
+            expectedRevision: "rev-desktop",
+            action: { type: "desktop.click", element: [0] },
+          }),
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(
+          computer.act({
+            sessionID: owner,
+            callID: "click",
+            target: desktop,
+            expectedRevision: "rev-desktop",
+            action: { type: "desktop.click", element: [0] },
+          }),
+        ),
+      ),
+    ).toBe(true)
+    expect(
+      Exit.isFailure(
+        await Effect.runPromiseExit(
+          computer.act({
+            sessionID: owner,
+            callID: "retry",
+            target: desktop,
+            expectedRevision: "rev-desktop",
+            action: { type: "desktop.click", element: [0] },
+          }),
+        ),
+      ),
+    ).toBe(true)
+    expect(requests.map((request) => request.action)).toEqual(["desktop.inspect", "desktop.click"])
+  })
+  test("does not replay a desktop mutation when the launched app produces an invalid response", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const locations = yield* makeLocationComputers(
+            (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-desktop" }),
+            Stream.never,
+            undefined,
+            (action) => action === "desktop.click",
+          )
+          yield* locations.first.inspect({ sessionID: owner, callID: "desktop-observe", target: desktop })
+          const first = yield* locations.first
+            .act({
+              sessionID: owner,
+              callID: "desktop-act",
+              target: desktop,
+              expectedRevision: "rev-desktop",
+              action: { type: "desktop.click", element: [0] },
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(first)).toBe(true)
+          if (Exit.isFailure(first))
+            expect(Cause.squash(first.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+          const replay = yield* locations.first
+            .act({
+              sessionID: owner,
+              callID: "desktop-replay",
+              target: desktop,
+              expectedRevision: "rev-desktop",
+              action: { type: "desktop.click", element: [0] },
+            })
+            .pipe(Effect.exit)
+          expect(Exit.isFailure(replay)).toBe(true)
+          if (Exit.isFailure(replay)) expect(replay.cause.toString()).toContain("must be inspected")
+          yield* locations.close
+        }),
+      ),
+    )
+  })
+})
 
 describe("native computer helper resolution", () => {
   test("uses the explicit source-development build instead of writing beside Bun", () => {
@@ -294,6 +466,12 @@ describe("native computer target ownership", () => {
         identity: { kind: "macos.bundle_id", value: "com.apple.finder" },
         operations: ["inspect", "move"],
       },
+      {
+        platform: "macos",
+        application: "desktop",
+        identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
+        operations: ["inspect", "capture", "click", "type", "scroll", "key"],
+      },
     ])
   })
 
@@ -346,7 +524,18 @@ function yieldPubSub() {
 }
 
 const fixtureRequest = Schema.Struct({
-  action: Schema.Literals(["iterm.inspect", "iterm.send_text", "finder.inspect", "finder.move"]),
+  action: Schema.Literals([
+    "iterm.inspect",
+    "iterm.send_text",
+    "finder.inspect",
+    "finder.move",
+    "desktop.inspect",
+    "desktop.capture",
+    "desktop.click",
+    "desktop.type",
+    "desktop.scroll",
+    "desktop.key",
+  ]),
   owner: Schema.Struct({ callID: Schema.String }),
 })
 const decodeFixtureRequest = Schema.decodeUnknownSync(Schema.fromJsonString(fixtureRequest))
@@ -357,24 +546,58 @@ function makeLocationComputers(
     signal: AbortSignal,
   ) => Effect.Effect<Computer.NativeSuccess, Computer.NativeError>,
   events: Stream.Stream<EventV2.Payload> = Stream.never,
+  onLaunch?: (args: ReadonlyArray<string>, signal?: AbortSignal) => void,
+  invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean,
+  respondAfterOpen = false,
 ) {
   const processLayer = Layer.mock(AppProcess.Service, {
-    run: (_command, options) => {
-      if (typeof options?.stdin !== "string" || !options.signal)
-        return Effect.die(new Error("Computer fixture requires JSON stdin and an AbortSignal"))
-      const request = decodeFixtureRequest(options.stdin)
-      return invoke(request, options.signal).pipe(
-        Effect.map((result) => ({
-          command: "computer-fixture",
-          exitCode: 0,
-          stdout: Buffer.from(JSON.stringify(result)),
-          stderr: Buffer.alloc(0),
-          stdoutTruncated: false,
-          stderrTruncated: false,
-        })),
-        Effect.mapError((error) => new AppProcess.AppProcessError({ command: "computer-fixture", cause: error })),
-      )
-    },
+    run: (command, options) =>
+      Effect.suspend(() => {
+        if (command._tag === "StandardCommand" && command.command === "/usr/bin/open") {
+          onLaunch?.(command.args, options?.signal)
+          const requestFile = command.args.at(-2)
+          const responseFile = command.args.at(-1)
+          if (!requestFile || !responseFile) return Effect.die(new Error("Missing desktop handoff paths"))
+          return Effect.promise(() => readFile(requestFile, "utf8")).pipe(
+            Effect.map(decodeFixtureRequest),
+            Effect.flatMap((request) => invoke(request, new AbortController().signal)),
+            Effect.flatMap((response) =>
+              invalidResponse?.(response.action)
+                ? Effect.promise(() => writeFile(responseFile, "{}"))
+                : respondAfterOpen
+                  ? Effect.sync(() => {
+                      setTimeout(() => {
+                        void writeFile(responseFile, JSON.stringify(response))
+                      }, 10)
+                    })
+                  : Effect.promise(() => writeFile(responseFile, JSON.stringify(response))),
+            ),
+            Effect.map(() => ({
+              command: "computer-fixture",
+              exitCode: 0,
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.alloc(0),
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            })),
+            Effect.mapError((error) => new AppProcess.AppProcessError({ command: "computer-fixture", cause: error })),
+          )
+        }
+        if (typeof options?.stdin !== "string" || !options.signal)
+          return Effect.die(new Error("Computer fixture requires JSON stdin and an AbortSignal"))
+        const request = decodeFixtureRequest(options.stdin)
+        return invoke(request, options.signal).pipe(
+          Effect.map((result) => ({
+            command: "computer-fixture",
+            exitCode: 0,
+            stdout: Buffer.from(JSON.stringify(result)),
+            stderr: Buffer.alloc(0),
+            stdoutTruncated: false,
+            stderrTruncated: false,
+          })),
+          Effect.mapError((error) => new AppProcess.AppProcessError({ command: "computer-fixture", cause: error })),
+        )
+      }),
   })
   const split = LayerNode.hoist(Computer.node, Node.tags.values.global, [
     [AppProcess.node, processLayer],

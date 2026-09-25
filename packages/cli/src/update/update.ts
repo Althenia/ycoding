@@ -1,20 +1,32 @@
-import { chmod, lstat, mkdtemp, readdir, rename, rm } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
+import { Readable } from "node:stream"
+import { createGunzip } from "node:zlib"
 import semver from "semver"
 
 const repository = "Althenia/ycoding"
 const maxArchiveBytes = 512 * 1024 * 1024
 const maxChecksumsBytes = 1024 * 1024
 const pairedMacOSRelease = "0.2.0"
+const appMacOSRelease = "0.7.1"
 const computerHelper = "ycoding-computer-helper"
+const computerApp = `${computerHelper}.app`
+const appFiles = [
+  `${computerApp}/Contents/Info.plist`,
+  `${computerApp}/Contents/MacOS/${computerHelper}`,
+  `${computerApp}/Contents/_CodeSignature/CodeResources`,
+  `${computerApp}/Contents/Resources/YCoding.icns`,
+]
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 type Rename = (source: string, destination: string) => Promise<void>
 type InstallTransaction = {
   executableBackedUp: boolean
   helperBackedUp: boolean
+  appBackedUp: boolean
   executableInstalled: boolean
   helperInstalled: boolean
+  appInstalled: boolean
 }
 
 export type InstallReleaseInput = {
@@ -25,6 +37,7 @@ export type InstallReleaseInput = {
   readonly fetch?: Fetch
   readonly filesystem?: {
     readonly rename: Rename
+    readonly verifyApplication?: (application: string) => Promise<void>
   }
 }
 
@@ -61,8 +74,8 @@ export async function latestRelease(fetcher: Fetch = fetch) {
 export async function installRelease(input: InstallReleaseInput) {
   if (!validVersion(input.version)) throw new Error(`Invalid YCoding version: ${input.version}`)
   const existing = await lstat(input.executable)
-  if (!existing.isFile() || existing.isSymbolicLink())
-    throw new Error("Installed ycoding executable must be a regular file")
+  if (!existing.isFile() || existing.isSymbolicLink() || existing.uid !== process.getuid?.())
+    throw new Error("Installed ycoding executable must be an owned regular file")
   const target = releaseTarget(input.platform, input.arch)
   const asset = `ycoding-${input.version}-${target}.tar.gz`
   const checksums = `ycoding-${input.version}-checksums.txt`
@@ -77,10 +90,13 @@ export async function installRelease(input: InstallReleaseInput) {
   let rollback: string | undefined
   let retainRollback = false
   try {
-    const names =
+    const installedNames =
       input.platform === "darwin" && semver.gte(input.version, pairedMacOSRelease)
         ? ["ycoding", computerHelper]
         : ["ycoding"]
+    const appRequired = input.platform === "darwin" && semver.gte(input.version, appMacOSRelease)
+    const names = [...installedNames, ...(appRequired ? appFiles : [])].sort()
+    await inspectArchive(archive, names, appRequired)
     const releaseArchive = new Bun.Archive(archive)
     const archiveFiles = await releaseArchive.files()
     const files = [...archiveFiles.keys()].sort()
@@ -94,14 +110,55 @@ export async function installRelease(input: InstallReleaseInput) {
     ) {
       throw new Error("Release archive entries must be bounded regular nonempty direct files")
     }
-    const extracted = await releaseArchive.extract(temporary)
+    if (appRequired) {
+      await Promise.all(
+        [
+          computerApp,
+          `${computerApp}/Contents`,
+          `${computerApp}/Contents/MacOS`,
+          `${computerApp}/Contents/Resources`,
+          `${computerApp}/Contents/_CodeSignature`,
+        ].map((directory) => mkdir(path.join(temporary, directory), { recursive: true })),
+      )
+    }
+    await Promise.all(names.map((name) => Bun.write(path.join(temporary, name), archiveFiles.get(name)!)))
     const entries = (await readdir(temporary)).sort()
     if (
-      extracted !== names.length ||
-      entries.length !== names.length ||
-      entries.some((entry, index) => entry !== names[index])
+      entries.length !== installedNames.length + Number(appRequired) ||
+      entries.some((entry, index) => entry !== [...installedNames, ...(appRequired ? [computerApp] : [])].sort()[index])
     ) {
       throw new Error(`Release archive did not contain the exact direct entries: ${names.join(", ")}`)
+    }
+    if (appRequired) {
+      for (const [directory, expected] of [
+        [computerApp, ["Contents"]],
+        [`${computerApp}/Contents`, ["Info.plist", "MacOS", "Resources", "_CodeSignature"]],
+        [`${computerApp}/Contents/MacOS`, [computerHelper]],
+        [`${computerApp}/Contents/Resources`, ["YCoding.icns"]],
+        [`${computerApp}/Contents/_CodeSignature`, ["CodeResources"]],
+      ] as const) {
+        const actual = (await readdir(path.join(temporary, directory))).sort()
+        if (actual.length !== expected.length || actual.some((entry, index) => entry !== [...expected].sort()[index])) {
+          throw new Error(`Release archive entry ${directory} contains unexpected files`)
+        }
+      }
+      for (const directory of [
+        computerApp,
+        `${computerApp}/Contents`,
+        `${computerApp}/Contents/MacOS`,
+        `${computerApp}/Contents/Resources`,
+        `${computerApp}/Contents/_CodeSignature`,
+      ]) {
+        const info = await lstat(path.join(temporary, directory))
+        if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Release archive entry ${directory} must be a directory`)
+      }
+      const metadata = await Bun.file(path.join(temporary, appFiles[0])).text()
+      if (
+        !metadata.includes("<key>CFBundleIdentifier</key><string>app.ycoding.computer-helper</string>") ||
+        !metadata.includes("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>") ||
+        !metadata.includes("<key>CFBundleIconFile</key><string>YCoding.icns</string>")
+      )
+        throw new Error("Computer helper app has invalid bundle metadata")
     }
     await Promise.all(
       names.map(async (name) => {
@@ -110,33 +167,54 @@ export async function installRelease(input: InstallReleaseInput) {
         if (!file.isFile() || file.isSymbolicLink() || file.size === 0 || file.size > maxArchiveBytes) {
           throw new Error(`Release archive entry ${name} must be a bounded regular nonempty direct file`)
         }
-        await chmod(candidate, 0o755)
+        if (name === "ycoding" || name === computerHelper || name === appFiles[1]) await chmod(candidate, 0o755)
       }),
     )
+    if (appRequired) {
+      const application = path.join(temporary, computerApp)
+      if (input.filesystem?.verifyApplication) await input.filesystem.verifyApplication(application)
+      else {
+        const verification = Bun.spawnSync(["/usr/bin/codesign", "--verify", "--deep", "--strict", application], {
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        if (verification.exitCode !== 0) throw new Error("Computer helper app signature verification failed")
+      }
+    }
     const move = input.filesystem?.rename ?? rename
-    if (names.length === 1) {
+    if (installedNames.length === 1) {
       await move(path.join(temporary, "ycoding"), input.executable)
       return { version: input.version, asset }
     }
     const helper = path.join(path.dirname(input.executable), computerHelper)
     const installedHelper = await statIfExists(helper)
-    if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink())) {
-      throw new Error("Installed computer helper must be a regular file")
+    if (installedHelper && (!installedHelper.isFile() || installedHelper.isSymbolicLink() || installedHelper.uid !== process.getuid?.())) {
+      throw new Error("Installed computer helper must be a regular file owned by the current user")
+    }
+    const app = path.join(path.dirname(input.executable), computerApp)
+    const installedApp = appRequired ? await statIfExists(app) : undefined
+    if (installedApp && (!installedApp.isDirectory() || installedApp.isSymbolicLink() || installedApp.uid !== process.getuid?.())) {
+      throw new Error("Installed computer helper app must be an owned directory")
     }
     rollback = await mkdtemp(path.join(path.dirname(input.executable), ".ycoding-update-backup-"))
     const transaction = {
       executableBackedUp: false,
       helperBackedUp: false,
+      appBackedUp: false,
       executableInstalled: false,
       helperInstalled: false,
+      appInstalled: false,
     }
     try {
       await replaceRelease({
         executable: input.executable,
         helper,
+        app: appRequired ? app : undefined,
+        appExists: installedApp !== undefined,
         helperExists: installedHelper !== undefined,
         candidate: path.join(temporary, "ycoding"),
         helperCandidate: path.join(temporary, computerHelper),
+        appCandidate: path.join(temporary, computerApp),
         rollback,
         rename: move,
         transaction,
@@ -145,6 +223,7 @@ export async function installRelease(input: InstallReleaseInput) {
       const recovery = await restoreRelease({
         executable: input.executable,
         helper,
+        app: appRequired ? app : undefined,
         rollback,
         rename: move,
         transaction,
@@ -163,9 +242,12 @@ export async function installRelease(input: InstallReleaseInput) {
 async function replaceRelease(input: {
   readonly executable: string
   readonly helper: string
+  readonly app?: string
+  readonly appExists: boolean
   readonly helperExists: boolean
   readonly candidate: string
   readonly helperCandidate: string
+  readonly appCandidate: string
   readonly rollback: string
   readonly rename: Rename
   readonly transaction: InstallTransaction
@@ -176,8 +258,16 @@ async function replaceRelease(input: {
     await input.rename(input.helper, path.join(input.rollback, computerHelper))
     input.transaction.helperBackedUp = true
   }
+  if (input.app && input.appExists) {
+    await input.rename(input.app, path.join(input.rollback, computerApp))
+    input.transaction.appBackedUp = true
+  }
   await input.rename(input.helperCandidate, input.helper)
   input.transaction.helperInstalled = true
+  if (input.app) {
+    await input.rename(input.appCandidate, input.app)
+    input.transaction.appInstalled = true
+  }
   await input.rename(input.candidate, input.executable)
   input.transaction.executableInstalled = true
 }
@@ -185,12 +275,14 @@ async function replaceRelease(input: {
 async function restoreRelease(input: {
   readonly executable: string
   readonly helper: string
+  readonly app?: string
   readonly rollback: string
   readonly rename: Rename
   readonly transaction: InstallTransaction
 }) {
   const executableBackup = path.join(input.rollback, "ycoding")
   const helperBackup = path.join(input.rollback, computerHelper)
+  const appBackup = path.join(input.rollback, computerApp)
   const recovery: string[] = []
   if (input.transaction.executableInstalled || input.transaction.executableBackedUp) {
     await rm(input.executable, { force: true }).catch(() => {})
@@ -212,6 +304,17 @@ async function restoreRelease(input: {
   } else if (input.transaction.helperInstalled) {
     await rm(input.helper, { force: true }).catch(() => {
       recovery.push(`Failed to remove the newly installed computer helper at ${input.helper}`)
+    })
+  }
+  if (input.app && (input.transaction.appInstalled || input.transaction.appBackedUp)) {
+    await rm(input.app, { recursive: true, force: true }).catch(() => {
+      recovery.push(`Failed to remove the newly installed computer helper app at ${input.app}`)
+    })
+  }
+  if (input.app && input.transaction.appBackedUp && (await exists(appBackup))) {
+    await input.rename(appBackup, input.app).catch(() => {
+      recovery.push(`Computer helper app backup retained at ${appBackup}`)
+      recovery.push(`Move that backup to ${input.app} before retrying`)
     })
   }
   return recovery
@@ -280,4 +383,72 @@ function checksum(text: string, asset: string) {
     .filter((match): match is RegExpExecArray => match?.[2] === asset)
   if (matches.length !== 1) throw new Error(`Checksum file does not contain exactly one entry for ${asset}`)
   return matches[0][1]
+}
+
+async function inspectArchive(archive: Uint8Array, files: string[], appRequired: boolean) {
+  const directories = appRequired
+    ? [
+        computerApp,
+        `${computerApp}/Contents`,
+        `${computerApp}/Contents/MacOS`,
+        `${computerApp}/Contents/Resources`,
+        `${computerApp}/Contents/_CodeSignature`,
+      ].map((directory) => `${directory}/`)
+    : []
+  const expected = [...files, ...directories].sort()
+  const entries: string[] = []
+  const header = new Uint8Array(512)
+  let headerBytes = 0
+  let skip = 0
+  let expanded = 0
+  let ended = false
+  for await (const chunk of Readable.from([archive]).pipe(createGunzip())) {
+    expanded += chunk.length
+    if (expanded > maxArchiveBytes + 1024 * 1024) throw new Error("Release archive is too large when expanded")
+    for (let offset = 0; offset < chunk.length; ) {
+      if (skip > 0) {
+        const consumed = Math.min(skip, chunk.length - offset)
+        skip -= consumed
+        offset += consumed
+        continue
+      }
+      const consumed = Math.min(512 - headerBytes, chunk.length - offset)
+      header.set(chunk.subarray(offset, offset + consumed), headerBytes)
+      headerBytes += consumed
+      offset += consumed
+      if (headerBytes !== 512) continue
+      headerBytes = 0
+      if (header.every((byte) => byte === 0)) {
+        ended = true
+        continue
+      }
+      if (ended) throw new Error("Release archive has entries after its terminator")
+      const name = Buffer.from(header.subarray(0, 100)).toString("utf8").split("\0", 1)[0]
+      const prefix = Buffer.from(header.subarray(345, 500)).toString("utf8").split("\0", 1)[0]
+      const sizeField = Buffer.from(header.subarray(124, 136)).toString("ascii").replace(/\0.*$/, "").trim()
+      if (prefix || !/^[0-7]+$/.test(sizeField)) throw new Error("Release archive has invalid entry metadata")
+      const size = Number.parseInt(sizeField, 8)
+      const type = header[156]
+      if (type === 120 && size <= 16 * 1024 && entries.length <= expected.length) {
+        skip = Math.ceil(size / 512) * 512
+        continue
+      }
+      if (
+        (type === 53 && directories.includes(name) && size === 0) ||
+        ((type === 48 || type === 0) && files.includes(name) && size > 0 && size <= maxArchiveBytes)
+      ) {
+        entries.push(name)
+        if (entries.length > expected.length) throw new Error("Release archive has unexpected entries")
+        skip = Math.ceil(size / 512) * 512
+        continue
+      }
+      if ((type === 48 || type === 0) && files.includes(name)) {
+        throw new Error("Release archive entries must be bounded regular nonempty direct files")
+      }
+      throw new Error(`Release archive did not contain the exact direct entries: ${expected.join(", ")}`)
+    }
+  }
+  if (headerBytes !== 0 || skip !== 0 || !ended || entries.sort().some((entry, index) => entry !== expected[index]) || entries.length !== expected.length) {
+    throw new Error(`Release archive did not contain the exact direct entries: ${expected.join(", ")}`)
+  }
 }

@@ -1,69 +1,95 @@
 const server = document.querySelector("#server")
-const session = document.querySelector("#session")
 const secret = document.querySelector("#secret")
+const pairingForm = document.querySelector("#pairing-form")
 const pair = document.querySelector("#pair")
+const pairingView = document.querySelector("#pairing-view")
+const reconnectingView = document.querySelector("#reconnecting-view")
+const reconnectingMessage = document.querySelector("#reconnecting-message")
+const connectedView = document.querySelector("#connected-view")
+const connectionState = document.querySelector("#connection-state")
+const connectionActions = document.querySelector("#connection-actions")
+const feedback = document.querySelector("#feedback")
 const connect = document.querySelector("#connect")
 const forget = document.querySelector("#forget")
-const share = document.querySelector("#share")
-const revoke = document.querySelector("#revoke")
-const status = document.querySelector("#status")
+let actionPending = false
+let actionRevision = 0
 
 function show(result) {
-  status.textContent = result.message
-  share.disabled = !result.connected || result.currentShared
-  revoke.disabled = !result.connected || !result.currentShared
-  connect.disabled = !result.paired || result.connected
-  forget.disabled = !result.paired
+  const state = result.connected
+    ? "connected"
+    : result.paired
+      ? result.enabled === false
+        ? "paused"
+        : "reconnecting"
+      : "disconnected"
+  connectionState.dataset.state = state
+  connectionState.textContent =
+    state === "connected" ? "Connected" : state === "reconnecting" ? "Reconnecting" : "Disconnected"
+  pairingView.hidden = state !== "disconnected"
+  reconnectingView.hidden = state !== "reconnecting" && state !== "paused"
+  reconnectingMessage.textContent =
+    state === "paused"
+      ? "Connection is paused. Retry from settings; your pairing is saved."
+      : "Trying the saved local service automatically. Your pairing code is not needed again."
+  connectedView.hidden = state !== "connected"
+  connectionActions.hidden = !result.paired
+  if (result.serverURL) server.value = result.serverURL
+  connect.hidden = result.connected || !result.paired
+  forget.hidden = !result.paired
 }
 
 async function refresh() {
-  const result = await chrome.runtime.sendMessage({ type: "status" })
-  if (result.serverURL) server.value = result.serverURL
-  if (result.sessionID) session.value = result.sessionID
-  show(result)
+  if (actionPending) return
+  const revision = actionRevision
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "status" })
+    if (revision !== actionRevision) return
+    show(result)
+    feedback.hidden = true
+  } catch {
+    if (revision !== actionRevision) return
+    connectionState.dataset.state = "unavailable"
+    connectionState.textContent = "Status unavailable"
+    pairingView.hidden = true
+    reconnectingView.hidden = false
+    connectedView.hidden = true
+    connectionActions.hidden = true
+    forget.hidden = true
+    feedback.textContent = "Unable to reach the extension background service. Close and reopen this popup."
+    feedback.hidden = false
+  }
 }
 
-pair.addEventListener("click", async () => {
+async function request(message) {
+  if (actionPending) return undefined
+  actionPending = true
+  actionRevision++
+  try {
+    const result = await chrome.runtime.sendMessage(message)
+    show(result)
+    feedback.textContent = result.message
+    feedback.hidden = message.type === "pair" && result.connected
+    return result
+  } catch {
+    feedback.textContent = "Unable to reach the extension background service. Reopen this popup to check its status."
+    feedback.hidden = false
+    return undefined
+  } finally {
+    actionPending = false
+  }
+}
+
+pairingForm.addEventListener("submit", async (event) => {
+  event.preventDefault()
+  if (pair.disabled) return
   pair.disabled = true
-  status.textContent = "Pairing selected Session…"
-  const result = await chrome.runtime.sendMessage({
-    type: "pair",
-    serverURL: server.value,
-    sessionID: session.value,
-    secret: secret.value,
-  })
+  await request({ type: "pair", serverURL: server.value, secret: secret.value })
   secret.value = ""
   pair.disabled = false
-  show(result)
 })
 
-connect.addEventListener("click", async () => {
-  connect.disabled = true
-  status.textContent = "Connecting selected Session…"
-  show(
-    await chrome.runtime.sendMessage({
-      type: "connect",
-      serverURL: server.value,
-      sessionID: session.value,
-    }),
-  )
-})
-
-forget.addEventListener("click", async () => {
-  forget.disabled = true
-  show(await chrome.runtime.sendMessage({ type: "forget" }))
-})
-
-share.addEventListener("click", async () => {
-  share.disabled = true
-  const result = await chrome.runtime.sendMessage({ type: "share-current" })
-  show(result)
-})
-
-revoke.addEventListener("click", async () => {
-  revoke.disabled = true
-  const result = await chrome.runtime.sendMessage({ type: "revoke-current" })
-  show(result)
-})
+connect.addEventListener("click", () => request({ type: "connect", serverURL: server.value }))
+forget.addEventListener("click", () => request({ type: "forget" }))
 
 void refresh()
+setInterval(refresh, 3_000)

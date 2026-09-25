@@ -36,6 +36,11 @@ export interface Interface {
     readonly expectedRevision: string
     readonly action: Action
   }) => Effect.Effect<NativeSuccess, Error>
+  readonly capture: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly callID: string
+    readonly target: MacOSComputer.DesktopTarget
+  }) => Effect.Effect<NativeSuccess, Error>
   readonly cancel: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string }) => Effect.Effect<boolean>
   readonly releaseSession: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
@@ -90,7 +95,10 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
       return yield* new OwnershipError({ message: "Target is owned by another Session" })
     if (expectedRevision !== undefined && !claim)
       return yield* new OwnershipError({ message: "Target must be inspected by this Session before mutation" })
-    if (expectedRevision !== undefined && claim?.revision !== expectedRevision)
+    if (
+      expectedRevision !== undefined &&
+      (claim?.revision !== expectedRevision || claim.locationToken !== locationToken)
+    )
       return yield* new OwnershipError({ message: "Target revision is stale; inspect it again before mutation" })
     const active = {
       locationToken,
@@ -221,6 +229,21 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
             }),
           )
         return run(locationToken, input, request, input.expectedRevision)
+      }),
+      capture: Effect.fn("Computer.capture")((input) => {
+        if (platform !== "darwin")
+          return Effect.fail(
+            new NativeError({
+              code: "unsupported_platform",
+              message: `Native computer use has no provider for ${platform}`,
+              outcome: "not_started",
+            }),
+          )
+        return run(
+          locationToken,
+          input,
+          MacOSComputer.captureRequest({ sessionID: input.sessionID, callID: input.callID }, input.target),
+        )
       }),
       cancel: Effect.fn("Computer.cancel")((input) =>
         Effect.sync(() => {

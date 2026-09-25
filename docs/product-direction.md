@@ -12,16 +12,17 @@ The product goal is a dependable, highly customizable coding-agent runtime with 
 
 ### Concepts at a glance
 
-| Concept                    | Purpose                                                                               | Read more                                            |
-| -------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Session                    | Durable intent, history, pending input, and execution state.                          | [Runtime](./runtime.md)                              |
-| Location                   | The folder-scoped runtime environment for configuration, tools, and model resolution. | [Architecture](./architecture.md)                    |
-| Agent and subagent         | Configured behavior and durable background delegation with inherited limits.          | [Repository resources](./repository-resources.md)    |
-| Autonomy                   | Explicit control over automatic answers, approvals, and goal continuation.            | [Runtime](./runtime.md)                              |
-| Permission and guardrail   | Tool authority and family-wide review of high-impact actions.                         | [Operator guide](./guardrails-and-provider-usage.md) |
-| Skill and project artifact | Loadable guidance and managed reusable agent customization.                           | [Repository resources](./repository-resources.md)    |
-| Workspace memory           | Explicit linked knowledge, separate from transcripts and prompt caches.               | [Memory](./memory.md)                                |
-| Provider cache and quota   | Provider-owned reuse telemetry and read-only usage reporting.                         | [Provider efficiency](./provider-efficiency.md)      |
+| Concept                    | Purpose                                                                                                                 | Read more                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Session                    | Durable intent, history, pending input, and execution state.                                                            | [Runtime](./runtime.md)                              |
+| Location                   | The folder-scoped runtime environment for configuration, tools, and model resolution.                                   | [Architecture](./architecture.md)                    |
+| Agent and subagent         | Configured behavior and durable background delegation with inherited limits.                                            | [Repository resources](./repository-resources.md)    |
+| Autonomy                   | Explicit control over automatic answers, approvals, and goal continuation.                                              | [Runtime](./runtime.md)                              |
+| Permission and guardrail   | Tool authority and family-wide review of high-impact actions.                                                           | [Operator guide](./guardrails-and-provider-usage.md) |
+| Browser and computer tools | Paired Chrome-profile tabs including the active tab, owned tabs, and bounded macOS window control in the local runtime. | [Runtime](./runtime.md)                              |
+| Skill and project artifact | Loadable guidance and managed reusable agent customization.                                                             | [Repository resources](./repository-resources.md)    |
+| Workspace memory           | Explicit linked knowledge, separate from transcripts and prompt caches.                                                 | [Memory](./memory.md)                                |
+| Provider cache and quota   | Provider-owned reuse telemetry and read-only usage reporting.                                                           | [Provider efficiency](./provider-efficiency.md)      |
 
 ### 1. Terminal-first delivery
 

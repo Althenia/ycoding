@@ -3,7 +3,6 @@ import {
   MAX_ELEMENTS,
   MAX_SHARED_TABS,
   VERSION,
-  actionGuardFailure,
   connectURL,
   reconnectDelay,
   safePage,
@@ -12,7 +11,9 @@ import {
 
 const PROTOCOL_VERSION = "1.3"
 const STORAGE_KEY = "browserPairing"
+const PROFILE_DENIED_KEY = "browserProfileDeniedTabs"
 const RECONNECT_ALARM = "browser-reconnect"
+const RECOVERY_ALARM = "browser-recovery"
 const MAX_CAPTURE_INSPECTION_DEPTH = 32
 const MAX_CAPTURE_INSPECTION_NODES = 10_000
 const interactiveRoles = new Set([
@@ -39,6 +40,8 @@ let reconnectAttempt = 0
 let reconnectScheduled = false
 const tabs = new Map()
 const chromeTabs = new Map()
+const groups = new Map()
+const deniedTabs = new Set()
 
 chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   handlePopup(message).then(respond, async (error) =>
@@ -52,13 +55,16 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     reconnectScheduled = false
     void reconnect()
   }
+  if (alarm.name === RECOVERY_ALARM) void reconnect()
 })
 
-chrome.tabs.onActivated.addListener(({ tabId: activeTabID }) => {
+chrome.tabs.onActivated.addListener(({ tabId: activeTabID, windowId }) => {
   for (const tab of tabs.values()) {
+    if (windowId !== undefined && tab.windowID !== undefined && tab.windowID !== windowId) continue
     const active = tab.chromeTabID === activeTabID
     if (tab.active === active) continue
     tab.active = active
+    updateBadge(tab)
     send({
       type: "takeover",
       tabID: tab.id,
@@ -68,13 +74,62 @@ chrome.tabs.onActivated.addListener(({ tabId: activeTabID }) => {
   }
 })
 
+chrome.tabs.onAttached.addListener((chromeTabID, info) => {
+  const tab = tabs.get(chromeTabs.get(chromeTabID))
+  if (!tab) return
+  tab.windowID = info.newWindowId
+  void isActive(tab).catch(() => {})
+})
+
+chrome.tabs.onCreated.addListener((tab) => {
+  if (pairing?.enabled) registerProfileTab(tab)
+})
+
+chrome.tabs.onUpdated.addListener((chromeTabID, change, info) => {
+  if (!pairing?.enabled) return
+  const current = tabs.get(chromeTabs.get(chromeTabID))
+  if (current && info.windowId !== undefined) current.windowID = info.windowId
+  if (current?.profile && change.url && !isAllowedPage(current, change.url)) {
+    void revokeTab(current).then(() => registerProfileTab(info))
+    return
+  }
+  if (current?.profile && change.url) {
+    current.url = change.url
+    current.documentGeneration++
+    current.revision = 0
+    current.refs.clear()
+    send({
+      type: "updated",
+      tabID: current.id,
+      title: info.title ?? "",
+      url: current.url,
+      documentGeneration: current.documentGeneration,
+    })
+  }
+  if (!current) registerProfileTab(info)
+})
+
+chrome.tabs.onRemoved.addListener((chromeTabID) => {
+  deniedTabs.delete(chromeTabID)
+  void persistDeniedTabs()
+  const tab = tabs.get(chromeTabs.get(chromeTabID))
+  if (tab) void revokeTab(tab)
+})
+
 chrome.debugger.onDetach.addListener((source) => {
   if (source.tabId === undefined) return
   const id = chromeTabs.get(source.tabId)
   if (!id) return
+  const tab = tabs.get(id)
+  if (tab && !tab.owned) {
+    deniedTabs.add(tab.chromeTabID)
+    void persistDeniedTabs()
+  }
   chromeTabs.delete(source.tabId)
   tabs.delete(id)
+  clearBadge(source.tabId)
   send({ type: "revoked", tabID: id })
+  if (tab?.owned) void removeInactive(tab.chromeTabID)
 })
 
 chrome.debugger.onEvent.addListener((source, method, params) => {
@@ -83,19 +138,29 @@ chrome.debugger.onEvent.addListener((source, method, params) => {
   const tab = id ? tabs.get(id) : undefined
   if (!tab) return
   if (method !== "Page.frameNavigated" || params.frame?.parentId) return
+  if (!isAllowedPage(tab, params.frame?.url)) {
+    void revokeTab(tab)
+    return
+  }
   tab.documentGeneration++
   tab.revision = 0
   tab.refs.clear()
   tab.url = params.frame.url
-  chrome.tabs.get(tab.chromeTabID).then(
-    (info) =>
+  tabInfo(tab).then(
+    (info) => {
+      if (tabs.get(tab.id) !== tab || tab.url !== params.frame.url) return
+      if (!isAllowedPage(tab, info.url)) {
+        void revokeTab(tab)
+        return
+      }
       send({
         type: "updated",
         tabID: tab.id,
         title: info.title ?? "",
         url: tab.url,
         documentGeneration: tab.documentGeneration,
-      }),
+      })
+    },
     () => {},
   )
 })
@@ -104,19 +169,11 @@ async function handlePopup(message) {
   if (message?.type === "status") return currentState()
   if (message?.type === "pair") {
     await pair(message)
-    return currentState("Paired. Sharing is limited to the tab you explicitly select.")
+    return currentState("Paired. Eligible existing tabs are available for approved actions.")
   }
   if (message?.type === "connect") {
-    await connectSelected(message)
-    return currentState("Connected to the explicitly selected Session.")
-  }
-  if (message?.type === "share-current") {
-    await shareCurrent()
-    return currentState("Current tab shared and paused while you are viewing it.")
-  }
-  if (message?.type === "revoke-current") {
-    await revokeCurrent()
-    return currentState("Current tab access revoked.")
+    await retryConnection(message)
+    return currentState("Connected to YCoding. Eligible existing tabs are available for approved actions.")
   }
   if (message?.type === "forget") {
     await forget()
@@ -132,7 +189,7 @@ async function handlePopup(message) {
 async function pair(input) {
   if (typeof input.secret !== "string" || input.secret.length < 32)
     throw new Error("Enter a valid one-time pairing secret")
-  const url = connectURL(input.serverURL, input.sessionID)
+  const url = connectURL(input.serverURL)
   await disablePairing()
   const response = await open(url, {
     type: "pair",
@@ -143,23 +200,34 @@ async function pair(input) {
     await stop(false)
     throw error
   })
-  if (!response.credential || !response.serverID) throw new Error("YCoding did not issue a durable pairing credential")
-  pairing = {
-    serverURL: input.serverURL,
-    sessionID: input.sessionID,
-    serverID: response.serverID,
-    credential: response.credential,
-    enabled: true,
+  try {
+    if (!response.credential || !response.serverID) throw new Error("YCoding did not issue a durable pairing credential")
+    pairing = {
+      serverURL: input.serverURL,
+      serverID: response.serverID,
+      credential: response.credential,
+      enabled: true,
+    }
+    await chrome.storage.local.set({ [STORAGE_KEY]: pairing })
+    await ensureRecoveryAlarm()
+    send({ type: "profile_access", enabled: true })
+    await enumerateProfileTabs()
+  } catch (error) {
+    send({ type: "forget" })
+    pairing = undefined
+    await Promise.allSettled([chrome.storage.local.remove(STORAGE_KEY), clearReconnectAlarms()])
+    await stop(false)
+    throw error
   }
-  await chrome.storage.local.set({ [STORAGE_KEY]: pairing })
 }
 
-async function connectSelected(input) {
-  connectURL(input.serverURL, input.sessionID)
-  if (!pairing || pairing.serverURL !== input.serverURL || pairing.sessionID !== input.sessionID)
-    throw new Error("Create a one-time pairing for the selected Session first")
+async function retryConnection(input) {
+  connectURL(input.serverURL)
+  if (!pairing || pairing.serverURL !== input.serverURL)
+    throw new Error("Pair this YCoding server with a one-time code first")
   pairing = { ...pairing, enabled: true }
   await chrome.storage.local.set({ [STORAGE_KEY]: pairing })
+  await ensureRecoveryAlarm()
   await stop(false)
   await reconnect()
 }
@@ -223,9 +291,10 @@ function waitForPairing(current) {
 }
 
 async function reconnect() {
-  if (!pairing?.enabled || (socket && socket.readyState === WebSocket.OPEN)) return
+  if (!pairing?.enabled || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return
+  if (socket) await stop(true)
   try {
-    const response = await open(connectURL(pairing.serverURL, pairing.sessionID), {
+    const response = await open(connectURL(pairing.serverURL), {
       type: "authenticate",
       version: VERSION,
       extensionID: chrome.runtime.id,
@@ -234,6 +303,10 @@ async function reconnect() {
     })
     if (response.serverID !== pairing.serverID) throw new Error("YCoding server identity changed")
     if (pairing.forgetPending) await revokeConnectedPairing()
+    else {
+      send({ type: "profile_access", enabled: true })
+      await enumerateProfileTabs()
+    }
   } catch {
     await stop(true)
     scheduleReconnect()
@@ -247,58 +320,97 @@ function scheduleReconnect() {
   chrome.alarms.create(RECONNECT_ALARM, { delayInMinutes })
 }
 
-async function shareCurrent() {
-  requireConnection()
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (active?.id === undefined) throw new Error("No active tab is available")
-  if (chromeTabs.has(active.id)) return
-  if (tabs.size >= MAX_SHARED_TABS) throw new Error(`At most ${MAX_SHARED_TABS} tabs can be shared`)
-  await chrome.debugger.attach({ tabId: active.id }, PROTOCOL_VERSION)
-  try {
-    await Promise.all([
-      command(active.id, "Page.enable"),
-      command(active.id, "DOM.enable"),
-      command(active.id, "Accessibility.enable"),
-    ])
-    const history = await command(active.id, "Page.getNavigationHistory")
-    const entry = history.entries[history.currentIndex] ?? history.entries.at(-1)
-    safePage(entry?.url ?? "")
-    const id = tabID()
-    const tab = {
-      id,
-      chromeTabID: active.id,
-      documentGeneration: 1,
-      revision: 0,
-      refs: new Map(),
-      allowedOrigins: new Set([new URL(entry.url).origin]),
-      active: true,
-      url: entry.url,
-    }
-    tabs.set(id, tab)
-    chromeTabs.set(active.id, id)
-    send({
-      type: "shared",
-      tabID: id,
-      title: entry.title ?? active.title ?? "",
-      url: entry.url,
-      documentGeneration: tab.documentGeneration,
-      active: true,
-    })
-  } catch (error) {
-    await chrome.debugger.detach({ tabId: active.id }).catch(() => {})
-    throw error
-  }
+async function ensureRecoveryAlarm() {
+  if (!pairing?.enabled || (await chrome.alarms.get(RECOVERY_ALARM))) return
+  await chrome.alarms.create(RECOVERY_ALARM, { periodInMinutes: 0.5, persistAcrossSessions: true })
 }
 
-async function revokeCurrent() {
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
-  if (active?.id === undefined) throw new Error("No active tab is available")
-  const id = chromeTabs.get(active.id)
-  if (!id) return
-  chromeTabs.delete(active.id)
-  tabs.delete(id)
-  await chrome.debugger.detach({ tabId: active.id }).catch(() => {})
-  send({ type: "revoked", tabID: id })
+async function clearReconnectAlarms() {
+  await chrome.alarms.clear(RECONNECT_ALARM)
+  await chrome.alarms.clear(RECOVERY_ALARM)
+  reconnectScheduled = false
+}
+
+async function enumerateProfileTabs() {
+  for (const tab of await chrome.tabs.query({})) registerProfileTab(tab)
+}
+
+function registerProfileTab(info) {
+  if (
+    !socket ||
+    socket.readyState !== WebSocket.OPEN ||
+    !pairing?.enabled ||
+    info?.id === undefined ||
+    chromeTabs.has(info.id) ||
+    deniedTabs.has(info.id)
+  )
+    return
+  try {
+    safePage(info.url)
+  } catch {
+    return
+  }
+  const id = tabID()
+  const tab = {
+    id,
+    chromeTabID: info.id,
+    profile: true,
+    attached: false,
+    documentGeneration: 1,
+    windowID: info.windowId,
+    revision: 0,
+    refs: new Map(),
+    allowedOrigins: new Set([new URL(info.url).origin]),
+    active: !!info.active,
+    url: info.url,
+  }
+  tabs.set(id, tab)
+  chromeTabs.set(info.id, id)
+  send({
+    type: "shared",
+    mode: "profile",
+    tabID: id,
+    title: info.title ?? "",
+    url: info.url,
+    documentGeneration: 1,
+    active: !!info.active,
+  })
+}
+
+async function revokePairedTabs() {
+  send({ type: "profile_access", enabled: false })
+  for (const tab of [...tabs.values()].filter((item) => item.profile)) await revokeTab(tab)
+  groups.clear()
+  deniedTabs.clear()
+  await chrome.storage.local.remove(PROFILE_DENIED_KEY)
+}
+
+function persistDeniedTabs() {
+  if (!pairing?.serverID) return Promise.resolve()
+  return chrome.storage.local.set({
+    [PROFILE_DENIED_KEY]: {
+      serverID: pairing.serverID,
+      tabIDs: [...deniedTabs],
+    },
+  })
+}
+
+async function revokeTab(tab) {
+  if (!tab || tabs.get(tab.id) !== tab) return
+  chromeTabs.delete(tab.chromeTabID)
+  tabs.delete(tab.id)
+  clearBadge(tab.chromeTabID)
+  send({ type: "revoked", tabID: tab.id })
+  if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
+  if (tab.owned) await removeInactive(tab.chromeTabID)
+}
+
+function isAllowedPage(tab, value) {
+  try {
+    return tab.allowedOrigins.has(safePage(value).origin)
+  } catch {
+    return false
+  }
 }
 
 async function receive(raw, current = socket) {
@@ -319,8 +431,10 @@ async function receive(raw, current = socket) {
   }
   if (message.type === "control") {
     if (message.action === "forget") {
+      await revokePairedTabs()
       pairing = undefined
       await chrome.storage.local.remove(STORAGE_KEY)
+      await clearReconnectAlarms()
       await stop(false)
       return
     }
@@ -329,6 +443,7 @@ async function receive(raw, current = socket) {
         pairing = { ...pairing, enabled: false }
         await chrome.storage.local.set({ [STORAGE_KEY]: pairing })
       }
+      await clearReconnectAlarms()
       await stop(false)
       return
     }
@@ -337,12 +452,213 @@ async function receive(raw, current = socket) {
   }
   if (message.type === "observe") await observe(message)
   if (message.type === "action") await act(message)
+  if (message.type === "open") await openTab(message)
+  if (message.type === "close") await closeTab(message)
+  if (message.type === "release" && message.generation === generation) {
+    const tab = tabs.get(message.tabID)
+    if (tab?.owned) await revokeTab(tab)
+  }
+}
+
+async function openTab(message) {
+  let chromeTabID
+  const owner = socket
+  const bridgeGeneration = generation
+  try {
+    requireConnection()
+    if (requestedPause) throw new Error("Chrome bridge is paused")
+    if (message.generation !== generation || tabs.has(message.tabID)) throw new Error("Stale or duplicate tab identity")
+    if ([...tabs.values()].filter((tab) => !tab.profile).length >= MAX_SHARED_TABS)
+      throw new Error(`At most ${MAX_SHARED_TABS} tabs can be controlled`)
+    const page = safePage(message.url)
+    const created = await chrome.tabs.create({ url: "about:blank", active: false })
+    chromeTabID = created.id
+    if (chromeTabID === undefined) throw new Error("Chrome did not create a tab")
+    if (socket !== owner || generation !== bridgeGeneration || owner.readyState !== WebSocket.OPEN)
+      throw new Error("Chrome bridge changed while opening a tab")
+    await chrome.debugger.attach({ tabId: chromeTabID }, PROTOCOL_VERSION)
+    await Promise.all([
+      command(chromeTabID, "Page.enable"),
+      command(chromeTabID, "DOM.enable"),
+      command(chromeTabID, "Accessibility.enable"),
+    ])
+    if (socket !== owner || generation !== bridgeGeneration || owner.readyState !== WebSocket.OPEN)
+      throw new Error("Chrome bridge changed while opening a tab")
+    const tab = {
+      id: message.tabID,
+      chromeTabID,
+      windowID: created.windowId,
+      owned: true,
+      documentGeneration: 1,
+      revision: 0,
+      refs: new Map(),
+      allowedOrigins: new Set([page.origin]),
+      active: created.active,
+      url: message.url,
+    }
+    tabs.set(tab.id, tab)
+    chromeTabs.set(chromeTabID, tab.id)
+    updateBadge(tab)
+    await command(chromeTabID, "Page.navigate", { url: message.url })
+    const info = await waitForOwnedPage(tab)
+    if (
+      socket !== owner ||
+      generation !== bridgeGeneration ||
+      tabs.get(tab.id) !== tab ||
+      !isAllowedPage(tab, info.url)
+    )
+      throw new Error("Created tab reached an unapproved site or lost its bridge")
+    tab.url = info.url
+    send({
+      type: "opened",
+      callID: message.callID,
+      tabID: tab.id,
+      generation,
+      title: info.title,
+      url: tab.url,
+      documentGeneration: tab.documentGeneration,
+      active: info.active,
+    })
+  } catch (error) {
+    if (chromeTabID !== undefined) {
+      if (chromeTabs.get(chromeTabID) === message.tabID) chromeTabs.delete(chromeTabID)
+      if (tabs.get(message.tabID)?.chromeTabID === chromeTabID) tabs.delete(message.tabID)
+      clearBadge(chromeTabID)
+      await chrome.debugger.detach({ tabId: chromeTabID }).catch(() => {})
+      await removeInactive(chromeTabID)
+    }
+    if (socket === owner && generation === bridgeGeneration) fail(message, safeError(error), chromeTabID !== undefined)
+  }
+}
+
+async function closeTab(message) {
+  let dispatched = false
+  try {
+    const tab = requireTab(message)
+    if (!tab.owned) throw new Error("Only agent-created tabs can be closed")
+    if (await isActive(tab)) throw new Error("The owned tab is active and controlled by the user")
+    chromeTabs.delete(tab.chromeTabID)
+    tabs.delete(tab.id)
+    clearBadge(tab.chromeTabID)
+    dispatched = true
+    await chrome.tabs.remove(tab.chromeTabID)
+    send({ type: "closed", callID: message.callID, tabID: tab.id, generation })
+  } catch (error) {
+    fail(message, safeError(error), dispatched)
+  }
+}
+
+async function groupTabs(message) {
+  let dispatched = false
+  try {
+    const request = message.action
+    requireConnection()
+    if (!pairing?.enabled || requestedPause || message.generation !== generation)
+      throw new Error("Profile access is unavailable")
+    if (
+      !Array.isArray(request.tabIDs) ||
+      request.tabIDs.length < 1 ||
+      request.tabIDs.length > 8 ||
+      !request.tabIDs.includes(message.tabID) ||
+      new Set(request.tabIDs).size !== request.tabIDs.length ||
+      typeof request.title !== "string" ||
+      !request.title.length ||
+      request.title.length > 64
+    )
+      throw new Error("Invalid tab group request")
+    const selected = request.tabIDs.map((id) => tabs.get(id))
+    if (selected.some((tab) => !tab?.profile)) throw new Error("Only granted profile tabs can be grouped")
+    const info = await Promise.all(selected.map((tab) => chrome.tabs.get(tab.chromeTabID)))
+    if (info.some((tab) => tab.active || tab.groupId !== -1 || tab.windowId !== info[0].windowId))
+      throw new Error("Only inactive ungrouped tabs in one window can be grouped")
+    if (
+      selected.some(
+        (tab, index) =>
+          tabs.get(tab.id) !== tab ||
+          !isAllowedPage(tab, info[index].url) ||
+          !message.allowedOrigins.includes(new URL(info[index].url).origin),
+      ) ||
+      !pairing?.enabled
+    )
+      throw new Error("Profile tab grant changed")
+    dispatched = true
+    const groupID = await chrome.tabs.group({ tabIds: info.map((tab) => tab.id) })
+    groups.set(
+      groupID,
+      selected.map((tab) => tab.chromeTabID),
+    )
+    await chrome.tabGroups.update(groupID, { title: request.title })
+    const anchor = tabs.get(message.tabID)
+    send({
+      type: "result",
+      callID: message.callID,
+      tabID: message.tabID,
+      generation,
+      documentGeneration: anchor.documentGeneration,
+      observationRevision: anchor.revision,
+      status: "completed",
+      title: info[request.tabIDs.indexOf(message.tabID)].title ?? "",
+      url: anchor.url,
+      groupID,
+    })
+  } catch (error) {
+    fail(message, safeError(error), dispatched)
+  }
+}
+
+async function ungroupTabs(message) {
+  let dispatched = false
+  try {
+    const request = message.action
+    requireConnection()
+    const ids = groups.get(request.groupID)
+    if (!pairing?.enabled || requestedPause || message.generation !== generation || !ids)
+      throw new Error("This group is not owned by the current profile grant")
+    if (
+      ids.length !== request.tabIDs.length ||
+      ids.some((id) => !request.tabIDs.includes(chromeTabs.get(id))) ||
+      !request.tabIDs.includes(message.tabID)
+    )
+      throw new Error("Group membership changed")
+    const members = await chrome.tabs.query({ groupId: request.groupID })
+    if (members.length !== ids.length || members.some((tab) => !ids.includes(tab.id)))
+      throw new Error("Group membership changed")
+    const info = await Promise.all(ids.map((id) => chrome.tabs.get(id)))
+    if (
+      info.some(
+        (tab) =>
+          tab.active || tab.groupId !== request.groupID || !message.allowedOrigins.includes(new URL(tab.url).origin),
+      ) ||
+      ids.some((id) => !tabs.get(chromeTabs.get(id))?.profile)
+    )
+      throw new Error("Group tabs changed or are controlled by the user")
+    dispatched = true
+    await chrome.tabs.ungroup(ids)
+    groups.delete(request.groupID)
+    const anchor = tabs.get(message.tabID)
+    send({
+      type: "result",
+      callID: message.callID,
+      tabID: message.tabID,
+      generation,
+      documentGeneration: anchor.documentGeneration,
+      observationRevision: anchor.revision,
+      status: "completed",
+      title: info[ids.indexOf(anchor.chromeTabID)].title ?? "",
+      url: anchor.url,
+      groupID: request.groupID,
+    })
+  } catch (error) {
+    fail(message, safeError(error), dispatched)
+  }
 }
 
 async function observe(message) {
   try {
     const tab = requireTab(message)
-    if (await isActive(tab)) return fail(message, "The shared tab is active and controlled by the user")
+    await isActive(tab)
+    await attachProfile(tab)
+    const documentGeneration = tab.documentGeneration
     const tree = await command(tab.chromeTabID, "Accessibility.getFullAXTree", { depth: 12 })
     const candidates = tree.nodes.filter(
       (node) => !node.ignored && interactiveRoles.has(node.role?.value) && node.backendDOMNodeId,
@@ -370,7 +686,12 @@ async function observe(message) {
         destination,
       })
     }
-    const info = await chrome.tabs.get(tab.chromeTabID)
+    const info = await tabInfo(tab)
+    if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
+      await revokeTab(tab)
+      return fail(message, "The shared tab changed to an unapproved site")
+    }
+    if (tab.documentGeneration !== documentGeneration) return fail(message, "The shared tab observation is stale")
     send({
       type: "observation",
       callID: message.callID,
@@ -392,11 +713,13 @@ async function act(message) {
   let dispatched = false
   try {
     const tab = requireTab(message)
-    if (requestedPause || (await isActive(tab))) return paused(message, tab)
+    if (requestedPause) return paused(message, tab)
+    await isActive(tab)
     if (tab.documentGeneration !== message.documentGeneration || tab.revision !== message.observationRevision)
       return fail(message, "The shared tab observation is stale")
-    const guardFailure = actionGuardFailure(message.action.type)
-    if (guardFailure) return fail(message, guardFailure, false)
+    if (message.action.type === "group") return groupTabs(message)
+    if (message.action.type === "ungroup") return ungroupTabs(message)
+    await attachProfile(tab)
     tab.allowedOrigins = new Set(message.allowedOrigins)
     if (message.action.type === "navigate") await navigate(tab, message.action.url, () => (dispatched = true))
     if (message.action.type === "click") await click(tab, message.action.ref, () => (dispatched = true))
@@ -411,11 +734,13 @@ async function act(message) {
         deltaY: message.action.deltaY,
       })
     const captured = message.action.type === "capture" ? await capture(tab) : undefined
-    if (await isActive(tab)) return paused(message, tab)
-    const info = await chrome.tabs.get(tab.chromeTabID)
+    await isActive(tab)
+    const info = await tabInfo(tab)
+    if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
+      await revokeTab(tab)
+      throw new Error("The shared tab changed to an unapproved site")
+    }
     if (info.url && info.url !== tab.url) {
-      const page = safePage(info.url)
-      if (!tab.allowedOrigins.has(page.origin)) throw new Error("A disallowed top-level navigation was blocked")
       tab.url = info.url
       tab.documentGeneration++
       tab.revision = 0
@@ -438,6 +763,23 @@ async function act(message) {
   }
 }
 
+async function attachProfile(tab) {
+  if (!tab.profile || tab.attached) return
+  if (!pairing?.enabled || socket?.readyState !== WebSocket.OPEN) throw new Error("Profile access is unavailable")
+  await chrome.debugger.attach({ tabId: tab.chromeTabID }, PROTOCOL_VERSION)
+  tab.attached = true
+  updateBadge(tab)
+  if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, (await chrome.tabs.get(tab.chromeTabID)).url)) {
+    await revokeTab(tab)
+    throw new Error("The profile tab changed to an unapproved site or was revoked")
+  }
+  await Promise.all([
+    command(tab.chromeTabID, "Page.enable"),
+    command(tab.chromeTabID, "DOM.enable"),
+    command(tab.chromeTabID, "Accessibility.enable"),
+  ])
+}
+
 async function navigate(tab, value, markDispatched) {
   const url = new URL(value)
   if (
@@ -452,10 +794,11 @@ async function navigate(tab, value, markDispatched) {
 }
 
 async function click(tab, ref, markDispatched) {
+  const documentGeneration = tab.documentGeneration
   const backendNodeId = requireRef(tab, ref)
   const described = await command(tab.chromeTabID, "DOM.describeNode", { backendNodeId, depth: 0 })
   const attributes = attrs(described.node.attributes)
-  if (attributes.has("download")) throw new Error("Downloads are unsupported")
+  if (attributes.has("download")) throw new Error("Explicit download links are unsupported")
   if (attributes.get("target") && attributes.get("target") !== "_self")
     throw new Error("New tabs and popups are unsupported")
   const href = attributes.get("href")
@@ -471,6 +814,8 @@ async function click(tab, ref, markDispatched) {
   if (!quad) throw new Error("Element is not visible")
   const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4
   const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
+  if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
+    throw new Error("The shared tab observation is stale")
   markDispatched()
   await command(tab.chromeTabID, "Input.dispatchMouseEvent", {
     type: "mousePressed",
@@ -489,9 +834,12 @@ async function click(tab, ref, markDispatched) {
 }
 
 async function typeText(tab, ref, text, markDispatched) {
+  const documentGeneration = tab.documentGeneration
   const backendNodeId = requireRef(tab, ref)
   const described = await command(tab.chromeTabID, "DOM.describeNode", { backendNodeId, depth: 0 })
   rejectProtectedInput(described.node)
+  if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
+    throw new Error("The shared tab observation is stale")
   markDispatched()
   await command(tab.chromeTabID, "DOM.focus", { backendNodeId })
   await command(tab.chromeTabID, "Input.insertText", { text })
@@ -573,9 +921,42 @@ function rejectProtectedInput(node) {
 }
 
 async function isActive(tab) {
-  const info = await chrome.tabs.get(tab.chromeTabID)
+  const info = await tabInfo(tab)
+  if (tabs.get(tab.id) !== tab || !isAllowedPage(tab, info.url)) {
+    await revokeTab(tab)
+    throw new Error("The shared tab changed to an unapproved site")
+  }
   tab.active = info.active
+  updateBadge(tab)
   return tab.active
+}
+
+async function tabInfo(tab) {
+  const info = await chrome.tabs.get(tab.chromeTabID)
+  if (!tab.owned) return info
+  const history = await command(tab.chromeTabID, "Page.getNavigationHistory")
+  const entry = history.entries[history.currentIndex] ?? history.entries.at(-1)
+  return { active: info.active, title: entry?.title ?? "", url: entry?.url }
+}
+
+async function removeInactive(chromeTabID) {
+  const info = await chrome.tabs.get(chromeTabID).catch(() => undefined)
+  if (info && !info.active) await chrome.tabs.remove(chromeTabID).catch(() => {})
+}
+
+async function waitForOwnedPage(tab) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (tabs.get(tab.id) !== tab) throw new Error("Created tab was revoked")
+    try {
+      const info = await tabInfo(tab)
+      if (info.url && info.url !== "about:blank") return info
+    } catch (error) {
+      if (!String(error instanceof Error ? error.message : error).includes("Not attached to an active page"))
+        throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error("Created tab did not finish navigation")
 }
 
 function command(chromeTabID, method, params = {}) {
@@ -616,7 +997,7 @@ function paused(message, tab) {
     status: "paused",
     title: "",
     url: tab.url,
-    message: "The shared tab is active and controlled by the user",
+    message: "Chrome bridge is paused",
   })
 }
 
@@ -625,11 +1006,16 @@ async function stop(disconnected) {
   const attached = [...tabs.values()]
   tabs.clear()
   chromeTabs.clear()
-  for (const tab of attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
+  for (const tab of attached) {
+    clearBadge(tab.chromeTabID)
+    if (!tab.profile || tab.attached) await chrome.debugger.detach({ tabId: tab.chromeTabID }).catch(() => {})
+    if (tab.owned) await removeInactive(tab.chromeTabID)
+  }
   const current = socket
   socket = undefined
   generation = undefined
   requestedPause = false
+  groups.clear()
   if (!disconnected && current?.readyState === WebSocket.OPEN) current.close(1000, "stopped")
 }
 
@@ -637,8 +1023,10 @@ async function disconnected(current, event) {
   if (socket !== current) return
   await stop(true)
   if (event?.code === 4403) {
+    await revokePairedTabs()
     pairing = undefined
     await chrome.storage.local.remove(STORAGE_KEY)
+    await clearReconnectAlarms()
     return
   }
   scheduleReconnect()
@@ -646,34 +1034,37 @@ async function disconnected(current, event) {
 
 async function disablePairing() {
   if (pairing) {
-    pairing = { ...pairing, enabled: true }
+    pairing = { ...pairing, enabled: true, forgetPending: true }
     await chrome.storage.local.set({ [STORAGE_KEY]: pairing })
-    await reconnect()
-    if (pairing && (!socket || socket.readyState !== WebSocket.OPEN))
-      throw new Error("Reconnect to the previously paired server before switching pairing")
-    if (pairing) await revokeConnectedPairing()
+    await ensureRecoveryAlarm()
+    if (socket?.readyState === WebSocket.OPEN) await revokeConnectedPairing()
+    else await reconnect()
+    if (pairing) throw new Error("Reconnect to the previously paired server before switching pairing")
   }
-  await chrome.alarms.clear(RECONNECT_ALARM)
-  reconnectScheduled = false
+  await revokePairedTabs()
+  await clearReconnectAlarms()
   pairing = undefined
   await chrome.storage.local.remove(STORAGE_KEY)
   await stop(false)
 }
 
 async function forget() {
+  await revokePairedTabs()
   if (!pairing) {
+    await clearReconnectAlarms()
     await stop(false)
     return
   }
   pairing = { ...pairing, enabled: true, forgetPending: true }
   await chrome.storage.local.set({ [STORAGE_KEY]: pairing })
+  await ensureRecoveryAlarm()
   await reconnect()
   if (pairing && socket?.readyState === WebSocket.OPEN) await revokeConnectedPairing()
 }
 
 async function revokeConnectedPairing() {
-  await chrome.alarms.clear(RECONNECT_ALARM)
-  reconnectScheduled = false
+  await revokePairedTabs()
+  await clearReconnectAlarms()
   send({ type: "forget" })
   pairing = undefined
   await chrome.storage.local.remove(STORAGE_KEY)
@@ -681,19 +1072,29 @@ async function revokeConnectedPairing() {
 }
 
 async function restore() {
+  await chrome.storage.local.remove("browserProfileGrant")
   const stored = (await chrome.storage.local.get(STORAGE_KEY))[STORAGE_KEY]
   if (!validPairing(stored)) {
     await chrome.storage.local.remove(STORAGE_KEY)
+    await chrome.storage.local.remove(PROFILE_DENIED_KEY)
+    await clearReconnectAlarms()
     return
   }
   pairing = stored
-  if (pairing.enabled) await reconnect()
+  const denied = (await chrome.storage.local.get(PROFILE_DENIED_KEY))[PROFILE_DENIED_KEY]
+  if (denied?.serverID === pairing.serverID && Array.isArray(denied.tabIDs)) {
+    for (const id of denied.tabIDs) if (Number.isInteger(id) && id > 0) deniedTabs.add(id)
+  } else await chrome.storage.local.remove(PROFILE_DENIED_KEY)
+  if (pairing.enabled) {
+    await ensureRecoveryAlarm()
+    await reconnect()
+  } else await clearReconnectAlarms()
 }
 
 function validPairing(input) {
   if (!input || typeof input !== "object") return false
   try {
-    connectURL(input.serverURL, input.sessionID)
+    connectURL(input.serverURL)
   } catch {
     return false
   }
@@ -709,21 +1110,20 @@ function validPairing(input) {
 
 async function currentState(message) {
   const connected = !!socket && socket.readyState === WebSocket.OPEN && !!generation
-  const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
   return {
     paired: !!pairing,
     connected,
-    currentShared: active?.id !== undefined && chromeTabs.has(active.id),
+    enabled: pairing?.enabled === true,
+    profileGranted: !!pairing?.enabled && !pairing.forgetPending,
     serverURL: pairing?.serverURL,
-    sessionID: pairing?.sessionID,
     message:
       message ??
       (connected
-        ? `${tabs.size} tab${tabs.size === 1 ? "" : "s"} shared`
+        ? `${tabs.size} tab${tabs.size === 1 ? "" : "s"} listed`
         : pairing?.enabled
-          ? `Reconnecting to ${pairing.sessionID}`
+          ? "Reconnecting to YCoding"
           : pairing
-            ? `Paired with ${pairing.sessionID}; connect explicitly to resume`
+            ? "Paired with YCoding; reconnect explicitly to resume"
             : "Not paired"),
   }
 }
@@ -733,6 +1133,16 @@ function safeError(error) {
   if (/Cannot access|not allowed|restricted|chrome:\/\//i.test(message))
     return "Chrome does not allow this restricted or enterprise-managed tab to be shared"
   return message.slice(0, 1024)
+}
+
+function updateBadge(tab) {
+  if (tab.profile && !tab.attached) return
+  void chrome.action.setBadgeText({ tabId: tab.chromeTabID, text: "ON" }).catch(() => {})
+  void chrome.action.setBadgeBackgroundColor({ tabId: tab.chromeTabID, color: "#28753e" }).catch(() => {})
+}
+
+function clearBadge(chromeTabID) {
+  void chrome.action.setBadgeText({ tabId: chromeTabID, text: "" }).catch(() => {})
 }
 
 void restore()

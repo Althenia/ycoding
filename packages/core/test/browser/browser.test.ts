@@ -24,7 +24,9 @@ const credentials = new Map<Credential.ID, Credential.Info>()
 const lifecycleEvents = Effect.runSync(PubSub.unbounded<EventV2.Payload>())
 const eventLayer = Layer.mock(EventV2.Service, { subscribe: () => Stream.fromPubSub(lifecycleEvents) })
 
-const lifecycleEvent = (definition: typeof SessionEvent.Moved | typeof SessionEvent.Deleted | typeof SessionEvent.Archived) =>
+const lifecycleEvent = (
+  definition: typeof SessionEvent.Moved | typeof SessionEvent.Deleted | typeof SessionEvent.Archived,
+) =>
   Schema.decodeUnknownSync(definition)({
     id: EventV2.ID.create(),
     created: 1,
@@ -91,7 +93,14 @@ const credentialLayer = Layer.mock(Credential.Service, {
 const dependencies = Layer.mergeAll(
   Layer.succeed(Location.Service, Location.Service.of(location({ directory }))),
   Layer.mock(SessionStore.Service, {
-    get: (id) => Effect.succeed([sessionID, otherSessionID].includes(id) ? session(id) : undefined),
+    get: (id) =>
+      Effect.succeed(
+        id === foreignSessionID
+          ? session(id, foreignDirectory)
+          : [sessionID, otherSessionID].includes(id)
+            ? session(id)
+            : undefined,
+      ),
   }),
   credentialLayer,
   BrowserAdmission.layer,
@@ -103,24 +112,20 @@ function run<A, E>(
   options: Browser.Options = { commandTimeout: "25 millis" },
 ) {
   const browser = Browser.layer(options).pipe(Layer.provide(dependencies))
-  return Effect.runPromise(
-    Effect.scoped(
-      effect.pipe(Effect.provide(Layer.merge(dependencies, browser))),
-    ),
-  )
+  return Effect.runPromise(Effect.scoped(effect.pipe(Effect.provide(Layer.merge(dependencies, browser)))))
 }
 
 async function attached(
   browser: Browser.Interface,
   outbox: Queue.Queue<BrowserProtocol.ServerMessage>,
   close: Browser.Transport["close"] = () => {},
+  grant = true,
 ) {
   const pairing = await Effect.runPromise(browser.start(sessionID))
   const attachment = await Effect.runPromise(
     browser.attach({
-      sessionID,
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 2, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close,
@@ -129,6 +134,7 @@ async function attached(
   )
   const paired = await Effect.runPromise(Queue.take(outbox))
   if (paired.type !== "paired") throw new Error("expected paired frame")
+  if (grant) await Effect.runPromise(attachment.receive({ type: "profile_access", enabled: true }))
   return { attachment, generation: paired.generation }
 }
 
@@ -137,9 +143,8 @@ async function pairedTrust(browser: Browser.Interface, session = sessionID) {
   const pairing = await Effect.runPromise(browser.start(session))
   const attachment = await Effect.runPromise(
     browser.attach({
-      sessionID: session,
       origin: `chrome-extension://${extensionID}`,
-      handshake: { type: "pair", version: 2, extensionID, secret: pairing.secret },
+      handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
       transport: {
         send: (message) => Queue.offerUnsafe(outbox, message),
         close: () => {},
@@ -151,8 +156,255 @@ async function pairedTrust(browser: Browser.Interface, session = sessionID) {
   return { attachment, response: { ...response, credential: response.credential } }
 }
 
-describe("selected-tab browser service", () => {
-  test("settles pending mutations and releases control on Session moved, deleted, and archived events", async () => {
+describe("paired Chrome browser service", () => {
+  test("an active profile tab remains controllable until an explicit pause", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      const profileID = Browser.TabID.make("btab_active_profile")
+      yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID: profileID,
+        title: "Active", url: "https://example.test/active", documentGeneration: 1, active: true })
+      expect(yield* browser.list(sessionID)).toMatchObject([
+        { id: profileID, mode: "profile", status: "shared" },
+      ])
+      const observing = yield* browser.observe({ sessionID, tabID: profileID,
+        generation: connected.generation, callID: "active-observe" }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID: profileID })
+      yield* connected.attachment.receive({ type: "observation", tabID: profileID,
+        callID: "active-observe", generation: connected.generation, documentGeneration: 1,
+        revision: 1, title: "Active", url: "https://example.test/active", elements: [], truncated: false })
+      yield* Fiber.join(observing)
+      yield* connected.attachment.receive({ type: "takeover", tabID: profileID,
+        documentGeneration: 2, active: true })
+      expect((yield* browser.list(sessionID)).find((item) => item.id === profileID))
+        .toMatchObject({ status: "shared" })
+      const acting = yield* browser.action({ sessionID, tabID: profileID, generation: connected.generation,
+        documentGeneration: 2, observationRevision: 0, callID: "active-action",
+        action: { type: "navigate", url: "https://example.test/next" } }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", tabID: profileID })
+      yield* connected.attachment.receive({ type: "result", tabID: profileID, callID: "active-action",
+        generation: connected.generation, documentGeneration: 3, observationRevision: 0,
+        status: "completed", title: "Next", url: "https://example.test/next" })
+      expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", tab: { status: "shared" } })
+      yield* browser.control(sessionID, { action: "pause" })
+      expect(yield* browser.status(sessionID)).toMatchObject({ state: "paused" })
+      expect(Exit.isFailure(yield* browser.observe({ sessionID, tabID: profileID,
+        generation: connected.generation, callID: "paused-observe" }).pipe(Effect.exit))).toBe(true)
+    }))
+  })
+  test("accepts profile tabs only after explicit extension grant and removes them on revocation", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox, undefined, false))
+      const id = Browser.TabID.make("btab_profile_test")
+      const shared = { type: "shared" as const, mode: "profile" as const, tabID: id,
+        title: "Synthetic", url: "https://example.test/form?secret=hidden", documentGeneration: 1, active: false }
+      yield* connected.attachment.receive(shared)
+      expect(yield* browser.list(otherSessionID)).toEqual([])
+      yield* connected.attachment.receive({ type: "profile_access", enabled: true })
+      yield* connected.attachment.receive(shared)
+      expect(yield* browser.status(sessionID)).toMatchObject({ profileGranted: true })
+      expect(yield* browser.list(otherSessionID)).toMatchObject([
+        { id, mode: "profile", page: { origin: "https://example.test", path: "/form" },
+          sessionID: otherSessionID },
+      ])
+      yield* connected.attachment.receive({ type: "profile_access", enabled: false })
+      expect(yield* browser.list(otherSessionID)).toEqual([])
+      expect(yield* browser.status(sessionID)).toMatchObject({ profileGranted: false })
+      yield* connected.attachment.receive(shared)
+      expect(yield* browser.list(sessionID)).toEqual([])
+    }))
+  })
+  test("creates a Session-owned tab from a fenced request and denies other Sessions and personal-tab close", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      const opening = yield* browser.open({ sessionID, generation: connected.generation,
+        url: "https://example.test/new", callID: "open-owned" }).pipe(Effect.forkScoped)
+      const sent = yield* Queue.take(outbox)
+      expect(sent).toMatchObject({ type: "open", url: "https://example.test/new", generation: connected.generation })
+      if (sent.type !== "open") throw new Error("expected open frame")
+      yield* connected.attachment.receive({ type: "opened", callID: sent.callID, tabID: sent.tabID,
+        generation: sent.generation, title: "Fixture", url: sent.url, documentGeneration: 1, active: false })
+      const owned = yield* Fiber.join(opening)
+      expect(owned).toMatchObject({ id: sent.tabID, sessionID, mode: "owned", status: "shared" })
+      yield* connected.attachment.receive({ type: "takeover", tabID: owned.id,
+        documentGeneration: 2, active: true })
+      expect((yield* browser.list(sessionID)).find((item) => item.id === owned.id))
+        .toMatchObject({ status: "shared", mode: "owned" })
+      const activeOwnedObserve = yield* browser.observe({ sessionID, tabID: owned.id,
+        generation: owned.generation, callID: "active-owned-observe" }).pipe(Effect.forkScoped)
+      expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID: owned.id })
+      yield* connected.attachment.receive({ type: "observation", tabID: owned.id,
+        callID: "active-owned-observe", generation: owned.generation, documentGeneration: 2,
+        revision: 1, title: "Fixture", url: "https://example.test/new", elements: [], truncated: false })
+      yield* Fiber.join(activeOwnedObserve)
+      expect(Exit.isFailure(yield* browser.open({ sessionID, generation: connected.generation,
+        url: "https://example.test/new", callID: "open-owned" }).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* browser.open({ sessionID, generation: connected.generation + 1,
+        url: "https://example.test/other", callID: "stale-open" }).pipe(Effect.exit))).toBe(true)
+      expect(yield* browser.list(otherSessionID)).toEqual([])
+      expect(Exit.isFailure(yield* browser.observe({ sessionID: otherSessionID, tabID: owned.id,
+        generation: owned.generation, callID: "foreign-observe" }).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* browser.action({ sessionID: otherSessionID, tabID: owned.id,
+        generation: owned.generation, documentGeneration: owned.documentGeneration,
+        observationRevision: 0, callID: "foreign-action", action: { type: "capture" } }).pipe(Effect.exit))).toBe(true)
+      expect(Exit.isFailure(yield* browser.close({ sessionID: otherSessionID, tabID: owned.id,
+        generation: owned.generation, callID: "foreign-close" }).pipe(Effect.exit))).toBe(true)
+      const rejected = yield* browser.close({ sessionID, tabID: owned.id,
+        generation: owned.generation, callID: "close-active" }).pipe(Effect.forkScoped)
+      const rejectedFrame = yield* Queue.take(outbox)
+      if (rejectedFrame.type !== "close") throw new Error("expected close frame")
+      yield* connected.attachment.receive({ type: "error", callID: rejectedFrame.callID,
+        tabID: rejectedFrame.tabID, generation: rejectedFrame.generation,
+        dispatched: false, message: "The owned tab is active" })
+      expect(Exit.isFailure(yield* Fiber.await(rejected))).toBe(true)
+      expect(yield* browser.list(sessionID)).toMatchObject([{ id: owned.id, mode: "owned" }])
+      expect(Exit.isFailure(yield* browser.close({ sessionID, tabID: owned.id,
+        generation: owned.generation, callID: "close-active" }).pipe(Effect.exit))).toBe(true)
+      expect(yield* Queue.size(outbox)).toBe(0)
+      const closing = yield* browser.close({ sessionID, tabID: owned.id,
+        generation: owned.generation, callID: "close-owned" }).pipe(Effect.forkScoped)
+      const close = yield* Queue.take(outbox)
+      expect(close).toMatchObject({ type: "close", tabID: owned.id })
+      if (close.type !== "close") throw new Error("expected close frame")
+      yield* connected.attachment.receive({ type: "closed", callID: close.callID, tabID: close.tabID,
+        generation: close.generation })
+      expect(yield* Fiber.await(closing)).toMatchObject({ _tag: "Success" })
+      expect(yield* browser.list(sessionID)).toEqual([])
+      yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID: Browser.TabID.make("btab_personal"),
+        title: "Personal", url: "https://example.test/", documentGeneration: 1, active: false })
+      expect(Exit.isFailure(yield* browser.close({ sessionID, tabID: Browser.TabID.make("btab_personal"),
+        generation: connected.generation, callID: "close-personal" }).pipe(Effect.exit))).toBe(true)
+    }))
+  })
+  const ownerTransitions = [SessionEvent.Moved, SessionEvent.Archived, SessionEvent.Deleted]
+  ownerTransitions.forEach((event) => {
+    test(`releases the ending Session's active owned tab on ${event.type} while keeping profile tabs available`, async () => {
+      await run(Effect.gen(function* () {
+        const browser = yield* Browser.Service
+        const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+        const connected = yield* Effect.promise(() => attached(browser, outbox))
+        const opening = yield* browser.open({ sessionID, generation: connected.generation,
+          url: "https://example.test/owned", callID: "lifecycle-open" }).pipe(Effect.forkScoped)
+        const open = yield* Queue.take(outbox)
+        if (open.type !== "open") throw new Error("expected open frame")
+        yield* connected.attachment.receive({ type: "opened", callID: open.callID, tabID: open.tabID,
+          generation: open.generation, title: "Owned", url: open.url, documentGeneration: 1, active: false })
+        yield* Fiber.join(opening)
+        yield* connected.attachment.receive({ type: "takeover", tabID: open.tabID, documentGeneration: 1, active: true })
+        yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID: Browser.TabID.make("btab_selected_lifecycle"),
+          title: "Shared", url: "https://example.test/", documentGeneration: 1, active: false })
+        yield* PubSub.publish(lifecycleEvents, lifecycleEvent(event))
+        const release = yield* Queue.take(outbox)
+        expect(release).toMatchObject({ type: "release", tabID: open.tabID })
+        expect(yield* browser.list(otherSessionID)).toMatchObject([{ id: "btab_selected_lifecycle" }])
+      }))
+    })
+  })
+  test("a bootstrap Session ending leaves the shared connection available to another Session", async () => {
+    await run(
+      Effect.gen(function* () {
+        const browser = yield* Browser.Service
+        const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+        const connected = yield* Effect.promise(() => attached(browser, outbox))
+        yield* connected.attachment.receive({
+          type: "shared", mode: "profile",
+          tabID: Browser.TabID.make("btab_still_shared"),
+          title: "Fixture",
+          url: "https://example.test/page",
+          documentGeneration: 1,
+          active: false,
+        })
+        yield* PubSub.publish(lifecycleEvents, lifecycleEvent(SessionEvent.Deleted))
+        yield* Effect.sleep("10 millis")
+        expect(yield* browser.status(otherSessionID)).toMatchObject({ state: "connected" })
+        expect(yield* browser.list(otherSessionID)).toMatchObject([{ id: "btab_still_shared" }])
+      }),
+    )
+  })
+
+  test("a paired extension shares its tab with every active Session, including another Location", async () => {
+    await run(
+      Effect.gen(function* () {
+        const browser = yield* Browser.Service
+        const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+        const connected = yield* Effect.promise(() => attached(browser, outbox))
+        const tabID = Browser.TabID.make("btab_global")
+        yield* connected.attachment.receive({
+          type: "shared", mode: "profile",
+          tabID,
+          title: "Fixture",
+          url: "https://example.test/page",
+          documentGeneration: 1,
+          active: false,
+        })
+        const admission = yield* BrowserAdmission.Service
+        expect(admission.claim(otherSessionID, "isolated")).toBe(true)
+        expect(yield* browser.list(otherSessionID)).toEqual([])
+        expect(yield* browser.status(otherSessionID)).toMatchObject({ state: "unavailable" })
+        admission.release(otherSessionID, "isolated")
+        for (const viewer of [otherSessionID, foreignSessionID]) {
+          expect(yield* browser.status(viewer)).toMatchObject({ state: "connected" })
+          expect(yield* browser.list(viewer)).toMatchObject([{ id: tabID, sessionID: viewer }])
+          const observing = yield* browser
+            .observe({
+              sessionID: viewer,
+              tabID,
+              generation: connected.generation,
+              callID: `read-${viewer}`,
+            })
+            .pipe(Effect.forkScoped)
+          expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", tabID })
+          yield* connected.attachment.receive({
+            type: "observation",
+            callID: `read-${viewer}`,
+            tabID,
+            generation: connected.generation,
+            documentGeneration: 1,
+            revision: 1,
+            title: "Fixture",
+            url: "https://example.test/page",
+            elements: [],
+            truncated: false,
+          })
+          expect(yield* Fiber.join(observing)).toMatchObject({ tabID })
+          const acting = yield* browser
+            .action({
+              sessionID: viewer,
+              tabID,
+              generation: connected.generation,
+              documentGeneration: 1,
+              observationRevision: 1,
+              callID: "shared-call",
+              action: { type: "scroll", deltaY: 100 },
+            })
+            .pipe(Effect.forkScoped)
+          expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", callID: "shared-call" })
+          yield* connected.attachment.receive({
+            type: "result",
+            callID: "shared-call",
+            tabID,
+            generation: connected.generation,
+            documentGeneration: 1,
+            observationRevision: 1,
+            status: "completed",
+            title: "Fixture",
+            url: "https://example.test/page",
+          })
+          expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", tab: { sessionID: viewer } })
+        }
+        expect(Exit.isFailure(yield* browser.list(SessionSchema.ID.make("ses_missing")).pipe(Effect.exit))).toBe(true)
+        yield* browser.stop(foreignSessionID)
+        expect(yield* browser.list(sessionID)).toEqual([])
+        expect(admission.current(sessionID)).toBeUndefined()
+      }),
+    )
+  })
+  test("settles pending mutations but keeps other Sessions connected on owner lifecycle events", async () => {
     for (const definition of [SessionEvent.Moved, SessionEvent.Deleted, SessionEvent.Archived]) {
       credentials.clear()
       const closed: Array<{ code: number; reason: string }> = []
@@ -166,7 +418,7 @@ describe("selected-tab browser service", () => {
           )
           const tabID = Browser.TabID.make(`btab_${definition.type.replaceAll(".", "_")}`)
           yield* connected.attachment.receive({
-            type: "shared",
+            type: "shared", mode: "profile",
             tabID,
             title: "Fixture",
             url: "https://example.test/form",
@@ -210,10 +462,8 @@ describe("selected-tab browser service", () => {
             }),
           )
           expect(result).toMatchObject({ status: "uncertain", callID: "lifecycle-mutation" })
-          expect(closed).toEqual([
-            { code: 1000, reason: `session ${definition.type.slice("session.".length)}` },
-          ])
-          expect(yield* browser.list(sessionID)).toEqual([])
+          expect(closed).toEqual([])
+          expect(yield* browser.list(otherSessionID)).toMatchObject([{ id: tabID, status: "paused" }])
           expect(admission.claim(sessionID, "isolated")).toBe(true)
           expect(credentials.size).toBe(1)
         }),
@@ -222,7 +472,7 @@ describe("selected-tab browser service", () => {
     }
   })
 
-  test("retains archived Session trust but rejects reconnect until the Session is active", async () => {
+  test("reconnects with durable trust after the bootstrap Session is archived", async () => {
     credentials.clear()
     const trust = await run(
       Effect.gen(function* () {
@@ -245,11 +495,10 @@ describe("selected-tab browser service", () => {
           const browser = yield* Browser.Service
           return yield* browser
             .attach({
-              sessionID,
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 2,
+                version: 3,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -260,9 +509,7 @@ describe("selected-tab browser service", () => {
         }).pipe(Effect.provide(Browser.layer().pipe(Layer.provide(archivedDependencies)))),
       ),
     )
-    expect(Exit.isFailure(reconnect)).toBe(true)
-    if (Exit.isFailure(reconnect))
-      expect(Cause.squash(reconnect.cause)).toMatchObject({ _tag: "Session.NotFoundError" })
+    expect(Exit.isSuccess(reconnect)).toBe(true)
     expect(credentials.size).toBe(1)
   })
 
@@ -281,11 +528,10 @@ describe("selected-tab browser service", () => {
         const browser = yield* Browser.Service
         const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
         yield* browser.attach({
-          sessionID,
           origin: `chrome-extension://${extensionID}`,
           handshake: {
             type: "authenticate",
-            version: 2,
+            version: 3,
             extensionID,
             serverID: trust.response.serverID,
             credential: trust.response.credential,
@@ -294,18 +540,17 @@ describe("selected-tab browser service", () => {
         })
         expect(yield* Queue.take(outbox)).toMatchObject({
           type: "paired",
-          version: 2,
+          version: 3,
           serverID: trust.response.serverID,
           credential: undefined,
         })
         expect(yield* browser.list(sessionID)).toEqual([])
         const wrongServer = yield* browser
           .attach({
-            sessionID,
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 2,
+              version: 3,
               extensionID,
               serverID: "different-server-identity",
               credential: trust.response.credential,
@@ -320,7 +565,7 @@ describe("selected-tab browser service", () => {
     )
   })
 
-  test("does not accept a Location-bound credential for a valid Session in another Location", async () => {
+  test("authenticates backend trust independent of the bootstrap Location", async () => {
     credentials.clear()
     const trust = await run(
       Effect.gen(function* () {
@@ -343,11 +588,10 @@ describe("selected-tab browser service", () => {
           const browser = yield* Browser.Service
           return yield* browser
             .attach({
-              sessionID: foreignSessionID,
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 2,
+                version: 3,
                 extensionID,
                 serverID: trust.response.serverID,
                 credential: trust.response.credential,
@@ -358,12 +602,10 @@ describe("selected-tab browser service", () => {
         }).pipe(Effect.provide(Browser.layer().pipe(Layer.provide(foreignDependencies)))),
       ),
     )
-    expect(Exit.isFailure(result)).toBe(true)
-    if (Exit.isFailure(result))
-      expect(Cause.squash(result.cause)).toMatchObject({ _tag: "Browser.AuthenticationError" })
+    expect(Exit.isSuccess(result)).toBe(true)
   })
 
-  test("revokes forgotten credentials and fails unknown or cross-Session auth closed", async () => {
+  test("revokes forgotten credentials and rejects unknown credentials", async () => {
     credentials.clear()
     const trust = await run(
       Effect.gen(function* () {
@@ -377,14 +619,13 @@ describe("selected-tab browser service", () => {
     await run(
       Effect.gen(function* () {
         const browser = yield* Browser.Service
-        const authenticate = (targetSession: SessionSchema.ID, credential: string) =>
+        const authenticate = (credential: string) =>
           browser
             .attach({
-              sessionID: targetSession,
               origin: `chrome-extension://${extensionID}`,
               handshake: {
                 type: "authenticate",
-                version: 2,
+                version: 3,
                 extensionID,
                 serverID: trust.serverID,
                 credential,
@@ -392,10 +633,9 @@ describe("selected-tab browser service", () => {
               transport: { send: () => true, close: () => {} },
             })
             .pipe(Effect.exit)
-        const revoked = yield* authenticate(sessionID, trust.credential)
-        const unknown = yield* authenticate(sessionID, "u".repeat(43))
-        const crossSession = yield* authenticate(otherSessionID, trust.credential)
-        for (const exit of [revoked, unknown, crossSession]) {
+        const revoked = yield* authenticate(trust.credential)
+        const unknown = yield* authenticate("u".repeat(43))
+        for (const exit of [revoked, unknown]) {
           expect(Exit.isFailure(exit)).toBe(true)
           if (Exit.isFailure(exit))
             expect(Cause.squash(exit.cause)).toMatchObject({ _tag: "Browser.AuthenticationError" })
@@ -413,9 +653,8 @@ describe("selected-tab browser service", () => {
         const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
         const pairing = yield* browser.start(sessionID)
         yield* browser.attach({
-          sessionID,
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 2, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
           transport: {
             send: (message) => Queue.offerUnsafe(outbox, message),
             close: (code, reason) => closed.push({ code, reason }),
@@ -433,11 +672,10 @@ describe("selected-tab browser service", () => {
         const browser = yield* Browser.Service
         const rejected = yield* browser
           .attach({
-            sessionID,
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 2,
+              version: 3,
               extensionID,
               serverID: first.serverID,
               credential: first.credential,
@@ -450,16 +688,15 @@ describe("selected-tab browser service", () => {
     )
   })
 
-  test("consumes one-time pairing, verifies extension origin, and isolates Session ownership", async () => {
+  test("consumes one-time pairing, verifies extension origin, and shares with other Sessions", async () => {
     await run(
       Effect.gen(function* () {
         const browser = yield* Browser.Service
         const pairing = yield* browser.start(sessionID)
         const rejected = yield* browser
           .attach({
-            sessionID,
             origin: "https://website.example",
-            handshake: { type: "pair", version: 2, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
@@ -469,47 +706,57 @@ describe("selected-tab browser service", () => {
 
         const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
         const connected = yield* browser.attach({
-          sessionID,
           origin: `chrome-extension://${extensionID}`,
-          handshake: { type: "pair", version: 2, extensionID, secret: pairing.secret },
+          handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
           transport: { send: (message) => Queue.offerUnsafe(outbox, message), close: () => {} },
         })
         const paired = yield* Queue.take(outbox)
         expect(paired.type).toBe("paired")
         const reused = yield* browser
           .attach({
-            sessionID,
             origin: `chrome-extension://${extensionID}`,
-            handshake: { type: "pair", version: 2, extensionID, secret: pairing.secret },
+            handshake: { type: "pair", version: 3, extensionID, secret: pairing.secret },
             transport: { send: () => true, close: () => {} },
           })
           .pipe(Effect.exit)
         expect(Exit.isFailure(reused)).toBe(true)
 
+        yield* connected.receive({ type: "profile_access", enabled: true })
         yield* connected.receive({
-          type: "shared",
+          type: "shared", mode: "profile",
           tabID: Browser.TabID.make("btab_owner"),
           title: "Fixture",
           url: "https://example.test/form?secret=redacted#fragment",
           documentGeneration: 1,
           active: false,
         })
-        const crossSession = yield* browser
+        const observing = yield* browser
           .observe({
             sessionID: otherSessionID,
             tabID: Browser.TabID.make("btab_owner"),
             generation: 1,
             callID: "cross",
           })
-          .pipe(Effect.exit)
-        expect(Exit.isFailure(crossSession)).toBe(true)
-        if (Exit.isFailure(crossSession))
-          expect(Cause.squash(crossSession.cause)).toMatchObject({ _tag: "Browser.OwnershipError" })
+          .pipe(Effect.forkScoped)
+        expect(yield* Queue.take(outbox)).toMatchObject({ type: "observe", callID: "cross" })
+        yield* connected.receive({
+          type: "observation",
+          callID: "cross",
+          tabID: Browser.TabID.make("btab_owner"),
+          generation: 1,
+          documentGeneration: 1,
+          revision: 1,
+          title: "Fixture",
+          url: "https://example.test/form",
+          elements: [],
+          truncated: false,
+        })
+        expect(yield* Fiber.join(observing)).toMatchObject({ tabID: Browser.TabID.make("btab_owner") })
       }),
     )
   })
 
-  test("rejects selected-tab start and trusted attach while isolated mode owns the Session without revoking trust", async () => {
+  test("rejects Chrome pairing and trusted attach while isolated mode owns the Session without revoking trust", async () => {
     credentials.clear()
     await run(
       Effect.gen(function* () {
@@ -524,11 +771,10 @@ describe("selected-tab browser service", () => {
         expect(credentials.size).toBe(1)
         const attach = yield* browser
           .attach({
-            sessionID,
             origin: `chrome-extension://${extensionID}`,
             handshake: {
               type: "authenticate",
-              version: 2,
+              version: 3,
               extensionID,
               serverID: paired.response.serverID,
               credential: paired.response.credential,
@@ -551,7 +797,7 @@ describe("selected-tab browser service", () => {
         const connected = yield* Effect.promise(() => attached(browser, outbox))
         const tabID = Browser.TabID.make("btab_semantic")
         yield* connected.attachment.receive({
-          type: "shared",
+          type: "shared", mode: "profile",
           tabID,
           title: "Fixture",
           url: "https://example.test/form?token=hidden",
@@ -572,13 +818,22 @@ describe("selected-tab browser service", () => {
           title: "Fixture",
           url: "https://example.test/form?token=hidden#private",
           elements: [
-            { ref: "b1", role: "button", name: "Submit", destination: "https://example.test/done?token=hidden" },
+            { ref: "b1", role: "button", name: "Submit", destination: "https://other.test/done?token=hidden" },
           ],
           truncated: false,
         })
         const observation = yield* Fiber.join(observing)
         expect(observation.page).toEqual({ origin: "https://example.test", path: "/form" })
-        expect(observation.elements[0]?.destination).toEqual({ origin: "https://example.test", path: "/done" })
+        expect(observation.elements[0]?.destination).toEqual({ origin: "https://other.test", path: "/done" })
+        expect(yield* browser.clickDestination({
+          sessionID, tabID, generation: connected.generation, documentGeneration: 1,
+          observationRevision: 1, ref: "b1",
+        })).toEqual({ origin: "https://other.test", path: "/done" })
+        const staleDestination = yield* browser.clickDestination({
+          sessionID, tabID, generation: connected.generation, documentGeneration: 1,
+          observationRevision: 0, ref: "b1",
+        }).pipe(Effect.exit)
+        expect(Exit.isFailure(staleDestination)).toBe(true)
 
         const stale = yield* browser
           .action({
@@ -604,7 +859,10 @@ describe("selected-tab browser service", () => {
           action: { type: "click" as const, ref: "b1" },
         }
         const mutating = yield* browser.action(mutation).pipe(Effect.forkScoped)
-        expect(yield* Queue.take(outbox)).toMatchObject({ type: "action", callID: "extension-predispatch-error" })
+        expect(yield* Queue.take(outbox)).toMatchObject({
+          type: "action", callID: "extension-predispatch-error",
+          allowedOrigins: ["https://example.test", "https://other.test"],
+        })
         yield* connected.attachment.receive({
           type: "error",
           callID: "extension-predispatch-error",
@@ -632,7 +890,7 @@ describe("selected-tab browser service", () => {
         const connected = yield* Effect.promise(() => attached(browser, outbox))
         const tabID = Browser.TabID.make("btab_uncertain")
         yield* connected.attachment.receive({
-          type: "shared",
+          type: "shared", mode: "profile",
           tabID,
           title: "Fixture",
           url: "https://example.test/form",
@@ -704,7 +962,7 @@ describe("selected-tab browser service", () => {
         const connected = yield* Effect.promise(() => attached(browser, outbox))
         const tabID = Browser.TabID.make("btab_disconnect")
         yield* connected.attachment.receive({
-          type: "shared",
+          type: "shared", mode: "profile",
           tabID,
           title: "Fixture",
           url: "https://example.test/form",

@@ -53,6 +53,21 @@ export const BrowserHandler = HttpApiBuilder.group(Api, "server.browser", (handl
         }),
       )
       .handle(
+        "browser.open",
+        Effect.fn(function* (ctx) {
+          const browser = yield* Browser.Service
+          return { data: yield* browser.open({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(Effect.mapError(mapOperation)) }
+        }),
+      )
+      .handle(
+        "browser.close",
+        Effect.fn(function* (ctx) {
+          const browser = yield* Browser.Service
+          yield* browser.close({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(Effect.mapError(mapOperation))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "browser.start",
         Effect.fn(function* (ctx) {
           const browser = yield* Browser.Service
@@ -147,7 +162,6 @@ export const BrowserHandler = HttpApiBuilder.group(Api, "server.browser", (handl
           const browser = yield* Browser.Service
           const attached = yield* browser
             .attach({
-              sessionID: ctx.params.sessionID,
               origin: ctx.request.headers.origin,
               handshake,
               transport: { send, close },

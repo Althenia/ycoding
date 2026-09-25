@@ -20,6 +20,7 @@ type CommandEntry =
   | (PanelEntry & { action: "subagent" })
   | (PanelEntry & { action: "variant.cycle" })
   | (PanelEntry & { action: "variant.list" })
+  | (PanelEntry & { action: "chrome" })
   | (PanelEntry & { action: "slash"; name: string })
   | (PanelEntry & { action: "exit" })
 
@@ -401,6 +402,7 @@ export function RunCommandMenuBody(props: {
   onVariant: () => void
   onVariantCycle: () => void
   onCommand: (name: string) => void
+  onChrome?: () => void
   onNew: () => void
   onExit: () => void
 }) {
@@ -416,6 +418,16 @@ export function RunCommandMenuBody(props: {
         footer: "/editor",
         keywords: "editor compose draft external editor",
       },
+      ...(props.onChrome
+        ? [
+            {
+              action: "chrome" as const,
+              category: "Session",
+              display: "Connect Chrome",
+              keywords: "chrome browser extension pair pairing",
+            },
+          ]
+        : []),
       ...(props.subagents().length > 0
         ? [
             {
@@ -519,6 +531,10 @@ export function RunCommandMenuBody(props: {
     ]
   })
   const pick = (item: CommandEntry) => {
+    if (item.action === "chrome") {
+      props.onChrome?.()
+      return
+    }
     if (item.action === "model") {
       props.onModel()
       return

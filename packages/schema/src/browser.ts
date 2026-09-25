@@ -64,6 +64,7 @@ export const Tab = Schema.Struct({
   observationRevision: ObservationRevision,
   pauseReason: PauseReason.pipe(optional),
   uncertainCallID: CallID.pipe(optional),
+  mode: Schema.Literals(["owned", "profile"]).pipe(optional),
 }).annotate({ identifier: "Browser.Tab" })
 export interface Tab extends Schema.Schema.Type<typeof Tab> {}
 
@@ -72,6 +73,7 @@ export type BridgeState = typeof BridgeState.Type
 
 export const Status = Schema.Struct({
   state: BridgeState,
+  profileGranted: Schema.Boolean.pipe(optional),
   generation: Generation.pipe(optional),
   pairingExpiresAt: NonNegativeInt.pipe(optional),
   extensionID: Schema.String.check(Schema.isPattern(/^[a-p]{32}$/)).pipe(optional),
@@ -119,7 +121,17 @@ export const Scroll = Schema.Struct({
   deltaY: Schema.Int.check(Schema.isGreaterThanOrEqualTo(-10_000), Schema.isLessThanOrEqualTo(10_000)),
 })
 export const Capture = Schema.Struct({ type: Schema.Literal("capture") })
-export const Action = Schema.Union([Navigate, Click, Type, Scroll, Capture])
+export const Group = Schema.Struct({
+  type: Schema.Literal("group"),
+  tabIDs: Schema.Array(TabID).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+  title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+})
+export const Ungroup = Schema.Struct({
+  type: Schema.Literal("ungroup"),
+  tabIDs: Schema.Array(TabID).check(Schema.isMinLength(1), Schema.isMaxLength(8)),
+  groupID: NonNegativeInt,
+})
+export const Action = Schema.Union([Navigate, Click, Type, Scroll, Capture, Group, Ungroup])
 export type Action = typeof Action.Type
 
 export const ActionInput = Schema.Struct({
@@ -141,6 +153,22 @@ export const ObserveInput = Schema.Struct({
 }).annotate({ identifier: "Browser.ObserveInput" })
 export interface ObserveInput extends Schema.Schema.Type<typeof ObserveInput> {}
 
+export const OpenInput = Schema.Struct({
+  sessionID: SessionID,
+  generation: Generation,
+  url: boundedUtf8(8 * 1024),
+  callID: CallID,
+}).annotate({ identifier: "Browser.OpenInput" })
+export interface OpenInput extends Schema.Schema.Type<typeof OpenInput> {}
+
+export const CloseInput = Schema.Struct({
+  sessionID: SessionID,
+  tabID: TabID,
+  generation: Generation,
+  callID: CallID,
+}).annotate({ identifier: "Browser.CloseInput" })
+export interface CloseInput extends Schema.Schema.Type<typeof CloseInput> {}
+
 const CaptureData = Schema.String.check(
   Schema.isMaxLength(Math.ceil((MAX_CAPTURE_BYTES * 4) / 3) + 8),
   Schema.isPattern(/^[A-Za-z0-9+/]*={0,2}$/),
@@ -158,6 +186,7 @@ export const ActionResult = Schema.Struct({
   status: Schema.Literals(["completed", "paused", "rejected", "uncertain"]),
   message: Schema.String.check(Schema.isMaxLength(1024)).pipe(optional),
   capture: CaptureOutput.pipe(optional),
+  groupID: NonNegativeInt.pipe(optional),
 }).annotate({ identifier: "Browser.ActionResult" })
 export interface ActionResult extends Schema.Schema.Type<typeof ActionResult> {}
 

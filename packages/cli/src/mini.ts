@@ -117,6 +117,7 @@ export async function runMini(input: MiniCommandInput) {
         initialInput,
         replay: input.replay ?? true,
         replayLimit: input.replayLimit,
+        browserAddress: connection.address,
         demo: input.demo,
         tuiConfig: input.tuiConfig,
       })
@@ -131,14 +132,18 @@ export async function runMini(input: MiniCommandInput) {
 
 /** @internal Exported for CLI boundary tests. */
 export function createMiniConnection(input: MiniCommandInput["server"]) {
-  const make = (endpoint: Endpoint) =>
-    YCoding.make({
+  let currentAddress = input.endpoint.url
+  const make = (endpoint: Endpoint) => {
+    currentAddress = endpoint.url
+    return YCoding.make({
       baseUrl: endpoint.url,
       headers: Service.headers(endpoint),
     })
+  }
   const reconnect = input.reconnect
   return {
     sdk: make(input.endpoint),
+    address: () => currentAddress,
     reconnect: reconnect
       ? async (signal: AbortSignal) => {
           const endpoint = await reconnect(signal)

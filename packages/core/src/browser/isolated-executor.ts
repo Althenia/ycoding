@@ -17,7 +17,7 @@ const CHROME =
   process.env.NODE_ENV === "test"
     ? (process.env.YCODING_TEST_ISOLATED_BROWSER_CHROME ?? INSTALLED_CHROME)
     : INSTALLED_CHROME
-const SUPPORTED_MAJOR = 152
+const MINIMUM_CHROME_MAJOR = 152
 const STARTUP_TIMEOUT_MS = 15_000
 const CLOSE_TIMEOUT_MS = 5_000
 const TERMINATE_TIMEOUT_MS = 500
@@ -86,14 +86,14 @@ function availability() {
     return Effect.succeed({ available: false, reason: "Isolated browser requires macOS arm64" })
   return Effect.promise(() => chromeVersion().catch(() => undefined)).pipe(
     Effect.map((major) =>
-      major === SUPPORTED_MAJOR
+      major !== undefined && major >= MINIMUM_CHROME_MAJOR
         ? { available: true }
         : {
             available: false,
             reason:
               major === undefined
                 ? "Installed Google Chrome is unavailable"
-                : `Installed Google Chrome major ${major} is unsupported; major ${SUPPORTED_MAJOR} is required`,
+                : `Installed Google Chrome major ${major} is unsupported; Chrome ${MINIMUM_CHROME_MAJOR} or newer is required`,
           },
     ),
   )
@@ -155,7 +155,8 @@ async function launchChrome(
   signal.addEventListener("abort", abort, { once: true })
   try {
     const version = record(await cdp.send("Browser.getVersion", {}, undefined, signal, STARTUP_TIMEOUT_MS))
-    if (typeof version.product !== "string" || !version.product.startsWith(`Chrome/${SUPPORTED_MAJOR}.`))
+    const major = typeof version.product === "string" ? /^Chrome\/(\d+)\./.exec(version.product)?.[1] : undefined
+    if (major === undefined || Number(major) < MINIMUM_CHROME_MAJOR)
       throw new Error({ message: "Installed Chrome changed during startup", phase: "predispatch" })
     return await configureRuntime(cdp, child, root, input, signal)
   } catch (cause) {

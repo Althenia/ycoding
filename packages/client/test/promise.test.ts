@@ -83,6 +83,8 @@ test("exposes every standard HTTP API group", () => {
     "tabs",
     "start",
     "observe",
+    "open",
+    "close",
     "action",
     "control",
     "stop",

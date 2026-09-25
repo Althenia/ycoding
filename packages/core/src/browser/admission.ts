@@ -1,8 +1,8 @@
 export * as BrowserAdmission from "./admission"
 
 import { SessionID } from "@ycoding-ai/schema/session-id"
-import { Context, Layer } from "effect"
-import { makeLocationNode } from "../effect/app-node"
+import { Context, Effect, Layer } from "effect"
+import { makeGlobalNode, makeLocationNode } from "../effect/app-node"
 
 export type Mode = "selected" | "isolated"
 
@@ -30,4 +30,22 @@ export const layer = Layer.sync(Service, () => {
   })
 })
 
-export const node = makeLocationNode({ service: Service, layer, deps: [] })
+export class CoordinatorService extends Context.Service<CoordinatorService, Interface>()(
+  "@ycoding/v2/BrowserAdmissionCoordinator",
+) {}
+
+const coordinatorLayer = Layer.effect(
+  CoordinatorService,
+  Effect.map(Service, (admission) => CoordinatorService.of(admission)),
+).pipe(Layer.provide(layer))
+
+export const coordinatorNode = makeGlobalNode({ service: CoordinatorService, layer: coordinatorLayer, deps: [] })
+
+export const node = makeLocationNode({
+  service: Service,
+  layer: Layer.effect(
+    Service,
+    Effect.map(CoordinatorService, (admission) => Service.of(admission)),
+  ),
+  deps: [coordinatorNode],
+})

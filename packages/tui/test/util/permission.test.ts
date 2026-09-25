@@ -17,3 +17,13 @@ test("preserves permission roots and self-contained metadata", () => {
     lines: ["Query: releases"],
   })
 })
+
+test("warns before granting selected Chrome site actions that can trigger downloads", () => {
+  const view = permissionPresentation({
+    action: "browser_interact",
+    resources: ["https://example.test/form"],
+    metadata: { mode: "selected", incidentalDownloads: true, site: "https://example.test" },
+  })
+  expect(view.title).toContain("example.test")
+  expect(view.lines.join(" ")).toMatch(/click.*download|download.*click/i)
+})

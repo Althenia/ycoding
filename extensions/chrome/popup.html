@@ -3,27 +3,52 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>YCoding tab sharing</title>
+    <title>YCoding Chrome bridge</title>
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <main>
-      <h1>YCoding tab sharing</h1>
-      <p class="warning">
-        Chrome shows a debugger warning while a selected tab is shared. YCoding never activates a tab.
-      </p>
-      <label>Local server URL <input id="server" value="http://127.0.0.1:4096" spellcheck="false" /></label>
-      <label>Session ID <input id="session" placeholder="ses_…" spellcheck="false" /></label>
-      <label>One-time pairing secret <input id="secret" type="password" autocomplete="off" /></label>
-      <div class="actions">
-        <button id="pair">Pair selected Session</button>
-        <button id="connect" disabled>Connect selected Session</button>
-        <button id="forget" disabled>Forget pairing</button>
-        <button id="share" disabled>Share current tab</button>
-        <button id="revoke" disabled>Revoke current tab</button>
-      </div>
-      <p id="status" role="status" aria-live="polite">Not paired</p>
-      <p class="note">A shared tab pauses whenever it is active. Switch away before asking YCoding to act.</p>
+      <h1><img src="icons/ycoding-32.png" width="32" height="32" alt="" /> YCoding Chrome</h1>
+      <section class="card" aria-label="Chrome connection">
+        <div class="card-header">
+          <span id="connection-state" class="state" data-state="disconnected" role="status" aria-live="polite"
+            >Disconnected</span
+          >
+        </div>
+
+        <div id="pairing-view">
+          <p class="description">Connect this Chrome profile to your local YCoding service.</p>
+          <p class="detail">
+            Pairing allows YCoding to use eligible current and future tabs, including the active tab. Model actions
+            still require site approval and human review.
+          </p>
+          <form id="pairing-form">
+            <label for="server">Local service address</label>
+            <input id="server" type="url" value="http://127.0.0.1:4096" spellcheck="false" required />
+            <label for="secret">Pairing code from YCoding</label>
+            <input id="secret" type="password" autocomplete="off" required />
+            <button id="pair" class="primary" type="submit">Connect YCoding</button>
+          </form>
+          <p class="detail">YCoding never activates tabs. Chrome shows a debugger warning while a tab is attached.</p>
+        </div>
+
+        <div id="reconnecting-view" hidden>
+          <p id="reconnecting-message" class="description">
+            Trying the saved local service automatically. Your pairing code is not needed again.
+          </p>
+        </div>
+
+        <div id="connected-view" hidden>
+          <p class="description">YCoding can use eligible tabs, including the active tab, after site approval.</p>
+          <p class="detail">Chrome shows a debugger warning when YCoding attaches to a tab.</p>
+        </div>
+
+        <div id="connection-actions" class="actions secondary-actions" hidden>
+          <button id="connect" type="button" hidden>Retry connection</button>
+          <button id="forget" type="button" hidden>Forget pairing</button>
+        </div>
+        <p id="feedback" role="status" aria-live="polite" hidden></p>
+      </section>
     </main>
     <script type="module" src="popup.js"></script>
   </body>

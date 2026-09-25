@@ -265,7 +265,7 @@ describe("isolated browser service", () => {
   test("reports missing and incompatible Chrome without dispatching launch", async () => {
     for (const reason of [
       "Installed Google Chrome is unavailable",
-      "Installed Google Chrome major 151 is unsupported; major 152 is required",
+      "Installed Google Chrome major 151 is unsupported; Chrome 152 or newer is required",
     ]) {
       let launches = 0
       const executor: IsolatedBrowserExecutor.Interface = {

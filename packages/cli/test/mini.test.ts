@@ -55,11 +55,13 @@ describe("mini command", () => {
           }
         },
       })
+      expect(connection.address()).toBe(initial.url.toString())
       const client = await connection.reconnect?.(controller.signal)
       if (!client) throw new Error("Expected a replacement client")
       await client.health.get()
 
       expect(client).not.toBe(connection.sdk)
+      expect(connection.address()).toBe(replacement.url.toString())
       expect(signal).toBe(controller.signal)
       expect(authorization).toEqual([`Basic ${btoa("replacement:secret")}`])
       expect(createMiniConnection({ endpoint: { url: initial.url.toString() } }).reconnect).toBeUndefined()

@@ -205,8 +205,17 @@ async function smoke(output: string, target: NodeTarget) {
   const root = await mkdtemp(path.join(os.tmpdir(), "ycoding-node-smoke-"))
   const executable = path.join(root, path.basename(output))
   await copyFile(output, executable)
-  if (target.platform === "darwin")
+  if (target.platform === "darwin") {
     await copyFile(path.join(path.dirname(output), COMPUTER_HELPER_BINARY), path.join(root, COMPUTER_HELPER_BINARY))
+    const app = `${COMPUTER_HELPER_BINARY}.app`
+    const contents = path.join(root, app, "Contents")
+    await mkdir(path.join(contents, "MacOS"), { recursive: true })
+    await mkdir(path.join(contents, "_CodeSignature"))
+    await mkdir(path.join(contents, "Resources"))
+    for (const file of ["Info.plist", `MacOS/${COMPUTER_HELPER_BINARY}`, "_CodeSignature/CodeResources", "Resources/YCoding.icns"]) {
+      await copyFile(path.join(path.dirname(output), app, "Contents", file), path.join(contents, file))
+    }
+  }
   if (process.platform !== "win32") await chmod(executable, 0o755)
   await verifyPackagedComputerHelper(root, target.platform)
   run(executable, ["--version"], root)

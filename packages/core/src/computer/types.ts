@@ -20,6 +20,12 @@ export type NativeSuccess<Action extends string = string> = {
   readonly status: "ok"
   readonly action: Action
   readonly revision: string
+  readonly elements?: ReadonlyArray<{
+    readonly path: ReadonlyArray<number>
+    readonly role: string
+    readonly label: string
+  }>
+  readonly image?: string
 }
 
 export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Computer.NativeError", {
@@ -30,6 +36,8 @@ export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Compute
     "invalid_response",
     "app_not_running",
     "automation_denied",
+    "accessibility_denied",
+    "screen_recording_denied",
     "target_not_found",
     "stale_revision",
     "target_conflict",

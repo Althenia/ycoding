@@ -84,6 +84,8 @@ type RunFooterOptions = {
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onFormReply: (input: FormReply) => void | Promise<void>
   onFormCancel: (input: FormCancel) => void | Promise<void>
+  browserAddress?: () => string | undefined
+  onChromePair?: (signal: AbortSignal) => Promise<{ secret: string; expiresAt: number }>
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
@@ -313,6 +315,8 @@ export class RunFooter implements FooterApi {
               onPermissionReply: footer.handlePermissionReply,
               onFormReply: footer.handleFormReply,
               onFormCancel: footer.handleFormCancel,
+              browserAddress: options.browserAddress,
+              onChromePair: options.onChromePair,
               onCycle: footer.handleCycle,
               onInterrupt: footer.handleInterrupt,
               onBackground: options.onBackground,
@@ -687,7 +691,7 @@ export class RunFooter implements FooterApi {
     const height =
       type === "permission"
         ? this.base + PERMISSION_ROWS
-        : type === "form"
+        : type === "form" || this.promptRoute.type === "chrome"
           ? this.base + FORM_ROWS
           : this.promptRoute.type === "command"
             ? 1 + COMMAND_ROWS

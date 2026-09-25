@@ -19,14 +19,16 @@ const operationErrors = [
 ] as const
 const { sessionID: _observeSessionID, ...ObservePayload } = Browser.ObserveInput.fields
 const { sessionID: _actionSessionID, ...ActionPayload } = Browser.ActionInput.fields
+const { sessionID: _openSessionID, ...OpenPayload } = Browser.OpenInput.fields
+const { sessionID: _closeSessionID, ...ClosePayload } = Browser.CloseInput.fields
 
-const BROWSER_CONNECT_PATH = /^\/api\/session\/[^/]+\/browser\/connect$/
+const BROWSER_CONNECT_PATH = "/api/browser/connect"
 
 // Both server authentication layers skip only this secret-free WebSocket path. The raw
 // handler then requires an exact Chrome-extension Origin and a bounded one-time or durable
 // credential in the first frame before it upgrades the connection into a usable bridge.
 export function isBrowserConnectURL(url: URL) {
-  return BROWSER_CONNECT_PATH.test(url.pathname) && url.search === ""
+  return url.pathname === BROWSER_CONNECT_PATH && url.search === ""
 }
 
 export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.AnyId, SessionLocationService>(
@@ -87,6 +89,24 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
       ),
     )
     .add(
+      HttpApiEndpoint.post("browser.open", "/api/session/:sessionID/browser/open", {
+        params: { sessionID: Session.ID }, payload: Schema.Struct(OpenPayload),
+        success: Schema.Struct({ data: Browser.Tab }), error: operationErrors,
+      }).annotateMerge(OpenApi.annotations({
+        identifier: "v2.browser.open", summary: "Open a new background Chrome tab",
+        description: "Create only a new Session-owned background tab after extension pairing.",
+      })),
+    )
+    .add(
+      HttpApiEndpoint.post("browser.close", "/api/session/:sessionID/browser/close", {
+        params: { sessionID: Session.ID }, payload: Schema.Struct(ClosePayload),
+        success: HttpApiSchema.NoContent, error: operationErrors,
+      }).annotateMerge(OpenApi.annotations({
+        identifier: "v2.browser.close", summary: "Close an agent-created Chrome tab",
+        description: "Close only a tab owned by the caller Session and fenced to the current bridge generation.",
+      })),
+    )
+    .add(
       HttpApiEndpoint.post("browser.action", "/api/session/:sessionID/browser/action", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct(ActionPayload),
@@ -137,13 +157,12 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
         OpenApi.annotations({
           identifier: "v2.browser.forget",
           summary: "Forget the Chrome extension pairing",
-          description: "Revoke durable trust for this Session and disconnect its selected-tab bridge.",
+          description: "Revoke backend-wide durable extension trust and disconnect its selected-tab bridge.",
         }),
       ),
     )
     .add(
-      HttpApiEndpoint.get("browser.connect", "/api/session/:sessionID/browser/connect", {
-        params: { sessionID: Session.ID },
+      HttpApiEndpoint.get("browser.connect", "/api/browser/connect", {
         success: Schema.Boolean,
         error: [ForbiddenError, SessionNotFoundError],
       }).annotateMerge(
@@ -158,5 +177,8 @@ export const makeBrowserGroup = <SessionLocationId extends HttpApiMiddleware.Any
     )
     .middleware(sessionLocationMiddleware)
     .annotateMerge(
-      OpenApi.annotations({ title: "browser", description: "Experimental Session-owned selected-tab Chrome routes." }),
+      OpenApi.annotations({
+        title: "browser",
+        description: "Session-scoped browser controls and a backend-wide Chrome extension connection.",
+      }),
     )

@@ -14,6 +14,18 @@ const tab = {
 }
 
 describe("Browser selected-tab contract", () => {
+  test("keeps owned-tab identity optional for selected tabs and requires fenced open/close", () => {
+    expect(Schema.decodeUnknownSync(Browser.Tab)(tab as unknown) as unknown).toEqual(tab)
+    expect(Schema.decodeUnknownSync(Browser.Tab)({ ...tab, mode: "owned" })).toMatchObject({ mode: "owned" })
+    expect(Schema.decodeUnknownSync(Browser.Tab)({ ...tab, mode: "profile" })).toMatchObject({ mode: "profile" })
+    expect(Schema.is(Browser.Tab)({ ...tab, mode: "personal" })).toBe(false)
+    expect(Schema.is(Browser.OpenInput)({ sessionID: tab.sessionID, generation: 1,
+      url: "https://example.test/", callID: "open" })).toBe(true)
+    expect(Schema.is(Browser.OpenInput)({ sessionID: tab.sessionID,
+      url: "https://example.test/", callID: "open" })).toBe(false)
+    expect(Schema.is(Browser.CloseInput)({ sessionID: tab.sessionID, tabID: tab.id,
+      generation: 1, callID: "close" })).toBe(true)
+  })
   test("exposes only safe tab metadata and explicit ownership generations", () => {
     expect(Schema.decodeUnknownSync(Browser.Tab)(tab as unknown) as unknown).toEqual(tab)
     expect(() =>
@@ -45,6 +57,17 @@ describe("Browser selected-tab contract", () => {
         action: { type: "cdp", method: "Runtime.evaluate" },
       }),
     ).toBe(false)
+  })
+
+  test("bounds profile tab grouping and accepts Chrome group zero", () => {
+    const base = { sessionID: tab.sessionID, tabID: tab.id, generation: 1,
+      documentGeneration: 2, observationRevision: 3, callID: "group" }
+    expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "group",
+      tabIDs: [tab.id], title: "Task" } })).toBe(true)
+    expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "group",
+      tabIDs: Array(9).fill(tab.id), title: "Task" } })).toBe(false)
+    expect(Schema.is(Browser.ActionInput)({ ...base, action: { type: "ungroup",
+      tabIDs: [tab.id], groupID: 0 } })).toBe(true)
   })
 
   test("bounds observations, typed text, and explicit captures", () => {

@@ -48,6 +48,77 @@ afterEach(() => {
 })
 
 describe("run interactive runtime", () => {
+  test("Mini pairing uses the active Session and only starts after an explicit request", async () => {
+    const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
+    const api = footer()
+    const streamStarted = defer<void>()
+    let lifecycle!: LifecycleInput
+    const started = spyOn(sdk.browser, "start").mockImplementation(async () => ({
+      secret: "one-time-code",
+      expiresAt: Date.now() + 120_000,
+    }))
+    stubCatalogLists(sdk)
+
+    const task = runInteractiveDeferredMode(
+      {
+        host: host(),
+        sdk,
+        directory: "/tmp",
+        browserAddress: () => "http://127.0.0.1:43094",
+        target: async () => ({
+          sessionID: "ses_chrome",
+          location: { directory: "/tmp", project: { id: "pro-1", directory: "/tmp" } },
+          agent: "build",
+          model: { providerID: "test", modelID: "model" },
+          variant: undefined,
+          resume: false,
+        }),
+        agent: "build",
+        model: { providerID: "test", modelID: "model" },
+        variant: undefined,
+        files: [],
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          lifecycle = input
+          return {
+            footer: api,
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async () => {
+            streamStarted.resolve()
+            return {
+              runPromptTurn: async () => {},
+              interruptActiveTurn: async () => {},
+              selectSubagent: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => String(error),
+        }),
+      },
+    )
+
+    try {
+      await streamStarted.promise
+      expect(lifecycle.browserAddress?.()).toBe("http://127.0.0.1:43094")
+      expect(started).not.toHaveBeenCalled()
+      const controller = new AbortController()
+      expect(await lifecycle.onChromePair?.(controller.signal)).toMatchObject({ secret: "one-time-code" })
+      expect(started).toHaveBeenCalledTimes(1)
+      expect(started).toHaveBeenCalledWith({ sessionID: "ses_chrome" }, { signal: controller.signal })
+    } finally {
+      api.close()
+      await task
+    }
+  })
+
   test("switching to a model without the saved variant displays and submits no stale variant", async () => {
     const sdk = YCoding.make({ baseUrl: "https://ycoding.test" })
     const footerFixture = createFooterApiFixture()

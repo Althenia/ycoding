@@ -101,6 +101,15 @@ export function permissionPresentation(
     }
   }
 
+  if ((action === "browser_navigate" || action === "browser_interact") && metadata.mode === "selected") {
+    const site = text(metadata.site) || resources[0] || "this site"
+    return {
+      icon: "◉",
+      title: `Control Chrome site ${site}`,
+      lines: [`Site: ${site}`, ...chromeSideEffectWarning(metadata)],
+    }
+  }
+
   if (action === "lsp") {
     const file = text(input.path)
     const operation = text(input.operation) || "request"
@@ -151,12 +160,22 @@ function wildcardDirectory(value: string) {
   return prefix.replace(/[\\/]+$/, "")
 }
 
-export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string> }): string[] {
+export function permissionAlwaysLines(input: { action: string; save?: ReadonlyArray<string>; metadata?: unknown }): string[] {
   const save = input.save ?? []
   if (save.length === 1 && save[0] === "*") {
     return [`This will allow ${input.action} until YCoding is restarted.`]
   }
-  return ["This will allow the following patterns until YCoding is restarted.", ...save.map((item) => `- ${item}`)]
+  return [
+    "This will allow the following patterns until YCoding is restarted.",
+    ...save.map((item) => `- ${item}`),
+    ...chromeSideEffectWarning(dict(input.metadata)),
+  ]
+}
+
+function chromeSideEffectWarning(metadata: Dict) {
+  return metadata.mode === "selected" && metadata.incidentalDownloads === true
+    ? ["Clicks, navigation, and typing on this site may trigger downloads without another prompt."]
+    : []
 }
 
 export function permissionOptionLabel(option: "once" | "always" | "reject" | "confirm" | "cancel") {

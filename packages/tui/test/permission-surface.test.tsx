@@ -173,3 +173,27 @@ test("surfaces a live subagent permission in the subagent view", async () => {
     await screen.dispose()
   }
 }, 30_000)
+
+test("shows the download side-effect warning on selected Chrome site approval", async () => {
+  childPermissions = [{
+    ...childPermission,
+    id: "per_chrome_site",
+    action: "browser_interact",
+    resources: ["https://example.test/form"],
+    metadata: { mode: "selected", incidentalDownloads: true, site: "https://example.test" },
+  }]
+  const screen = await renderScreen({
+    width: 120,
+    height: 40,
+    args: { sessionID: childID },
+    route,
+    settle: "SUBAGENT ECONOMICS",
+  })
+  try {
+    await waitForFrameText(screen, "Permission required")
+    expect(screen.frame()).toContain("example.test")
+    expect(screen.frame()).toContain("downloads")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)

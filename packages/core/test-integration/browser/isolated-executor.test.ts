@@ -666,7 +666,8 @@ async function positiveDownloadControl(origin: string) {
 
 async function runPositiveDownloadControl(cdp: Client, origin: string, downloads: string) {
   const version = testRecord(await cdp.send("Browser.getVersion"))
-  expect(version.product).toMatch(/^Chrome\/152\./)
+  expect(version.product).toMatch(/^Chrome\/\d+\./)
+  expect(Number(/^Chrome\/(\d+)\./.exec(String(version.product))?.[1])).toBeGreaterThanOrEqual(152)
   const context = testRecord(await cdp.send("Target.createBrowserContext", { disposeOnDetach: true }))
   const browserContextId = testString(context.browserContextId)
   await cdp.send("Browser.setDownloadBehavior", {

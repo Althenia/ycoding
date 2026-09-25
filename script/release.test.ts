@@ -67,10 +67,10 @@ test("release workflow ships no Godot desktop client", () => {
 
 test("release workflow packages and checksums every CLI archive", () => {
   expect(workflow).toContain(
-    'tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" ycoding ycoding-computer-helper',
+    'tar -C unpacked/ycoding-darwin-arm64 -czf "release/ycoding-$version-darwin-arm64.tar.gz" "${mac_entries[@]}"',
   )
   expect(workflow).toContain(
-    'tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" ycoding ycoding-computer-helper',
+    'tar -C unpacked/ycoding-darwin-x64 -czf "release/ycoding-$version-darwin-x64.tar.gz" "${mac_entries[@]}"',
   )
   expect(workflow).toContain(
     'tar -C unpacked/ycoding-linux-x64 -czf "release/ycoding-$version-linux-x64.tar.gz" ycoding',
@@ -80,6 +80,20 @@ test("release workflow packages and checksums every CLI archive", () => {
     '(cd release && sha256sum "ycoding-$version-"*.tar.gz "ycoding-$version-"*.zip > "ycoding-$version-checksums.txt")',
   )
   expect(workflow).toContain("needs: [build, isolated-browser-acceptance]")
+})
+
+test("macOS release archives stage the signed app and preserve its bundle tree", () => {
+  expect(workflow).toContain('cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-computer-helper.app" "$staging/"')
+  expect(workflow).toContain('mac_entries=(ycoding ycoding-computer-helper)')
+  expect(workflow).toContain('mac_entries+=(ycoding-computer-helper.app)')
+  expect(workflow).toContain("Contents/Resources/YCoding.icns")
+  expect(workflow).toContain(
+    'test -f "$app/Contents/Resources/YCoding.icns" && test ! -L "$app/Contents/Resources/YCoding.icns" && test -s "$app/Contents/Resources/YCoding.icns"',
+  )
+  expect(workflow).toContain("<key>CFBundleDisplayName</key><string>YCoding Computer Use</string>")
+  const packageJob = workflow.split("\n  package:")[1]?.split("\n  release-tui:")[0]
+  expect(packageJob).toContain("runs-on: ubuntu-24.04")
+  expect(packageJob).toContain('find "$app" -mindepth 1 -printf')
 })
 
 test("one v tag verifies a shared note and publishes only the TUI GitHub release", () => {

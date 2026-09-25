@@ -65,6 +65,8 @@ export type LifecycleInput = {
   onPermissionReply: (input: PermissionReply) => void | Promise<void>
   onFormReply: (input: FormReply) => void | Promise<void>
   onFormCancel: (input: FormCancel) => void | Promise<void>
+  browserAddress?: () => string | undefined
+  onChromePair?: (signal: AbortSignal) => Promise<{ secret: string; expiresAt: number }>
   onCycleVariant?: () => CycleResult | void
   onModelSelect?: (model: NonNullable<RunInput["model"]>) => CycleResult | void | Promise<CycleResult | void>
   onVariantSelect?: (variant: string | undefined) => CycleResult | void | Promise<CycleResult | void>
@@ -234,6 +236,8 @@ export async function createRuntimeLifecycle(input: LifecycleInput): Promise<Lif
     onPermissionReply: input.onPermissionReply,
     onFormReply: input.onFormReply,
     onFormCancel: input.onFormCancel,
+    browserAddress: input.browserAddress,
+    onChromePair: input.onChromePair,
     onCycleVariant: input.onCycleVariant,
     onModelSelect: input.onModelSelect,
     onVariantSelect: input.onVariantSelect,

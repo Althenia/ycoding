@@ -7,9 +7,8 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { BrowserProtocol } from "./browser/protocol"
 import { BrowserAdmission } from "./browser/admission"
 import { Credential } from "./credential"
-import { makeLocationNode } from "./effect/app-node"
+import { makeGlobalNode, makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
-import { Location } from "./location"
 import { SessionErrors } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionStore } from "./session/store"
@@ -22,6 +21,8 @@ export const Pairing = Browser.Pairing
 export const Observation = Browser.Observation
 export const ActionInput = Browser.ActionInput
 export const ObserveInput = Browser.ObserveInput
+export const OpenInput = Browser.OpenInput
+export const CloseInput = Browser.CloseInput
 export const ActionResult = Browser.ActionResult
 export const ControlInput = Browser.ControlInput
 export const MAX_CAPTURE_BYTES = Browser.MAX_CAPTURE_BYTES
@@ -32,6 +33,8 @@ export type Pairing = Browser.Pairing
 export type Observation = Browser.Observation
 export type ActionInput = Browser.ActionInput
 export type ObserveInput = Browser.ObserveInput
+export type OpenInput = Browser.OpenInput
+export type CloseInput = Browser.CloseInput
 export type ActionResult = Browser.ActionResult
 
 export class UnavailableError extends Schema.TaggedErrorClass<UnavailableError>()("Browser.UnavailableError", {
@@ -69,12 +72,19 @@ export interface Interface {
   readonly start: (
     sessionID: Browser.Tab["sessionID"],
   ) => Effect.Effect<Pairing, SessionErrors.NotFoundError | BusyError>
+  readonly open: (input: OpenInput) => Effect.Effect<Tab, SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError>
+  readonly close: (input: CloseInput) => Effect.Effect<void, SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError>
   readonly observe: (
     input: ObserveInput,
   ) => Effect.Effect<
     Observation,
     SessionErrors.NotFoundError | OwnershipError | FenceError | BusyError | UnavailableError | BridgeError
   >
+  readonly clickDestination: (
+    input: Pick<ActionInput, "sessionID" | "tabID" | "generation" | "documentGeneration" | "observationRevision"> & {
+      readonly ref: string
+    },
+  ) => Effect.Effect<Browser.Page | undefined, SessionErrors.NotFoundError | OwnershipError | FenceError | UnavailableError>
   readonly action: (
     input: ActionInput,
   ) => Effect.Effect<
@@ -92,7 +102,6 @@ export interface Interface {
     sessionID: Browser.Tab["sessionID"],
   ) => Effect.Effect<void, SessionErrors.NotFoundError | OwnershipError>
   readonly attach: (input: {
-    readonly sessionID: Browser.Tab["sessionID"]
     readonly origin: string
     readonly handshake: BrowserProtocol.Handshake
     readonly transport: Transport
@@ -111,7 +120,7 @@ const DEFAULT_COMMAND_TIMEOUT = Duration.seconds(30)
 const MAX_PAIRING_ATTEMPTS = 5
 const SETTLEMENT_LIMIT = 64
 
-type MutableTab = Types.DeepMutable<Tab> & { elements: Map<string, Browser.Element> }
+type MutableTab = Types.DeepMutable<Tab> & { elements: Map<string, Browser.Element>; allowedOrigins?: Set<string> }
 type PairingState = {
   sessionID: Browser.Tab["sessionID"]
   digest: Uint8Array
@@ -123,13 +132,13 @@ type Trust = {
   readonly credentialID: Credential.ID
   readonly digest: Uint8Array
   readonly extensionID: string
-  readonly locationKey: string
   readonly serverID: string
   readonly sessionID: Browser.Tab["sessionID"]
 }
 type PendingBase = {
   readonly callID: string
   readonly tabID: Browser.TabID
+  readonly sessionID: Browser.Tab["sessionID"]
   readonly generation: number
   readonly deferred: Deferred.Deferred<Observation | ActionResult, BridgeError>
   timedOut: boolean
@@ -146,6 +155,7 @@ type Pending = PendingBase &
         readonly fingerprint: string
         readonly documentGeneration: number
       }
+    | { readonly kind: "open" | "close"; readonly mutation: true; readonly fingerprint: string }
   )
 type Settlement = {
   readonly fingerprint: string
@@ -159,8 +169,11 @@ type Connection = {
   readonly transport: Transport
   readonly tabs: Map<Browser.TabID, MutableTab>
   readonly settlements: Map<string, Settlement>
+  readonly openCalls: Map<string, { readonly url: string; readonly tabID: Browser.TabID }>
+  readonly closeCalls: Set<string>
   connected: boolean
   paused: boolean
+  profileGranted: boolean
   pending?: Pending
 }
 
@@ -168,7 +181,6 @@ export const layer = (options: Options = {}) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const location = yield* Location.Service
       const sessions = yield* SessionStore.Service
       const credentials = yield* Credential.Service
       const admission = yield* BrowserAdmission.Service
@@ -179,10 +191,7 @@ export const layer = (options: Options = {}) =>
       let pairingExpiryTimer: ReturnType<typeof setTimeout> | undefined
       let connection: Connection | undefined
       let nextGeneration = 1
-      const locationKey = createHash("sha256")
-        .update(JSON.stringify([location.directory, location.workspaceID ?? null]))
-        .digest("hex")
-      const integrationID = Integration.ID.make(`ycoding.browser.${locationKey}`)
+      const integrationID = Integration.ID.make("ycoding.browser")
 
       const loadTrust = Effect.fn("Browser.loadTrust")(function* () {
         const stored = (yield* credentials.list(integrationID))[0]
@@ -190,7 +199,6 @@ export const layer = (options: Options = {}) =>
         const metadata = stored.value.metadata
         if (
           metadata?.type !== "browser-extension-trust" ||
-          metadata.locationKey !== locationKey ||
           typeof metadata.extensionID !== "string" ||
           typeof metadata.serverID !== "string" ||
           typeof metadata.sessionID !== "string"
@@ -202,7 +210,6 @@ export const layer = (options: Options = {}) =>
           credentialID: stored.id,
           digest,
           extensionID: metadata.extensionID,
-          locationKey,
           serverID: metadata.serverID,
           sessionID: Browser.Tab.fields.sessionID.make(metadata.sessionID),
         } satisfies Trust
@@ -216,18 +223,16 @@ export const layer = (options: Options = {}) =>
       const assertSession = Effect.fn("Browser.assertSession")(function* (sessionID: Browser.Tab["sessionID"]) {
         const session = yield* sessions.get(sessionID)
         if (!session || session.time.archived) return yield* new SessionErrors.NotFoundError({ sessionID })
-        if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
-          return yield* new SessionErrors.NotFoundError({ sessionID })
         return session
       })
 
-      function publicTab(tab: MutableTab): Tab {
-        const { elements: _elements, ...info } = tab
-        return info
+      function publicTab(tab: MutableTab, sessionID: Browser.Tab["sessionID"] = tab.sessionID): Tab {
+        const { elements: _elements, allowedOrigins: _allowedOrigins, ...info } = tab
+        return { ...info, sessionID: tab.mode === "owned" ? tab.sessionID : sessionID }
       }
 
       function bridgeStatus(sessionID: Browser.Tab["sessionID"]): Status {
-        if (connection?.sessionID === sessionID) {
+        if (connection) {
           return {
             state: !connection.connected
               ? "unavailable"
@@ -236,6 +241,7 @@ export const layer = (options: Options = {}) =>
                 : "connected",
             generation: connection.generation,
             extensionID: connection.extensionID,
+            profileGranted: connection.profileGranted,
             pendingCallID: connection.pending?.callID,
           }
         }
@@ -251,10 +257,10 @@ export const layer = (options: Options = {}) =>
 
       const requireConnection = Effect.fn("Browser.requireConnection")(function* (sessionID: Browser.Tab["sessionID"]) {
         yield* assertSession(sessionID)
+        if (admission.current(sessionID) === "isolated")
+          return yield* new OwnershipError({ message: "Stop the isolated browser before using paired Chrome tabs" })
         if (!connection?.connected)
           return yield* new UnavailableError({ message: "Chrome extension bridge is unavailable" })
-        if (connection.sessionID !== sessionID)
-          yield* new OwnershipError({ message: "Browser bridge belongs to another Session" })
         return connection
       })
 
@@ -264,13 +270,14 @@ export const layer = (options: Options = {}) =>
       ) {
         const current = yield* requireConnection(sessionID)
         const tab = current.tabs.get(tabID)
-        if (!tab) return yield* new OwnershipError({ message: "Chrome tab is not shared with this Session" })
+        if (!tab || (tab.mode === "owned" && tab.sessionID !== sessionID))
+          return yield* new OwnershipError({ message: "Chrome tab is not owned by this Session" })
         return { current, tab }
       })
 
-      function remember(current: Connection, fingerprint: string, result: ActionResult) {
-        current.settlements.delete(result.callID)
-        current.settlements.set(result.callID, { fingerprint, result })
+      function remember(current: Connection, fingerprint: string, result: ActionResult, key: string) {
+        current.settlements.delete(key)
+        current.settlements.set(key, { fingerprint, result })
         while (current.settlements.size > SETTLEMENT_LIMIT) {
           const oldest = current.settlements.keys().next().value
           if (oldest === undefined) break
@@ -292,7 +299,7 @@ export const layer = (options: Options = {}) =>
             status: "uncertain",
             message: bounded(`The browser bridge was lost while the mutation was settling: ${message}`, 1024),
           }
-          remember(current, pending.fingerprint, uncertain)
+          remember(current, pending.fingerprint, uncertain, `${pending.sessionID}\0${pending.callID}`)
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(uncertain))
           current.pending = undefined
           return
@@ -301,20 +308,21 @@ export const layer = (options: Options = {}) =>
         current.pending = undefined
       }
 
-      const releaseSession = Effect.fn("Browser.releaseSession")((sessionID: Browser.Tab["sessionID"], reason: string) =>
+      const releaseSession = Effect.fn("Browser.releaseSession")((sessionID: Browser.Tab["sessionID"]) =>
         Effect.sync(() => {
           if (pairing?.sessionID === sessionID) {
             pairing = undefined
             if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer)
             pairingExpiryTimer = undefined
           }
-          if (connection?.sessionID === sessionID) {
-            failPending(connection, `Browser ownership ended because the Session was ${reason}`)
-            connection.transport.send({ type: "control", action: "stop" })
-            connection.transport.close(1000, `session ${reason}`)
-            connection.tabs.clear()
-            connection.connected = false
-            connection = undefined
+          if (connection?.pending?.sessionID === sessionID)
+            failPending(connection, "Browser caller Session ended while a command was settling")
+          if (connection) {
+            for (const tab of connection.tabs.values()) {
+              if (tab.mode !== "owned" || tab.sessionID !== sessionID) continue
+              connection.tabs.delete(tab.id)
+              connection.transport.send({ type: "release", tabID: tab.id, generation: connection.generation })
+            }
           }
           admission.release(sessionID, "selected")
         }),
@@ -322,19 +330,21 @@ export const layer = (options: Options = {}) =>
 
       const status = Effect.fn("Browser.status")(function* (sessionID: Browser.Tab["sessionID"]) {
         yield* assertSession(sessionID)
-        return bridgeStatus(sessionID)
+        return admission.current(sessionID) === "isolated" ? { state: "unavailable" as const } : bridgeStatus(sessionID)
       })
 
       const list = Effect.fn("Browser.list")(function* (sessionID: Browser.Tab["sessionID"]) {
         yield* assertSession(sessionID)
-        if (connection?.sessionID !== sessionID) return []
-        return Array.from(connection.tabs.values(), publicTab)
+        if (!connection || admission.current(sessionID) === "isolated") return []
+        return Array.from(connection.tabs.values())
+          .filter((tab) => tab.mode !== "owned" || tab.sessionID === sessionID)
+          .map((tab) => publicTab(tab, sessionID))
       })
 
       const start = Effect.fn("Browser.start")(function* (sessionID: Browser.Tab["sessionID"]) {
         yield* assertSession(sessionID)
         if (!admission.claim(sessionID, "selected"))
-          return yield* new BusyError({ message: "Stop the isolated browser before starting selected-tab pairing" })
+          return yield* new BusyError({ message: "Stop the isolated browser before starting Chrome pairing" })
         const trust = yield* loadTrust()
         yield* removeTrust()
         if (pairing && pairing.sessionID !== sessionID) admission.release(pairing.sessionID, "selected")
@@ -407,7 +417,7 @@ export const layer = (options: Options = {}) =>
           message:
             "The extension response was lost or late. The action will not be replayed; inspect or stop after reconciliation.",
         }
-        remember(current, pending.fingerprint, uncertain)
+        remember(current, pending.fingerprint, uncertain, `${pending.sessionID}\0${pending.callID}`)
         return uncertain
       })
 
@@ -424,6 +434,7 @@ export const layer = (options: Options = {}) =>
             kind: "observe",
             callID: input.callID,
             tabID: input.tabID,
+            sessionID: input.sessionID,
             generation: input.generation,
             mutation: false,
             deferred,
@@ -436,14 +447,93 @@ export const layer = (options: Options = {}) =>
         return result
       })
 
+      const open = Effect.fn("Browser.open")(function* (input: OpenInput) {
+        const current = yield* requireConnection(input.sessionID)
+        if (input.generation !== current.generation)
+          return yield* new FenceError({ message: "Chrome bridge generation is stale" })
+        if (current.paused) return yield* new FenceError({ message: "Chrome bridge is paused" })
+        const page = yield* Effect.try({
+          try: () => safePage(input.url),
+          catch: () => new FenceError({ message: "Only credential-free HTTP and HTTPS navigation is supported" }),
+        })
+        const key = `${input.sessionID}\0${input.callID}`
+        const prior = current.openCalls.get(key)
+        if (prior) return yield* new FenceError({ message: "Browser open call ID was already used; list tabs before continuing" })
+        if (current.openCalls.size >= SETTLEMENT_LIMIT)
+          return yield* new BusyError({ message: "Chrome open call limit reached; reconnect before opening more tabs" })
+        if ([...current.tabs.values()].filter((tab) => tab.mode !== "profile").length >= BrowserProtocol.MAX_SHARED_TABS)
+          return yield* new BusyError({ message: "Chrome tab limit reached" })
+        const tabID = Browser.TabID.create()
+        current.openCalls.set(key, { url: input.url, tabID })
+        const deferred = yield* Deferred.make<Observation | ActionResult, BridgeError>()
+        const result = yield* dispatch(current, {
+          kind: "open", mutation: true, callID: input.callID, tabID, sessionID: input.sessionID,
+          generation: current.generation, fingerprint: JSON.stringify([key, input.url]), deferred, timedOut: false,
+        }, { type: "open", callID: input.callID, tabID, generation: current.generation, url: input.url })
+        if (!("status" in result) || result.tab.page.origin !== page.origin)
+          return yield* new BridgeError({ message: "Chrome tab reached an unapproved site" })
+        return result.tab
+      })
+
+      const close = Effect.fn("Browser.close")(function* (input: CloseInput) {
+        const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
+        if (tab.mode !== "owned")
+          return yield* new OwnershipError({ message: "Only agent-created tabs can be closed" })
+        if (tab.generation !== input.generation)
+          return yield* new FenceError({ message: "Chrome bridge generation is stale" })
+        const key = `${input.sessionID}\0${input.callID}`
+        if (current.closeCalls.has(key))
+          return yield* new FenceError({ message: "Browser close call ID was already used; list tabs before continuing" })
+        if (current.closeCalls.size >= SETTLEMENT_LIMIT)
+          return yield* new BusyError({ message: "Chrome close call limit reached; reconnect before closing more tabs" })
+        if (current.pending)
+          return yield* new BusyError({ message: `Browser command ${current.pending.callID} is still unsettled` })
+        current.closeCalls.add(key)
+        const deferred = yield* Deferred.make<Observation | ActionResult, BridgeError>()
+        const result = yield* dispatch(current, {
+          kind: "close", mutation: true, callID: input.callID, tabID: input.tabID,
+          sessionID: input.sessionID, generation: input.generation,
+          fingerprint: JSON.stringify([input.sessionID, input.callID, input.tabID, input.generation]),
+          deferred, timedOut: false,
+        }, { type: "close", callID: input.callID, tabID: input.tabID, generation: input.generation })
+        if (!("status" in result) || result.status !== "completed")
+          return yield* new BridgeError({ message: "Chrome tab close did not settle" })
+        return yield* Effect.void
+      })
+
+      const clickDestination = Effect.fn("Browser.clickDestination")(function* (
+        input: Parameters<Interface["clickDestination"]>[0],
+      ) {
+        const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
+        if (current.paused || tab.status !== "shared")
+          return yield* new FenceError({ message: "Chrome tab control is paused" })
+        if (
+          tab.generation !== input.generation ||
+          tab.documentGeneration !== input.documentGeneration ||
+          tab.observationRevision !== input.observationRevision
+        )
+          return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
+        const element = tab.elements.get(input.ref)
+        if (!element || element.disabled)
+          return yield* new FenceError({ message: "Semantic element reference is stale or disabled" })
+        return element.destination
+      })
+
       const action = Effect.fn("Browser.action")(function* (input: ActionInput) {
         const { current, tab } = yield* requireTab(input.sessionID, input.tabID)
+        if (input.action.type === "group" || input.action.type === "ungroup") {
+          if (!current.profileGranted || tab.mode !== "profile" || !input.action.tabIDs.includes(tab.id) ||
+              new Set(input.action.tabIDs).size !== input.action.tabIDs.length ||
+              input.action.tabIDs.some((id) => current.tabs.get(id)?.mode !== "profile"))
+            return yield* new OwnershipError({ message: "Group actions require granted profile tabs" })
+        }
         const fingerprint = actionFingerprint(input)
-        const settled = current.settlements.get(input.callID)
+        const settlementKey = `${input.sessionID}\0${input.callID}`
+        const settled = current.settlements.get(settlementKey)
         if (settled) {
           if (settled.fingerprint !== fingerprint)
             return yield* new FenceError({ message: "Browser call ID was already used for a different action" })
-          return settled.result
+          return { ...settled.result, tab: { ...settled.result.tab, sessionID: input.sessionID } }
         }
         if (current.paused || tab.status !== "shared")
           return yield* new FenceError({ message: "Chrome tab control is paused" })
@@ -453,7 +543,7 @@ export const layer = (options: Options = {}) =>
           tab.observationRevision !== input.observationRevision
         )
           return yield* new FenceError({ message: "Chrome tab observation is stale; observe again" })
-        if (input.action.type !== "navigate" && input.action.type !== "scroll" && input.action.type !== "capture") {
+        if (input.action.type === "click" || input.action.type === "type") {
           const element = tab.elements.get(input.action.ref)
           if (!element) return yield* new FenceError({ message: "Semantic element reference is stale" })
           if (element.disabled) return yield* new FenceError({ message: "Semantic element is disabled" })
@@ -467,7 +557,10 @@ export const layer = (options: Options = {}) =>
                 : undefined,
           catch: () => new FenceError({ message: "Only credential-free HTTP and HTTPS navigation is supported" }),
         })
-        const allowedOrigins = [...new Set([tab.page.origin, ...(destination ? [destination.origin] : [])])]
+        const allowedOrigins = [...new Set([tab.page.origin, ...(destination ? [destination.origin] : []),
+          ...((input.action.type === "group" || input.action.type === "ungroup")
+            ? input.action.tabIDs.map((id) => current.tabs.get(id)!.page.origin) : [])])]
+        if (tab.mode === "owned") tab.allowedOrigins = new Set(allowedOrigins)
         const deferred = yield* Deferred.make<Observation | ActionResult, BridgeError>()
         const result = yield* dispatch(
           current,
@@ -475,9 +568,10 @@ export const layer = (options: Options = {}) =>
             kind: "action",
             callID: input.callID,
             tabID: input.tabID,
+            sessionID: input.sessionID,
             generation: input.generation,
             documentGeneration: input.documentGeneration,
-            mutation: ["navigate", "click", "type"].includes(input.action.type),
+            mutation: ["navigate", "click", "type", "group", "ungroup"].includes(input.action.type),
             fingerprint,
             deferred,
             timedOut: false,
@@ -495,8 +589,8 @@ export const layer = (options: Options = {}) =>
         )
         if (!("status" in result))
           return yield* new BridgeError({ message: "Extension returned an observation for action" })
-        remember(current, fingerprint, result)
-        return result
+        remember(current, fingerprint, result, settlementKey)
+        return { ...result, tab: { ...result.tab, sessionID: input.sessionID } }
       })
 
       const control = Effect.fn("Browser.control")(function* (
@@ -537,66 +631,64 @@ export const layer = (options: Options = {}) =>
           admission.release(sessionID, "selected")
           return
         }
-        if (connection.sessionID !== sessionID)
-          yield* new OwnershipError({ message: "Browser bridge belongs to another Session" })
+        if (admission.current(sessionID) === "isolated")
+          yield* new OwnershipError({ message: "Stop the isolated browser before using paired Chrome tabs" })
+        const bootstrapSessionID = connection.sessionID
         connection.transport.send({ type: "control", action: "stop" })
         connection.transport.close(1000, "stopped")
         failPending(connection, "Browser bridge stopped")
         connection.tabs.clear()
         connection.connected = false
         connection = undefined
-        admission.release(sessionID, "selected")
+        admission.release(bootstrapSessionID, "selected")
       })
 
       const forget = Effect.fn("Browser.forget")(function* (sessionID: Browser.Tab["sessionID"]) {
         yield* assertSession(sessionID)
-        const trust = yield* loadTrust()
-        if (trust && trust.sessionID !== sessionID)
-          yield* new OwnershipError({ message: "Browser pairing belongs to another Session" })
         yield* removeTrust()
-        if (pairing?.sessionID === sessionID) {
+        if (pairing) {
+          admission.release(pairing.sessionID, "selected")
           pairing = undefined
           if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer)
           pairingExpiryTimer = undefined
         }
-        if (!connection) {
-          admission.release(sessionID, "selected")
-          return
-        }
-        if (connection.sessionID !== sessionID)
-          yield* new OwnershipError({ message: "Browser bridge belongs to another Session" })
+        if (!connection) return
+        const bootstrapSessionID = connection.sessionID
         connection.transport.send({ type: "control", action: "forget" })
         connection.transport.close(1000, "pairing forgotten")
         failPending(connection, "Browser pairing forgotten")
         connection.tabs.clear()
         connection.connected = false
         connection = undefined
-        admission.release(sessionID, "selected")
+        admission.release(bootstrapSessionID, "selected")
       })
 
       const attach: Interface["attach"] = Effect.fn("Browser.attach")(function* (input) {
-        yield* assertSession(input.sessionID)
         const originID = BrowserProtocol.extensionIDFromOrigin(input.origin)
         if (!originID || originID !== input.handshake.extensionID)
           return yield* new AuthenticationError({ message: "Invalid Chrome extension identity" })
         const credential =
           input.handshake.type === "pair"
-            ? yield* authenticatePairing(input.sessionID, originID, input.handshake.secret)
-            : yield* authenticateTrust(input.sessionID, originID, input.handshake)
-        if (!admission.claim(input.sessionID, "selected"))
-          return yield* new BusyError({ message: "Stop the isolated browser before attaching selected-tab control" })
+            ? yield* authenticatePairing(originID, input.handshake.secret)
+            : yield* authenticateTrust(originID, input.handshake)
+        const sessionID = credential.sessionID
+        if (!admission.claim(sessionID, "selected"))
+          return yield* new BusyError({ message: "Stop the isolated browser before attaching Chrome control" })
         if (connection?.connected)
           return yield* new BusyError({ message: "A Chrome extension bridge is already connected" })
         const current: Connection = {
           token: {},
-          sessionID: input.sessionID,
+          sessionID,
           extensionID: originID,
           generation: nextGeneration++,
           transport: input.transport,
           tabs: new Map(),
           settlements: new Map(),
+          openCalls: new Map(),
+          closeCalls: new Set(),
           connected: true,
           paused: false,
+          profileGranted: false,
         }
         connection = current
         if (
@@ -609,7 +701,7 @@ export const layer = (options: Options = {}) =>
           })
         ) {
           connection = undefined
-          admission.release(input.sessionID, "selected")
+          admission.release(sessionID, "selected")
           return yield* new BusyError({ message: "Chrome extension bridge output queue is full" })
         }
 
@@ -618,6 +710,12 @@ export const layer = (options: Options = {}) =>
         ) {
           if (connection !== current || !current.connected) return
           if (message.type === "pong") return
+          if (message.type === "profile_access") {
+            current.profileGranted = message.enabled
+            if (!message.enabled)
+              for (const tab of current.tabs.values()) if (tab.mode === "profile") current.tabs.delete(tab.id)
+            return
+          }
           if (message.type === "forget") {
             yield* removeTrust()
             current.transport.send({ type: "control", action: "forget" })
@@ -630,10 +728,8 @@ export const layer = (options: Options = {}) =>
             return
           }
           if (message.type === "shared") {
-            if (current.tabs.size >= BrowserProtocol.MAX_SHARED_TABS && !current.tabs.has(message.tabID)) {
-              current.transport.send({ type: "error", message: "Shared tab limit reached" })
-              return
-            }
+            if (current.tabs.get(message.tabID)?.mode === "owned") return
+            if (message.mode !== "profile" || !current.profileGranted) return
             const page = safePageMaybe(message.url)
             if (!page) {
               current.transport.send({
@@ -647,11 +743,12 @@ export const layer = (options: Options = {}) =>
               sessionID: current.sessionID,
               title: bounded(message.title, Browser.MAX_TITLE_LENGTH),
               page,
-              status: message.active ? "paused" : "shared",
+              status: current.paused ? "paused" : "shared",
               generation: current.generation,
               documentGeneration: message.documentGeneration,
               observationRevision: 0,
-              ...(message.active ? { pauseReason: "user_active" as const } : {}),
+              mode: "profile",
+              ...(current.paused ? { pauseReason: "requested" as const } : {}),
               elements: new Map(),
             })
             return
@@ -661,21 +758,59 @@ export const layer = (options: Options = {}) =>
             current.tabs.delete(message.tabID)
             return
           }
+          const pending = current.pending
+          if (pending?.kind === "open" && message.type === "opened" &&
+              pending.callID === message.callID && pending.tabID === message.tabID &&
+              message.generation === current.generation) {
+            const request = current.openCalls.get(`${pending.sessionID}\0${pending.callID}`)
+            const page = safePageMaybe(message.url)
+            const expected = request && safePageMaybe(request.url)
+            if (!page || !expected || page.origin !== expected.origin) {
+              Deferred.doneUnsafe(pending.deferred, Effect.fail(new BridgeError({ message: "Chrome tab reached an unapproved site" })))
+              current.pending = undefined
+              current.transport.send({ type: "close", callID: pending.callID, tabID: pending.tabID, generation: current.generation })
+              return
+            }
+            const owned: MutableTab = {
+              id: message.tabID, sessionID: pending.sessionID, mode: "owned",
+              title: bounded(message.title, Browser.MAX_TITLE_LENGTH), page,
+              status: current.paused ? "paused" : "shared", generation: current.generation,
+              documentGeneration: message.documentGeneration, observationRevision: 0,
+              ...(current.paused ? { pauseReason: "requested" as const } : {}),
+              elements: new Map(), allowedOrigins: new Set([page.origin]),
+            }
+            current.tabs.set(owned.id, owned)
+            Deferred.doneUnsafe(pending.deferred, Effect.succeed({ callID: pending.callID, tab: publicTab(owned), status: "completed" }))
+            current.pending = undefined
+            return
+          }
           const tab = current.tabs.get(message.tabID)
+          if (!tab && !(pending?.kind === "open" && message.type === "error")) return
+          if (message.type === "error" && pending?.kind === "open" &&
+              pending.callID === message.callID && pending.tabID === message.tabID &&
+              message.generation === current.generation) {
+            Deferred.doneUnsafe(pending.deferred, Effect.fail(new BridgeError({ message: "Chrome could not open a background tab" })))
+            current.pending = undefined
+            return
+          }
           if (!tab) return
           if (message.type === "takeover") {
             tab.documentGeneration = message.documentGeneration
             tab.observationRevision = 0
             tab.elements.clear()
-            tab.status = message.active ? "paused" : current.paused ? "paused" : "shared"
-            if (message.active) tab.pauseReason = "user_active"
-            else if (current.paused) tab.pauseReason = "requested"
+            tab.status = current.paused ? "paused" : "shared"
+            if (current.paused) tab.pauseReason = "requested"
             else delete tab.pauseReason
             return
           }
           if (message.type === "updated") {
             const page = safePageMaybe(message.url)
             if (!page) return
+            if (tab.mode === "owned" && !tab.allowedOrigins?.has(page.origin)) {
+              current.tabs.delete(tab.id)
+              current.transport.send({ type: "close", callID: "unapproved-origin", tabID: tab.id, generation: current.generation })
+              return
+            }
             tab.title = bounded(message.title, Browser.MAX_TITLE_LENGTH)
             tab.page = page
             tab.documentGeneration = message.documentGeneration
@@ -683,7 +818,6 @@ export const layer = (options: Options = {}) =>
             tab.elements.clear()
             return
           }
-          const pending = current.pending
           if (!pending || pending.callID !== message.callID || pending.tabID !== message.tabID) return
           if (message.generation !== current.generation) return
           if (message.type === "error") {
@@ -700,7 +834,7 @@ export const layer = (options: Options = {}) =>
                   1024,
                 ),
               }
-              remember(current, pending.fingerprint, uncertain)
+              remember(current, pending.fingerprint, uncertain, `${pending.sessionID}\0${pending.callID}`)
               Deferred.doneUnsafe(pending.deferred, Effect.succeed(uncertain))
               current.pending = undefined
               return
@@ -712,12 +846,19 @@ export const layer = (options: Options = {}) =>
                 status: "rejected",
                 message: bounded(`The extension rejected the action before dispatch: ${message.message}`, 1024),
               }
-              remember(current, pending.fingerprint, rejected)
+              remember(current, pending.fingerprint, rejected, `${pending.sessionID}\0${pending.callID}`)
               Deferred.doneUnsafe(pending.deferred, Effect.succeed(rejected))
               current.pending = undefined
               return
             }
             Deferred.doneUnsafe(pending.deferred, Effect.fail(new BridgeError({ message: message.message })))
+            current.pending = undefined
+            return
+          }
+          if (message.type === "closed" && pending.kind === "close") {
+            const result: ActionResult = { callID: pending.callID, tab: publicTab(tab), status: "completed" }
+            current.tabs.delete(tab.id)
+            Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
             current.pending = undefined
             return
           }
@@ -767,8 +908,9 @@ export const layer = (options: Options = {}) =>
             status: message.status,
             message: message.message,
             capture: message.capture,
+            groupID: message.groupID,
           }
-          remember(current, pending.fingerprint, result)
+          remember(current, pending.fingerprint, result, `${pending.sessionID}\0${pending.callID}`)
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))
           current.pending = undefined
         })
@@ -789,7 +931,7 @@ export const layer = (options: Options = {}) =>
       })
 
       yield* events.subscribe([SessionEvent.Moved, SessionEvent.Deleted, SessionEvent.Archived]).pipe(
-        Stream.runForEach((event) => releaseSession(event.data.sessionID, event.type.slice("session.".length))),
+        Stream.runForEach((event) => releaseSession(event.data.sessionID)),
         Effect.forkScoped({ startImmediately: true }),
       )
 
@@ -809,22 +951,22 @@ export const layer = (options: Options = {}) =>
       )
 
       const authenticatePairing = Effect.fn("Browser.authenticatePairing")(function* (
-        sessionID: Browser.Tab["sessionID"],
         extensionID: string,
         secret: string,
       ) {
         const expected = pairing
         const supplied = createHash("sha256").update(secret).digest()
         const valid =
-          expected?.sessionID === sessionID &&
+          expected !== undefined &&
           expected.expiresAt > Date.now() &&
           expected.attempts < MAX_PAIRING_ATTEMPTS &&
           expected.digest.byteLength === supplied.byteLength &&
           timingSafeEqual(expected.digest, supplied)
         if (!valid) {
-          if (expected?.sessionID === sessionID) expected.attempts++
+          if (expected) expected.attempts++
           return yield* new AuthenticationError({ message: "Invalid or expired Chrome pairing" })
         }
+        yield* assertSession(expected.sessionID)
         pairing = undefined
         if (pairingExpiryTimer) clearTimeout(pairingExpiryTimer)
         pairingExpiryTimer = undefined
@@ -838,41 +980,64 @@ export const layer = (options: Options = {}) =>
             metadata: {
               type: "browser-extension-trust",
               extensionID,
-              locationKey,
               serverID: expected.serverID,
-              sessionID,
+              sessionID: expected.sessionID,
             },
           },
         })
-        return { serverID: expected.serverID, secret: credential }
+        return { sessionID: expected.sessionID, serverID: expected.serverID, secret: credential }
       })
 
       const authenticateTrust = Effect.fn("Browser.authenticateTrust")(function* (
-        sessionID: Browser.Tab["sessionID"],
         extensionID: string,
         handshake: Extract<BrowserProtocol.Handshake, { readonly type: "authenticate" }>,
       ) {
         const trust = yield* loadTrust()
         const supplied = createHash("sha256").update(handshake.credential).digest()
         const valid =
-          trust?.sessionID === sessionID &&
-          trust.extensionID === extensionID &&
+          trust?.extensionID === extensionID &&
           trust.serverID === handshake.serverID &&
-          trust.locationKey === locationKey &&
           trust.digest.byteLength === supplied.byteLength &&
           timingSafeEqual(trust.digest, supplied)
         if (!valid) return yield* new AuthenticationError({ message: "Unknown or revoked Chrome pairing" })
-        return { serverID: trust.serverID, secret: undefined }
+        return { sessionID: trust.sessionID, serverID: trust.serverID, secret: undefined }
       })
 
-      return Service.of({ status, list, start, observe, action, control, stop, forget, attach })
+      return Service.of({ status, list, start, open, close, observe, clickDestination, action, control, stop, forget, attach })
     }),
   )
 
+class CoordinatorService extends Context.Service<CoordinatorService, Interface>()("@ycoding/v2/BrowserCoordinator") {}
+
+const coordinatorLayer = Layer.effect(
+  CoordinatorService,
+  Effect.map(Service, (browser) => CoordinatorService.of(browser)),
+).pipe(
+  Layer.provide(
+    layer().pipe(
+      Layer.provide(
+        Layer.effect(
+          BrowserAdmission.Service,
+          Effect.map(BrowserAdmission.CoordinatorService, (admission) => BrowserAdmission.Service.of(admission)),
+        ),
+      ),
+    ),
+  ),
+)
+
+const coordinatorNode = makeGlobalNode({
+  service: CoordinatorService,
+  layer: coordinatorLayer,
+  deps: [BrowserAdmission.coordinatorNode, Credential.node, EventV2.node, SessionStore.node],
+})
+
 export const node = makeLocationNode({
   service: Service,
-  layer: layer(),
-  deps: [BrowserAdmission.node, Credential.node, EventV2.node, Location.node, SessionStore.node],
+  layer: Layer.effect(
+    Service,
+    Effect.map(CoordinatorService, (browser) => Service.of(browser)),
+  ),
+  deps: [coordinatorNode],
 })
 
 function safePage(input: string): Browser.Page {

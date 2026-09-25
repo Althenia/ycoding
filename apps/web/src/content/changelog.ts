@@ -22,6 +22,28 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.1",
+    date: "2026-09-25",
+    title: "Chrome and desktop control",
+    tags: ["Added", "Changed", "Fixed"],
+    changes: [
+      { tag: "Added", text: "Pair Chrome from the Mini or full Session and use eligible open tabs, including the active tab." },
+      { tag: "Added", text: "Open Session-owned background Chrome tabs and group or ungroup eligible inactive profile tabs." },
+      { tag: "Added", text: "Inspect, capture, and control one targeted macOS app window with Accessibility and Screen Recording authorization." },
+      { tag: "Added", text: "Record Runpod Ollama cached-input and request-timing diagnostics in Session usage when reported by the worker." },
+      { tag: "Added", text: "Select refreshed Muse Spark models, including the 1.3 contributor entry, with updated catalog pricing." },
+      { tag: "Changed", text: "Read and capture paired Chrome tabs with site permission but without a hard access review; profile mutations still require hard human review." },
+      { tag: "Changed", text: "Use isolated browsing with installed Chrome 152 or newer on macOS arm64." },
+      { tag: "Changed", text: "Use the GSD agent for direct or delegated delivery with verification." },
+      { tag: "Changed", text: "Install or update the macOS CLI with a signed computer-helper app and replacement rollback." },
+      { tag: "Changed", text: "Keep model-visible tool definitions stable across eligible provider-cache requests; reuse remains provider-controlled." },
+      { tag: "Changed", text: "Reload the Chrome extension with the matching 0.7.1 backend for bridge protocol 3; re-pair if its connection is lost." },
+      { tag: "Fixed", text: "Keep the selected model and variant in sync across the Session header and variant picker." },
+      { tag: "Fixed", text: "Start landing-screen goals against the returned Session ID." },
+      { tag: "Fixed", text: "Restore paired Chrome tabs after reconnect and clean up incomplete pairing attempts." },
+    ],
+  },
+  {
     version: "0.7.0",
     date: "2026-09-24",
     title: "A clearer remote workspace",

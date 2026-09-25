@@ -7,9 +7,10 @@ import { SessionTable } from "@ycoding-ai/core/session/sql"
 import { WorkspaceV2 } from "@ycoding-ai/core/workspace"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
-import { HttpRouter } from "effect/unstable/http"
+import { HttpRouter, HttpServerRequest } from "effect/unstable/http"
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { InvalidRequestError, SessionNotFoundError } from "@ycoding-ai/protocol/errors"
+import { isBrowserConnectURL } from "@ycoding-ai/protocol/groups/browser"
 import type { LocationServices } from "../location"
 
 export class SessionLocationMiddleware extends HttpApiMiddleware.Service<
@@ -33,6 +34,11 @@ export const sessionLocationLayer = Layer.effect(
     return SessionLocationMiddleware.of((effect) =>
       Effect.gen(function* () {
         const route = yield* HttpRouter.RouteContext
+        const request = yield* HttpServerRequest.HttpServerRequest
+        if (isBrowserConnectURL(new URL(request.url, "http://localhost")))
+          return yield* effect.pipe(
+            Effect.provide(locations.get(Location.Ref.make({ directory: AbsolutePath.make(process.cwd()) }))),
+          )
         const sessionID = yield* decodeSessionID(sessionLocationID(route.params)).pipe(
           Effect.mapError(
             () =>

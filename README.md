@@ -9,6 +9,7 @@ Work on repositories from your terminal, with durable sessions and explicit cont
 - **Durable work:** preserve session history, pending prompts, and orchestration state.
 - **Background subagents:** delegate work with inherited permission limits.
 - **Repository-native customization:** configure agents, commands, skills, hooks, and MCP tools.
+- **Local browser and computer control:** use [paired Chrome-profile tabs, including the active tab, or agent-owned tabs](./docs/browser-extension.md) and [scoped macOS windows](./docs/computer-use.md) with site permissions and hard human review for profile mutations, owned opens, and desktop windows.
 - **On-demand knowledge:** save and search linked workspace Markdown with an [offline graph and reader](./docs/memory.md), without automatic transcript extraction or recall.
 
 YCoding is terminal-first—the TUI is the primary surface. The [remote web client](https://ycoding.althenia.app/remote/) lets the signed-in owner of a connected machine control its existing and future local Sessions from desktop, tablet, or mobile.
@@ -25,7 +26,7 @@ The agent, repository, filesystem, shell, tools, and model execution remain in t
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
 ```
 
-The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. Follow its PATH instructions, then open a new terminal and run:
+The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. macOS releases from v0.7.1 also install a signed computer helper app; window control requires Accessibility and Screen Recording grants to that installed app. Follow the PATH instructions, then open a new terminal and run:
 
 ```sh
 ycoding

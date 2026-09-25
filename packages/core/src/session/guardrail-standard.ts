@@ -74,6 +74,27 @@ const reviews: ReadonlyArray<{ readonly id: string; readonly pattern: RegExp; re
 ]
 
 export function match(action: string, resource: string, paths?: Paths): Match | undefined {
+  if (action === "browser_profile_mutation")
+    return {
+      id: "standard.review.browser-profile-mutation",
+      decision: "ask",
+      reason: `Chrome profile mutation: ${resource}`,
+      hardReview: true,
+    }
+  if (action === "browser_owned_open")
+    return {
+      id: "standard.review.browser-owned-open",
+      decision: "ask",
+      reason: `Agent-owned Chrome tab access: ${resource}`,
+      hardReview: true,
+    }
+  if (action === "computer")
+    return {
+      id: "standard.review.desktop-access",
+      decision: "ask",
+      reason: `Desktop window access: ${resource}`,
+      hardReview: true,
+    }
   if (action === "mcp_execute")
     return {
       id: "standard.review.mcp-execute",

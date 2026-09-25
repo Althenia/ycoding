@@ -464,6 +464,7 @@ export type ProjectArtifactConfidence = {
 
 export type BrowserStatus = {
   state: "unavailable" | "pairing" | "connected" | "paused"
+  profileGranted?: boolean
   generation?: number
   pairingExpiresAt?: number
   extensionID?: string
@@ -2110,6 +2111,7 @@ export type BrowserTab = {
   observationRevision: number
   pauseReason?: "user_active" | "requested" | "uncertain" | "disconnected"
   uncertainCallID?: string
+  mode?: "owned" | "profile"
 }
 
 export type BrowserElement = {
@@ -2450,6 +2452,7 @@ export type BrowserActionResult = {
   status: "completed" | "paused" | "rejected" | "uncertain"
   message?: string
   capture?: BrowserCaptureOutput
+  groupID?: number
 }
 
 export type IsolatedBrowserStatus = {
@@ -7406,6 +7409,24 @@ export type BrowserObserveInput = {
 
 export type BrowserObserveOutput = { data: BrowserObservation }["data"]
 
+export type BrowserOpenInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly generation: { readonly generation: number; readonly url: string; readonly callID: string }["generation"]
+  readonly url: { readonly generation: number; readonly url: string; readonly callID: string }["url"]
+  readonly callID: { readonly generation: number; readonly url: string; readonly callID: string }["callID"]
+}
+
+export type BrowserOpenOutput = { data: BrowserTab }["data"]
+
+export type BrowserCloseInput = {
+  readonly sessionID: { readonly sessionID: string }["sessionID"]
+  readonly tabID: { readonly tabID: string; readonly generation: number; readonly callID: string }["tabID"]
+  readonly generation: { readonly tabID: string; readonly generation: number; readonly callID: string }["generation"]
+  readonly callID: { readonly tabID: string; readonly generation: number; readonly callID: string }["callID"]
+}
+
+export type BrowserCloseOutput = void
+
 export type BrowserActionInput = {
   readonly sessionID: { readonly sessionID: string }["sessionID"]
   readonly tabID: {
@@ -7420,6 +7441,8 @@ export type BrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
   }["tabID"]
   readonly generation: {
     readonly tabID: string
@@ -7433,6 +7456,8 @@ export type BrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
   }["generation"]
   readonly documentGeneration: {
     readonly tabID: string
@@ -7446,6 +7471,8 @@ export type BrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
   }["documentGeneration"]
   readonly observationRevision: {
     readonly tabID: string
@@ -7459,6 +7486,8 @@ export type BrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
   }["observationRevision"]
   readonly callID: {
     readonly tabID: string
@@ -7472,6 +7501,8 @@ export type BrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
   }["callID"]
   readonly action: {
     readonly tabID: string
@@ -7485,6 +7516,8 @@ export type BrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
   }["action"]
 }
 
@@ -7564,6 +7597,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["tabID"]
   readonly generation: {
@@ -7578,6 +7613,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["generation"]
   readonly documentGeneration: {
@@ -7592,6 +7629,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["documentGeneration"]
   readonly observationRevision: {
@@ -7606,6 +7645,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["observationRevision"]
   readonly callID: {
@@ -7620,6 +7661,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["callID"]
   readonly action: {
@@ -7634,6 +7677,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["action"]
   readonly instanceID: {
@@ -7648,6 +7693,8 @@ export type IsolatedBrowserActionInput = {
       | { readonly type: "type"; readonly ref: string; readonly text: string }
       | { readonly type: "scroll"; readonly deltaY: number }
       | { readonly type: "capture" }
+      | { readonly type: "group"; readonly tabIDs: ReadonlyArray<string>; readonly title: string }
+      | { readonly type: "ungroup"; readonly tabIDs: ReadonlyArray<string>; readonly groupID: number }
     readonly instanceID: string
   }["instanceID"]
 }

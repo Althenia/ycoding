@@ -1,10 +1,7 @@
-export const VERSION = 2
+export const VERSION = 3
 export const MAX_CAPTURE_BYTES = 1024 * 1024
 export const MAX_ELEMENTS = 200
 export const MAX_SHARED_TABS = 8
-
-const ACTION_GUARD_UNAVAILABLE =
-  "Chrome's extension debugger API cannot enforce the required no-download guard; navigate, click, and type are unavailable"
 
 export function validateServerURL(input) {
   const url = new URL(input)
@@ -15,11 +12,10 @@ export function validateServerURL(input) {
   return url
 }
 
-export function connectURL(serverURL, sessionID) {
+export function connectURL(serverURL) {
   const url = validateServerURL(serverURL)
-  if (!/^ses_[A-Za-z0-9_-]+$/.test(sessionID)) throw new Error("Invalid YCoding Session ID")
   url.protocol = "ws:"
-  url.pathname = `/api/session/${encodeURIComponent(sessionID)}/browser/connect`
+  url.pathname = "/api/browser/connect"
   return url.toString()
 }
 
@@ -36,8 +32,4 @@ export function safePage(input) {
 
 export function tabID() {
   return `btab_${crypto.randomUUID().replaceAll("-", "")}`
-}
-
-export function actionGuardFailure(action) {
-  return ["navigate", "click", "type"].includes(action) ? ACTION_GUARD_UNAVAILABLE : undefined
 }
