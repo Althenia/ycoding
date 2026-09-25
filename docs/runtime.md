@@ -685,7 +685,7 @@ The `subagents` section enters attention mode when any subagent has a pending qu
 
 ### Shells section
 
-The sidebar shells section (`SHELLS`) summarizes running shells grouped by owner (Main chat, Subagent, Unknown session). The summary shows counts of running, terminal, and orphaned shells. Orphaned shells trigger the attention state. Each group row shows the owner label and count.
+The sidebar shells section (`SHELLS`) summarizes running shells grouped by owner (Main chat, Subagent, Unknown session). The summary shows counts of running, terminal, and orphaned shells. A shell whose owning Session is not loaded in the TUI stays hidden while the TUI fetches that Session, then groups under its resolved owner; it is orphaned only when that fetch fails or the shell records no owner. Orphaned shells trigger the attention state. Each group row shows the owner label and count.
 
 ### Subagents section
 

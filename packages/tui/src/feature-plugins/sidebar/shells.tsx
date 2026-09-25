@@ -1,5 +1,6 @@
 import { Plugin } from "@ycoding-ai/plugin/tui"
 import { createEffect, createMemo, For, Show } from "solid-js"
+import { createStore } from "solid-js/store"
 import { useTheme } from "../../context/theme"
 import { RailRow, RailSection, useRail } from "../../routes/session/rail-section"
 import { groupSessionShells, type SessionShellGroup } from "../../util/session"
@@ -64,7 +65,25 @@ export function ShellRailContent(props: {
 
 function View(props: { context: Plugin.Context; sessionID: string; shellSurface?: () => boolean }) {
   const session = createMemo(() => props.context.data.session.get(props.sessionID))
-  const shells = createMemo(() => props.context.data.shell.list(session()?.location))
+  // Owner IDs whose Session lookup failed; only these shells are orphaned.
+  const [missing, setMissing] = createStore<Record<string, true>>({})
+  const located = createMemo(() => props.context.data.shell.list(session()?.location))
+  const unresolvedOwners = createMemo(() => [
+    ...new Set(
+      located().flatMap((shell) => {
+        const ownerID = shell.metadata.sessionID
+        if (typeof ownerID !== "string" || props.context.data.session.get(ownerID)) return []
+        return [ownerID]
+      }),
+    ),
+  ])
+  // A shell whose owner is still loading stays hidden so it never flashes as orphaned.
+  const shells = createMemo(() =>
+    located().filter((shell) => {
+      const ownerID = shell.metadata.sessionID
+      return typeof ownerID !== "string" || !unresolvedOwners().includes(ownerID) || missing[ownerID]
+    }),
+  )
   const groups = createMemo(() => {
     const sessions = props.context.data.session.list()
     const terminalOrphans = shells().filter((shell) => {
@@ -84,6 +103,11 @@ function View(props: { context: Plugin.Context; sessionID: string; shellSurface?
   const terminalCount = createMemo(() => shells().filter((shell) => shell.status !== "running").length)
 
   createEffect(() => void props.context.data.shell.sync(session()?.location))
+  createEffect(() =>
+    unresolvedOwners()
+      .filter((ownerID) => !missing[ownerID])
+      .forEach((ownerID) => void props.context.data.session.sync(ownerID).catch(() => setMissing(ownerID, true))),
+  )
 
   return <ShellRailContent groups={groups()} terminalCount={terminalCount()} shellSurface={props.shellSurface} />
 }

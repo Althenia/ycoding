@@ -327,6 +327,62 @@ test("keeps the rail top below the header across autonomy modes and retained goa
   }
 }, 60_000)
 
+test("resolves a shell owner that is not loaded before grouping it instead of flagging it orphaned", async () => {
+  const childID = "ses_child_not_loaded"
+  const owner = Promise.withResolvers<Response>()
+  let ownerRequested = false
+  const app = await mountSidebar({ width: 189, height: 69 }, [], undefined, (url) => {
+    if (url.pathname === "/api/shell") return json({ location, data: [runningShell("sh_child", childID)] })
+    if (url.pathname !== `/api/session/${childID}`) return undefined
+    ownerRequested = true
+    return owner.promise
+  })
+  try {
+    await waitFor(() => ownerRequested)
+    expect(app.captureCharFrame()).not.toContain("SHELLS")
+
+    owner.resolve(json({ data: { ...session, id: childID, parentID: sessionID, agent: "docs-sync", title: "Sync docs" } }))
+    await app.waitForFrame((frame) => /SHELLS\s+1\/1 running/.test(frame))
+    expect(app.captureCharFrame()).not.toContain("orphaned")
+  } finally {
+    app.dispose()
+  }
+})
+
+test("flags a shell orphaned when its owner session cannot be resolved", async () => {
+  const app = await mountSidebar({ width: 189, height: 69 }, [], undefined, (url) => {
+    if (url.pathname === "/api/shell") return json({ location, data: [runningShell("sh_gone", "ses_deleted_owner")] })
+    if (url.pathname === "/api/session/ses_deleted_owner") return new Response("not found", { status: 404 })
+    return undefined
+  })
+  try {
+    await app.waitForFrame((frame) => /SHELLS\s+1\/1 running · 1 orphaned/.test(frame))
+  } finally {
+    app.dispose()
+  }
+})
+
+function runningShell(id: string, ownerID: string) {
+  return {
+    id,
+    status: "running",
+    command: "bun test",
+    cwd: directory,
+    shell: "/bin/sh",
+    file: `/tmp/${id}`,
+    metadata: { sessionID: ownerID },
+    time: { started: 1 },
+  }
+}
+
+async function waitFor(condition: () => boolean, timeout = 2000) {
+  const deadline = Date.now() + timeout
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting for condition")
+    await Bun.sleep(10)
+  }
+}
+
 async function mount(body: () => JSX.Element, dimensions: { width: number; height: number }) {
   const app = await testRender(
     () => (
@@ -356,9 +412,10 @@ async function mountSidebar(
   viewport: { width: number; height: number },
   mcp: ReadonlyArray<McpFixture> = [],
   autonomy: SessionAutonomyState = { mode: "normal", yolo: false },
+  override?: (url: URL) => Response | Promise<Response> | undefined,
 ) {
   const events = createEventStream()
-  const calls = createFetch((url) => route(url, mcp), events)
+  const calls = createFetch((url) => override?.(url) ?? route(url, mcp), events)
   const [canvas, setCanvas] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
   const [rail, setRail] = createSignal<ReturnType<typeof useTheme>["themeV2"]>()
 

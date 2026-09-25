@@ -502,6 +502,11 @@ export const layer = (options?: ShellSelect.Options) =>
                   )
               }
 
+              // Publish creation before any watcher can publish exit: a command that ended during setup
+              // resolves its exit watcher synchronously, and clients that saw exit first would keep the
+              // shell listed as running.
+              yield* events.publish(Shell.Event.Created, { info })
+
               session.timeout = (duration) =>
                 Effect.gen(function* () {
                   if (session.timeoutFiber) yield* Fiber.interrupt(session.timeoutFiber)
@@ -526,7 +531,6 @@ export const layer = (options?: ShellSelect.Options) =>
                 ),
               )
 
-              yield* events.publish(Shell.Event.Created, { info })
               yield* Deferred.succeed(ready, session)
               // Hold the handle's scope open until the command terminates; closing it earlier would
               // release (kill) the process before its exit is observed.
