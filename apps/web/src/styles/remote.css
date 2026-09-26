@@ -214,6 +214,15 @@ body:has(.app) {
   font-size: var(--yc-size-xs);
 }
 
+.remote-device__select .custom-select__value {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.remote-device__surface .custom-select__option {
+  font-size: var(--yc-size-xs);
+}
+
 .remote-connection {
   display: inline-flex;
   align-items: center;

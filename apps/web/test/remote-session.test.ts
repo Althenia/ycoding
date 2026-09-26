@@ -234,12 +234,13 @@ describe("remote store integration", () => {
         if (request.operation !== "session.list") return "default"
         if (request.input?.cursor === "initial-tail") {
           await oldPage.promise
-          return { ok: true, value: { data: [row("ses_stable")] } }
+          return { ok: true, value: { data: [row("ses_stable")], cursor: { next: "superseded-tail" } } }
         }
         if (request.input?.cursor === "created-tail") {
           await createdPage.promise
-          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")] } }
+          return { ok: true, value: { data: [row("ses_deleted"), row("ses_stable")], cursor: { next: "superseded-tail" } } }
         }
+        if (request.input?.cursor === "superseded-tail") return { ok: true, value: { data: [] } }
         if (request.input?.cursor === "final-tail") return { ok: true, value: { data: [row("ses_stable")] } }
         return { ok: true, value: {
           data: [row(phase === "initial" ? "ses_deleted" : "ses_created")],
@@ -271,7 +272,9 @@ describe("remote store integration", () => {
       await waitFor(() => store.state().sessions.length === 2)
       oldPage.resolve()
       createdPage.resolve()
-      await waitFor(() => settledPages === 6)
+      await waitFor(() => settledPages >= 6)
+      await Bun.sleep(20)
+      expect(relay.requests.filter((request) => request.input?.cursor === "superseded-tail")).toEqual([])
       expect(store.state().sessions.map((session) => session.id)).toEqual(["ses_created", "ses_stable"])
       expect(published.filter((ids) => ids.length > 0).every((ids) => ids.join(",") === "ses_created,ses_stable")).toBe(true)
     } finally {

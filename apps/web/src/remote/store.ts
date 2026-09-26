@@ -618,11 +618,12 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     }
   }
 
-  const readAllSessions = async (owner: RemoteTransport): Promise<RemoteRequestOutcome> => {
+  const readAllSessions = async (owner: RemoteTransport, token: number): Promise<RemoteRequestOutcome | undefined> => {
     const data: unknown[] = []
     const seen = new Set<string>()
     let cursor: string | undefined
     for (;;) {
+      if (token !== sessionsToken) return undefined
       const page = await owner.request("session.list", {
         input: { limit: 200, ...(cursor === undefined ? {} : { cursor }) },
       })
@@ -647,13 +648,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
     const active = transport
     if (!active) return
     const [listed, activeStatus] = await Promise.all([
-      readAllSessions(active),
+      readAllSessions(active, token),
       // Optional read: a connection that cannot answer it leaves `running` unknown.
       active.request("session.active"),
     ])
     // A read that settles after its connection was replaced, or after a newer
     // Session invalidation arrived, describes a list this store no longer shows.
-    if (token !== sessionsToken || !isCurrentConnection(active)) return
+    if (token !== sessionsToken || !isCurrentConnection(active) || listed === undefined) return
     if (listed.status !== "ok") {
       // An open, authenticated browser relay reports this exact structured response
       // when its selected device has no local agent. Transport failures and every

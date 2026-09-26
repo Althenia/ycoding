@@ -22,6 +22,17 @@ export type ReleaseEntry = {
 
 export const RELEASES: readonly ReleaseEntry[] = [
   {
+    version: "0.7.4",
+    date: "2026-09-26",
+    title: "Remote request pacing and readable machine names",
+    tags: ["Fixed"],
+    changes: [
+      { tag: "Fixed", text: "Pace remote requests within relay rate limits so large Session inventories can load without a client-rate policy disconnect; the workspace still loads the complete inventory." },
+      { tag: "Fixed", text: "Stop superseded Session list reads before fetching more pages and discard unsent requests when their connection closes, without replaying mutations." },
+      { tag: "Fixed", text: "Wrap long machine names instead of truncating them and use compact picker text on desktop and phones while preserving keyboard controls and mobile confirmation." },
+    ],
+  },
+  {
     version: "0.7.3",
     date: "2026-09-26",
     title: "Remote sessions and background desktop control",

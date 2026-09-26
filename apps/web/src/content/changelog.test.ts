@@ -6,6 +6,20 @@ const TAGS = ["Added", "Changed", "Fixed"] as const
 describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     expect(RELEASES[0]).toEqual({
+      version: "0.7.4",
+      date: "2026-09-26",
+      title: "Remote request pacing and readable machine names",
+      tags: ["Fixed"],
+      changes: [
+        { tag: "Fixed", text: "Pace remote requests within relay rate limits so large Session inventories can load without a client-rate policy disconnect; the workspace still loads the complete inventory." },
+        { tag: "Fixed", text: "Stop superseded Session list reads before fetching more pages and discard unsent requests when their connection closes, without replaying mutations." },
+        { tag: "Fixed", text: "Wrap long machine names instead of truncating them and use compact picker text on desktop and phones while preserving keyboard controls and mobile confirmation." },
+      ],
+    })
+  })
+
+  test("retains the 0.7.3 release content", () => {
+    expect(RELEASES.find((item) => item.version === "0.7.3")).toEqual({
       version: "0.7.3",
       date: "2026-09-26",
       title: "Remote sessions and background desktop control",
@@ -95,7 +109,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 9)).toEqual(["0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6"])
+    expect(versions.slice(0, 10)).toEqual(["0.7.4", "0.7.3", "0.7.2", "0.7.1", "0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)

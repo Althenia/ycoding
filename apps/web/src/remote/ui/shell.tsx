@@ -457,6 +457,7 @@ function RemoteHeader(props: {
         <div class="remote-device">
           <CustomSelect
             class="remote-device__select"
+            surfaceClass="remote-device__surface"
             label="Machine"
             sheetTitle="Select Active Machine"
             sheetSubtitle="Online machines you can connect to"

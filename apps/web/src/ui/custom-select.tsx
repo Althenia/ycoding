@@ -18,6 +18,7 @@ export function CustomSelect(props: {
   readonly options: readonly CustomSelectOption[]
   readonly disabled?: boolean
   readonly class?: string
+  readonly surfaceClass?: string
   readonly sheetTitle?: string
   readonly sheetSubtitle?: string
   /** Content under the options; activating anything in it closes the menu. */
@@ -227,7 +228,7 @@ export function CustomSelect(props: {
       <Show when={open()}>
         <Portal>
           <Show when={compact()} fallback={
-            <div ref={surface} class="custom-select__surface" style={{
+            <div ref={surface} class={`custom-select__surface${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} style={{
               "--custom-select-left": `${placement().left}px`,
               "--custom-select-top": `${placement().top}px`,
               "--custom-select-width": `${placement().width}px`,
@@ -241,7 +242,7 @@ export function CustomSelect(props: {
               {options()}
             </div>
           }>
-            <Modal class="overlay--sheet custom-select__dialog" label={props.sheetTitle ?? props.label} onClose={() => closeMenu(true)}>
+            <Modal class={`overlay--sheet custom-select__dialog${props.surfaceClass ? ` ${props.surfaceClass}` : ""}`} label={props.sheetTitle ?? props.label} onClose={() => closeMenu(true)}>
               <p class="custom-select__subtitle">{props.sheetSubtitle ?? "Available options"}</p>
               {options()}
               <button

@@ -65,6 +65,8 @@ const deviceMode = accountParams.get("devices")
 const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sessions") === "empty"
 if (remoteScenarioData !== undefined) localStorage.setItem("ycoding.theme", remoteScenarioData.theme)
 if (remoteScenarioData !== undefined) devices = remoteScenarioData.devices
+const machineName = accountParams.get("machineName")
+if (machineName !== null) devices = devices.map((device, index) => index === 0 ? { ...device, name: machineName } : device)
 if (deviceMode === "none") devices = []
 if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
 if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))

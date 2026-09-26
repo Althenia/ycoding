@@ -1,5 +1,6 @@
 import {
   RemoteCloseCode,
+  RemoteLimits,
   parseAgentMessage,
   parseChunkedValue,
   type RemoteError,
@@ -76,10 +77,13 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   let connectedOnce = false
   let cancelFlush: (() => void) | undefined
   let timer: (() => void) | undefined
+  let cancelOutbound: (() => void) | undefined
+  const outbound: { readonly frame: unknown; readonly onSend?: () => void }[] = []
+  const sentAt: number[] = []
 
   const pending = new Map<
     string,
-    { readonly resolve: (outcome: RemoteRequestOutcome) => void; readonly cancel: () => void; chunks?: Map<number, string> }
+    { readonly resolve: (outcome: RemoteRequestOutcome) => void; cancel: () => void; sent: boolean; chunks?: Map<number, string> }
   >()
   let nextID = 0
 
@@ -89,9 +93,12 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
   }
 
   const settlePending = (outcome: RemoteRequestOutcome) => {
+    cancelOutbound?.()
+    cancelOutbound = undefined
+    outbound.length = 0
     for (const entry of pending.values()) {
       entry.cancel()
-      entry.resolve(outcome)
+      entry.resolve(entry.sent ? outcome : { status: "unavailable", reason: "not-connected" })
     }
     pending.clear()
   }
@@ -130,6 +137,7 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
       const reconnected = connectedOnce
       connectedOnce = true
       attempt = 0
+      sentAt.length = 0
       publish({ kind: "open" })
       if (reconnected) handlers.onReconnect?.()
       timer = schedule(() => send({ type: "ping" }), pingIntervalMs)
@@ -163,9 +171,29 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     })
   }
 
-  const send = (frame: unknown): boolean => {
+  const flushOutbound = () => {
+    cancelOutbound?.()
+    cancelOutbound = undefined
+    if (socket === undefined || socket.readyState !== 1) return
+    const now = performance.now()
+    while (sentAt[0] !== undefined && now - sentAt[0] >= RemoteLimits.clientRateWindowMs) sentAt.shift()
+    while (outbound.length > 0 && sentAt.length < RemoteLimits.maxClientRequestsPerWindow) {
+      const entry = outbound.shift()!
+      entry.onSend?.()
+      socket.send(JSON.stringify(entry.frame))
+      sentAt.push(performance.now())
+    }
+    if (outbound.length > 0)
+      cancelOutbound = schedule(
+        flushOutbound,
+        Math.max(1, Math.ceil(RemoteLimits.clientRateWindowMs - (performance.now() - sentAt[0]!))),
+      )
+  }
+
+  const send = (frame: unknown, onSend?: () => void): boolean => {
     if (socket === undefined || socket.readyState !== 1) return false
-    socket.send(JSON.stringify(frame))
+    outbound.push({ frame, onSend })
+    flushOutbound()
     return true
   }
 
@@ -248,27 +276,31 @@ export function createRemoteTransport(options: RemoteTransportOptions): RemoteTr
     const id = `req_${nextID}_${Math.floor(random() * 1_000_000).toString(36)}`
     return new Promise<RemoteRequestOutcome>((resolve) => {
       const timeout = input.timeoutMs ?? requestTimeoutMs
-      const cancel =
-        timeout > 0
-          ? schedule(() => {
+      const entry = { resolve, cancel: () => {}, sent: false }
+      pending.set(id, entry)
+      const sent = send(
+        {
+          type: "request",
+          id,
+          operation,
+          ...(input.sessionID === undefined ? {} : { sessionID: input.sessionID }),
+          ...(input.input === undefined ? {} : { input: input.input }),
+        },
+        () => {
+          entry.sent = true
+          if (timeout > 0)
+            entry.cancel = schedule(() => {
               if (!pending.delete(id)) return
               resolve({
                 status: "unknown",
                 error: { code: "outcome_unknown", message: "The request did not settle before the timeout" },
               })
             }, timeout)
-          : () => {}
-      pending.set(id, { resolve, cancel })
-      const sent = send({
-        type: "request",
-        id,
-        operation,
-        ...(input.sessionID === undefined ? {} : { sessionID: input.sessionID }),
-        ...(input.input === undefined ? {} : { input: input.input }),
-      })
+        },
+      )
       if (sent) return
       pending.delete(id)
-      cancel()
+      entry.cancel()
       resolve({ status: "unavailable", reason: "not-connected" })
     })
   }
