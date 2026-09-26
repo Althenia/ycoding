@@ -125,6 +125,82 @@ test("Session command creates a one-time Chrome pairing code only on explicit re
   }
 })
 
+test("Chrome pairing code survives status polls and paired disconnects never offer implicit re-pairing", async () => {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  let statuses = 0
+  const requests: string[] = []
+  const result = await renderBrowser({
+    command: true,
+    baseUrl: "http://127.0.0.1:43210",
+    fetch: (url, request) => {
+      if (url.pathname === `/api/session/${first.sessionID}/browser` && request.method === "GET") {
+        statuses += 1
+        return json({ data: { state: "unavailable", paired: false } })
+      }
+      if (url.pathname === `/api/session/${first.sessionID}/browser/start`) {
+        requests.push(request.method)
+        return json({ data: { secret: "p".repeat(43), expiresAt: Date.now() + 120_000 } })
+      }
+      return undefined
+    },
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+    void commands().find((command) => command.id === "session.browser.chrome")!.run()
+    await result.app.waitForFrame((frame) => frame.includes("Chrome connection"))
+    result.app.mockInput.pressKey("p")
+    await result.app.waitForFrame((frame) => frame.includes("p".repeat(43)))
+    await Bun.sleep(4100)
+    expect(statuses).toBeGreaterThanOrEqual(2)
+    expect(result.app.captureCharFrame()).toContain("p".repeat(43))
+    expect(result.app.captureCharFrame()).not.toContain("Loading")
+    result.app.mockInput.pressKey("r")
+    await Bun.sleep(10)
+    expect(result.app.captureCharFrame()).toContain("p".repeat(43))
+    expect(result.app.captureCharFrame()).toContain("Pairing code (expires in two minutes)")
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
+test("paired Chrome status offers explicit forget instead of another pairing code", async () => {
+  let commands!: Accessor<readonly KeymapCommand[]>
+  const requests: string[] = []
+  const result = await renderBrowser({
+    command: true,
+    baseUrl: "http://127.0.0.1:43210",
+    fetch: (url, request) => {
+      requests.push(request.method)
+      if (url.pathname === `/api/session/${first.sessionID}/browser`)
+        return json({ data: { state: "unavailable", paired: true } })
+      if (url.pathname === `/api/session/${first.sessionID}/browser/pairing` && request.method === "DELETE")
+        return json({ data: undefined }, { status: 204 })
+      return undefined
+    },
+    fixture: () => {
+      commands = Keymap.useCommands()
+      return <SessionIsolatedBrowserCommand sessionID={first.sessionID} location={first.location} />
+    },
+  })
+  try {
+    await result.app.waitFor(() => commands().some((command) => command.id === "session.browser.chrome"))
+    void commands().find((command) => command.id === "session.browser.chrome")!.run()
+    await result.app.waitForFrame((frame) => frame.includes("Paired; waiting for Chrome to reconnect"))
+    expect(result.app.captureCharFrame()).not.toContain("create pairing code")
+    const posts = requests.filter((method) => method === "POST")
+    result.app.mockInput.pressKey("p")
+    await Bun.sleep(10)
+    expect(requests.filter((method) => method === "POST")).toEqual(posts)
+    expect(result.app.captureCharFrame()).toContain("f forget pairing")
+  } finally {
+    result.app.renderer.destroy()
+  }
+})
+
 test("Chrome connection dialog describes profile-wide pairing without a separate grant", async () => {
   let commands!: Accessor<readonly KeymapCommand[]>
   const result = await renderBrowser({

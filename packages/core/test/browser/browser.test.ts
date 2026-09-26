@@ -157,6 +157,15 @@ async function pairedTrust(browser: Browser.Interface, session = sessionID) {
 }
 
 describe("paired Chrome browser service", () => {
+  test("reports durable pairing while the extension is disconnected", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const paired = yield* Effect.promise(() => pairedTrust(browser))
+      yield* paired.attachment.detach
+      expect(yield* browser.status(sessionID)).toMatchObject({ state: "unavailable", paired: true })
+    }))
+  })
+
   test("an active profile tab remains controllable until an explicit pause", async () => {
     await run(Effect.gen(function* () {
       const browser = yield* Browser.Service

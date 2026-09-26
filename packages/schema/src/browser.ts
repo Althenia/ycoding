@@ -73,6 +73,7 @@ export type BridgeState = typeof BridgeState.Type
 
 export const Status = Schema.Struct({
   state: BridgeState,
+  paired: Schema.Boolean.pipe(optional),
   profileGranted: Schema.Boolean.pipe(optional),
   generation: Generation.pipe(optional),
   pairingExpiresAt: NonNegativeInt.pipe(optional),

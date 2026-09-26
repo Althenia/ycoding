@@ -50,6 +50,7 @@ import type {
 } from "./types"
 import type { RunTheme } from "./theme"
 import { modelInfo } from "./variant.shared"
+import type { Browser } from "@ycoding-ai/schema/browser"
 
 registerYCodingSpinner()
 
@@ -106,6 +107,8 @@ type RunFooterViewProps = {
   onQueuedRemove: (messageID: string) => Promise<boolean>
   browserAddress?: () => string | undefined
   onChromePair?: (signal: AbortSignal) => Promise<{ secret: string; expiresAt: number }>
+  onChromeStatus?: (signal: AbortSignal) => Promise<Browser.Status>
+  onChromeForget?: (signal: AbortSignal) => Promise<void>
 }
 
 export function RunFooterView(props: RunFooterViewProps) {
@@ -699,15 +702,17 @@ export function RunFooterView(props: RunFooterViewProps) {
                               composer.submitText("/new")
                               closePanel()
                             }}
-                            onChrome={props.onChromePair ? () => setRoute({ type: "chrome" }) : undefined}
+                            onChrome={props.onChromePair && props.onChromeStatus && props.onChromeForget ? () => setRoute({ type: "chrome" }) : undefined}
                             onExit={props.onExit}
                           />
                         </Match>
-                        <Match when={chrome() && props.onChromePair}>
+                        <Match when={chrome() && props.onChromePair && props.onChromeStatus && props.onChromeForget}>
                           <RunChromePairingBody
                             theme={theme}
                             address={props.browserAddress}
                             onStart={props.onChromePair!}
+                            onStatus={props.onChromeStatus!}
+                            onForget={props.onChromeForget!}
                             onClose={closePanel}
                           />
                         </Match>

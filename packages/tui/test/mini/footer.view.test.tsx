@@ -122,6 +122,8 @@ async function renderFooter(
     onFormReply?: (input: unknown) => void
     browserAddress?: string
     onChromePair?: () => Promise<{ secret: string; expiresAt: number }>
+    onChromeStatus?: () => Promise<{ state: "unavailable" | "connected" | "pairing" | "paused"; paired?: boolean }>
+    onChromeForget?: () => Promise<void>
     agents?: RunAgent[]
     references?: RunReference[]
   } = {},
@@ -156,6 +158,8 @@ async function renderFooter(
           onFormCancel={() => {}}
           browserAddress={input.browserAddress ? () => input.browserAddress : undefined}
           onChromePair={input.onChromePair}
+          onChromeStatus={input.onChromeStatus ?? (async () => ({ state: "unavailable" }))}
+          onChromeForget={input.onChromeForget ?? (async () => {})}
           onCycle={input.onCycle ?? (() => {})}
           onInterrupt={() => false}
           onEditorOpen={async () => undefined}
@@ -830,6 +834,40 @@ test("closing Mini Chrome pairing ignores a pending response and does not submit
     await app.renderOnce()
     expect(app.captureCharFrame()).not.toContain("late-code")
     expect(app.captureCharFrame()).not.toContain("Local service address")
+  } finally {
+    app.cleanup()
+  }
+})
+
+test("Mini paired Chrome view hides pair and exposes deliberate forget", async () => {
+  const starts: number[] = []
+  const forgets: number[] = []
+  const app = await renderFooter({
+    browserAddress: "http://127.0.0.1:43094",
+    onChromePair: async () => {
+      starts.push(1)
+      return { secret: "unused", expiresAt: Date.now() + 120_000 }
+    },
+    onChromeStatus: async () => ({ state: "unavailable", paired: true }),
+    onChromeForget: async () => {
+      forgets.push(1)
+    },
+  })
+  try {
+    app.mockInput.pressKey("p", { ctrl: true })
+    await app.renderOnce()
+    await app.mockInput.typeText("chr")
+    await app.renderOnce()
+    app.mockInput.pressEnter()
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("Chrome is paired; waiting for Chrome to reconnect.")
+    expect(app.captureCharFrame()).not.toContain("Press p to create")
+    app.mockInput.pressKey("p")
+    await app.renderOnce()
+    expect(starts).toHaveLength(0)
+    app.mockInput.pressKey("f")
+    await app.renderOnce()
+    expect(forgets).toHaveLength(1)
   } finally {
     app.cleanup()
   }

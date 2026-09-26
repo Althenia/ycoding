@@ -2,7 +2,7 @@ import type { IsolatedBrowserStatus, SessionInfo } from "@ycoding-ai/client"
 import { IsolatedBrowser } from "@ycoding-ai/schema/isolated-browser"
 import { TextAttributes } from "@opentui/core"
 import { Option, Schema } from "effect"
-import { createEffect, createMemo, createSignal, on, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js"
 import { Keymap } from "../context/keymap"
 import { useClient } from "../context/client"
 import { useTheme } from "../context/theme"
@@ -49,27 +49,41 @@ function DialogChromeConnection(props: { sessionID: string }) {
     address?.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(address.hostname)
       ? address.origin
       : undefined
-  const [status, setStatus] = createSignal<"loading" | "connected" | "pairing" | "unavailable">("loading")
+  const [status, setStatus] = createSignal<"loading" | "connected" | "pairing" | "unavailable" | "paired">("loading")
   const [secret, setSecret] = createSignal<string>()
+  const [paired, setPaired] = createSignal(false)
   const [failure, setFailure] = createSignal(false)
   const [pending, setPending] = createSignal(false)
   let request: AbortController | undefined
+  let statusRequest: AbortController | undefined
   let expiryTimer: ReturnType<typeof setTimeout> | undefined
   let reconnectInterval: ReturnType<typeof setInterval> | undefined
 
   const refresh = () => {
-    request?.abort()
-    clearTimeout(expiryTimer)
+    statusRequest?.abort()
     const controller = new AbortController()
-    request = controller
-    setSecret()
+    statusRequest = controller
     setFailure(false)
-    setStatus("loading")
+    if (!secret() && !paired()) setStatus("loading")
     void client.api.browser
       .status({ sessionID: props.sessionID }, { signal: controller.signal })
       .then((value) => {
         if (!controller.signal.aborted) {
-          setStatus(value.state === "paused" ? "connected" : value.state)
+          const waiting = ["pairing", "unavailable", "paired"].includes(status())
+          setPaired(value.paired === true)
+          setStatus(
+            value.state === "connected" || value.state === "paused"
+              ? "connected"
+              : secret()
+                ? "pairing"
+                : value.paired
+                  ? "paired"
+                  : value.state,
+          )
+          if (waiting && value.state === "connected") {
+            dialog.clear()
+            stopReconnect()
+          }
         }
       })
       .catch(() => {
@@ -78,7 +92,7 @@ function DialogChromeConnection(props: { sessionID: string }) {
   }
 
   const pair = () => {
-    if (pending() || status() === "loading" || status() === "connected") return
+    if (pending() || paired() || status() === "loading" || status() === "connected") return
     request?.abort()
     clearTimeout(expiryTimer)
     const controller = new AbortController()
@@ -109,8 +123,31 @@ function DialogChromeConnection(props: { sessionID: string }) {
     }
   }
 
+  const forget = () => {
+    if (pending() || !paired()) return
+    const controller = new AbortController()
+    request?.abort()
+    request = controller
+    setPending(true)
+    setFailure(false)
+    void client.api.browser
+      .forget({ sessionID: props.sessionID }, { signal: controller.signal })
+      .then(() => {
+        if (controller.signal.aborted) return
+        setPaired(false)
+        setStatus(secret() ? "pairing" : "unavailable")
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFailure(true)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPending(false)
+      })
+  }
+
   onCleanup(() => {
     request?.abort()
+    statusRequest?.abort()
     clearTimeout(expiryTimer)
     stopReconnect()
     setSecret()
@@ -120,23 +157,17 @@ function DialogChromeConnection(props: { sessionID: string }) {
     commands: [
       { bind: "p", title: "Create Chrome pairing code", group: "Dialog", run: pair },
       { bind: "r", title: "Refresh Chrome connection", group: "Dialog", run: () => !pending() && refresh() },
+      { bind: "f", title: "Forget Chrome pairing", group: "Dialog", run: forget },
     ],
   }))
   createEffect(on(() => props.sessionID, refresh))
 
-  createEffect(() => {
-    if (status() !== "pairing" && status() !== "unavailable") return
+  onMount(() => {
     reconnectInterval = setInterval(() => {
-      const current = status()
-      if (current === "connected") {
-        dialog.clear()
-        stopReconnect()
-        return
-      }
-      if (current === "loading" || current === "pairing") refresh()
+      refresh()
     }, 2000)
-    onCleanup(stopReconnect)
   })
+  onCleanup(stopReconnect)
 
   return (
     <box paddingBottom={1} flexDirection="column">
@@ -169,6 +200,8 @@ function DialogChromeConnection(props: { sessionID: string }) {
               ? "Connected to YCoding"
               : status() === "loading"
                 ? "Loading"
+                : status() === "paired"
+                  ? "Paired; waiting for Chrome to reconnect"
                 : "Not connected"}
         </text>
         <Show when={secret()}>
@@ -180,8 +213,11 @@ function DialogChromeConnection(props: { sessionID: string }) {
           </text>
         </Show>
         <text>
-          <Show when={!failure() && !pending() && ["pairing", "unavailable"].includes(status())}>
+          <Show when={!failure() && !pending() && !paired() && ["pairing", "unavailable"].includes(status())}>
             <b>p</b> create pairing code{" "}
+          </Show>
+          <Show when={!failure() && !pending() && paired()}>
+            <b>f</b> forget pairing{" "}
           </Show>
           <b>r</b> refresh
         </text>

@@ -464,6 +464,7 @@ export type ProjectArtifactConfidence = {
 
 export type BrowserStatus = {
   state: "unavailable" | "pairing" | "connected" | "paused"
+  paired?: boolean
   profileGranted?: boolean
   generation?: number
   pairingExpiresAt?: number

@@ -245,6 +245,23 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           return result
         }
       : undefined,
+    onChromeStatus: input.browserAddress
+      ? async (signal) => {
+          const sdk = state.sdk
+          if (!state.sessionID) throw new Error("Session is not ready")
+          const result = await sdk.browser.status({ sessionID: state.sessionID }, { signal })
+          if (sdk !== state.sdk) throw new Error("Service changed during pairing status refresh")
+          return result
+        }
+      : undefined,
+    onChromeForget: input.browserAddress
+      ? async (signal) => {
+          const sdk = state.sdk
+          if (!state.sessionID) throw new Error("Session is not ready")
+          await sdk.browser.forget({ sessionID: state.sessionID }, { signal })
+          if (sdk !== state.sdk) throw new Error("Service changed during pairing forget")
+        }
+      : undefined,
     onPermissionReply: async (next) => {
       if (state.demo?.permission(next)) {
         return

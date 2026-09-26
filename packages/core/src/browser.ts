@@ -231,7 +231,7 @@ export const layer = (options: Options = {}) =>
         return { ...info, sessionID: tab.mode === "owned" ? tab.sessionID : sessionID }
       }
 
-      function bridgeStatus(sessionID: Browser.Tab["sessionID"]): Status {
+      function bridgeStatus(sessionID: Browser.Tab["sessionID"], paired: boolean): Status {
         if (connection) {
           return {
             state: !connection.connected
@@ -239,6 +239,7 @@ export const layer = (options: Options = {}) =>
               : connection.paused || connection.pending?.timedOut
                 ? "paused"
                 : "connected",
+            paired,
             generation: connection.generation,
             extensionID: connection.extensionID,
             profileGranted: connection.profileGranted,
@@ -252,7 +253,7 @@ export const layer = (options: Options = {}) =>
           pairingExpiryTimer = undefined
           admission.release(sessionID, "selected")
         }
-        return { state: "unavailable" }
+        return { state: "unavailable", paired }
       }
 
       const requireConnection = Effect.fn("Browser.requireConnection")(function* (sessionID: Browser.Tab["sessionID"]) {
@@ -330,7 +331,8 @@ export const layer = (options: Options = {}) =>
 
       const status = Effect.fn("Browser.status")(function* (sessionID: Browser.Tab["sessionID"]) {
         yield* assertSession(sessionID)
-        return admission.current(sessionID) === "isolated" ? { state: "unavailable" as const } : bridgeStatus(sessionID)
+        if (admission.current(sessionID) === "isolated") return { state: "unavailable" as const }
+        return bridgeStatus(sessionID, !!(yield* loadTrust()))
       })
 
       const list = Effect.fn("Browser.list")(function* (sessionID: Browser.Tab["sessionID"]) {
@@ -603,7 +605,7 @@ export const layer = (options: Options = {}) =>
             return yield* new FenceError({ message: "Cannot pause while a browser action is still settling" })
           current.paused = true
           current.transport.send({ type: "control", action: "pause" })
-          return bridgeStatus(sessionID)
+          return bridgeStatus(sessionID, !!(yield* loadTrust()))
         }
         if (current.pending)
           return yield* new FenceError({ message: "Cannot resume while an action has an uncertain or pending result" })
@@ -617,7 +619,7 @@ export const layer = (options: Options = {}) =>
           }
         }
         current.transport.send({ type: "control", action: "resume" })
-        return bridgeStatus(sessionID)
+        return bridgeStatus(sessionID, !!(yield* loadTrust()))
       })
 
       const stop = Effect.fn("Browser.stop")(function* (sessionID: Browser.Tab["sessionID"]) {

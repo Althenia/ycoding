@@ -155,7 +155,7 @@ export const BrowserHandler = HttpApiBuilder.group(Api, "server.browser", (handl
             (handshake.type !== "pair" && handshake.type !== "authenticate") ||
             handshake.extensionID !== extensionID
           ) {
-            close(4403, "authentication required")
+            close(4400, "authentication required")
             yield* drain(outbox, write)
             return HttpServerResponse.empty()
           }

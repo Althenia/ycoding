@@ -110,6 +110,27 @@ describe("Chrome bridge service worker", () => {
     expect(harness.alarms.created).toEqual([])
   })
 
+  test("Chrome startup wakes a saved pairing without requiring the alarm to persist", async () => {
+    harness.reset()
+    await popup(harness.runtimeMessages, {
+      type: "pair",
+      serverURL: "http://127.0.0.1:4096",
+      secret: "c".repeat(32),
+    })
+    const first = harness.FakeWebSocket.instance
+    first.readyState = 3
+    await harness.runtimeStartup.emit()
+    await waitFor(() => harness.FakeWebSocket.instance !== first)
+    expect(harness.FakeWebSocket.instance.outgoing[0]).toMatchObject({
+      type: "authenticate",
+      serverID: "server-paired",
+    })
+    await harness.FakeWebSocket.instance.emit("close", { code: 4400 })
+    expect(harness.storage.browserPairing).toBeDefined()
+    expect((await popup(harness.runtimeMessages, { type: "status" })).paired).toBe(true)
+    await popup(harness.runtimeMessages, { type: "forget" })
+  })
+
   test("revokes an authenticated bridge when the pairing cannot be saved", async () => {
     harness.reset()
     const save = harness.chrome.storage.local.set
@@ -989,6 +1010,7 @@ describe("Chrome bridge service worker", () => {
 
 function createHarness() {
   const runtimeMessages = listeners()
+  const runtimeStartup = listeners()
   const tabActivations = listeners()
   const tabCreated = listeners()
   const tabUpdated = listeners()
@@ -1119,6 +1141,7 @@ function createHarness() {
 
   return {
     runtimeMessages,
+    runtimeStartup,
     tabActivations,
     debuggerEvents,
     commands,
@@ -1142,6 +1165,7 @@ function createHarness() {
       runtime: {
         id: "extension-test",
         onMessage: runtimeMessages,
+        onStartup: runtimeStartup,
       },
       action: {
         setBadgeText: async (input) => {

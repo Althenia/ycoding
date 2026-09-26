@@ -107,6 +107,13 @@ chrome.runtime.onMessage.addListener((message, _sender, respond) => {
   return true
 })
 
+chrome.runtime.onStartup.addListener(() => {
+  if (!pairing?.enabled) return
+  void ensureRecoveryAlarm()
+    .then(() => reconnect())
+    .catch(() => scheduleReconnect())
+})
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RECONNECT_ALARM) {
     reconnectScheduled = false

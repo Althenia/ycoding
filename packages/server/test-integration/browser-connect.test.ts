@@ -81,7 +81,20 @@ test("pairs an exact Chrome extension origin without URL secrets and exposes an 
     )
     await opened(stale)
     stale.send(JSON.stringify({ type: "pair", version: 2, extensionID, secret: pairing.secret }))
-    expect((await staleClosed).code).toBe(4403)
+    expect((await staleClosed).code).toBe(4400)
+    expect((await (await request(`/api/session/${sessionID}/browser`)).json()).data).toMatchObject({
+      state: "pairing",
+    })
+
+    const malformed = new HeaderWebSocket(`${base.replace("http://", "ws://")}/api/browser/connect`, {
+      headers: { Origin: `chrome-extension://${extensionID}` },
+    })
+    const malformedClosed = new Promise<CloseEvent>((resolve) =>
+      malformed.addEventListener("close", (event) => resolve(event), { once: true }),
+    )
+    await opened(malformed)
+    malformed.send("not-json")
+    expect((await malformedClosed).code).toBe(4400)
     expect((await (await request(`/api/session/${sessionID}/browser`)).json()).data).toMatchObject({
       state: "pairing",
     })
