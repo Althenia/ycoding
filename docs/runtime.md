@@ -174,6 +174,8 @@ The provider sees one fixed `execute` tool definition. Its description explains 
 
 The live catalog remains available inside CodeMode through `search(...)` and exact runtime tool paths. Direct non-CodeMode tool definition changes still rotate the prompt-cache namespace.
 
+OpenAI Chat and Responses project top-level tool input unions into one object, preserving every distinct property alternative and requiring fields common to every branch. Branch-specific fields remain optional in the provider schema; canonical tool input validation enforces action-specific requirements before execution.
+
 MCP server instruction blocks are sorted by server ID, normalized to LF line endings, stripped of trailing whitespace, and limited to 2,048 UTF-8 bytes per server with an explicit truncation marker. These instructions can still change when server guidance changes, but their ordering and size are deterministic and bounded.
 
 ### Provider prompt caching

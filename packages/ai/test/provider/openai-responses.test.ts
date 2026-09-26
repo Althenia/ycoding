@@ -213,7 +213,7 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
-  it.effect("flattens top-level object unions in function schemas", () =>
+  it.effect("flattens top-level object unions without discarding property alternatives", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
         LLM.updateRequest(request, {
@@ -256,7 +256,12 @@ describe("OpenAI Responses route", () => {
             properties: {
               path: { type: "string" },
               reference: { type: "string" },
-              limit: { type: "integer", maximum: 2000 },
+              limit: {
+                anyOf: [
+                  { type: "integer", maximum: 2000 },
+                  { type: "integer", maximum: 51200 },
+                ],
+              },
               resource: { type: "string" },
             },
             additionalProperties: false,

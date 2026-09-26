@@ -134,6 +134,54 @@ describe("tool schema projections", () => {
     })
   })
 
+  test("openai preserves property alternatives and common requirements when flattening object unions", () => {
+    expect(
+      ToolSchemaProjection.openAI({
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["list"] },
+              scope: { type: "string", enum: ["repository", "knowledge"] },
+              limit: { type: "integer", maximum: 100 },
+            },
+            required: ["action"],
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["search"] },
+              scope: { type: "string", enum: ["repository", "knowledge"] },
+              limit: { type: "integer", maximum: 50 },
+              query: { type: "string" },
+            },
+            required: ["action", "query"],
+          },
+        ],
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        action: {
+          anyOf: [
+            { type: "string", enum: ["list"] },
+            { type: "string", enum: ["search"] },
+          ],
+        },
+        scope: { type: "string", enum: ["repository", "knowledge"] },
+        limit: {
+          anyOf: [
+            { type: "integer", maximum: 100 },
+            { type: "integer", maximum: 50 },
+          ],
+        },
+        query: { type: "string" },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    })
+  })
+
   it.effect("applies model compatibility before protocol projection", () =>
     Effect.gen(function* () {
       const model = OpenAIChat.route

@@ -1,3 +1,4 @@
+import { Schema } from "effect"
 import type { JsonSchema, ModelToolSchemaCompatibility } from "../../schema"
 import { isRecord } from "../../utils/record"
 import { GeminiToolSchema } from "./gemini-tool-schema"
@@ -47,16 +48,28 @@ const moonshot = (schema: JsonSchema): JsonSchema => {
 
 const openAI = (schema: JsonSchema): JsonSchema => {
   const variants = Array.isArray(schema.anyOf) ? schema.anyOf.filter(isRecord) : []
+  const encode = Schema.encodeSync(Schema.UnknownFromJsonString)
+  const required = (Array.isArray(variants[0]?.required) ? variants[0].required : []).filter((name) =>
+    variants.every((variant) => Array.isArray(variant.required) && variant.required.includes(name)),
+  )
   const flattened =
     variants.length === 0
       ? { ...schema, type: "object" }
       : {
           ...Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "anyOf")),
           type: "object",
-          properties: variants.reduce(
-            (properties, variant) => ({ ...(isRecord(variant.properties) ? variant.properties : {}), ...properties }),
-            {},
+          properties: Object.fromEntries(
+            [
+              ...Map.groupBy(
+                variants.flatMap((variant) => (isRecord(variant.properties) ? Object.entries(variant.properties) : [])),
+                ([name]) => name,
+              ),
+            ].map(([name, properties]) => {
+              const alternatives = [...new Map(properties.map(([, value]) => [encode(value), value])).values()]
+              return [name, alternatives.length === 1 ? alternatives[0] : { anyOf: alternatives }]
+            }),
           ),
+          ...(required.length > 0 ? { required } : {}),
           additionalProperties: false,
         }
   const normalized = removeNullSchemas(flattened)

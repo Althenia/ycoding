@@ -2,6 +2,9 @@ import { expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { Effect, Layer } from "effect"
+import { LLM } from "@ycoding-ai/ai"
+import { OpenAIChat, OpenAIResponses } from "@ycoding-ai/ai/protocols"
+import { Auth, LLMClient } from "@ycoding-ai/ai/route"
 import { MemoryTool } from "@ycoding-ai/core/tool/memory"
 import { Guardrail } from "@ycoding-ai/schema/guardrail"
 import { Memory } from "@ycoding-ai/core/memory"
@@ -50,11 +53,52 @@ test("R5-F exposes on-demand memory and enforces permissions/guardrail lifetime 
   ])
   await Effect.runPromise(Effect.gen(function* () {
     const registry = yield* ToolRegistry.Service
-    expect((yield* toolDefinitions(registry)).map((definition) => definition.name)).toContain("memory")
+    const definitions = yield* toolDefinitions(registry)
+    expect(definitions.map((definition) => definition.name)).toContain("memory")
+    const chat = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+      LLM.request({
+        model: OpenAIChat.route.with({ auth: Auth.bearer("test") }).model({ id: "tool-schema-fixture" }),
+        prompt: "Search repository memory.",
+        tools: definitions,
+      }),
+    )
+    const responses = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+      LLM.request({
+        model: OpenAIResponses.route.with({ auth: Auth.bearer("test") }).model({ id: "gpt-5" }),
+        prompt: "Search repository memory.",
+        tools: definitions,
+      }),
+    )
+    const responseTool = responses.body.tools
+      ?.filter((tool) => tool.type === "function")
+      .find((tool) => tool.name === "memory")
+    for (const parameters of [
+      chat.body.tools?.find((tool) => tool.function.name === "memory")?.function.parameters,
+      responseTool?.parameters,
+    ]) {
+      expect(parameters).toMatchObject({
+        type: "object",
+        required: ["action"],
+        properties: {
+          action: {
+            anyOf: [
+              "status", "list", "search", "read", "trash", "vacuum", "graph", "write", "delete", "restore", "purge",
+            ].map((action) => ({ type: "string", enum: [action] })),
+          },
+          scope: { type: "string", enum: ["repository", "knowledge"] },
+          query: { type: "string" },
+          content: { type: "string" },
+        },
+      })
+      expect(parameters).not.toHaveProperty("anyOf")
+    }
     const call = (input: Record<string, unknown>) => executeTool(registry, {
       sessionID: SessionV2.ID.make("ses_memory_test"), ...toolIdentity,
       call: { type: "tool-call", id: `call-${state.actions.length}`, name: "memory", input },
     })
+    expect((yield* call({ query: "build" })).type).toBe("error")
+    expect((yield* call({ action: "write", id: "guide" })).type).toBe("error")
+    expect(state.actions).toEqual([])
     state.catalogDenied = true
     expect((yield* call({ action: "write", id: "guide", content: note() })).type).toBe("error")
     expect(state.actions).toEqual([])
