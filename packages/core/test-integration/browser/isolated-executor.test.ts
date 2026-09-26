@@ -634,6 +634,7 @@ async function positiveDownloadControl(origin: string) {
       "--headless=new",
       `--user-data-dir=${join(root, "profile")}`,
       "--remote-debugging-pipe",
+      "--use-mock-keychain",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",

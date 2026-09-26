@@ -12,14 +12,26 @@ import { Tool } from "./tool"
 export const name = "browser"
 
 const Mode = Schema.Literals(["isolated", "owned", "profile"]).pipe(Schema.optional)
+const integer = <S extends Schema.Constraint>(schema: S) =>
+  Schema.Union([schema, Schema.NumberFromString.pipe(Schema.decodeTo(schema))])
 const StatusOperation = Schema.Struct({ operation: Schema.Literal("status"), mode: Mode })
 const TabsOperation = Schema.Struct({ operation: Schema.Literal("tabs"), mode: Mode })
 const { sessionID: _observeSessionID, callID: _observeCallID, ...ObserveFields } = Browser.Schema.ObserveInput.fields
 const { sessionID: _actionSessionID, callID: _actionCallID, ...ActionFields } = Browser.Schema.ActionInput.fields
+const ActionPayload = Schema.Union([
+  Browser.Schema.Navigate,
+  Browser.Schema.Click,
+  Browser.Schema.Type,
+  Schema.Struct({ ...Browser.Schema.Scroll.fields, deltaY: integer(Browser.Schema.Scroll.fields.deltaY) }),
+  Browser.Schema.Capture,
+  Browser.Schema.Group,
+  Schema.Struct({ ...Browser.Schema.Ungroup.fields, groupID: integer(Browser.Schema.Ungroup.fields.groupID) }),
+])
 const ObserveOperation = Schema.Struct({
   operation: Schema.Literal("observe"),
   mode: Schema.Literals(["owned", "profile"]).pipe(Schema.optional),
   ...ObserveFields,
+  generation: integer(Browser.Schema.Generation),
 })
 const {
   sessionID: _isolatedObserveSessionID,
@@ -30,11 +42,16 @@ const IsolatedObserveOperation = Schema.Struct({
   operation: Schema.Literal("observe"),
   mode: Schema.Literal("isolated"),
   ...IsolatedObserveFields,
+  generation: integer(Browser.Schema.Generation),
 })
 const ActionOperation = Schema.Struct({
   operation: Schema.Literal("action"),
   mode: Schema.Literals(["owned", "profile"]).pipe(Schema.optional),
   ...ActionFields,
+  generation: integer(Browser.Schema.Generation),
+  documentGeneration: integer(Browser.Schema.DocumentGeneration),
+  observationRevision: integer(Browser.Schema.ObservationRevision),
+  action: ActionPayload,
 })
 const {
   sessionID: _isolatedActionSessionID,
@@ -45,6 +62,10 @@ const IsolatedActionOperation = Schema.Struct({
   operation: Schema.Literal("action"),
   mode: Schema.Literal("isolated"),
   ...IsolatedActionFields,
+  generation: integer(Browser.Schema.Generation),
+  documentGeneration: integer(Browser.Schema.DocumentGeneration),
+  observationRevision: integer(Browser.Schema.ObservationRevision),
+  action: ActionPayload,
 })
 const ControlOperation = Schema.Struct({
   operation: Schema.Literal("control"),
@@ -53,8 +74,9 @@ const ControlOperation = Schema.Struct({
 })
 const StopOperation = Schema.Struct({ operation: Schema.Literal("stop"), mode: Schema.Literal("isolated").pipe(Schema.optional) })
 const OpenOperation = Schema.Struct({ operation: Schema.Literal("open"), mode: Schema.Literal("owned"),
-  generation: Browser.Schema.Generation, url: Browser.Schema.OpenInput.fields.url })
-const CloseOperation = Schema.Struct({ operation: Schema.Literal("close"), mode: Schema.Literal("owned"), tabID: Browser.TabID, generation: Browser.Schema.Generation })
+  generation: integer(Browser.Schema.Generation), url: Browser.Schema.OpenInput.fields.url })
+const CloseOperation = Schema.Struct({ operation: Schema.Literal("close"), mode: Schema.Literal("owned"), tabID: Browser.TabID,
+  generation: integer(Browser.Schema.Generation) })
 
 export const Input = Schema.Union([
   StatusOperation,
@@ -104,7 +126,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Operate eligible existing/future tabs in paired Chrome by default, mode:'owned' agent-created background tabs, or mode:'isolated' temporary headless browser started by the user. Explicit mode:'profile' also selects paired Chrome tabs. Profile tabs can group and ungroup granted inactive tabs using action type group/ungroup. Owned mode only creates and closes its own tabs. Use status/tabs first, observe before actions, and preserve generation fences. Never replay uncertain mutations.",
+              "Use status once, then tabs. Reuse returned tabID, generation, documentGeneration, and observationRevision fences exactly as numbers; never invent refs. Observe for semantic refs, then act only by a returned ref. Action results return updated tab fences, not a semantic observation; carry those fences forward for actions without refs, and observe again before another ref-based action because each action invalidates prior refs. Capture only when semantic observation is insufficient. On a stale-fence error, observe once and retry once; never replay an uncertain mutation—observe first. Prefer mode:'owned' background tabs for new work so user tabs stay untouched. Paired Chrome is the default; mode:'profile' selects it explicitly, and mode:'isolated' uses the user-started temporary headless browser. Profile tabs can group or ungroup granted inactive tabs. Owned mode only creates and closes its own tabs.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => {
@@ -152,7 +174,7 @@ export const Plugin = {
                     })
                   const reservation = yield* guardrail.assert({
                     sessionID: context.sessionID, action: "browser_owned_open", resources: [resource],
-                    metadata: { operation: "open" },
+                    metadata: { operation: "open" }, skipReview: true,
                   })
                   const tab = yield* browser.open({ sessionID: context.sessionID, generation: input.generation,
                     url: input.url, callID: context.callID })
@@ -183,7 +205,8 @@ export const Plugin = {
                   yield* permission.assert({ action: "browser_read", resources: [`${tab.page.origin}${tab.page.path}`],
                     save: [tab.page.origin], metadata: { operation: "close" }, sessionID: context.sessionID, agent: context.agent, source })
                   const reservation = yield* guardrail.assert({ sessionID: context.sessionID,
-                    action: "browser_mutation", resources: [`${tab.page.origin}${tab.page.path}`], metadata: { operation: "close" } })
+                    action: "browser_mutation", resources: [`${tab.page.origin}${tab.page.path}`], metadata: { operation: "close" },
+                    skipReview: true })
                   yield* browser.close({ sessionID: context.sessionID, tabID: input.tabID, generation: input.generation,
                     callID: context.callID }).pipe(Effect.ensuring(reservation.release))
                   return { type: "closed" as const, mode: "owned" as const }
@@ -307,7 +330,7 @@ export const Plugin = {
                     sessionID: context.sessionID, agent: context.agent, source })
                   const reservation = yield* guardrail.assert({ sessionID: context.sessionID,
                     action: "browser_profile_mutation", resources,
-                    metadata: { operation: input.action.type } })
+                    metadata: { operation: input.action.type }, skipReview: true })
                   const result = yield* browser.action({ sessionID: context.sessionID, tabID: input.tabID,
                     generation: input.generation, documentGeneration: input.documentGeneration,
                     observationRevision: input.observationRevision, callID: context.callID,
@@ -402,6 +425,7 @@ export const Plugin = {
                       action: profileMode ? "browser_profile_mutation" : "browser_mutation",
                       resources: destination ? [resource, destination] : [resource],
                       metadata: { operation: input.action.type },
+                      skipReview: true,
                     })
                   : { release: Effect.void }
                 const result = isolatedMode

@@ -1,6 +1,6 @@
 export * as Computer from "./computer"
 
-import { Context, Effect, Layer, Schema, Stream } from "effect"
+import { Context, Effect, Layer, Schema, Semaphore, Stream } from "effect"
 import { makeGlobalNode, makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { AppProcess } from "./process"
@@ -24,6 +24,8 @@ export type Error = NativeError | OwnershipError
 
 export interface Interface {
   readonly status: Effect.Effect<Status>
+  readonly list: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string }) => Effect.Effect<NativeSuccess, Error>
+  readonly launch: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: string }) => Effect.Effect<NativeSuccess, Error>
   readonly inspect: (input: {
     readonly sessionID: SessionSchema.ID
     readonly callID: string
@@ -62,6 +64,13 @@ interface Active {
 
 const callKey = (sessionID: SessionSchema.ID, callID: string) => `${sessionID}\0${callID}`
 
+const desktopMutation = (request: NativeRequest) =>
+  request.action.startsWith("desktop.") &&
+  request.action !== "desktop.inspect" &&
+  request.action !== "desktop.capture" &&
+  request.action !== "desktop.list" &&
+  request.action !== "desktop.launch"
+
 interface Coordinator {
   readonly service: (locationToken: object) => Interface
   readonly releaseSession: (sessionID: SessionSchema.ID) => Effect.Effect<void>
@@ -76,6 +85,7 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
   const claims = new Map<string, Claim>()
   const activeCalls = new Map<string, Active>()
   const activeTargets = new Map<string, Active>()
+  const desktopInput = Semaphore.makeUnsafe(1)
 
   const begin = Effect.fnUntraced(function* (
     locationToken: object,
@@ -128,7 +138,10 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
   ) =>
     Effect.gen(function* () {
       const active = yield* begin(locationToken, input.sessionID, input.callID, input.target, expectedRevision)
-      const result = yield* invoke(request, active.controller.signal).pipe(
+      const dispatch = invoke(request, active.controller.signal)
+      // Raw desktop input briefly moves the user's key focus and restores it; overlapping calls on different
+      // windows would each save the other's target as the user's focus, so desktop mutations run one at a time.
+      const result = yield* (desktopMutation(request) ? desktopInput.withPermit(dispatch) : dispatch).pipe(
         Effect.tap(() =>
           active.controller.signal.aborted
             ? Effect.fail(new OwnershipError({ message: "Computer call was cancelled; inspect the target again" }))
@@ -159,6 +172,24 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
       return result
     })
 
+  const runUnclaimed = (
+    locationToken: object,
+    input: { readonly sessionID: SessionSchema.ID; readonly callID: string },
+    request: NativeRequest,
+  ) => Effect.gen(function* () {
+    const invocationKey = callKey(input.sessionID, input.callID)
+    if (activeCalls.has(invocationKey))
+      return yield* new OwnershipError({ message: "This Session already has an active computer call with that ID" })
+    const active: Active = { locationToken, token: {}, sessionID: input.sessionID, callID: input.callID,
+      targetKey: `unclaimed\0${invocationKey}`, controller: new AbortController() }
+    activeCalls.set(invocationKey, active)
+    return yield* invoke(request, active.controller.signal).pipe(
+      Effect.tap(() => active.controller.signal.aborted
+        ? Effect.fail(new OwnershipError({ message: "Computer call was cancelled" })) : Effect.void),
+      Effect.ensuring(finish(active)),
+    )
+  })
+
   const releaseSession = Effect.fn("Computer.releaseSession")((sessionID: SessionSchema.ID) =>
     Effect.sync(() => {
       for (const [key, claim] of claims) if (claim.sessionID === sessionID) claims.delete(key)
@@ -188,6 +219,16 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
         state: platform === "darwin" ? "supported" : "unsupported",
         capabilities: platform === "darwin" ? MacOSComputer.capabilities : [],
       }),
+      list: Effect.fn("Computer.list")((input) =>
+        platform === "darwin"
+          ? runUnclaimed(locationToken, input, MacOSComputer.listRequest({ sessionID: input.sessionID, callID: input.callID }))
+          : Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" })),
+      ),
+      launch: Effect.fn("Computer.launch")((input) =>
+        platform === "darwin"
+          ? runUnclaimed(locationToken, input, MacOSComputer.launchRequest({ sessionID: input.sessionID, callID: input.callID }, input.bundleID))
+          : Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" })),
+      ),
       inspect: Effect.fn("Computer.inspect")((input) => {
         if (platform !== "darwin")
           return Effect.fail(

@@ -5,6 +5,7 @@ import CryptoKit
 import Foundation
 import CoreGraphics
 import ScreenCaptureKit
+import Darwin
 
 private struct Owner: Decodable {
     let sessionID: String
@@ -36,12 +37,41 @@ private struct Element: Encodable {
     let path: [Int]
     let role: String
     let label: String
+    let frame: [Double]
+    let actions: [String]
+    let enabled: Bool
+    let focused: Bool
+    let value: String?
+}
+
+private struct WindowInfo: Encodable {
+    let window_id: UInt32
+    let title: String
+    let bounds: Bounds
+    let on_screen: Bool
+}
+
+private struct Bounds: Encodable {
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
+private struct AppInfo: Encodable {
+    let bundle_id: String
+    let pid: Int32
+    let name: String
+    let is_active: Bool
+    let is_hidden: Bool
+    let windows: [WindowInfo]
 }
 
 private struct Request: Decodable {
     let action: String
     let owner: Owner
-    let target: Target
+    let target: Target?
+    let bundleID: String?
     let expectedRevision: String?
     let text: String?
     let newline: Bool?
@@ -49,6 +79,17 @@ private struct Request: Decodable {
     let element: [Int]?
     let direction: String?
     let key: String?
+    let x: Int?
+    let y: Int?
+    let button: String?
+    let count: Int?
+    let fromX: Int?
+    let fromY: Int?
+    let toX: Int?
+    let toY: Int?
+    let deltaX: Int?
+    let deltaY: Int?
+    let modifiers: [String]?
 
     enum Target: Decodable {
         case iterm(ItermTarget)
@@ -81,6 +122,14 @@ private struct Response: Encodable {
     let outcome: String?
     let elements: [Element]?
     let image: String?
+    let width: Int?
+    let height: Int?
+    let scale: Double?
+    let apps: [AppInfo]?
+    let pid: Int32?
+    let windows: [WindowInfo]?
+    let accessible: Bool?
+    let effect: String?
 }
 
 private struct ApplicationTarget {
@@ -95,9 +144,12 @@ private enum HelperError: Error {
     case staleRevision
     case targetConflict
     case nativeFailure
+    case captureFailed(String)
     case unknownOutcome
     case accessibilityDenied
     case screenRecordingDenied
+    case backgroundUnavailable
+    case focusRestoreFailed
 
     var response: Response {
         switch self {
@@ -115,22 +167,60 @@ private enum HelperError: Error {
             return failure("target_conflict", "The requested destination already exists")
         case .nativeFailure:
             return failure("native_failure", "The application rejected the native command")
+        case .captureFailed(let reason):
+            return failure("native_failure", "Window capture failed: \(reason.prefix(200))")
         case .unknownOutcome:
             return failure("unknown_outcome", "The native command may have been accepted; inspect before any further mutation", outcome: "unknown")
         case .accessibilityDenied:
             return failure("accessibility_denied", "Allow YCoding Computer Use in System Settings > Privacy & Security > Accessibility, then retry")
         case .screenRecordingDenied:
             return failure("screen_recording_denied", "Allow YCoding Computer Use in System Settings > Privacy & Security > Screen Recording, then retry")
+        case .backgroundUnavailable:
+            return failure("background_unavailable", "Target-only background input is unavailable; use an Accessibility element route")
+        case .focusRestoreFailed:
+            return failure("focus_restore_failed", "Original foreground focus could not be restored after background input; inspect before any further mutation", outcome: "unknown")
         }
     }
 }
 
 private func failure(_ code: String, _ message: String, outcome: String = "not_started") -> Response {
-    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil)
+    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, accessible: nil, effect: nil)
 }
 
-private func success(_ action: String, _ revision: String, elements: [Element]? = nil, image: String? = nil) -> Response {
-    Response(status: "ok", action: action, revision: revision, code: nil, message: nil, outcome: nil, elements: elements, image: image)
+private func success(_ action: String, _ revision: String, elements: [Element]? = nil, image: String? = nil,
+                     width: Int? = nil, height: Int? = nil, scale: Double? = nil, apps: [AppInfo]? = nil,
+                     pid: Int32? = nil, windows: [WindowInfo]? = nil, accessible: Bool? = nil, effect: String? = nil) -> Response {
+    Response(status: "ok", action: action, revision: revision, code: nil, message: nil, outcome: nil,
+             elements: elements, image: image, width: width, height: height, scale: scale, apps: apps, pid: pid, windows: windows, accessible: accessible, effect: effect)
+}
+
+private func windowInfos() -> [Int32: [WindowInfo]] {
+    let infos = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    var byPID: [Int32: [WindowInfo]] = [:]
+    for info in infos {
+        guard let pid = info[kCGWindowOwnerPID as String] as? Int32,
+              let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+              let id = info[kCGWindowNumber as String] as? UInt32,
+              let dictionary = info[kCGWindowBounds as String] as? [String: Any],
+              let rect = CGRect(dictionaryRepresentation: dictionary as CFDictionary),
+              rect.width > 0, rect.height > 0, byPID[pid, default: []].count < 32 else { continue }
+        byPID[pid, default: []].append(WindowInfo(window_id: id,
+            title: String((info[kCGWindowName as String] as? String ?? "").prefix(200)),
+            bounds: Bounds(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height),
+            on_screen: (info[kCGWindowIsOnscreen as String] as? Bool) == true))
+    }
+    return byPID
+}
+
+private func runningApps() -> [AppInfo] {
+    let windows = windowInfos()
+    return NSWorkspace.shared.runningApplications
+        .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && !$0.isTerminated }
+        .prefix(64).map { app in
+            AppInfo(bundle_id: app.bundleIdentifier ?? "", pid: app.processIdentifier,
+                    name: String((app.localizedName ?? "").prefix(200)), is_active: app.isActive,
+                    is_hidden: app.isHidden, windows: windows[app.processIdentifier] ?? [])
+        }
 }
 
 private func fourCC(_ value: String) -> UInt32 {
@@ -295,7 +385,38 @@ private func stringAttribute(_ element: AXUIElement, _ name: String) -> String {
 }
 
 private func children(_ element: AXUIElement) -> [AXUIElement] {
-    (attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(16).map { $0 }
+    (attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []).prefix(64).map { $0 }
+}
+
+private func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool {
+    (attribute(element, name) as? NSNumber)?.boolValue ?? false
+}
+
+private func imageScale(_ bounds: CGRect) -> Double {
+    min(1, 1280 / max(bounds.width, bounds.height))
+}
+
+private func elementFrame(_ element: AXUIElement, in bounds: CGRect) -> [Double]? {
+    guard let position = attribute(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
+          let size = attribute(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+    var origin = CGPoint.zero
+    var dimensions = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &origin),
+          AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions) else { return nil }
+    let scale = imageScale(bounds)
+    return [(origin.x - bounds.minX) * scale, (origin.y - bounds.minY) * scale,
+            dimensions.width * scale, dimensions.height * scale]
+}
+
+private let advertisedActions: [(String, String)] = [
+    (kAXPressAction, "press"), (kAXConfirmAction, "confirm"), (kAXIncrementAction, "increment"),
+    (kAXDecrementAction, "decrement"), (kAXShowMenuAction, "show_menu")
+]
+
+private func actionNames(_ element: AXUIElement) -> [String] {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(element, &names) == .success else { return [] }
+    return names as? [String] ?? []
 }
 
 @_silgen_name("_AXUIElementGetWindow")
@@ -332,8 +453,9 @@ private func offSpaceWindows(_ target: DesktopTarget) -> [AXUIElement] {
 }
 
 private struct DesktopWindow {
-    let element: AXUIElement
+    let element: AXUIElement?
     let bounds: CGRect
+    let title: String
 }
 
 private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
@@ -341,10 +463,6 @@ private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
           target.pid > 0, target.windowID > 0,
           let app = NSRunningApplication(processIdentifier: target.pid),
           app.bundleIdentifier == target.bundleID, !app.isTerminated else { throw HelperError.appNotRunning }
-    // Requesting trust lets macOS list this app under Accessibility and show its own allow prompt.
-    guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) else {
-        throw HelperError.accessibilityDenied
-    }
     guard let windows = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(target.windowID)) as? [[String: Any]],
           windows.count == 1, let info = windows.first,
           (info[kCGWindowOwnerPID as String] as? Int) == Int(target.pid),
@@ -353,37 +471,62 @@ private func desktopWindow(_ target: DesktopTarget) throws -> DesktopWindow {
           let bounds = CGRect(dictionaryRepresentation: dictionary as CFDictionary), bounds.width > 0, bounds.height > 0 else {
         throw HelperError.targetNotFound
     }
+    // Requesting trust lets macOS list this app under Accessibility and show its own allow prompt.
+    guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) else {
+        throw HelperError.accessibilityDenied
+    }
     let application = AXUIElementCreateApplication(target.pid)
     AXUIElementSetMessagingTimeout(application, 5)
+    enableElectronAccessibility(application)
     let listed = (attribute(application, kAXWindowsAttribute) as? [AXUIElement] ?? []).filter { windowID($0) == target.windowID }
     let onscreen = (info[kCGWindowIsOnscreen as String] as? Bool) == true
     let matches = listed.isEmpty && !onscreen ? offSpaceWindows(target) : listed
-    guard matches.count == 1, let match = matches.first else { throw HelperError.targetNotFound }
-    AXUIElementSetMessagingTimeout(match, 5)
-    return DesktopWindow(element: match, bounds: bounds)
+    guard matches.count <= 1 else { throw HelperError.targetNotFound }
+    if let match = matches.first { AXUIElementSetMessagingTimeout(match, 5) }
+    return DesktopWindow(element: matches.first, bounds: bounds, title: String((info[kCGWindowName as String] as? String ?? "").prefix(200)))
+}
+
+// Electron builds its web-content Accessibility tree only after a client sets AXManualAccessibility. Its getter
+// always reads false, so the idempotent set is repeated; the tree builds asynchronously for later inspects.
+private func enableElectronAccessibility(_ application: AXUIElement) {
+    let name = "AXManualAccessibility" as CFString
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(application, name, &settable) == .success, settable.boolValue else { return }
+    AXUIElementSetAttributeValue(application, name, kCFBooleanTrue)
 }
 
 private func desktopSnapshot(_ target: DesktopTarget) throws -> (DesktopWindow, String, [Element]) {
     let window = try desktopWindow(target)
     var entries: [Element] = []
-    var revisionParts = [target.bundleID, String(target.pid), String(target.windowID), NSStringFromRect(window.bounds), stringAttribute(window.element, kAXTitleAttribute)]
-    func visit(_ node: AXUIElement, path: [Int]) {
-        guard entries.count < 64 else { return }
+    var revisionParts = [target.bundleID, String(target.pid), String(target.windowID), NSStringFromRect(window.bounds), window.title]
+    guard let root = window.element else { return (window, sha256(revisionParts), []) }
+    var queue: [(AXUIElement, [Int])] = [(root, [])]
+    var cursor = 0
+    while cursor < queue.count && entries.count < 400 {
+        let (node, path) = queue[cursor]
+        cursor += 1
         let role = stringAttribute(node, kAXRoleAttribute)
         let label = stringAttribute(node, kAXTitleAttribute).isEmpty ? stringAttribute(node, kAXDescriptionAttribute) : stringAttribute(node, kAXTitleAttribute)
-        entries.append(Element(path: path, role: role, label: label))
-        let rawValue = attribute(node, kAXValueAttribute)
-        let value = (rawValue as? String)?.prefix(512).description ?? (rawValue as? NSNumber)?.stringValue ?? ""
-        revisionParts.append("\(path):\(role):\(label):\(value):\(stringAttribute(node, kAXEnabledAttribute)):\(stringAttribute(node, kAXFocusedAttribute))")
-        guard path.count < 5 else { return }
-        for (index, child) in children(node).enumerated() { visit(child, path: path + [index]) }
+        let secure = role == "AXSecureTextField" || role.localizedCaseInsensitiveContains("secure")
+        let rawValue = secure ? nil : attribute(node, kAXValueAttribute)
+        let value = (rawValue as? String ?? (rawValue as? NSNumber)?.stringValue).map { String($0.prefix(200)) }
+        let frame = elementFrame(node, in: window.bounds)
+        let actions = actionNames(node)
+        let enabled = boolAttribute(node, kAXEnabledAttribute)
+        let focused = boolAttribute(node, kAXFocusedAttribute)
+        entries.append(Element(path: path, role: role, label: label, frame: frame ?? [0, 0, 0, 0],
+                               actions: advertisedActions.compactMap { actions.contains($0.0) ? $0.1 : nil },
+                               enabled: enabled, focused: focused, value: value))
+        revisionParts.append("\(path):\(role):\(label):\(value ?? ""):\(enabled):\(focused):\(frame ?? []):\(actions)")
+        if path.count < 12 {
+            queue.append(contentsOf: children(node).enumerated().map { ($0.element, path + [$0.offset]) })
+        }
     }
-    visit(window.element, path: [])
     return (window, sha256(revisionParts), entries)
 }
 
 private func desktopElement(_ window: AXUIElement, path: [Int]) throws -> AXUIElement {
-    guard path.count <= 5, path.allSatisfy({ $0 >= 0 && $0 < 16 }) else { throw HelperError.invalidRequest }
+    guard path.count <= 12, path.allSatisfy({ $0 >= 0 && $0 < 64 }) else { throw HelperError.invalidRequest }
     return try path.reduce(window) { parent, index in
         let nodes = children(parent)
         guard index < nodes.count else { throw HelperError.targetNotFound }
@@ -391,82 +534,413 @@ private func desktopElement(_ window: AXUIElement, path: [Int]) throws -> AXUIEl
     }
 }
 
-private func captureWindow(_ target: DesktopTarget) async throws -> String {
+// A hash of a small window image; nil when Screen Recording or capture is unavailable.
+private func windowFingerprint(_ target: DesktopTarget) async -> String? {
+    guard #available(macOS 14, *), CGPreflightScreenCaptureAccess(),
+          let source = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false).windows
+            .first(where: { $0.windowID == target.windowID && $0.owningApplication?.processID == target.pid }) else { return nil }
+    let configuration = SCStreamConfiguration()
+    let scale = min(1, 240 / max(1, source.frame.width, source.frame.height))
+    configuration.width = max(1, Int(source.frame.width * scale))
+    configuration.height = max(1, Int(source.frame.height * scale))
+    configuration.showsCursor = false
+    guard let image = try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: source),
+                                                                   configuration: configuration),
+          let pixels = image.dataProvider?.data as Data? else { return nil }
+    return SHA256.hash(data: pixels).map { String(format: "%02x", $0) }.joined()
+}
+
+private func captureWindow(_ target: DesktopTarget) async throws -> (String, Int, Int, Double) {
     guard #available(macOS 14, *) else { throw HelperError.nativeFailure }
     guard CGRequestScreenCaptureAccess() else { throw HelperError.screenRecordingDenied }
-    _ = try desktopWindow(target)
+    let targetWindow = try desktopWindow(target)
     let windows: [SCWindow]
     do { windows = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false).windows }
     catch { throw HelperError.nativeFailure }
     guard let source = windows.first(where: { $0.windowID == target.windowID && $0.owningApplication?.processID == target.pid && $0.owningApplication?.bundleIdentifier == target.bundleID }) else { throw HelperError.targetNotFound }
     let filter = SCContentFilter(desktopIndependentWindow: source)
     let configuration = SCStreamConfiguration()
-    let scale = min(1, 320 / max(1, source.frame.width), 240 / max(1, source.frame.height))
-    configuration.width = max(1, Int(source.frame.width * scale))
-    configuration.height = max(1, Int(source.frame.height * scale))
+    let scale = imageScale(targetWindow.bounds)
+    configuration.width = max(1, Int(targetWindow.bounds.width * scale))
+    configuration.height = max(1, Int(targetWindow.bounds.height * scale))
     configuration.showsCursor = false
     let image: CGImage
     do { image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) }
-    catch { throw HelperError.nativeFailure }
+    catch { throw HelperError.captureFailed(error.localizedDescription) }
     _ = try desktopWindow(target)
-    guard let jpeg = NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.4]),
-          jpeg.count <= 40_000 else { throw HelperError.nativeFailure }
-    return jpeg.base64EncodedString()
+    let bitmap = NSBitmapImageRep(cgImage: image)
+    guard let jpeg = [0.6, 0.45, 0.3, 0.2].lazy
+        .compactMap({ bitmap.representation(using: .jpeg, properties: [.compressionFactor: $0]) })
+        .first(where: { $0.count <= 600_000 }) else { throw HelperError.captureFailed("image exceeds 600 KB at the lowest quality") }
+    return (jpeg.base64EncodedString(), image.width, image.height, scale)
+}
+
+private func settledRevision(_ snapshot: () throws -> String) throws -> String {
+    let deadline = Date().addingTimeInterval(0.75)
+    var previous = try snapshot()
+    repeat {
+        Thread.sleep(forTimeInterval: 0.05)
+        let current = try snapshot()
+        if current == previous { return current }
+        previous = current
+    } while Date() < deadline
+    return previous
+}
+
+// Target-only posting and window stamping follow trycua/cua (MIT), libs/cua-driver/rust/crates/platform-macos/src/input/{skylight,mouse}.rs.
+// An unavailable private route fails closed; never send a global HID event or warp the cursor.
+private enum BackgroundPost {
+    typealias Post = @convention(c) (Int32, CGEvent) -> Void
+    typealias SetLocation = @convention(c) (CGEvent, CGPoint) -> Void
+    typealias SetField = @convention(c) (CGEvent, UInt32, Int64) -> Void
+    static let library = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY)
+    static let post: Post? = library.flatMap { dlsym($0, "SLEventPostToPid") }.map { unsafeBitCast($0, to: Post.self) }
+    static let setLocation: SetLocation? = library.flatMap { dlsym($0, "CGEventSetWindowLocation") }.map { unsafeBitCast($0, to: SetLocation.self) }
+    static let setField: SetField? = library.flatMap { dlsym($0, "SLEventSetIntegerValueField") }.map { unsafeBitCast($0, to: SetField.self) }
+    // Click-group IDs must stay small (sub-second nanoseconds, as in Cua Driver); a microsecond epoch timestamp
+    // makes WindowServer drop the grouped pointer events without an error.
+    static let groupID = Int64(Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1) * 1_000_000_000)
+
+    static func send(_ event: CGEvent, target: DesktopTarget, at point: CGPoint?) throws {
+        guard let post, let setLocation, let setField else { throw HelperError.backgroundUnavailable }
+        setField(event, 40, Int64(target.pid))
+        for field: UInt32 in [51, 91, 92] { setField(event, field, Int64(target.windowID)) }
+        setField(event, 58, groupID)
+        if let point { setLocation(event, point) }
+        post(target.pid, event)
+    }
+}
+
+// Cua Driver (MIT), libs/cua-driver/rust/crates/platform-macos/src/input/skylight.rs:
+// Carbon focus records change AppKit's key-window routing without SLPSSetFrontProcess or window ordering.
+private struct BackgroundFocus {
+    typealias PostRecord = @convention(c) (UnsafeRawPointer?, UnsafePointer<UInt8>?) -> Int32
+    typealias GetFront = @convention(c) (UnsafeMutableRawPointer?) -> Int32
+    typealias GetPSN = @convention(c) (Int32, UnsafeMutableRawPointer?) -> Int32
+
+    static let postRecord: PostRecord? = BackgroundPost.library.flatMap { dlsym($0, "SLPSPostEventRecordTo") }.map { unsafeBitCast($0, to: PostRecord.self) }
+    static let getFront: GetFront? = BackgroundPost.library.flatMap { dlsym($0, "_SLPSGetFrontProcess") }.map { unsafeBitCast($0, to: GetFront.self) }
+    static let applicationServices = dlopen("/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices", RTLD_LAZY | RTLD_GLOBAL)
+    static let getPSN: GetPSN? = applicationServices.flatMap { dlsym($0, "GetProcessForPID") }.map { unsafeBitCast($0, to: GetPSN.self) }
+
+    let previousPSN: [UInt8]
+    let previousPID: Int32
+    let previousWindow: UInt32
+    let targetPSN: [UInt8]
+    let targetWindow: UInt32
+    let shifted: Bool
+
+    static func begin(_ target: DesktopTarget) throws -> BackgroundFocus {
+        guard let previous = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              let previousWindow = keyWindow(previous), let getFront, let getPSN, postRecord != nil else {
+            throw HelperError.backgroundUnavailable
+        }
+        var frontPSN = [UInt8](repeating: 0, count: 8)
+        var previousPSN = frontPSN
+        var targetPSN = frontPSN
+        guard frontPSN.withUnsafeMutableBytes({ getFront($0.baseAddress) }) == 0,
+              previousPSN.withUnsafeMutableBytes({ getPSN(previous, $0.baseAddress) }) == 0,
+              targetPSN.withUnsafeMutableBytes({ getPSN(target.pid, $0.baseAddress) }) == 0,
+              frontPSN == previousPSN else { throw HelperError.backgroundUnavailable }
+        let focus = BackgroundFocus(previousPSN: previousPSN, previousPID: previous, previousWindow: previousWindow,
+                                    targetPSN: targetPSN, targetWindow: target.windowID,
+                                    shifted: previous != target.pid || previousWindow != target.windowID)
+        if !focus.shifted { return focus }
+        guard focus.post(previousPSN, window: previousWindow, focused: false) else {
+            if !focus.restore() { throw HelperError.focusRestoreFailed }
+            throw HelperError.backgroundUnavailable
+        }
+        guard focus.post(targetPSN, window: target.windowID, focused: true) else {
+            if !focus.restore() { throw HelperError.focusRestoreFailed }
+            throw HelperError.backgroundUnavailable
+        }
+        Thread.sleep(forTimeInterval: 0.04)
+        return focus
+    }
+
+    func restore() -> Bool {
+        if shifted {
+            let defocused = post(targetPSN, window: targetWindow, focused: false)
+            let focused = post(previousPSN, window: previousWindow, focused: true)
+            if !defocused || !focused { return false }
+        }
+        guard let getFront = Self.getFront else { return false }
+        var frontPSN = [UInt8](repeating: 0, count: 8)
+        return frontPSN.withUnsafeMutableBytes { getFront($0.baseAddress) } == 0 && frontPSN == previousPSN &&
+            NSWorkspace.shared.frontmostApplication?.processIdentifier == previousPID
+    }
+
+    private func post(_ psn: [UInt8], window: UInt32, focused: Bool) -> Bool {
+        guard let postRecord = Self.postRecord else { return false }
+        var record = [UInt8](repeating: 0, count: 0xF8)
+        record[0x04] = 0xF8
+        record[0x08] = 0x0D
+        for index in 0..<4 { record[0x3C + index] = UInt8(truncatingIfNeeded: window >> (index * 8)) }
+        record[0x8A] = focused ? 0x01 : 0x02
+        return psn.withUnsafeBytes { bytes in
+            record.withUnsafeBufferPointer { postRecord(bytes.baseAddress, $0.baseAddress) }
+        } == 0
+    }
+
+    private static func keyWindow(_ pid: Int32) -> UInt32? {
+        let app = AXUIElementCreateApplication(pid)
+        if let focused = attribute(app, kAXFocusedWindowAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID(),
+           let id = windowID(unsafeBitCast(focused, to: AXUIElement.self)) { return id }
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.first(where: { ($0[kCGWindowOwnerPID as String] as? Int32) == pid && ($0[kCGWindowLayer as String] as? Int) == 0 })?[kCGWindowNumber as String] as? UInt32
+    }
+}
+
+private func withBackgroundFocus(_ target: DesktopTarget, _ body: () throws -> Void) throws {
+    let focus = try BackgroundFocus.begin(target)
+    var restored = false
+    var actionError: Error?
+    do {
+        defer { restored = focus.restore() }
+        do { try body() }
+        catch { actionError = error }
+        if focus.shifted { Thread.sleep(forTimeInterval: 0.05) }
+    }
+    guard restored else { throw HelperError.focusRestoreFailed }
+    if let actionError { throw actionError }
+}
+
+private func windowPoint(_ x: Int, _ y: Int, bounds: CGRect) throws -> CGPoint {
+    let scale = imageScale(bounds)
+    let local = CGPoint(x: Double(x) / scale, y: Double(y) / scale)
+    guard x >= 0, y >= 0, local.x < bounds.width, local.y < bounds.height else { throw HelperError.invalidRequest }
+    return CGPoint(x: bounds.minX + local.x, y: bounds.minY + local.y)
+}
+
+// Field stamps follow Cua Driver's background click route (MIT), input/mouse.rs `click_at_xy_chromium`:
+// f0 gesture phase, f1 click state, f3 button number, f7 touch subtype, f40 pid filter, f51/f91/f92 window routing,
+// f58 click group, and a screen-space window location, created from the HID system event source.
+private func pointerEvent(_ type: CGEventType, _ button: CGMouseButton, _ point: CGPoint,
+                          _ target: DesktopTarget, click: Int = 1, phase: Int64? = nil) throws {
+    guard let post = BackgroundPost.post, let setLocation = BackgroundPost.setLocation, let setField = BackgroundPost.setField,
+          let source = CGEventSource(stateID: .hidSystemState),
+          let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: button) else {
+        throw HelperError.backgroundUnavailable
+    }
+    let window = Int64(target.windowID)
+    let fields: [(UInt32, Int64)] = [(0, phase ?? (type == .mouseMoved ? 2 : 3)), (1, Int64(click)), (3, Int64(button.rawValue)),
+                                     (7, 3), (40, Int64(target.pid)), (51, window), (58, BackgroundPost.groupID),
+                                     (91, window), (92, window)]
+    for (field, value) in fields { setField(event, field, value) }
+    setLocation(event, point)
+    post(target.pid, event)
+}
+
+private func coordinateClick(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
+    guard let x = request.x, let y = request.y,
+          request.button == nil || request.button == "left" || request.button == "right",
+          request.count == nil || request.count == 1 || request.count == 2 else { throw HelperError.invalidRequest }
+    let point = try windowPoint(x, y, bounds: window.bounds)
+    guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil else { throw HelperError.backgroundUnavailable }
+    let right = request.button == "right"
+    let button: CGMouseButton = right ? .right : .left
+    try withBackgroundFocus(target) {
+        try pointerEvent(.mouseMoved, button, point, target, click: 0, phase: 2)
+        Thread.sleep(forTimeInterval: 0.015)
+        do {
+            if !right {
+                // An off-screen press satisfies Chromium's user-activation gate without hitting page content.
+                let offscreen = CGPoint(x: -1, y: -1)
+                try pointerEvent(.leftMouseDown, .left, offscreen, target, click: 1, phase: 1)
+                Thread.sleep(forTimeInterval: 0.001)
+                try pointerEvent(.leftMouseUp, .left, offscreen, target, click: 1, phase: 2)
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            let clicks = request.count ?? 1
+            for count in 1...clicks {
+                try pointerEvent(right ? .rightMouseDown : .leftMouseDown, button, point, target, click: count)
+                Thread.sleep(forTimeInterval: right ? 0.028 : 0.001)
+                try pointerEvent(right ? .rightMouseUp : .leftMouseUp, button, point, target, click: count)
+                if count < clicks { Thread.sleep(forTimeInterval: 0.08) }
+            }
+        } catch { throw HelperError.unknownOutcome }
+    }
+}
+
+private func coordinateDrag(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
+    guard let fromX = request.fromX, let fromY = request.fromY, let toX = request.toX, let toY = request.toY else { throw HelperError.invalidRequest }
+    let start = try windowPoint(fromX, fromY, bounds: window.bounds)
+    let end = try windowPoint(toX, toY, bounds: window.bounds)
+    guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil else { throw HelperError.backgroundUnavailable }
+    try withBackgroundFocus(target) {
+        try pointerEvent(.leftMouseDown, .left, start, target)
+        do {
+            for step in 1...5 {
+                let fraction = Double(step) / 5
+                let point = CGPoint(x: start.x + (end.x - start.x) * fraction, y: start.y + (end.y - start.y) * fraction)
+                try pointerEvent(.leftMouseDragged, .left, point, target)
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            try pointerEvent(.leftMouseUp, .left, end, target)
+        } catch { throw HelperError.unknownOutcome }
+    }
+}
+
+private func coordinateScroll(_ request: Request, _ target: DesktopTarget, _ window: DesktopWindow) throws {
+    guard let x = request.x, let y = request.y, let deltaX = request.deltaX, let deltaY = request.deltaY,
+          let vertical = Int32(exactly: deltaY), let horizontal = Int32(exactly: deltaX) else { throw HelperError.invalidRequest }
+    let point = try windowPoint(x, y, bounds: window.bounds)
+    guard BackgroundPost.post != nil, BackgroundPost.setLocation != nil, BackgroundPost.setField != nil,
+          let source = CGEventSource(stateID: .combinedSessionState),
+          let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
+                              wheel1: vertical, wheel2: horizontal, wheel3: 0) else { throw HelperError.backgroundUnavailable }
+    event.location = point
+    try withBackgroundFocus(target) { try BackgroundPost.send(event, target: target, at: point) }
+}
+
+private func keyboard(_ request: Request, _ target: DesktopTarget) throws {
+    guard let source = CGEventSource(stateID: .combinedSessionState) else { throw HelperError.backgroundUnavailable }
+    if request.action == "desktop.type" {
+        guard let text = request.text, text.utf8.count <= 4096 else { throw HelperError.invalidRequest }
+        try withBackgroundFocus(target) {
+            var dispatched = false
+            // One key event per character: many apps read only the first character of a multi-character event.
+            for character in text {
+                let chunk = Array(String(character).utf16)
+                guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                      let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+                    throw dispatched ? HelperError.unknownOutcome : HelperError.backgroundUnavailable
+                }
+                down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                down.postToPid(target.pid)
+                dispatched = true
+                up.postToPid(target.pid)
+            }
+        }
+        return
+    }
+    guard let key = request.key else { throw HelperError.invalidRequest }
+    let codes: [String: CGKeyCode] = ["enter": 36, "return": 36, "tab": 48, "escape": 53, "space": 49,
+        "delete": 51, "forward_delete": 117, "up": 126, "down": 125, "left": 123, "right": 124,
+        "home": 115, "end": 119, "page_up": 116, "page_down": 121,
+        "f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96, "f6": 97,
+        "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111]
+    let printable = key.unicodeScalars.count == 1 && key.unicodeScalars.allSatisfy { $0.value >= 32 && $0.value != 127 }
+    let characterCodes: [Character: CGKeyCode] = ["a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3,
+        "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35,
+        "q": 12, "r": 15, "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+        "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+        "-": 27, "=": 24, "[": 33, "]": 30, ";": 41, "'": 39, ",": 43, ".": 47, "/": 44, "`": 50]
+    let hasModifiers = !(request.modifiers ?? []).isEmpty
+    let characterCode = key.lowercased().first.flatMap { characterCodes[$0] }
+    guard let code = codes[key] ?? (printable ? (hasModifiers ? characterCode : 0) : nil),
+          let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
+          let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else { throw HelperError.invalidRequest }
+    var flags: CGEventFlags = []
+    for modifier in request.modifiers ?? [] {
+        switch modifier {
+        case "command": flags.insert(.maskCommand)
+        case "shift": flags.insert(.maskShift)
+        case "option": flags.insert(.maskAlternate)
+        case "control": flags.insert(.maskControl)
+        case "fn": flags.insert(.maskSecondaryFn)
+        default: throw HelperError.invalidRequest
+        }
+    }
+    down.flags = flags
+    up.flags = flags
+    if printable && !hasModifiers {
+        let units = Array(key.utf16)
+        down.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+        up.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+    }
+    try withBackgroundFocus(target) {
+        down.postToPid(target.pid)
+        up.postToPid(target.pid)
+    }
 }
 
 private func handle(_ request: Request) async throws -> Response {
     guard !request.owner.sessionID.isEmpty, !request.owner.callID.isEmpty else { throw HelperError.invalidRequest }
     switch (request.action, request.target) {
+    case ("desktop.list", nil):
+        return success(request.action, "", apps: runningApps())
+    case ("desktop.launch", nil):
+        guard let bundleID = request.bundleID, !bundleID.isEmpty else { throw HelperError.invalidRequest }
+        let app: NSRunningApplication
+        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { app = running }
+        else {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { throw HelperError.targetNotFound }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            configuration.addsToRecentItems = false
+            do { app = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration) }
+            catch { throw HelperError.unknownOutcome }
+        }
+        guard app.bundleIdentifier == bundleID else { throw HelperError.unknownOutcome }
+        return success(request.action, "", pid: app.processIdentifier, windows: windowInfos()[app.processIdentifier] ?? [])
     case ("desktop.inspect", .desktop(let target)):
-        let (_, revision, elements) = try desktopSnapshot(target)
-        return success(request.action, revision, elements: elements)
+        let (window, revision, elements) = try desktopSnapshot(target)
+        return success(request.action, revision, elements: elements, accessible: window.element != nil)
     case ("desktop.capture", .desktop(let target)):
-        let (_, revision, _) = try desktopSnapshot(target)
-        return success(request.action, revision, image: try await captureWindow(target))
+        _ = try desktopSnapshot(target)
+        let (image, width, height, scale) = try await captureWindow(target)
+        return success(request.action, try desktopSnapshot(target).1, image: image, width: width, height: height, scale: scale)
     case ("desktop.click", .desktop(let target)),
+         ("desktop.drag", .desktop(let target)),
          ("desktop.type", .desktop(let target)),
          ("desktop.scroll", .desktop(let target)),
          ("desktop.key", .desktop(let target)):
-        guard let expected = request.expectedRevision, let path = request.element else { throw HelperError.invalidRequest }
+        guard let expected = request.expectedRevision else { throw HelperError.invalidRequest }
         let (window, revision, _) = try desktopSnapshot(target)
         guard revision == expected else { throw HelperError.staleRevision }
-        let element = try desktopElement(window.element, path: path)
-        let axAction: String
-        switch request.action {
-        case "desktop.click": axAction = kAXPressAction
-        case "desktop.key":
-            guard request.key == "enter" else { throw HelperError.invalidRequest }
-            axAction = kAXConfirmAction
-        case "desktop.scroll":
-            guard let direction = request.direction, direction == "up" || direction == "down" else { throw HelperError.invalidRequest }
-            guard stringAttribute(element, kAXRoleAttribute) == kAXScrollBarRole,
-                  let value = attribute(element, kAXValueAttribute) as? NSNumber else { throw HelperError.invalidRequest }
-            var settable = DarwinBoolean(false)
-            guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
-                  settable.boolValue else { throw HelperError.invalidRequest }
-            let next = max(0, min(1, value.doubleValue + (direction == "up" ? -0.1 : 0.1)))
-            guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, NSNumber(value: next)) == .success else { throw HelperError.unknownOutcome }
-            do { return success(request.action, try desktopSnapshot(target).1) }
-            catch { throw HelperError.unknownOutcome }
-        case "desktop.type":
-            guard let text = request.text, text.utf8.count <= 4096,
-                  stringAttribute(element, kAXRoleAttribute) == kAXTextFieldRole ||
-                  stringAttribute(element, kAXRoleAttribute) == kAXTextAreaRole else { throw HelperError.invalidRequest }
-            var settable = DarwinBoolean(false)
-            guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
-                  settable.boolValue else { throw HelperError.invalidRequest }
-            let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef)
-            guard result == .success else { throw HelperError.unknownOutcome }
-            do { return success(request.action, try desktopSnapshot(target).1) }
-            catch { throw HelperError.unknownOutcome }
-        default: throw HelperError.invalidRequest
+        let imageBefore = await windowFingerprint(target)
+        if let path = request.element, request.action != "desktop.drag" {
+            guard let root = window.element else { throw HelperError.targetNotFound }
+            let element = try desktopElement(root, path: path)
+            switch request.action {
+            case "desktop.click", "desktop.key":
+                let axAction = request.action == "desktop.click" ? kAXPressAction : kAXConfirmAction
+                guard request.action != "desktop.key" || (request.key == "enter" && (request.modifiers ?? []).isEmpty) else {
+                    try keyboard(request, target)
+                    break
+                }
+                guard actionNames(element).contains(axAction) else { throw HelperError.invalidRequest }
+                guard AXUIElementPerformAction(element, axAction as CFString) == .success else { throw HelperError.unknownOutcome }
+            case "desktop.scroll":
+                guard let direction = request.direction, direction == "up" || direction == "down",
+                      stringAttribute(element, kAXRoleAttribute) == kAXScrollBarRole,
+                      let value = attribute(element, kAXValueAttribute) as? NSNumber else { throw HelperError.invalidRequest }
+                var settable = DarwinBoolean(false)
+                guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
+                      settable.boolValue else { throw HelperError.invalidRequest }
+                let next = max(0, min(1, value.doubleValue + (direction == "up" ? -0.1 : 0.1)))
+                guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, NSNumber(value: next)) == .success else { throw HelperError.unknownOutcome }
+            case "desktop.type":
+                guard let text = request.text, text.utf8.count <= 4096,
+                      [kAXTextFieldRole, kAXTextAreaRole, "AXSecureTextField"].contains(stringAttribute(element, kAXRoleAttribute)) else { throw HelperError.invalidRequest }
+                var settable = DarwinBoolean(false)
+                guard AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success,
+                      settable.boolValue else { throw HelperError.invalidRequest }
+                guard AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef) == .success else { throw HelperError.unknownOutcome }
+            default: throw HelperError.invalidRequest
+            }
+        } else {
+            switch request.action {
+            case "desktop.click": try coordinateClick(request, target, window)
+            case "desktop.drag": try coordinateDrag(request, target, window)
+            case "desktop.scroll": try coordinateScroll(request, target, window)
+            case "desktop.type", "desktop.key": try keyboard(request, target)
+            default: throw HelperError.invalidRequest
+            }
         }
-        var actions: CFArray?
-        guard AXUIElementCopyActionNames(element, &actions) == .success,
-              (actions as? [String])?.contains(axAction) == true else { throw HelperError.invalidRequest }
-        guard AXUIElementPerformAction(element, axAction as CFString) == .success else { throw HelperError.unknownOutcome }
-        do { return success(request.action, try desktopSnapshot(target).1) }
+        let settled: String
+        do { settled = try settledRevision { try desktopSnapshot(target).1 } }
         catch { throw HelperError.unknownOutcome }
+        if window.element != nil && settled != revision { return success(request.action, settled, effect: "changed") }
+        // The bounded AX snapshot can miss changes (for example deep web content), so an unchanged tree is
+        // confirmed against a small window image before reporting no effect.
+        let imageAfter = await windowFingerprint(target)
+        let effect = imageBefore == nil || imageAfter == nil
+            ? (window.element == nil ? "unverified" : "unchanged")
+            : imageBefore == imageAfter ? "unchanged" : "changed"
+        return success(request.action, settled, effect: effect)
     case ("iterm.inspect", .iterm(let target)):
         return success(request.action, try inspectIterm(target).1)
     case ("iterm.send_text", .iterm(let target)):
@@ -485,7 +959,7 @@ private func handle(_ request: Request) async throws -> Response {
                     (fourCC("Wtnl"), NSAppleEventDescriptor(boolean: request.newline ?? true)),
                 ]
             )
-            return success(request.action, try inspectIterm(target).1)
+            return success(request.action, try settledRevision { try inspectIterm(target).1 })
         } catch {
             throw HelperError.unknownOutcome
         }
@@ -519,7 +993,7 @@ private func handle(_ request: Request) async throws -> Response {
             )
             return success(
                 request.action,
-                try finderRevision(FinderTarget(platform: "macos", application: "finder", path: destinationURL.path)).1
+                try settledRevision { try finderRevision(FinderTarget(platform: "macos", application: "finder", path: destinationURL.path)).1 }
             )
         } catch {
             throw HelperError.unknownOutcome

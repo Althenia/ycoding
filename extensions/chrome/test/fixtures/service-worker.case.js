@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { runInNewContext } from "node:vm"
 
 const harness = createHarness()
 harness.storage.browserProfileGrant = { serverID: "server-restored-1" }
@@ -792,6 +793,122 @@ describe("Chrome bridge service worker", () => {
     }
   })
 
+  test("animates the isolated agent cursor at the click point before CDP input", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "c".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-cursor" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-cursor")
+      await socket.receive(action("cursor-click", shared.tabID, observation, { type: "click", ref: "b1" }))
+      const world = harness.commands.findIndex((item) => item.method === "Page.createIsolatedWorld")
+      const animation = harness.commands.findIndex((item) => item.method === "Runtime.evaluate")
+      const mouse = harness.commands.findIndex((item) => item.method === "Input.dispatchMouseEvent")
+      expect(world).toBeGreaterThan(-1)
+      expect(animation).toBeGreaterThan(world)
+      expect(mouse).toBeGreaterThan(animation)
+      expect(harness.commands.some((item) => item.method === "Runtime.enable")).toBe(false)
+      expect(harness.commands[animation].params.expression).toContain("YCoding")
+      expect(harness.commands[animation].params.expression).toContain("pointer-events:none")
+      expect(harness.commands[animation].params.expression).toContain("attachShadow({mode:'closed'})")
+      expect(harness.commands[animation].params.contextId).toBe(1)
+      expect(harness.commands[animation].params.expression).toContain('"x":5,"y":5')
+      expect(harness.commands[mouse].params).toMatchObject({ type: "mousePressed", x: 5, y: 5 })
+      expect(harness.cursorDOM.hosts()).toHaveLength(1)
+      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(5px,5px)")
+
+      harness.commands.length = 0
+      await socket.receive(action("cursor-type", shared.tabID, observation, { type: "type", ref: "b1", text: "hello" }))
+      const typingAnimation = harness.commands.findIndex((item) => item.method === "Runtime.evaluate")
+      expect(typingAnimation).toBeGreaterThan(-1)
+      expect(typingAnimation).toBeLessThan(harness.commands.findIndex((item) => item.method === "DOM.focus"))
+      expect(typingAnimation).toBeLessThan(harness.commands.findIndex((item) => item.method === "Input.insertText"))
+      expect(harness.commands[typingAnimation].params.expression).toContain('"x":5,"y":5')
+
+      harness.commands.length = 0
+      const movesBeforeScroll = harness.cursorDOM.moves.length
+      await socket.receive(action("cursor-scroll", shared.tabID, observation, { type: "scroll", deltaY: 120 }))
+      const scrollAnimation = harness.commands.findIndex((item) => item.method === "Runtime.evaluate")
+      const wheel = harness.commands.findIndex((item) => item.method === "Input.dispatchMouseEvent")
+      expect(scrollAnimation).toBeGreaterThan(-1)
+      expect(scrollAnimation).toBeLessThan(wheel)
+      expect(harness.commands[scrollAnimation].params.expression).toContain('"x":50,"y":40')
+      expect(harness.commands[wheel].params).toMatchObject({ type: "mouseWheel", x: 50, y: 40 })
+      expect(harness.cursorDOM.hosts()).toHaveLength(1)
+      expect(harness.cursorDOM.moves[movesBeforeScroll]).toBe("translate(5px,5px)")
+      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(50px,40px)")
+    } finally {
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  })
+
+  test("hidden-page cursor placement skips animation and still completes the action", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Background" }]
+    harness.cursorDOM.setVisibility("hidden")
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "g".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-hidden-cursor" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-hidden-cursor")
+      await socket.receive(action("hidden-cursor-click", shared.tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "hidden-cursor-click")).toMatchObject({ type: "result" })
+      expect(harness.cursorDOM.frameRequests).toBe(0)
+      expect(harness.cursorDOM.hosts()).toHaveLength(1)
+      expect(harness.cursorDOM.moves.at(-1)).toBe("translate(5px,5px)")
+    } finally {
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  }, 1500)
+
+  test("cursor CDP hangs cannot hold up browser input", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
+    harness.page.cursorEvaluationHangs = true
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "h".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-stuck-cursor" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-stuck-cursor")
+      await socket.receive(action("stuck-cursor-click", shared.tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "stuck-cursor-click")).toMatchObject({ type: "result" })
+      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
+    } finally {
+      harness.page.cursorEvaluationHangs = false
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  }, 1500)
+
+  test("cursor injection failure does not block input and detach cleanup is best effort", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
+    harness.page.cursorEvaluationFails = true
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "d".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-cursor-fail" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-cursor-fail")
+      await socket.receive(action("cursor-click-fail", shared.tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "cursor-click-fail")).toMatchObject({ type: "result" })
+      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
+      harness.page.cursorEvaluationFails = false
+      harness.commands.length = 0
+      await harness.debuggerDetach.emit({ tabId: 17 })
+      expect(harness.commands.some((item) => item.method === "Runtime.evaluate" && item.params.expression.includes("remove"))).toBe(true)
+    } finally {
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  })
+
   test("revokes an unknown script navigation during typing without sending its page metadata", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
@@ -888,6 +1005,7 @@ function createHarness() {
   const groupUpdates = []
   const ungrouped = []
   const badges = []
+  const cursorDOM = createCursorDOM()
   let createdURL = "about:blank"
   const storage = {
     browserPairing: {
@@ -906,6 +1024,8 @@ function createHarness() {
     holdCreate: Promise.resolve(),
     href: undefined,
     typeRedirect: undefined,
+    cursorEvaluationFails: false,
+    cursorEvaluationHangs: false,
     documentRoot: node("#document"),
   }
 
@@ -1016,6 +1136,7 @@ function createHarness() {
     storage,
     alarms,
     page,
+    cursorDOM,
     FakeWebSocket,
     chrome: {
       runtime: {
@@ -1099,6 +1220,30 @@ function createHarness() {
               entries: [{ title: "Example", url: source.tabId === 24 ? createdURL : "https://example.test/form" }],
             }
           }
+          if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main-frame" } } }
+          if (method === "Page.createIsolatedWorld") return { executionContextId: 1 }
+          if (method === "Page.getLayoutMetrics")
+            return { layoutViewport: { clientWidth: 100, clientHeight: 80 } }
+          if (method === "Runtime.evaluate" && page.cursorEvaluationFails)
+            throw new Error("isolated world unavailable")
+          if (method === "Runtime.evaluate" && page.cursorEvaluationHangs) return new Promise(() => {})
+          if (method === "Runtime.evaluate") {
+            let frame = 0
+            return runInNewContext(params.expression, {
+              document: cursorDOM.document,
+              innerWidth: 100,
+              innerHeight: 80,
+              performance: { now: () => 0 },
+              requestAnimationFrame: (callback) => {
+                cursorDOM.frameRequests++
+                if (cursorDOM.document.visibilityState === "visible" && !cursorDOM.suppressFrames)
+                  callback(frame++ === 0 ? 0 : 320)
+                return cursorDOM.frameRequests
+              },
+              setTimeout,
+              clearTimeout,
+            })
+          }
           if (method === "Accessibility.getFullAXTree")
             return {
               nodes: [
@@ -1142,7 +1287,10 @@ function createHarness() {
       page.holdCreate = undefined
       page.href = undefined
       page.typeRedirect = undefined
+      page.cursorEvaluationFails = false
+      page.cursorEvaluationHangs = false
       page.documentRoot = node("#document")
+      cursorDOM.reset()
       FakeWebSocket.failConnections = false
       FakeWebSocket.instance = undefined
     },
@@ -1151,6 +1299,62 @@ function createHarness() {
 
 function password() {
   return node("INPUT", { attributes: ["type", "password"] })
+}
+
+function createCursorDOM() {
+  const hosts = []
+  const moves = []
+  const document = {
+    visibilityState: "visible",
+    documentElement: {
+      append: (host) => hosts.push(host),
+    },
+    createElement: () => {
+      const element = {
+        dataset: {},
+        style: { cssText: "" },
+        remove() {
+          const index = hosts.indexOf(element)
+          if (index >= 0) hosts.splice(index, 1)
+        },
+        attachShadow: () => {
+          const cursor = {
+            style: {
+              _transform: "",
+              set transform(value) {
+                this._transform = value
+                moves.push(value)
+              },
+              get transform() {
+                return this._transform
+              },
+            },
+          }
+          return {
+            querySelector: () => cursor,
+            append: () => {},
+          }
+        },
+      }
+      return element
+    },
+    querySelectorAll: () => hosts.filter((host) => host.dataset.ycodingAgentCursor !== undefined),
+  }
+  return {
+    document,
+    moves,
+    frameRequests: 0,
+    suppressFrames: false,
+    hosts: () => hosts.filter((host) => host.dataset.ycodingAgentCursor !== undefined),
+    setVisibility: (value) => (document.visibilityState = value),
+    reset() {
+      hosts.length = 0
+      moves.length = 0
+      this.frameRequests = 0
+      this.suppressFrames = false
+      document.visibilityState = "visible"
+    },
+  }
 }
 
 function node(nodeName, values = {}) {

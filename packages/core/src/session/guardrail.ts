@@ -26,6 +26,8 @@ export interface EvaluateInput {
   readonly action: string
   readonly resources: ReadonlyArray<string>
   readonly metadata?: Guardrail.Request["metadata"]
+  /** Admit ordinary and hard review decisions without a request; deny decisions still block. */
+  readonly skipReview?: boolean
 }
 
 export interface Evaluation {
@@ -358,6 +360,7 @@ export const layer = Layer.effect(
               .pipe(Effect.catchTag("SessionAutonomy.NotFound", () => Effect.succeed(false)))
             if (
               result.decision === "allow" ||
+              input.skipReview ||
               (!result.hardReview && reusableApprovals.has(reusableApprovalKey)) ||
               (result.decision === "ask" && !result.hardReview && autoGuardrail)
             ) {

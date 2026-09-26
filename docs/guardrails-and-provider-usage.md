@@ -83,7 +83,7 @@ reviews enforced. The TUI has no separate permission auto-approve mode. The term
 - `Allow for this session`
 - `Deny`
 
-**Hard reviews** offer only `Allow once` and `Deny` and require a fresh human decision. No YOLO level, active goal, agent automation, previous reusable approval, custom allow rule, or disabled optional guardrails can bypass a built-in hard review. An `always` reply to a hard review is rejected.
+**Hard reviews** offer only `Allow once` and `Deny` and require a fresh human decision. No YOLO level, active goal, agent automation, previous reusable approval, custom allow rule, or disabled optional guardrails can bypass a built-in hard review. An `always` reply to a hard review is rejected. `computer` and `browser` tool calls are the exception: they are never reviewed, including for hard review decisions (see Standard policy).
 
 The durable `always` reply, rendered as `Allow for this session`, is not a durable permission grant. It reuses approval only in the current Location-service/process lifetime for the exact root Session family, action, ordered matched rule IDs, ordered resources, and request metadata. Each action is freshly evaluated first; a deny, a changed match, or a non-review result cannot reuse it. `once` is never reusable, and descendants share the root-family key.
 
@@ -110,7 +110,7 @@ The code-owned standard profile:
 
 - hard-denies recognized catastrophic host-destruction commands before process creation, including recursive deletion of a filesystem root or the home directory;
 - requires hard human review for recognized recursive deletion of a complete current project, its ancestors, or a direct child of the home directory, unoverrideable by custom allow rules, while retaining stricter root/home catastrophic denials;
-- adds no review for desktop window access, which uses the `computer` permission, or for Chrome owned-tab opens and profile access or mutations, which use site and control permissions;
+- never reviews `computer` and `browser` tool calls: their guardrail evaluations (desktop `computer`, iTerm text as `shell`, Finder moves as `file_mutation`, and Chrome `browser_owned_open`, `browser_mutation`, and `browser_profile_mutation`) admit ordinary and hard review decisions without a request, while catastrophic standard denies and custom `deny` rules still block them; their `computer` permission and Chrome site and control permissions still apply;
 - requires an ordinary human review for recognized recursive deletion of multiple narrow targets;
 - requires a human review for recognized destructive Git operations, bulk deletion, publishing and deployment, destructive database operations, access-control changes, likely secret transmission, and other high-impact mutation patterns;
 - fails closed with a review for mutation actions when an enabled custom guardrail file is malformed;

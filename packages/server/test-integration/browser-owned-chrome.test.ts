@@ -100,6 +100,7 @@ test("pairs a private Chrome extension for owned and automatically listed existi
         "--headless=new",
         `--user-data-dir=${join(directory, "profile")}`,
         "--remote-debugging-pipe",
+        "--use-mock-keychain",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",
@@ -301,6 +302,21 @@ test("pairs a private Chrome extension for owned and automatically listed existi
     ).toBe("completed")
     await eventually(async () => (submissions.length === 1 ? true : undefined), "foreground fixture submit")
     expect(submissions).toEqual(["synthetic-value"])
+    const foregroundPage = string(
+      record(await cdp.send("Target.attachToTarget", { targetId: string(foreground.targetId), flatten: true }))
+        .sessionId,
+    )
+    expect(
+      await evaluate(
+        cdp,
+        foregroundPage,
+        `(() => {
+          const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
+          return { count: hosts.length, pointerEvents: hosts[0] && getComputedStyle(hosts[0]).pointerEvents, positioned: hosts[0]?.dataset.x !== undefined }
+        })()`,
+      ),
+    ).toEqual({ count: 1, pointerEvents: "none", positioned: true })
+    await cdp.send("Target.detachFromTarget", { sessionId: foregroundPage })
     expect((await foregroundAction(afterType, { type: "scroll", deltaY: 20 }, "foreground-scroll")).status).toBe(
       "completed",
     )
@@ -615,6 +631,7 @@ test("recovers a stopped Chrome worker without reopening its popup or repeating 
         "--headless=new",
         `--user-data-dir=${join(directory, "profile")}`,
         "--remote-debugging-pipe",
+        "--use-mock-keychain",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-networking",

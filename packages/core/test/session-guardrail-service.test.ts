@@ -535,6 +535,25 @@ autoHardReview.it.effect("does not let YOLO 3 auto-approve a hard review", () =>
   }),
 )
 
+exact.it.effect("admits hard and ordinary reviews without a request when review is skipped", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const hard = yield* service.assert({ ...hardReviewInput, sessionID: childID, skipReview: true })
+    yield* hard.release
+    const ordinary = yield* service.assert({ ...destructive, skipReview: true })
+    yield* ordinary.release
+    expect(yield* service.forSession(parentID)).toEqual([])
+  }),
+)
+
+exact.it.effect("keeps deny rules blocking when review is skipped", () =>
+  Effect.gen(function* () {
+    const service = yield* SessionGuardrail.Service
+    const error = yield* Effect.flip(service.assert({ ...destructive, resources: ["rm -rf /"], skipReview: true }))
+    expect(error._tag).toBe("Guardrail.BlockedError")
+  }),
+)
+
 exact.it.effect("rejects reusable Always for hard reviews and requires a fresh human decision", () =>
   Effect.gen(function* () {
     const service = yield* SessionGuardrail.Service

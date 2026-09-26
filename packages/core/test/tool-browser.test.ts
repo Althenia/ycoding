@@ -20,6 +20,7 @@ const sessionID = SessionV2.ID.make("ses_browser_tool")
 const tabID = Browser.TabID.make("btab_browser_tool")
 const sequence: string[] = []
 const requests: PermissionV2.AssertInput[] = []
+const guardrailRequests: SessionGuardrail.EvaluateInput[] = []
 
 const tab: Browser.Tab = {
   id: tabID,
@@ -90,6 +91,7 @@ const permission = Layer.mock(PermissionV2.Service, {
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: (input) =>
     Effect.sync(() => {
+      guardrailRequests.push(input)
       sequence.push(`guardrail:${input.action}:${input.resources[0]}`)
       return { release: Effect.sync(() => sequence.push("release")) }
     }),
@@ -507,6 +509,7 @@ describe("BrowserTool", () => {
   it.effect("enforces permission then guardrail at the leaf before a semantic mutation", () =>
     Effect.gen(function* () {
       sequence.length = 0
+      guardrailRequests.length = 0
       const registry = yield* ToolRegistry.Service
       const result = yield* executeTool(registry, {
         sessionID,
@@ -542,6 +545,90 @@ describe("BrowserTool", () => {
         "release",
         "permission:browser_read:https://example.test/form",
       ])
+      expect(guardrailRequests).toHaveLength(1)
+      expect(guardrailRequests[0].skipReview).toBe(true)
+    }),
+  )
+
+  it.effect("accepts integer-valued numeric strings for every browser action fence and payload integer", () =>
+    Effect.gen(function* () {
+      sequence.length = 0
+      guardrailRequests.length = 0
+      const registry = yield* ToolRegistry.Service
+      const observed = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "numeric-browser-observe",
+          name: "browser",
+          input: { operation: "observe", tabID: profileTab.id, generation: "1" },
+        },
+      })
+      expect(observed).toMatchObject({ type: "text", value: expect.stringContaining('"type":"observation"') })
+      const result = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "numeric-browser-action",
+          name: "browser",
+          input: {
+            operation: "action",
+            tabID: profileTab.id,
+            generation: "1",
+            documentGeneration: "1",
+            observationRevision: "1",
+            action: { type: "scroll", deltaY: "120" },
+          },
+        },
+      })
+      expect(result).toMatchObject({ type: "text", value: expect.stringContaining('"callID":"numeric-browser-action"') })
+      expect(sequence).toContain("action:numeric-browser-action")
+
+      const ungroup = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "numeric-browser-group-id",
+          name: "browser",
+          input: {
+            operation: "action",
+            tabID: profileTab.id,
+            generation: "1",
+            documentGeneration: "1",
+            observationRevision: "1",
+            action: { type: "ungroup", tabIDs: [profileTab.id], groupID: "7" },
+          },
+        },
+      })
+      expect(ungroup).toMatchObject({ type: "text", value: expect.stringContaining('"callID":"numeric-browser-group-id"') })
+
+      const opened = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "numeric-browser-open",
+          name: "browser",
+          input: { operation: "open", mode: "owned", generation: "1", url: "https://example.test/new" },
+        },
+      })
+      expect(opened).toMatchObject({ type: "text", value: expect.stringContaining('"type":"opened"') })
+
+      const closed = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "numeric-browser-close",
+          name: "browser",
+          input: { operation: "close", mode: "owned", tabID: ownedTab.id, generation: "1" },
+        },
+      })
+      expect(closed).toMatchObject({ type: "text", value: expect.stringContaining('"type":"closed"') })
+      expect(guardrailRequests.every((input) => input.skipReview === true)).toBe(true)
     }),
   )
 

@@ -11,28 +11,33 @@ import { ComputerTool } from "@ycoding-ai/core/tool/computer"
 import { ToolRegistry } from "@ycoding-ai/core/tool/registry"
 import { ToolOutputStore } from "@ycoding-ai/core/tool-output-store"
 import { Image } from "@ycoding-ai/core/image"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Schema } from "effect"
 import { testEffect } from "./lib/effect"
 import { imagePassthrough } from "./lib/image"
 import { registerToolPlugin, settleTool, toolIdentity, waitForTool } from "./lib/tool"
 
 const calls: string[] = []
+const actions: Computer.Action[] = []
 const sessionID = SessionV2.ID.make("ses_computer_tool")
 
 const computer = Layer.mock(Computer.Service, {
   status: Effect.succeed({ platform: "macos", state: "supported" as const, capabilities: [] }),
+  list: () => { calls.push("native:desktop.list"); return Effect.succeed({ status: "ok" as const, action: "desktop.list" as const, revision: "rev-list", apps: [] }) },
+  launch: () => { calls.push("native:desktop.launch"); return Effect.succeed({ status: "ok" as const, action: "desktop.launch" as const, revision: "rev-launch", pid: 451, windows: [] }) },
   inspect: (input) => {
     calls.push(`inspect:${input.target.application}`)
     return Effect.succeed({
       status: "ok" as const,
       action: `${input.target.application}.inspect` as const,
       revision: "rev-1",
+      ...(input.target.application === "desktop" ? { accessible: false, elements: [] } : {}),
     })
   },
   act: (input) => {
+    actions.push(input.action)
     if (input.action.type.startsWith("desktop.")) {
       calls.push(`native:${input.action.type}`)
-      return Effect.succeed({ status: "ok" as const, action: input.action.type, revision: "rev-2" })
+      return Effect.succeed({ status: "ok" as const, action: input.action.type, revision: "rev-2", effect: "unchanged" as const })
     }
     if (input.action.type === "finder.move") {
       calls.push("native:finder.move")
@@ -48,6 +53,7 @@ const computer = Layer.mock(Computer.Service, {
       action: "desktop.capture" as const,
       revision: "rev-1",
       image: "base64",
+      width: 320, height: 240, scale: 1,
     })
   },
   cancel: () => Effect.succeed(false),
@@ -61,7 +67,7 @@ const permission = Layer.mock(PermissionV2.Service, {
 })
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: (input) => {
-    calls.push(`guardrail:${input.action}:${input.resources.join(",")}`)
+    calls.push(`guardrail:${input.action}:${input.resources.join(",")}:${input.skipReview}`)
     return Effect.succeed({ release: Effect.sync(() => calls.push("guardrail:release")) })
   },
 })
@@ -99,6 +105,64 @@ const call = (input: Record<string, unknown>, id: string) => ({
 })
 
 describe("computer tool policy ordering", () => {
+  it.effect("shows unchanged pointer effect so a caller does not repeat a dropped pixel click", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(registry, call({ action: "desktop.click", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73, expected_revision: "rev-1", x: 34, y: 319, count: 2 }, "unchanged-click"))
+      expect(settlement.output?.content).toEqual([{ type: "text", text: JSON.stringify({ type: "result", action: "desktop.click", revision: "rev-2", effect: "unchanged" }) }])
+    }),
+  )
+  it.effect("exposes an AX-inaccessible window state rather than hiding its pixels", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(registry, call({ action: "desktop.inspect", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73 }, "ax-inaccessible"))
+      expect(settlement.output?.content).toEqual([{ type: "text", text: JSON.stringify({ type: "result", action: "desktop.inspect", revision: "rev-1", accessible: false, elements: [] }) }])
+    }),
+  )
+  it.effect("lists apps without a target claim and launches with bundle-scoped permission", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(registry, call({ action: "desktop.list", platform: "macos" }, "list"))
+      expect(calls).toEqual(["permission:computer:macos.desktop/list", "guardrail:computer:macos.desktop/list:true", "native:desktop.list", "guardrail:release"])
+      calls.length = 0
+      yield* settleTool(registry, call({ action: "desktop.launch", platform: "macos", bundle_id: "com.example.fixture" }, "launch"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/launch",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/launch:true",
+        "native:desktop.launch",
+        "guardrail:release",
+      ])
+    }),
+  )
+
+  it.effect("maps coordinate and keyboard actions to native requests without guessing an element", () =>
+    Effect.gen(function* () {
+      actions.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      for (const [index, fields] of [
+        { action: "desktop.click", x: 15, y: 22, button: "right", count: 2 },
+        { action: "desktop.drag", from_x: 1, from_y: 2, to_x: 30, to_y: 40 },
+        { action: "desktop.scroll", x: 15, y: 22, delta_x: -3, delta_y: 6 },
+        { action: "desktop.type", text: "hello" },
+        { action: "desktop.key", key: "a", modifiers: ["command"] },
+      ].entries()) {
+        yield* settleTool(registry, call({ ...fields, platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73, expected_revision: "rev-1" }, `mapping-${index}`))
+      }
+      expect(actions).toEqual([
+        { type: "desktop.click", x: 15, y: 22, button: "right", count: 2 },
+        { type: "desktop.drag", fromX: 1, fromY: 2, toX: 30, toY: 40 },
+        { type: "desktop.scroll", x: 15, y: 22, deltaX: -3, deltaY: 6 },
+        { type: "desktop.type", text: "hello" },
+        { type: "desktop.key", key: "a", modifiers: ["command"] },
+      ])
+    }),
+  )
+
   it.effect("reports filtered provider status without a permission or native call", () =>
     Effect.gen(function* () {
       calls.length = 0
@@ -132,7 +196,7 @@ describe("computer tool policy ordering", () => {
       )
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.googlecode.iterm2/41/2/iterm-session-guid",
-        "guardrail:shell:printf safe",
+        "guardrail:shell:printf safe:true",
         "native:iterm.send_text",
         "guardrail:release",
       ])
@@ -159,7 +223,7 @@ describe("computer tool policy ordering", () => {
       )
       expect(calls).toEqual([
         "permission:computer:fixture/old.txt,moved/old.txt",
-        "guardrail:file_mutation:/workspace/fixture/old.txt,/workspace/moved/old.txt",
+        "guardrail:file_mutation:/workspace/fixture/old.txt,/workspace/moved/old.txt:true",
         "native:finder.move",
         "guardrail:release",
       ])
@@ -188,7 +252,7 @@ describe("computer tool policy ordering", () => {
       )
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/451/73",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/0",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/0:true",
         "native:desktop.click",
         "guardrail:release",
       ])
@@ -209,14 +273,14 @@ describe("computer tool policy ordering", () => {
       )
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/451/73",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73:true",
         "native:desktop.capture",
         "guardrail:release",
       ])
       expect(settlement.output?.content).toEqual([
         {
           type: "text",
-          text: JSON.stringify({ type: "result", action: "desktop.capture", revision: "rev-1", image: "image/jpeg" }),
+          text: JSON.stringify({ type: "result", action: "desktop.capture", revision: "rev-1", image: "image/jpeg", width: 320, height: 240, scale: 1 }),
         },
         { type: "file", uri: "data:image/jpeg;base64,base64", mime: "image/jpeg", name: "desktop-window.jpg" },
       ])
@@ -246,10 +310,25 @@ describe("computer tool policy ordering", () => {
       )
       expect(calls).toEqual([
         "permission:computer:macos.bundle_id/com.example.fixture/451/73",
-        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/1/2,safe input",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/451/73,element/1/2,safe input:true",
         "native:desktop.type",
         "guardrail:release",
       ])
+    }),
+  )
+})
+
+describe("computer tool input", () => {
+  const decode = Schema.decodeUnknownSync(ComputerTool.Input)
+  it.effect("accepts integer-valued numeric strings in every integer field", () =>
+    Effect.sync(() => {
+      expect(decode({ action: "desktop.click", platform: "macos", bundle_id: "com.example.fixture", pid: "451", window_id: "73", x: "12", y: "13", count: "2", expected_revision: "rev" })).toMatchObject({ pid: 451, window_id: 73, x: 12, y: 13, count: 2 })
+      expect(decode({ action: "desktop.click", platform: "macos", bundle_id: "com.example.fixture", pid: "451", window_id: "73", element: ["0", "11"], expected_revision: "rev" })).toMatchObject({ element: [0, 11] })
+      expect(decode({ action: "iterm.inspect", platform: "macos", window_id: "41", tab_index: "2", session_id: "id" })).toMatchObject({ window_id: 41, tab_index: 2 })
+      expect(decode({ action: "desktop.drag", platform: "macos", bundle_id: "x", pid: "1", window_id: "2", expected_revision: "rev", from_x: "3", from_y: "4", to_x: "5", to_y: "6" })).toMatchObject({ from_x: 3, from_y: 4, to_x: 5, to_y: 6 })
+      expect(decode({ action: "desktop.scroll", platform: "macos", bundle_id: "x", pid: "1", window_id: "2", expected_revision: "rev", x: "3", y: "4", delta_x: "-5", delta_y: "6" })).toMatchObject({ delta_x: -5, delta_y: 6 })
+      for (const value of ["-1", "1.2", "invalid"]) expect(() => decode({ action: "desktop.inspect", platform: "macos", bundle_id: "com.example.fixture", pid: value, window_id: 73 })).toThrow()
+      expect(() => decode({ action: "desktop.drag", platform: "macos", bundle_id: "x", pid: 1, window_id: 2, expected_revision: "rev", from_x: "-1", from_y: 0, to_x: 1, to_y: 1 })).toThrow()
     }),
   )
 })

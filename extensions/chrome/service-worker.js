@@ -16,6 +16,63 @@ const RECONNECT_ALARM = "browser-reconnect"
 const RECOVERY_ALARM = "browser-recovery"
 const MAX_CAPTURE_INSPECTION_DEPTH = 32
 const MAX_CAPTURE_INSPECTION_NODES = 10_000
+const CURSOR_WORLD = "ycoding-agent-cursor"
+const CURSOR_ANIMATION_TIMEOUT_MS = 500
+const CURSOR_COMMAND_TIMEOUT_MS = 600
+const CURSOR_SCRIPT = `async ({x,y,click,remove}) => {
+  const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
+  const previous = hosts.at(-1)
+  const startX = previous ? Number(previous.dataset.x) : innerWidth / 2
+  const startY = previous ? Number(previous.dataset.y) : innerHeight / 2
+  if (remove) {
+    for (const host of hosts) host.remove()
+    return
+  }
+  for (const host of hosts) host.remove()
+  const host = document.createElement("div")
+  host.dataset.ycodingAgentCursor = ""
+  host.dataset.x = String(startX)
+  host.dataset.y = String(startY)
+  host.style.cssText = "position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;"
+  const root = host.attachShadow({mode:'closed'})
+  root.innerHTML = '<style>:host,.cursor,.arrow,.label,.ripple{pointer-events:none}.cursor{position:fixed;left:0;top:0;will-change:transform;color:#8b5cf6;font:12px/1.2 system-ui,sans-serif;filter:drop-shadow(0 1px 2px #0008)}.arrow{font-size:24px;line-height:20px}.label{position:absolute;left:14px;top:15px;padding:3px 6px;border-radius:5px;background:#6d28d9;color:white;white-space:nowrap}.ripple{position:fixed;width:22px;height:22px;margin:-11px;border:2px solid #a78bfa;border-radius:50%;animation:ripple .45s ease-out forwards}@keyframes ripple{to{transform:scale(2);opacity:0}}</style><div class="cursor"><span class="arrow">➤</span><span class="label">YCoding</span></div>'
+  document.documentElement.append(host)
+  const node = root.querySelector('.cursor')
+  node.style.transform = 'translate(' + startX + 'px,' + startY + 'px)'
+  if (document.visibilityState === "visible") {
+    let active = true
+    let timeout
+    await Promise.race([
+      new Promise(resolve => {
+        const started = performance.now()
+        const frame = now => {
+          if (!active) return resolve()
+          const progress = Math.min(1, (now - started) / 320)
+          const eased = 1 - Math.pow(1 - progress, 3)
+          const px = startX + (x - startX) * eased, py = startY + (y - startY) * eased
+          node.style.transform = 'translate(' + px + 'px,' + py + 'px)'
+          if (progress < 1) requestAnimationFrame(frame)
+          else resolve()
+        }
+        requestAnimationFrame(frame)
+      }),
+      new Promise(resolve => { timeout = setTimeout(resolve, ${CURSOR_ANIMATION_TIMEOUT_MS}) }),
+    ])
+    active = false
+    clearTimeout(timeout)
+  }
+  node.style.transform = 'translate(' + x + 'px,' + y + 'px)'
+  host.dataset.x = String(x)
+  host.dataset.y = String(y)
+  if (click) {
+    const ripple = document.createElement('span')
+    ripple.className = 'ripple'
+    ripple.style.left = x + 'px'
+    ripple.style.top = y + 'px'
+    root.append(ripple)
+    setTimeout(() => ripple.remove(), 500)
+  }
+}`
 const interactiveRoles = new Set([
   "button",
   "checkbox",
@@ -121,6 +178,7 @@ chrome.debugger.onDetach.addListener((source) => {
   const id = chromeTabs.get(source.tabId)
   if (!id) return
   const tab = tabs.get(id)
+  if (tab) void removeCursor(tab)
   if (tab && !tab.owned) {
     deniedTabs.add(tab.chromeTabID)
     void persistDeniedTabs()
@@ -400,6 +458,7 @@ function persistDeniedTabs() {
 
 async function revokeTab(tab) {
   if (!tab || tabs.get(tab.id) !== tab) return
+  void removeCursor(tab)
   chromeTabs.delete(tab.chromeTabID)
   tabs.delete(tab.id)
   clearBadge(tab.chromeTabID)
@@ -728,14 +787,19 @@ async function act(message) {
     if (message.action.type === "click") await click(tab, message.action.ref, () => (dispatched = true))
     if (message.action.type === "type")
       await typeText(tab, message.action.ref, message.action.text, () => (dispatched = true))
-    if (message.action.type === "scroll")
+    if (message.action.type === "scroll") {
+      const { layoutViewport } = await command(tab.chromeTabID, "Page.getLayoutMetrics")
+      const x = (layoutViewport?.clientWidth ?? 0) / 2
+      const y = (layoutViewport?.clientHeight ?? 0) / 2
+      await moveCursor(tab, x, y)
       await command(tab.chromeTabID, "Input.dispatchMouseEvent", {
         type: "mouseWheel",
-        x: 0,
-        y: 0,
+        x,
+        y,
         deltaX: 0,
         deltaY: message.action.deltaY,
       })
+    }
     const captured = message.action.type === "capture" ? await capture(tab) : undefined
     await isActive(tab)
     const info = await tabInfo(tab)
@@ -819,6 +883,7 @@ async function click(tab, ref, markDispatched) {
   const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4
   if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
     throw new Error("The shared tab observation is stale")
+  await moveCursor(tab, x, y, true)
   markDispatched()
   await command(tab.chromeTabID, "Input.dispatchMouseEvent", {
     type: "mousePressed",
@@ -843,9 +908,59 @@ async function typeText(tab, ref, text, markDispatched) {
   rejectProtectedInput(described.node)
   if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
     throw new Error("The shared tab observation is stale")
+  await command(tab.chromeTabID, "DOM.scrollIntoViewIfNeeded", { backendNodeId })
+  const { quads } = await command(tab.chromeTabID, "DOM.getContentQuads", { backendNodeId })
+  const quad = quads?.[0]
+  if (!quad) throw new Error("Element is not visible")
+  await moveCursor(
+    tab,
+    (quad[0] + quad[2] + quad[4] + quad[6]) / 4,
+    (quad[1] + quad[3] + quad[5] + quad[7]) / 4,
+  )
   markDispatched()
   await command(tab.chromeTabID, "DOM.focus", { backendNodeId })
   await command(tab.chromeTabID, "Input.insertText", { text })
+}
+
+async function moveCursor(tab, x, y, click = false) {
+  let timeout
+  await Promise.race([
+    (async () => {
+      try {
+        const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
+        const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
+          frameId: frameTree.frame.id,
+          worldName: CURSOR_WORLD,
+        })
+        await command(tab.chromeTabID, "Runtime.evaluate", {
+          expression: `(${CURSOR_SCRIPT})(${JSON.stringify({ x, y, click })})`,
+          contextId: executionContextId,
+          awaitPromise: true,
+          returnByValue: true,
+        })
+      } catch {}
+    })(),
+    new Promise((resolve) => {
+      timeout = setTimeout(resolve, CURSOR_COMMAND_TIMEOUT_MS)
+    }),
+  ])
+  clearTimeout(timeout)
+}
+
+async function removeCursor(tab) {
+  if (!tab?.attached) return
+  try {
+    const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
+    const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
+      frameId: frameTree.frame.id,
+      worldName: CURSOR_WORLD,
+    })
+    await command(tab.chromeTabID, "Runtime.evaluate", {
+      expression: `(${CURSOR_SCRIPT})({remove:true})`,
+      contextId: executionContextId,
+      returnByValue: true,
+    })
+  } catch {}
 }
 
 async function capture(tab) {

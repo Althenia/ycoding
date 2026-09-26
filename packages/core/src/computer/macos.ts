@@ -36,9 +36,12 @@ export type Action =
   | { readonly type: "iterm.send_text"; readonly text: string; readonly newline: boolean }
   | { readonly type: "finder.move"; readonly destination: string }
   | { readonly type: "desktop.click"; readonly element: ReadonlyArray<number> }
-  | { readonly type: "desktop.type"; readonly element: ReadonlyArray<number>; readonly text: string }
+  | { readonly type: "desktop.click"; readonly x: number; readonly y: number; readonly button?: "left" | "right"; readonly count?: 1 | 2 }
+  | { readonly type: "desktop.drag"; readonly fromX: number; readonly fromY: number; readonly toX: number; readonly toY: number }
+  | { readonly type: "desktop.type"; readonly element?: ReadonlyArray<number>; readonly text: string }
   | { readonly type: "desktop.scroll"; readonly element: ReadonlyArray<number>; readonly direction: "up" | "down" }
-  | { readonly type: "desktop.key"; readonly element: ReadonlyArray<number>; readonly key: "enter" }
+  | { readonly type: "desktop.scroll"; readonly x: number; readonly y: number; readonly deltaX: number; readonly deltaY: number }
+  | { readonly type: "desktop.key"; readonly element?: ReadonlyArray<number>; readonly key: string; readonly modifiers?: ReadonlyArray<"command" | "shift" | "option" | "control" | "fn"> }
 
 interface Owner {
   readonly sessionID: string
@@ -46,6 +49,8 @@ interface Owner {
 }
 
 export type Request =
+  | { readonly action: "desktop.list"; readonly owner: Owner }
+  | { readonly action: "desktop.launch"; readonly owner: Owner; readonly bundleID: string }
   | { readonly action: "iterm.inspect"; readonly owner: Owner; readonly target: ItermTarget }
   | {
       readonly action: "iterm.send_text"
@@ -58,14 +63,25 @@ export type Request =
   | { readonly action: "finder.inspect"; readonly owner: Owner; readonly target: FinderTarget }
   | { readonly action: "desktop.inspect" | "desktop.capture"; readonly owner: Owner; readonly target: DesktopTarget }
   | {
-      readonly action: "desktop.click" | "desktop.type" | "desktop.scroll" | "desktop.key"
+      readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.scroll" | "desktop.key"
       readonly owner: Owner
       readonly target: DesktopTarget
       readonly expectedRevision: string
-      readonly element: ReadonlyArray<number>
+      readonly element?: ReadonlyArray<number>
       readonly text?: string
       readonly direction?: "up" | "down"
-      readonly key?: "enter"
+      readonly key?: string
+      readonly modifiers?: ReadonlyArray<"command" | "shift" | "option" | "control" | "fn">
+      readonly x?: number
+      readonly y?: number
+      readonly button?: "left" | "right"
+      readonly count?: 1 | 2
+      readonly fromX?: number
+      readonly fromY?: number
+      readonly toX?: number
+      readonly toY?: number
+      readonly deltaX?: number
+      readonly deltaY?: number
     }
   | {
       readonly action: "finder.move"
@@ -95,7 +111,7 @@ export const capabilities = [
     platform: "macos",
     application: "desktop",
     identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-    operations: ["inspect", "capture", "click", "type", "scroll", "key"],
+    operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key"],
   },
 ] as const satisfies ReadonlyArray<Capability>
 
@@ -130,6 +146,9 @@ export const captureRequest = (owner: Owner, target: DesktopTarget): Request => 
   target,
 })
 
+export const listRequest = (owner: Owner): Request => ({ action: "desktop.list", owner })
+export const launchRequest = (owner: Owner, bundleID: string): Request => ({ action: "desktop.launch", owner, bundleID })
+
 export function actionRequest(
   owner: Owner,
   target: Target,
@@ -158,6 +177,7 @@ export function actionRequest(
     (action.type === "desktop.click" ||
       action.type === "desktop.type" ||
       action.type === "desktop.scroll" ||
+      action.type === "desktop.drag" ||
       action.type === "desktop.key")
   )
     return { action: action.type, owner, target, expectedRevision, ...action }
@@ -181,17 +201,33 @@ const Response = Schema.Union([
       "finder.inspect",
       "finder.move",
       "desktop.inspect",
+      "desktop.list",
+      "desktop.launch",
       "desktop.capture",
       "desktop.click",
+      "desktop.drag",
       "desktop.type",
       "desktop.scroll",
       "desktop.key",
     ]),
     revision: Schema.String,
-    elements: Schema.Array(
-      Schema.Struct({ path: Schema.Array(Schema.Int), role: Schema.String, label: Schema.String }),
-    ).pipe(Schema.optional),
+    accessible: Schema.Boolean.pipe(Schema.optional),
+    effect: Schema.Literals(["changed", "unchanged", "unverified"]).pipe(Schema.optional),
+    elements: Schema.Array(Schema.Struct({ path: Schema.Array(Schema.Int), role: Schema.String, label: Schema.String,
+      frame: Schema.Tuple([Schema.Number, Schema.Number, Schema.Number, Schema.Number]),
+      actions: Schema.Array(Schema.Literals(["press", "confirm", "increment", "decrement", "show_menu"])),
+      enabled: Schema.Boolean, focused: Schema.Boolean, value: Schema.String.pipe(Schema.optional),
+    })).pipe(Schema.optional),
     image: Schema.String.pipe(Schema.optional),
+    width: Schema.Number.pipe(Schema.optional), height: Schema.Number.pipe(Schema.optional), scale: Schema.Number.pipe(Schema.optional),
+    apps: Schema.Array(Schema.Struct({ bundle_id: Schema.String, pid: Schema.Int, name: Schema.String,
+      is_active: Schema.Boolean, is_hidden: Schema.Boolean,
+      windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
+        bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })),
+    })).pipe(Schema.optional),
+    pid: Schema.Int.pipe(Schema.optional),
+    windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
+      bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })).pipe(Schema.optional),
   }),
   Schema.Struct({
     status: Schema.Literal("error"),
@@ -218,10 +254,10 @@ export function invokeWith(
       )
     const mutating =
       request.action === "iterm.send_text" ||
-      request.action === "finder.move" ||
+      request.action === "finder.move" || request.action === "desktop.launch" ||
       (request.action.startsWith("desktop.") &&
         request.action !== "desktop.inspect" &&
-        request.action !== "desktop.capture")
+        request.action !== "desktop.capture" && request.action !== "desktop.list")
     // Every request runs inside the app so its Accessibility, Screen Recording, and Automation grants apply.
     const output = Effect.uninterruptible(
       Effect.scoped(
@@ -319,10 +355,10 @@ function awaitResponse(directory: string): Promise<string> {
       try {
         const response = await open(responsePath, "r")
         try {
-          const buffer = Buffer.alloc(64 * 1024 + 1)
+          const buffer = Buffer.alloc(900_000 + 1)
           const { bytesRead } = await response.read(buffer, 0, buffer.length, 0)
           settle(
-            bytesRead > 64 * 1024
+            bytesRead > 900_000
               ? new Error("Native helper response exceeds the output limit")
               : buffer.subarray(0, bytesRead).toString("utf8"),
           )

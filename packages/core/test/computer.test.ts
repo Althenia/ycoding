@@ -31,6 +31,136 @@ const desktop = {
 }
 
 describe("scoped desktop control", () => {
+  test("decodes native app/window and capture metadata and treats invalid launch response as uncertain", async () => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const windows = [{ window_id: 73, title: "Fixture", bounds: { x: 10, y: 20, width: 300, height: 200 }, on_screen: false }]
+      const locations = yield* makeLocationComputers((request) => Effect.succeed({ status: "ok" as const,
+        action: request.action, revision: "rev-native",
+        ...(request.action === "desktop.list" ? { apps: [{ bundle_id: "com.example.fixture", pid: 451, name: "Fixture", is_active: false, is_hidden: false, windows }] } : {}),
+        ...(request.action === "desktop.capture" ? { image: "jpeg", width: 300, height: 200, scale: 1 } : {}),
+      }), Stream.never, undefined, (action) => action === "desktop.launch")
+      const list = yield* locations.first.list({ sessionID: owner, callID: "list-response" })
+      expect(list.apps?.[0]?.windows[0]).toEqual(windows[0])
+      const capture = yield* locations.first.capture({ sessionID: owner, callID: "capture-response", target: desktop })
+      expect(capture).toMatchObject({ width: 300, height: 200, scale: 1 })
+      const launched = yield* locations.first.launch({ sessionID: owner, callID: "launch-response", bundleID: "com.example.fixture" }).pipe(Effect.exit)
+      expect(Exit.isFailure(launched)).toBe(true)
+      if (Exit.isFailure(launched)) expect(Cause.squash(launched.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+      yield* locations.close
+    })))
+  })
+  test("decodes an AX-inaccessible Core Graphics window snapshot and keeps its revision claim", async () => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers((request) => Effect.succeed({
+        status: "ok" as const, action: request.action, revision: "cg-window-revision",
+        ...(request.action === "desktop.inspect" ? { accessible: false, elements: [] } : {}),
+      }))
+      const inspected = yield* locations.first.inspect({ sessionID: owner, callID: "cg-only", target: desktop })
+      expect(inspected).toMatchObject({ action: "desktop.inspect", accessible: false, elements: [], revision: "cg-window-revision" })
+      const clicked = yield* locations.first.act({ sessionID: owner, callID: "cg-click", target: desktop,
+        expectedRevision: inspected.revision, action: { type: "desktop.click", x: 20, y: 30 } })
+      expect(clicked.revision).toBe("cg-window-revision")
+      yield* locations.close
+    })))
+  })
+  test("treats a failed focus restoration as an unknown mutation and requires reinspection", async () => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers(
+        (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-focus" }),
+        Stream.never, undefined,
+        (action) => action === "desktop.click"
+          ? { status: "error" as const, code: "focus_restore_failed" as const, message: "Original foreground focus was not restored", outcome: "unknown" as const }
+          : false,
+      )
+      yield* locations.first.inspect({ sessionID: owner, callID: "before-focus", target: desktop })
+      const result = yield* locations.first.act({ sessionID: owner, callID: "focus-error", target: desktop,
+        expectedRevision: "rev-focus", action: { type: "desktop.click", x: 20, y: 30 } }).pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "focus_restore_failed", outcome: "unknown" })
+      const replay = yield* locations.first.act({ sessionID: owner, callID: "focus-replay", target: desktop,
+        expectedRevision: "rev-focus", action: { type: "desktop.click", x: 20, y: 30 } }).pipe(Effect.exit)
+      expect(Exit.isFailure(replay)).toBe(true)
+      if (Exit.isFailure(replay)) expect(replay.cause.toString()).toContain("must be inspected")
+      yield* locations.close
+    })))
+  })
+  test.each(["changed", "unchanged", "unverified"] as const)("decodes the native pointer effect %s", async (effect) => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers((request) => Effect.succeed({
+        status: "ok" as const, action: request.action, revision: "rev-effect",
+        ...(request.action === "desktop.click" ? { effect } : {}),
+      }))
+      yield* locations.first.inspect({ sessionID: owner, callID: `effect-inspect-${effect}`, target: desktop })
+      const clicked = yield* locations.first.act({ sessionID: owner, callID: `effect-click-${effect}`, target: desktop,
+        expectedRevision: "rev-effect", action: { type: "desktop.click", x: 20, y: 30 } })
+      expect(clicked.effect).toBe(effect)
+      yield* locations.close
+    })))
+  })
+  test("desktop discovery does not claim a window; launch settlement ambiguity is unknown", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "desktop.launch")
+        return Effect.fail(new Computer.NativeError({ code: "unknown_outcome", message: "uncertain", outcome: "unknown" }))
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev", apps: [] })
+    }, "darwin")
+    expect(await Effect.runPromise(computer.list({ sessionID: owner, callID: "list" }))).toMatchObject({ action: "desktop.list", apps: [] })
+    const launch = await Effect.runPromiseExit(computer.launch({ sessionID: owner, callID: "launch", bundleID: "com.example.fixture" }))
+    expect(Exit.isFailure(launch)).toBe(true)
+    if (Exit.isFailure(launch)) expect(Cause.squash(launch.cause)).toMatchObject({ code: "unknown_outcome", outcome: "unknown" })
+    expect(requests.map((request) => request.action)).toEqual(["desktop.list", "desktop.launch"])
+    expect(await Effect.runPromise(computer.inspect({ sessionID: other, callID: "inspect-after-list", target: desktop }))).toMatchObject({ revision: "rev" })
+  })
+
+  test("serializes desktop mutations across different windows so focus scopes never overlap", async () => {
+    const second = { ...desktop, pid: 452, windowID: 74 }
+    const events: string[] = []
+    const computer = Computer.make((request) =>
+      request.action === "desktop.inspect"
+        ? Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev" })
+        : Effect.gen(function* () {
+            events.push(`start:${request.action}`)
+            yield* Effect.sleep("20 millis")
+            events.push("end")
+            return { status: "ok" as const, action: request.action, revision: "rev" }
+          }),
+      "darwin",
+    )
+    await Effect.runPromise(Effect.gen(function* () {
+      yield* computer.inspect({ sessionID: owner, callID: "inspect-first", target: desktop })
+      yield* computer.inspect({ sessionID: owner, callID: "inspect-second", target: second })
+      yield* Effect.all([
+        computer.act({ sessionID: owner, callID: "click-first", target: desktop, expectedRevision: "rev",
+          action: { type: "desktop.click", x: 1, y: 1 } }),
+        computer.act({ sessionID: owner, callID: "type-second", target: second, expectedRevision: "rev",
+          action: { type: "desktop.type", text: "a" } }),
+      ], { concurrency: "unbounded" })
+    }))
+    expect(events.filter((event) => event !== "end").length).toBe(2)
+    expect(events.every((event, index) => (index % 2 === 0) === event.startsWith("start:"))).toBe(true)
+  })
+
+  test("maps pointer and key requests and retains native inspection geometry", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: `rev-${requests.length}`,
+        elements: request.action === "desktop.inspect" ? [{ path: [], role: "AXWindow", label: "Fixture", frame: [0, 0, 300, 200], actions: ["press"], enabled: true, focused: false, value: "hello" }] : undefined,
+      width: request.action === "desktop.capture" ? 300 : undefined,
+      height: request.action === "desktop.capture" ? 200 : undefined,
+      scale: request.action === "desktop.capture" ? 1 : undefined,
+    })
+    }, "darwin")
+    const inspection = await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "inspect", target: desktop }))
+    expect(inspection.elements?.[0]).toMatchObject({ frame: [0, 0, 300, 200], actions: ["press"], value: "hello" })
+    const capture = await Effect.runPromise(computer.capture({ sessionID: owner, callID: "capture", target: desktop }))
+    expect(capture).toMatchObject({ width: 300, height: 200, scale: 1 })
+    const response = await Effect.runPromise(computer.act({ sessionID: owner, callID: "drag", target: desktop,
+      expectedRevision: capture.revision, action: { type: "desktop.drag", fromX: 1, fromY: 2, toX: 30, toY: 40 } }))
+    expect(response.revision).toBe("rev-3")
+    expect(requests.at(-1)).toMatchObject({ action: "desktop.drag", fromX: 1, fromY: 2, toX: 30, toY: 40, expectedRevision: "rev-2" })
+  })
   test("waits for the app response after LaunchServices returns", async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -493,7 +623,7 @@ describe("native computer target ownership", () => {
         platform: "macos",
         application: "desktop",
         identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-        operations: ["inspect", "capture", "click", "type", "scroll", "key"],
+        operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key"],
       },
     ])
   })
@@ -553,8 +683,11 @@ const fixtureRequest = Schema.Struct({
     "finder.inspect",
     "finder.move",
     "desktop.inspect",
+    "desktop.list",
+    "desktop.launch",
     "desktop.capture",
     "desktop.click",
+    "desktop.drag",
     "desktop.type",
     "desktop.scroll",
     "desktop.key",
@@ -570,7 +703,12 @@ function makeLocationComputers(
   ) => Effect.Effect<Computer.NativeSuccess, Computer.NativeError>,
   events: Stream.Stream<EventV2.Payload> = Stream.never,
   onLaunch?: (args: ReadonlyArray<string>, signal?: AbortSignal) => void,
-  invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean,
+  invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean | {
+    readonly status: "error"
+    readonly code: "focus_restore_failed"
+    readonly message: string
+    readonly outcome: "unknown"
+  },
   respondAfterOpen = false,
 ) {
   const processLayer = Layer.mock(AppProcess.Service, {
@@ -584,17 +722,18 @@ function makeLocationComputers(
           return Effect.promise(() => readFile(requestFile, "utf8")).pipe(
             Effect.map(decodeFixtureRequest),
             Effect.flatMap((request) => invoke(request, new AbortController().signal)),
-            Effect.flatMap((response) =>
-              invalidResponse?.(response.action)
-                ? Effect.promise(() => writeFile(responseFile, "{}"))
+            Effect.flatMap((response) => {
+              const override = invalidResponse?.(response.action)
+              return override
+                ? Effect.promise(() => writeFile(responseFile, JSON.stringify(override === true ? {} : override)))
                 : respondAfterOpen
                   ? Effect.sync(() => {
                       setTimeout(() => {
                         void writeFile(responseFile, JSON.stringify(response))
                       }, 10)
                     })
-                  : Effect.promise(() => writeFile(responseFile, JSON.stringify(response))),
-            ),
+                  : Effect.promise(() => writeFile(responseFile, JSON.stringify(response)))
+            }),
             Effect.map(() => ({
               command: "computer-fixture",
               exitCode: 0,

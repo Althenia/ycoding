@@ -127,6 +127,8 @@ async function launchChrome(
       "--headless=new",
       `--user-data-dir=${join(root, "profile")}`,
       "--remote-debugging-pipe",
+      // A temporary profile needs no login keychain; without this macOS may prompt to store "Chrome Safe Storage".
+      "--use-mock-keychain",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
