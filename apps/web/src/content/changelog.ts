@@ -23,16 +23,21 @@ export type ReleaseEntry = {
 export const RELEASES: readonly ReleaseEntry[] = [
   {
     version: "0.7.2",
-    date: "2026-09-25",
-    title: "Provider compaction, signed computer-use app, and usage profiles",
+    date: "2026-09-26",
+    title: "Provider compaction, remote sign-in, and agent-readable docs",
     tags: ["Added", "Changed", "Fixed"],
     changes: [
       { tag: "Added", text: "Run provider-native compaction on the owner request with a bounded local fallback; persist private compaction items across model switches; enable Copilot Responses compaction and Claude Chat cache markers." },
       { tag: "Added", text: "Ship the signed YCoding Computer Use app beside release executables; resolve desktop windows by CG window ID, probe other Spaces, request Accessibility/Screen Recording/Automation access, and require Developer ID signing so privacy grants persist across updates." },
       { tag: "Added", text: "Install and update the paired Chrome extension alongside the CLI release with a fixed manifest public key." },
       { tag: "Added", text: "Show provider usage by profile in the TUI: one quota snapshot per stored credential profile, hide providers without usable credentials, render unreported values as '-'. Add built-in git worktree guidance to core instructions." },
+      { tag: "Added", text: "Sign in to the remote workspace from a dedicated OAuth screen (Google); read the documentation as Markdown for AI agents at /llms.txt, /llms-full.txt, and /docs/<page>.md." },
+      { tag: "Added", text: "Agents search workspace memory before substantive work and save verified durable facts afterward." },
       { tag: "Changed", text: "Remove standard hard guardrail reviews for desktop access, Chrome owned opens, and Chrome profile mutations; site permissions and custom rules still apply." },
       { tag: "Changed", text: "Scope prompt_cache_key per Session on key-carrying routes while keeping shared ledger namespace; OpenRouter Responses replay reasoning under the openai metadata key; request encrypted reasoning for GPT-5.6+." },
+      { tag: "Changed", text: "Redesign the remote workspace around one conversation column with pending requests after the transcript, one composer box, and hard reviews marked Human only; an offline machine keeps its last session list read-only." },
+      { tag: "Changed", text: "Rewrite every documentation page with exact commands, full configuration examples, and verification steps on one aligned layout." },
+      { tag: "Changed", text: "Send tool result images and files as provider-native content; reusing a prompt message ID returns the first admitted record instead of failing." },
       { tag: "Fixed", text: "Avoid deadlock when a child asks its parent during session coordination; keep shell sidebar accurate for fast exits and unloaded owners." },
     ],
   },
