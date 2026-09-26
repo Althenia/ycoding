@@ -570,6 +570,8 @@ The noninteractive client does not approve requests locally: any remaining permi
 
 Home-directory expansion applies to path resources for `external_directory`, `read`, and `edit`. It does not rewrite shell command text.
 
+`glob` and `grep` search roots must resolve inside the active Location, including through symlinks. `grep` also accepts an absolute file path directly inside YCoding's managed tool-output directory. A direct file search checks `read` permission before scanning; a directory search checks `read` for each matched file before returning any results. A denied match rejects the search result. `webfetch` checks its `webfetch` URL permission before every HTTP redirect destination, refusing an unapproved destination and limiting chains to ten redirects.
+
 Example:
 
 ```jsonc
@@ -1149,6 +1151,7 @@ Shape:
 ```
 
 `hostname`, `port`, and `password` are optional. The password is generated and persisted with mode `0600` when absent.
+HTTP requests authenticate with `Authorization: Basic` using the username `ycoding` and the configured password. Query-string credentials do not authenticate requests.
 
 Default managed ports are deterministic and product-namespaced:
 

@@ -25,6 +25,7 @@ const webFetchToolNode = makeLocationNode({
 const sessionID = SessionV2.ID.make("ses_webfetch_test")
 const requests: Array<{ readonly url: string; readonly headers: Record<string, string> }> = []
 const assertions: PermissionV2.AssertInput[] = []
+let blockedURL: string | undefined
 let respond = (_request: HttpClientRequest.HttpClientRequest) =>
   Effect.succeed(new Response("hello", { headers: { "content-type": "text/plain" } }))
 
@@ -41,7 +42,16 @@ const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
     evaluateEffective: () => Effect.die(new Error("unused PermissionV2.evaluateEffective")),
-    assert: (input) => Effect.sync(() => assertions.push(input)),
+    assert: (input) =>
+      Effect.sync(() => assertions.push(input)).pipe(
+        Effect.andThen(
+          input.resources.includes(blockedURL ?? "")
+            ? Effect.fail(
+                new PermissionV2.BlockedError({ rules: [], permission: input.action, resources: input.resources }),
+              )
+            : Effect.void,
+        ),
+      ),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
@@ -62,6 +72,7 @@ const live = testEffect(toolLayer())
 const reset = () => {
   requests.length = 0
   assertions.length = 0
+  blockedURL = undefined
   respond = () => Effect.succeed(new Response("hello", { headers: { "content-type": "text/plain" } }))
 }
 
@@ -125,7 +136,7 @@ describe("WebFetchTool registration", () => {
     }),
   )
 
-  live.effect("follows redirects while approving only the requested URL", () =>
+  live.effect("authorizes the resolved URL before following a redirect", () =>
     Effect.acquireUseRelease(
       Effect.sync(() =>
         Bun.serve({
@@ -148,10 +159,74 @@ describe("WebFetchTool registration", () => {
           })
           expect(assertions).toMatchObject([
             { sessionID, action: "webfetch", resources: [url], save: ["*"], metadata: { url, format: "text" } },
+            {
+              sessionID,
+              action: "webfetch",
+              resources: [new URL("/target", server.url).toString()],
+              save: ["*"],
+              metadata: { url: new URL("/target", server.url).toString(), format: "text" },
+            },
           ])
         }),
       (server) => Effect.promise(() => server.stop(true)),
     ),
+  )
+
+  live.effect("does not contact a redirected destination when its permission is denied", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        let destinationRequests = 0
+        const destination = Bun.serve({
+          port: 0,
+          fetch: () => {
+            destinationRequests++
+            return new Response("private")
+          },
+        })
+        const source = Bun.serve({ port: 0, fetch: () => Response.redirect(destination.url.toString()) })
+        return { destination, source, count: () => destinationRequests }
+      }),
+      (servers) =>
+        Effect.gen(function* () {
+          reset()
+          blockedURL = servers.destination.url.toString()
+          const registry = yield* ToolRegistry.Service
+          const result = yield* executeTool(registry, call({ url: servers.source.url.toString(), format: "text" }))
+          expect(result.type).toBe("error")
+          expect(servers.count()).toBe(0)
+          expect(assertions.map((input) => input.resources[0])).toEqual([servers.source.url.toString(), blockedURL])
+        }),
+      (servers) =>
+        Effect.promise(async () => {
+          await servers.source.stop(true)
+          await servers.destination.stop(true)
+        }),
+    ),
+  )
+
+  it.effect("refuses non-HTTP redirect targets without contacting them", () =>
+    Effect.gen(function* () {
+      reset()
+      respond = () => Effect.succeed(new Response("", { status: 302, headers: { location: "file:///tmp/fixture" } }))
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, call({ url: "https://example.com/redirect", format: "text" }))
+      expect(result.type).toBe("error")
+      expect(requests).toHaveLength(1)
+      expect(assertions).toHaveLength(1)
+    }),
+  )
+
+  it.effect("bounds redirect chains", () =>
+    Effect.gen(function* () {
+      reset()
+      respond = (request) =>
+        Effect.succeed(new Response("", { status: 302, headers: { location: `${request.url}/next` } }))
+      const registry = yield* ToolRegistry.Service
+      const result = yield* executeTool(registry, call({ url: "https://example.com/redirect", format: "text" }))
+      expect(result.type).toBe("error")
+      expect(requests).toHaveLength(11)
+      expect(assertions).toHaveLength(11)
+    }),
   )
 
   it.effect("rejects non-HTTP schemes before permission or transport", () =>

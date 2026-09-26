@@ -126,6 +126,8 @@ yield *
 
 Trusted tools formulate and sequence permission requests. `PermissionV2` evaluates policy and manages approval. The registry does not inject an `assertPermission` helper.
 
+The built-in `glob` and `grep` tools canonicalize their search roots and reject escapes from the active Location. `grep` also accepts a direct absolute managed tool-output file; a direct file search checks `read` before scanning, while a directory search checks `read` on each matched file before returning results. A denied file fails the whole result. `webfetch` checks the destination URL's permission before following each HTTP redirect, with at most ten redirects.
+
 Sharing a tool type does not imply equal authority. Built-ins and trusted Location plugins may capture services that are not available to application tools.
 
 ## Requests Capture Tool Values

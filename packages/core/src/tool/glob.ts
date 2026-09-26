@@ -82,9 +82,13 @@ export const Plugin = {
                       Effect.fail(new ToolFailure({ message: `Search path does not exist: ${input.path ?? "."}` })),
                     ),
                   )
+                const root = yield* fs.realPath(location.directory)
+                const resolved = yield* fs.realPath(cwd)
+                if (!FSUtil.contains(root, resolved))
+                  return yield* new ToolFailure({ message: "Search path escapes the active Location" })
                 return yield* ripgrep
                   .glob({
-                    cwd,
+                    cwd: resolved,
                     pattern: input.pattern,
                     limit: input.limit ?? FileSystem.DEFAULT_SEARCH_LIMIT,
                   })
@@ -93,7 +97,9 @@ export const Plugin = {
                       result.map((entry) =>
                         FileSystem.Entry.make({
                           ...entry,
-                          path: RelativePath.make(path.relative(location.directory, path.resolve(cwd, entry.path))),
+                          path: RelativePath.make(
+                            path.relative(location.directory, path.resolve(resolved, entry.path)),
+                          ),
                         }),
                       ),
                     ),

@@ -6,10 +6,12 @@ import { Effect, Schema } from "effect"
 import path from "path"
 import { FileSystem } from "../filesystem"
 import { FSUtil } from "../fs-util"
+import { Global } from "../global"
 import { Location } from "../location"
 import { PermissionV2 } from "../permission"
 import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
+import { ToolOutputStore } from "../tool-output-store"
 import { Tool } from "./tool"
 
 export const name = "grep"
@@ -54,6 +56,7 @@ export const Plugin = {
     const fs = yield* FSUtil.Service
     const ripgrep = yield* Ripgrep.Service
     const location = yield* Location.Service
+    const global = yield* Global.Service
     const permission = yield* PermissionV2.Service
 
     yield* ctx.tool
@@ -62,7 +65,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "Search file contents by regular expression within the active Location or an absolute managed tool-output file. Use a path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns concise file resources, line numbers, and bounded line previews.",
+              "Search file contents by regular expression within the active Location or an absolute managed tool-output file. A matching file needs read permission before its text is returned. Use a path to narrow the search, include to filter files by glob, and limit to bound the match count. Returns concise file resources, line numbers, and bounded line previews.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) => [
@@ -100,35 +103,56 @@ export const Plugin = {
                       Effect.fail(new ToolFailure({ message: `Search path does not exist: ${input.path ?? "."}` })),
                     ),
                   )
-                return yield* ripgrep
-                  .grep({
-                    cwd: info?.type === "Directory" ? target : path.dirname(target),
-                    pattern: input.pattern,
-                    file: info?.type === "File" ? path.basename(target) : undefined,
-                    include: input.include,
-                    limit: input.limit ?? FileSystem.DEFAULT_SEARCH_LIMIT,
-                  })
-                  .pipe(
-                    Effect.map((result) =>
-                      result.map((match) =>
-                        FileSystem.Match.make({
-                          ...match,
-                          entry: FileSystem.Entry.make({
-                            ...match.entry,
-                            path: RelativePath.make(
-                              path.relative(
-                                location.directory,
-                                path.resolve(
-                                  info?.type === "Directory" ? target : path.dirname(target),
-                                  match.entry.path,
-                                ),
-                              ),
-                            ),
-                          }),
-                        }),
-                      ),
-                    ),
-                  )
+                const root = yield* fs.realPath(location.directory)
+                const resolved = yield* fs.realPath(target)
+                const managed =
+                  path.isAbsolute(input.path ?? "") &&
+                  info.type === "File" &&
+                  path.dirname(resolved) ===
+                    path.join(yield* fs.realPath(global.data), ToolOutputStore.MANAGED_DIRECTORY) &&
+                  /^tool_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(path.basename(resolved))
+                if (!FSUtil.contains(root, resolved) && !managed)
+                  return yield* new ToolFailure({ message: "Search path escapes the active Location" })
+                const cwd = info.type === "File" ? path.dirname(resolved) : resolved
+                const source = { type: "tool" as const, messageID: context.messageID, callID: context.callID }
+                const authorized = new Set<string>()
+                const authorizeRead = Effect.fnUntraced(function* (file: string) {
+                  const canonical = yield* fs.realPath(file)
+                  if (!FSUtil.contains(root, canonical) && !(managed && canonical === resolved))
+                    yield* new ToolFailure({ message: "Search result escapes the active Location" })
+                  const resource = FSUtil.contains(root, canonical)
+                    ? path.relative(root, canonical).replaceAll("\\", "/")
+                    : canonical.replaceAll("\\", "/")
+                  if (!authorized.has(resource)) {
+                    yield* permission.assert({
+                      action: "read",
+                      resources: [resource],
+                      save: ["*"],
+                      sessionID: context.sessionID,
+                      agent: context.agent,
+                      source,
+                    })
+                    authorized.add(resource)
+                  }
+                })
+                if (info.type === "File") yield* authorizeRead(resolved)
+                const matches = yield* ripgrep.grep({
+                  cwd,
+                  pattern: input.pattern,
+                  file: info.type === "File" ? path.basename(resolved) : undefined,
+                  include: input.include,
+                  limit: input.limit ?? FileSystem.DEFAULT_SEARCH_LIMIT,
+                })
+                for (const match of matches) yield* authorizeRead(path.resolve(cwd, match.entry.path))
+                return matches.map((match) =>
+                  FileSystem.Match.make({
+                    ...match,
+                    entry: FileSystem.Entry.make({
+                      ...match.entry,
+                      path: RelativePath.make(path.relative(location.directory, path.resolve(cwd, match.entry.path))),
+                    }),
+                  }),
+                )
               }).pipe(
                 Effect.mapError((error) =>
                   error instanceof ToolFailure

@@ -3,7 +3,7 @@ export * as WebFetchTool from "./webfetch"
 import type { Context as PluginContext } from "@ycoding-ai/plugin/effect/plugin"
 import { ToolFailure } from "@ycoding-ai/ai"
 import { Duration, Effect, Schema } from "effect"
-import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
 import { PermissionV2 } from "../permission"
@@ -17,7 +17,7 @@ export const MAX_TIMEOUT_SECONDS = 120
 
 export const description = `Fetch content from an HTTP or HTTPS URL and return it as text, markdown, or HTML. Markdown is the default.
 
-Use a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.`
+Use a more targeted tool when one is available. This tool is read-only. Each HTTP redirect requires permission for its destination before it is followed, up to 10 redirects. Large text results may be replaced with a preview while the complete output is retained in managed storage.`
 
 const Timeout = Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT_SECONDS))
 
@@ -61,21 +61,6 @@ const headers = (format: Format, userAgent: string) => ({
 const browserUserAgent =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
 
-const isCloudflareChallenge = (error: unknown) => {
-  if (!error || typeof error !== "object" || !("reason" in error)) return false
-  const reason = error.reason
-  if (
-    !reason ||
-    typeof reason !== "object" ||
-    !("_tag" in reason) ||
-    reason._tag !== "StatusCodeError" ||
-    !("response" in reason)
-  )
-    return false
-  const response = reason.response as HttpClientResponse.HttpClientResponse
-  return response.status === 403 && response.headers["cf-mitigated"] === "challenge"
-}
-
 const request = (url: string, format: Format, userAgent = browserUserAgent) =>
   HttpClientRequest.get(url).pipe(HttpClientRequest.setHeaders(headers(format, userAgent)))
 
@@ -84,7 +69,9 @@ const assertHttpUrl = (url: URL) => {
 }
 
 const execute = (http: HttpClient.HttpClient, url: string, format: Format, userAgent = browserUserAgent) =>
-  http.execute(request(url, format, userAgent)).pipe(Effect.flatMap(HttpClientResponse.filterStatusOk))
+  http
+    .execute(request(url, format, userAgent))
+    .pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }))
 
 const collectBody = (response: HttpClientResponse.HttpClientResponse) =>
   collectBoundedResponseBody(
@@ -134,27 +121,47 @@ export const Plugin = {
                   catch: (error) => error,
                 })
 
-                yield* permission.assert({
-                  action: name,
-                  resources: [input.url],
-                  save: ["*"],
-                  metadata: input,
-                  sessionID: context.sessionID,
-                  agent: context.agent,
-                  source: { type: "tool", messageID: context.messageID, callID: context.callID },
-                })
-
                 const { body, contentType } = yield* Effect.gen(function* () {
-                  const response = yield* execute(http, input.url, input.format).pipe(
-                    Effect.catchIf(isCloudflareChallenge, () => execute(http, input.url, input.format, "ycoding")),
-                  )
-                  const contentType = response.headers["content-type"] || ""
-                  const mime = mimeFrom(contentType)
-                  if (isImageAttachment(mime))
-                    return yield* Effect.fail(new Error(`Unsupported fetched image content type: ${mime}`))
-                  if (!isTextualMime(mime))
-                    return yield* Effect.fail(new Error(`Unsupported fetched file content type: ${mime}`))
-                  return { body: yield* collectBody(response), contentType }
+                  let url = input.url
+                  for (let redirects = 0; redirects <= 10; redirects++) {
+                    yield* permission.assert({
+                      action: name,
+                      resources: [url],
+                      save: ["*"],
+                      metadata: { ...input, url },
+                      sessionID: context.sessionID,
+                      agent: context.agent,
+                      source: { type: "tool", messageID: context.messageID, callID: context.callID },
+                    })
+                    const first = yield* execute(http, url, input.format)
+                    const response =
+                      first.status === 403 && first.headers["cf-mitigated"] === "challenge"
+                        ? yield* execute(http, url, input.format, "ycoding")
+                        : first
+                    const location = response.headers.location
+                    if (response.status >= 300 && response.status < 400 && location) {
+                      if (redirects === 10) return yield* Effect.fail(new Error("Too many redirects"))
+                      const next = yield* Effect.try({
+                        try: () => {
+                          const value = new URL(location, url)
+                          assertHttpUrl(value)
+                          return value
+                        },
+                        catch: (error) => error,
+                      })
+                      url = next.href
+                      continue
+                    }
+                    yield* HttpClientResponse.filterStatusOk(response)
+                    const contentType = response.headers["content-type"] || ""
+                    const mime = mimeFrom(contentType)
+                    if (isImageAttachment(mime))
+                      return yield* Effect.fail(new Error(`Unsupported fetched image content type: ${mime}`))
+                    if (!isTextualMime(mime))
+                      return yield* Effect.fail(new Error(`Unsupported fetched file content type: ${mime}`))
+                    return { body: yield* collectBody(response), contentType }
+                  }
+                  return yield* Effect.fail(new Error("Too many redirects"))
                 }).pipe(
                   Effect.timeoutOrElse({
                     duration: Duration.seconds(input.timeout ?? DEFAULT_TIMEOUT_SECONDS),

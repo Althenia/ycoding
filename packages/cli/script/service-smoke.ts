@@ -10,7 +10,13 @@ import { BUN_BINARY, NODE_BINARY, platformBinary } from "../src/binary"
 
 const nodeBuild = process.argv.includes("--node")
 const target = `cli${nodeBuild ? "-node" : ""}-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`
-const directory = path.join(import.meta.dir, "..", "dist", ...(nodeBuild ? ["node"] : []), target, "bin")
+const outdir = process.argv.find((arg) => arg.startsWith("--outdir="))?.slice("--outdir=".length)
+const directory = path.join(
+  outdir ?? path.join(import.meta.dir, "..", "dist"),
+  ...(nodeBuild ? ["node"] : []),
+  target,
+  "bin",
+)
 const binary = path.join(directory, platformBinary(nodeBuild ? NODE_BINARY : BUN_BINARY))
 if (!(await Bun.file(binary).exists())) throw new Error(`Missing compiled CLI in ${directory}`)
 
@@ -38,19 +44,13 @@ try {
   if (info.id === undefined || info.password === undefined) throw new Error("Registration is missing service identity")
   const credential = btoa(`ycoding:${info.password}`)
   const headers = { authorization: "Basic " + credential }
-  const token = encodeURIComponent(credential)
   const health = await waitForReady(info.url, headers)
   if (health.pid !== info.pid) throw new Error("Health process does not match registration")
-  const tokenHealth = await fetch(
-    new URL(`/api/health?auth_token=${token}`, info.url),
-    { signal: AbortSignal.timeout(5_000) },
-  )
-  if (tokenHealth.status !== 200) throw new Error("Compiled service rejected query authentication")
-  const tokenOpenApi = await fetch(
-    new URL(`/openapi.json?auth_token=${token}`, info.url),
-    { signal: AbortSignal.timeout(5_000) },
-  )
-  if (tokenOpenApi.status !== 200) throw new Error("Compiled application rejected query authentication")
+  const authorizedOpenApi = await fetch(new URL("/openapi.json", info.url), {
+    headers,
+    signal: AbortSignal.timeout(5_000),
+  })
+  if (authorizedOpenApi.status !== 200) throw new Error("Compiled application rejected header authentication")
 
   const unauthorizedHealth = await fetch(new URL("/api/health", info.url), {
     signal: AbortSignal.timeout(5_000),
@@ -59,7 +59,8 @@ try {
   const unauthorizedOpenApi = await fetch(new URL("/openapi.json", info.url), {
     signal: AbortSignal.timeout(5_000),
   })
-  if (unauthorizedOpenApi.status !== 401) throw new Error("Compiled service exposed application routes without authentication")
+  if (unauthorizedOpenApi.status !== 401)
+    throw new Error("Compiled service exposed application routes without authentication")
   const unauthorizedStop = await fetch(new URL("/api/service/stop", info.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
