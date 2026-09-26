@@ -3,6 +3,7 @@ import path from "node:path"
 import { Readable } from "node:stream"
 import { createGunzip } from "node:zlib"
 import semver from "semver"
+import type { UpdateProgress } from "./progress"
 import { BrowserExtension } from "@ycoding-ai/core/browser/extension"
 
 const repository = "Althenia/ycoding"
@@ -39,6 +40,7 @@ export type InstallReleaseInput = {
     readonly rename: Rename
     readonly verifyApplication?: (application: string) => Promise<void>
   }
+  readonly onProgress?: (event: UpdateProgress.Event) => void
 }
 
 export function validVersion(version: string) {
@@ -82,10 +84,14 @@ export async function installRelease(input: InstallReleaseInput) {
   const release = `https://github.com/${repository}/releases/download/v${input.version}`
   const fetcher = input.fetch ?? fetch
   const checksumText = new TextDecoder().decode(await download(fetcher, `${release}/${checksums}`, maxChecksumsBytes))
-  const archive = await download(fetcher, `${release}/${asset}`, maxArchiveBytes)
+  const archive = await download(fetcher, `${release}/${asset}`, maxArchiveBytes, (received, total) =>
+    input.onProgress?.({ phase: "download", received, total }),
+  )
+  input.onProgress?.({ phase: "verify" })
   const expected = checksum(checksumText, asset)
   const actual = new Bun.CryptoHasher("sha256").update(archive).digest("hex")
   if (actual !== expected) throw new Error(`Checksum verification failed for ${asset}`)
+  input.onProgress?.({ phase: "install" })
   const temporary = await mkdtemp(path.join(path.dirname(input.executable), ".ycoding-update-"))
   let rollback: string | undefined
   let retainRollback = false
@@ -369,7 +375,12 @@ const statIfExists = (file: string) =>
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-async function download(fetcher: Fetch, url: string, maximum: number) {
+async function download(
+  fetcher: Fetch,
+  url: string,
+  maximum: number,
+  onBytes?: (received: number, total: number | undefined) => void,
+) {
   const response = await fetcher(url, {
     headers: { Accept: "application/octet-stream", "User-Agent": "ycoding" },
     signal: AbortSignal.timeout(60_000),
@@ -378,7 +389,8 @@ async function download(fetcher: Fetch, url: string, maximum: number) {
   if (!response.ok) throw new Error(`Failed to download ${path.basename(url)}: HTTP ${response.status}`)
   const declared = Number(response.headers.get("content-length"))
   if (Number.isFinite(declared) && declared > maximum) throw new Error(`Download is too large: ${path.basename(url)}`)
-  return readLimited(response, maximum, path.basename(url))
+  const total = Number.isFinite(declared) && declared > 0 ? declared : undefined
+  return readLimited(response, maximum, path.basename(url), onBytes && ((received) => onBytes(received, total)))
 }
 
 function requireHttps(response: Response) {
@@ -387,11 +399,12 @@ function requireHttps(response: Response) {
   }
 }
 
-async function readLimited(response: Response, maximum: number, name: string) {
+async function readLimited(response: Response, maximum: number, name: string, onBytes?: (received: number) => void) {
   if (!response.body) throw new Error(`Download returned no body: ${name}`)
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
+  onBytes?.(0)
   try {
     while (true) {
       const next = await reader.read()
@@ -399,6 +412,7 @@ async function readLimited(response: Response, maximum: number, name: string) {
       size += next.value.byteLength
       if (size > maximum) throw new Error(`Download is too large: ${name}`)
       chunks.push(next.value)
+      onBytes?.(size)
     }
   } finally {
     await reader.cancel().catch(() => {})

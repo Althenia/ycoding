@@ -64,6 +64,42 @@ describe("release updater", () => {
     expect(await updatePaths(fixture.root)).toEqual([])
   })
 
+  test("reports archive download progress, then verification and installation", async () => {
+    const fixture = await setup()
+    const events: unknown[] = []
+    await installRelease({
+      version: fixture.version,
+      executable: fixture.executable,
+      platform: "darwin",
+      arch: "arm64",
+      fetch: async (url: string) => {
+        if (url.endsWith("checksums.txt")) return new Response(fixture.checksums)
+        const bytes = new Uint8Array(await new Response(fixture.archive).arrayBuffer())
+        const half = Math.floor(bytes.byteLength / 2)
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(bytes.slice(0, half))
+              controller.enqueue(bytes.slice(half))
+              controller.close()
+            },
+          }),
+          { headers: { "content-length": String(bytes.byteLength) } },
+        )
+      },
+      onProgress: (event) => events.push(event),
+    })
+    const size = new Uint8Array(await new Response(fixture.archive).arrayBuffer()).byteLength
+    const half = Math.floor(size / 2)
+    expect(events).toEqual([
+      { phase: "download", received: 0, total: size },
+      { phase: "download", received: half, total: size },
+      { phase: "download", received: size, total: size },
+      { phase: "verify" },
+      { phase: "install" },
+    ])
+  })
+
   test("installs the v0.7.1 app bundle beside the existing macOS helper", async () => {
     const fixture = await setup({ version: "0.7.1", app: true })
     await installRelease({ version: fixture.version, executable: fixture.executable, platform: "darwin", arch: "arm64", fetch: fixtureFetch(fixture), filesystem: { rename, verifyApplication: async () => {} } })
