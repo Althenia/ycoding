@@ -65,7 +65,7 @@ import {
 } from "../../util/session-autonomy"
 import { daybreakPlan, daybreakSuccessLabel, daybreakTitle } from "../../util/session-daybreak"
 import { openBtwSession, steerBtwConclusion } from "../../util/session"
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
 
 registerYCodingSpinner()
 
@@ -78,6 +78,8 @@ export type PromptProps = {
   onAutonomyUpdated?: (sessionID: string, state: SessionAutonomyState) => void
   onLandingYoloToggle?: (next: boolean) => void
   onLandingGoalToggle?: (next: string | null) => void
+  landingDaybreak?: ModelDaybreak
+  onLandingDaybreakChange?: (next: ModelDaybreak | undefined) => void
   visible?: boolean
   disabled?: boolean
   onSubmit?: () => void
@@ -140,6 +142,7 @@ type PromptSubmissionPayload = {
   metadata: ReturnType<typeof promptSkillMetadata>
   mode: NonNullable<PromptInfo["mode"]>
   agentID: string
+  daybreak?: ModelDaybreak
   model: {
     providerID: string
     id: string
@@ -173,6 +176,7 @@ function submissionKey(sessionID: string | undefined, payload: PromptSubmissionP
     mode: payload.mode,
     agent: payload.agentID,
     model: payload.model,
+    daybreak: payload.daybreak,
     editor: payload.editor?.key,
   })
 }
@@ -899,27 +903,32 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: daybreakTitle(props.sessionID ? data.session.get(props.sessionID)?.daybreak : undefined),
+        title: daybreakTitle(props.sessionID ? data.session.get(props.sessionID)?.daybreak : props.landingDaybreak),
         name: "session.daybreak.toggle",
         category: "Session",
+        enabled: !!props.sessionID || !!props.onLandingDaybreakChange,
         palette: true,
         slash: { name: "daybreak", arguments: true as const },
         run: async (input?: string) => {
           const sessionID = props.sessionID
-          if (!sessionID) return
-          const selected = local.model.pendingTarget(sessionID) ?? local.model.current()
+          const selected = (sessionID ? local.model.pendingTarget(sessionID) : undefined) ?? local.model.current()
           const advertised = selected
             ? (data.location.model.list(currentLocation.current)?.find(
                 (item) => item.providerID === selected.providerID && item.id === selected.modelID,
               )?.daybreak ?? [])
             : []
           const plan = daybreakPlan({
-            current: data.session.get(sessionID)?.daybreak,
+            current: sessionID ? data.session.get(sessionID)?.daybreak : props.landingDaybreak,
             advertised,
             argument: input,
           })
           if (plan.type === "reject") {
             toast.show({ message: plan.message, variant: "error", duration: 3000 })
+            return
+          }
+          if (!sessionID) {
+            props.onLandingDaybreakChange?.(plan.daybreak ?? undefined)
+            toast.show({ message: daybreakSuccessLabel(plan.daybreak), variant: "success", duration: 3000 })
             return
           }
           try {
@@ -1713,6 +1722,7 @@ export function Prompt(props: PromptProps) {
       metadata,
       mode: store.mode,
       agentID,
+      daybreak: props.sessionID ? undefined : props.landingDaybreak,
       model: {
         providerID: selectedModel!.providerID,
         id: selectedModel!.modelID,
@@ -1784,6 +1794,23 @@ export function Prompt(props: PromptProps) {
       }
 
       session = created
+    }
+
+    if (submission.payload.daybreak && session?.daybreak !== submission.payload.daybreak) {
+      updateOperation(currentOperation.id, "Selecting Daybreak…")
+      const result = await client.api.session.daybreak.set(
+        { sessionID, daybreak: submission.payload.daybreak },
+        requestOptions(currentOperation),
+      ).then(
+        (session) => ({ session }),
+        (error) => ({ error }),
+      )
+      if ("error" in result) {
+        finishOperation(currentOperation.id, { message: "Daybreak selection failed · draft retained", error: true })
+        toast.show({ title: "Failed to enable Daybreak", message: errorMessage(result.error), variant: "error" })
+        return false
+      }
+      session = result.session
     }
 
     const currentMode = submission.payload.mode
@@ -2273,12 +2300,14 @@ export function Prompt(props: PromptProps) {
           return false
         }
         const modelRef = { id: currentModel.modelID, providerID: currentModel.providerID, variant: local.model.variant.current() || undefined }
+        const daybreak = props.landingDaybreak
         try {
           const created = await client.api.session.create({
             location: location as never,
             agent: agentID,
             model: modelRef,
           })
+          if (daybreak) await client.api.session.daybreak.set({ sessionID: created.id, daybreak })
           await client.api.session.autonomy.set({ sessionID: created.id, payload: { goal: candidate } })
           props.onLandingGoalToggle?.(candidate)
           clearPrompt()

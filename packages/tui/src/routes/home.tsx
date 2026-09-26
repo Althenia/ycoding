@@ -19,7 +19,7 @@ import { Header, headerModelLabel } from "./session/header"
 import { useClient } from "../context/client"
 import { BrandMark } from "../component/logo"
 import { useToast } from "../ui/toast"
-import type { SessionAutonomyState } from "@ycoding-ai/client"
+import type { ModelDaybreak, SessionAutonomyState } from "@ycoding-ai/client"
 
 let once = false
 export const landingPlaceholder = { normal: ["Message YCoding…"] }
@@ -105,18 +105,29 @@ export function Home() {
   const [promptOverlay, setPromptOverlay] = createSignal(false)
   const [landingYolo, setLandingYolo] = createSignal(false)
   const [landingGoal, setLandingGoal] = createSignal<string | undefined>(undefined)
+  const [landingDaybreak, setLandingDaybreak] = createSignal<ModelDaybreak>()
   const landingAutonomy = createMemo(() => ({ mode: "normal" as const, yolo: landingYolo(), goal: landingGoal() ? { text: landingGoal()!, status: "active" as const, iteration: 0, noProgress: 0, maxNoProgress: 3 } : undefined }) as SessionAutonomyState)
   // Global MCP elicitations can arrive without a session route, so keep them reachable from Home.
   const forms = createMemo(() => data.session.form.list("global", data.location.default()) ?? [])
   const overlay = createMemo(() => dialog.stack.length > 0 || promptOverlay())
   const homeLocation = createMemo(() => data.location.default())
+  const landingModelInfo = createMemo(() => {
+    const current = local.model.current()
+    if (!current) return undefined
+    return data.location.model
+      .list(homeLocation())
+      ?.find((item) => item.providerID === current.providerID && item.id === current.modelID)
+  })
   const landingModel = createMemo(() => {
     const current = local.model.current()
     if (!current) return undefined
-    const info = data.location.model
-      .list(homeLocation())
-      ?.find((item) => item.providerID === current.providerID && item.id === current.modelID)
-    return headerModelLabel({ providerID: current.providerID, modelID: current.modelID, name: info?.name })
+    return headerModelLabel({ providerID: current.providerID, modelID: current.modelID, name: landingModelInfo()?.name })
+  })
+  const daybreakIndicator = createMemo(() => {
+    const program = landingDaybreak()
+    if (!program) return undefined
+    const model = landingModelInfo()
+    return { program, active: model?.providerID === "openai" && model.daybreak?.includes(program) === true }
   })
   const [branch, setBranch] = createSignal<string>()
   let sent = false
@@ -172,6 +183,7 @@ export function Home() {
         branch={branch()}
         agent={local.agent.current()?.name}
         model={landingModel()}
+        daybreak={daybreakIndicator()}
         variant={local.model.variant.current()}
         state={{ type: "ready" }}
       />
@@ -193,6 +205,8 @@ export function Home() {
               placeholders={landingPlaceholder}
               landing
               autonomy={landingAutonomy()}
+              landingDaybreak={landingDaybreak()}
+              onLandingDaybreakChange={setLandingDaybreak}
               onLandingYoloToggle={(next) => setLandingYolo(next)}
               onLandingGoalToggle={(next) => setLandingGoal(next ?? undefined)}
               onOverlayChange={setPromptOverlay}

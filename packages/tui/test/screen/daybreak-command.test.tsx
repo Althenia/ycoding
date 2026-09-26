@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { ModelDaybreak, SessionMessageModelSelected, YCodingEvent } from "@ycoding-ai/client"
+import type { ModelDaybreak, ModelRef, SessionCreateInput, SessionMessageModelSelected, YCodingEvent } from "@ycoding-ai/client"
 import { json, type FetchHandler } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
 // Distinct Location and Session from every other screen suite so the shared module mocks
 // installed by renderScreen cannot collide with a concurrent lane.
-const sessionID = "ses_daybreak_command"
+let sessionID = "ses_daybreak_command"
 const directory = "/tmp/ycoding/daybreak-command"
 const location = { directory, project: { id: "proj_daybreak_command", directory } }
 const baseSession = {
@@ -22,14 +22,23 @@ const baseSession = {
 }
 
 let advertised: ModelDaybreak[] = []
-let sessionModel = baseSession.model
+let sessionModel: ModelRef = baseSession.model
 let sessionDaybreak: ModelDaybreak | undefined
 let daybreakSets: Array<{ daybreak: ModelDaybreak | null }> = []
-let promptRequests: Array<{ id: string; text: string }> = []
+let promptRequests: Array<{ id: string; text: string; resume?: boolean }> = []
 let eventSeq = 0
 const modelMessages = new Map<string, SessionMessageModelSelected>()
+let sessionExists = true
+let failDaybreak = false
+let mutations: string[] = []
+let createdIDs: string[] = []
 
-function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak }) {
+function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak; landing?: boolean }) {
+  sessionID = baseSession.id
+  sessionExists = !input.landing
+  failDaybreak = false
+  mutations = []
+  createdIDs = []
   advertised = input.advertised
   sessionModel = baseSession.model
   sessionDaybreak = input.daybreak
@@ -39,25 +48,45 @@ function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDayb
   modelMessages.clear()
 }
 
+function sessionInfo() {
+  return { ...baseSession, id: sessionID, model: sessionModel, daybreak: sessionDaybreak }
+}
+
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
-  if (url.pathname === "/api/session") return json({ data: [{ ...baseSession, model: sessionModel, daybreak: sessionDaybreak }], cursor: {} })
+  if (url.pathname === "/api/session" && request.method === "POST") {
+    const body = await request.json() as SessionCreateInput
+    sessionID = body.id ?? "ses_daybreak_landing_goal"
+    sessionModel = body.model ?? baseSession.model
+    sessionExists = true
+    createdIDs.push(sessionID)
+    mutations.push("create")
+    return json({ data: sessionInfo() })
+  }
+  if (url.pathname === "/api/session") return json({ data: sessionExists ? [sessionInfo()] : [], cursor: {} })
   if (url.pathname === "/api/session/active") return json({ data: {} })
-  if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...baseSession, model: sessionModel, daybreak: sessionDaybreak } })
+  if (url.pathname === `/api/session/${sessionID}`) return json({ data: sessionInfo() })
   if (url.pathname === `/api/session/${sessionID}/daybreak` && request.method === "POST") {
     const body = (await request.json()) as { daybreak: ModelDaybreak | null }
     daybreakSets.push(body)
+    mutations.push("daybreak")
+    if (failDaybreak) return new Response("Daybreak selection failed", { status: 500 })
     sessionDaybreak = body.daybreak === null ? undefined : body.daybreak
-    return json({ data: { ...baseSession, daybreak: sessionDaybreak } })
+    return json({ data: sessionInfo() })
+  }
+  if (url.pathname === `/api/session/${sessionID}/autonomy` && request.method === "PUT") {
+    mutations.push("goal")
+    return json({ data: { mode: "normal", yolo: 0 } })
   }
   if (url.pathname === `/api/session/${sessionID}/autonomy`) return json({ data: { mode: "normal", yolo: 0 } })
   if (url.pathname === `/api/session/${sessionID}/model` && request.method === "POST") {
     return new Response(null, { status: 204 })
   }
   if (url.pathname === `/api/session/${sessionID}/prompt` && request.method === "POST") {
-    const body = (await request.json()) as { id: string; text: string }
+    const body = (await request.json()) as { id: string; text: string; resume?: boolean }
     promptRequests.push(body)
+    mutations.push(body.resume === false ? "admit" : "wake")
     return json({
       data: {
         id: body.id,
@@ -225,15 +254,148 @@ async function expectPaletteTitle(screen: Screen, title: string) {
   )
 }
 
-async function boot(advertisedPrograms: ModelDaybreak[], daybreak?: ModelDaybreak) {
-  resetFixture({ advertised: advertisedPrograms, daybreak })
-  const screen = await renderScreen({ width: 120, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+async function boot(advertisedPrograms: ModelDaybreak[], daybreak?: ModelDaybreak, landing = false) {
+  resetFixture({ advertised: advertisedPrograms, daybreak, landing })
+  const screen = await renderScreen({ width: 120, height: 69, args: landing ? {} : { sessionID }, route, settle: "Message YCoding…" })
   await waitUntil(screen, () => screen.lines()[1].includes("openai/GPT 5.6 Terra"), "the resolved model").catch(async (error) => {
     await screen.dispose()
     throw error
   })
   return screen
 }
+
+test("toggles Daybreak from the landing palette and slash command without creating a Session", async () => {
+  const screen = await boot(["daybreak_blue", "daybreak_red"], undefined, true)
+  try {
+    screen.input.pressKey("p", { ctrl: true })
+    await waitUntil(screen, () => screen.frame().includes("Commands"), "the landing palette")
+    await screen.input.typeText("daybreak")
+    await waitUntil(screen, () => screen.frame().includes("Daybreak: off"), "the Daybreak option")
+    screen.input.pressEnter()
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Blue"), "the landing blue indicator")
+    expect(screen.frame()).toContain("What should we build?")
+
+    await submitDaybreak(screen, "red")
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Red"), "the landing red indicator")
+    await expectPaletteTitle(screen, "Daybreak: red (cycle off→blue→red, /daybreak blue|red|off)")
+    await submitDaybreak(screen, "off")
+    await waitUntil(screen, () => screen.frame().includes("Daybreak disabled"), "the landing off toast")
+    expect(screen.lines()[1]).not.toContain("Daybreak")
+    expect(mutations).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("saves landing Daybreak before the first prompt and rehydrates its Session indicator", async () => {
+  const screen = await boot(["daybreak_blue"], undefined, true)
+  try {
+    await submitDaybreak(screen, "blue")
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Blue"), "the landing indicator")
+    await focusComposer(screen)
+    await screen.input.typeText("Check the application")
+    screen.input.pressEnter()
+    await waitUntil(
+      screen,
+      () => mutations.includes("wake") && !screen.frame().includes("What should we build?") && screen.lines()[1].includes("Daybreak Blue"),
+      "the new Session",
+    )
+    expect(mutations).toEqual(["create", "daybreak", "admit", "wake"])
+    expect(daybreakSets).toEqual([{ daybreak: "daybreak_blue" }])
+    expect(promptRequests).toMatchObject([
+      { text: "Check the application", resume: false },
+      { text: "Check the application", resume: true },
+    ])
+    expect(promptRequests[1].id).toBe(promptRequests[0].id)
+    expect(screen.lines()[1]).toContain("Daybreak Blue")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("retains the landing draft and retries the same Session when saving Daybreak fails", async () => {
+  const screen = await boot(["daybreak_blue"], undefined, true)
+  try {
+    await submitDaybreak(screen, "blue")
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Blue"), "the landing indicator")
+    failDaybreak = true
+    await focusComposer(screen)
+    await screen.input.typeText("Check the application")
+    screen.input.pressEnter()
+    await waitUntil(screen, () => screen.frame().includes("Daybreak selection failed · draft retained"), "the failure")
+    expect(screen.frame()).toContain("Check the application")
+    expect(screen.frame()).toContain("What should we build?")
+    expect(promptRequests).toEqual([])
+    const created = createdIDs[0]
+
+    failDaybreak = false
+    screen.input.pressEnter()
+    await waitUntil(
+      screen,
+      () => mutations.includes("wake") && !screen.frame().includes("What should we build?") && screen.lines()[1].includes("Daybreak Blue"),
+      "the retried Session",
+    )
+    expect(createdIDs).toEqual([created])
+    expect(mutations).toEqual(["create", "daybreak", "daybreak", "admit", "wake"])
+    expect(promptRequests).toHaveLength(2)
+    expect(promptRequests[1].id).toBe(promptRequests[0].id)
+    expect(sessionDaybreak).toBe("daybreak_blue")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("rejects unsupported landing Daybreak without starting a Session", async () => {
+  const screen = await boot([], undefined, true)
+  try {
+    await submitDaybreak(screen, "blue")
+    await waitUntil(screen, () => screen.frame().includes("Daybreak blue is not available for this model"), "the rejection")
+    expect(screen.lines()[1]).not.toContain("Daybreak")
+    expect(mutations).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("applies landing Daybreak before an explicit goal starts the new Session", async () => {
+  const screen = await boot(["daybreak_blue"], undefined, true)
+  try {
+    await submitDaybreak(screen, "blue")
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Blue"), "the landing indicator")
+    await focusComposer(screen)
+    await screen.input.typeText("/goal Check the application")
+    screen.input.pressEnter()
+    await waitUntil(
+      screen,
+      () => mutations.includes("goal") && !screen.frame().includes("What should we build?") && screen.lines()[1].includes("Daybreak Blue"),
+      "the goal Session",
+    )
+    expect(mutations).toEqual(["create", "daybreak", "goal"])
+    expect(sessionDaybreak).toBe("daybreak_blue")
+    expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("does not activate a landing goal when Daybreak persistence fails", async () => {
+  const screen = await boot(["daybreak_blue"], undefined, true)
+  try {
+    await submitDaybreak(screen, "blue")
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Blue"), "the landing indicator")
+    failDaybreak = true
+    await focusComposer(screen)
+    await screen.input.typeText("/goal Check the application")
+    screen.input.pressEnter()
+    await waitUntil(screen, () => screen.frame().includes("Failed to create a session with the goal"), "the goal failure")
+    expect(mutations).toEqual(["create", "daybreak"])
+    expect(screen.frame()).toContain("/goal Check the application")
+    expect(screen.frame()).toContain("What should we build?")
+    expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
 
 test("lists the Daybreak command in the palette with the Session's current state", async () => {
   const screen = await boot(["daybreak_blue", "daybreak_red"], "daybreak_blue")
