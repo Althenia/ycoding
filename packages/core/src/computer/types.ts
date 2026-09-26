@@ -39,6 +39,21 @@ export interface BrowserWindowInfo {
   readonly tabs: ReadonlyArray<{ readonly index: number; readonly title: string; readonly url: string; readonly active: boolean }>
 }
 
+export interface ComputerFrame {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+export interface AgentDisplay {
+  readonly id: number
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
 export type NativeSuccess<Action extends string = string> = {
   readonly status: "ok"
   readonly action: Action
@@ -67,6 +82,8 @@ export type NativeSuccess<Action extends string = string> = {
   readonly tabIndex?: number
   readonly value?: string
   readonly truncated?: boolean
+  readonly display?: AgentDisplay
+  readonly originalFrame?: ComputerFrame
 }
 
 export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Computer.NativeError", {

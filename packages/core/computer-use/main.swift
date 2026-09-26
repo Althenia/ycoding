@@ -54,6 +54,14 @@ private struct BrowserWindow: Encodable {
     let tabs: [BrowserTab]
 }
 
+private struct AgentDisplay: Codable {
+    let id: UInt32
+    let x: Double
+    let y: Double
+    let width: Double
+    let height: Double
+}
+
 private struct Element: Encodable {
     let path: [Int]
     let role: String
@@ -72,7 +80,7 @@ private struct WindowInfo: Encodable {
     let on_screen: Bool
 }
 
-private struct Bounds: Encodable {
+private struct Bounds: Codable {
     let x: Double
     let y: Double
     let width: Double
@@ -92,6 +100,10 @@ private struct Request: Decodable {
     let action: String
     let owner: Owner
     let target: Target?
+    let controlDirectory: String?
+    let ownerPID: Int32?
+    let display: Bounds?
+    let originalFrame: Bounds?
     let url: String?
     let script: String?
     let bundleID: String?
@@ -156,6 +168,8 @@ private struct Response: Encodable {
     let pid: Int32?
     let windows: [WindowInfo]?
     let browserWindows: [BrowserWindow]?
+    let display: AgentDisplay?
+    let originalFrame: Bounds?
     let tabIndex: Int?
     let value: String?
     let truncated: Bool?
@@ -184,6 +198,8 @@ private enum HelperError: Error {
     case backgroundUnavailable
     case focusRestoreFailed
     case quitPending
+    case agentDisplayUnavailable
+    case windowNotMovable
 
     var response: Response {
         switch self {
@@ -213,6 +229,10 @@ private enum HelperError: Error {
             return failure("screen_recording_denied", "Allow YCoding Computer Use in System Settings > Privacy & Security > Screen Recording, then retry")
         case .backgroundUnavailable:
             return failure("background_unavailable", "Target-only background input is unavailable; use an Accessibility element route")
+        case .agentDisplayUnavailable:
+            return failure("background_unavailable", "The private agent display could not be created")
+        case .windowNotMovable:
+            return failure("background_unavailable", "The window exposes no movable Accessibility window; a full-screen window must leave full screen before staging")
         case .focusRestoreFailed:
             return failure("focus_restore_failed", "Original foreground focus could not be restored after background input; inspect before any further mutation", outcome: "unknown")
         case .quitPending:
@@ -222,17 +242,19 @@ private enum HelperError: Error {
 }
 
 private func failure(_ code: String, _ message: String, outcome: String = "not_started") -> Response {
-    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, browserWindows: nil, tabIndex: nil, value: nil, truncated: nil, accessible: nil, effect: nil, exited: nil)
+    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, browserWindows: nil, display: nil, originalFrame: nil, tabIndex: nil, value: nil, truncated: nil, accessible: nil, effect: nil, exited: nil)
 }
 
 private func success(_ action: String, _ revision: String, elements: [Element]? = nil, image: String? = nil,
                      width: Int? = nil, height: Int? = nil, scale: Double? = nil, apps: [AppInfo]? = nil,
                      pid: Int32? = nil, windows: [WindowInfo]? = nil, browserWindows: [BrowserWindow]? = nil,
+                     display: AgentDisplay? = nil, originalFrame: Bounds? = nil,
                      tabIndex: Int? = nil, value: String? = nil, truncated: Bool? = nil,
                      accessible: Bool? = nil, effect: String? = nil, exited: Bool? = nil) -> Response {
     Response(status: "ok", action: action, revision: revision, code: nil, message: nil, outcome: nil,
              elements: elements, image: image, width: width, height: height, scale: scale, apps: apps, pid: pid, windows: windows,
-             browserWindows: browserWindows, tabIndex: tabIndex, value: value, truncated: truncated,
+             browserWindows: browserWindows, display: display, originalFrame: originalFrame,
+             tabIndex: tabIndex, value: value, truncated: truncated,
              accessible: accessible, effect: effect, exited: exited)
 }
 
@@ -804,6 +826,86 @@ private func settledRevision(_ snapshot: () throws -> String) throws -> String {
     return previous
 }
 
+private func axFrame(_ element: AXUIElement) throws -> CGRect {
+    guard let rawPosition = attribute(element, kAXPositionAttribute), CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+          let rawSize = attribute(element, kAXSizeAttribute), CFGetTypeID(rawSize) == AXValueGetTypeID() else { throw HelperError.windowNotMovable }
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(rawPosition, to: AXValue.self), .cgPoint, &origin),
+          AXValueGetValue(unsafeBitCast(rawSize, to: AXValue.self), .cgSize, &size),
+          size.width > 0, size.height > 0 else { throw HelperError.windowNotMovable }
+    return CGRect(origin: origin, size: size)
+}
+
+private func requireSettable(_ element: AXUIElement, _ name: String) throws {
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(element, name as CFString, &settable) == .success, settable.boolValue else {
+        throw HelperError.windowNotMovable
+    }
+}
+
+private func setWindowPosition(_ element: AXUIElement, _ origin: CGPoint) throws {
+    var value = origin
+    guard let attributeValue = AXValueCreate(.cgPoint, &value),
+          AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, attributeValue) == .success else { throw HelperError.unknownOutcome }
+}
+
+private func setWindowSize(_ element: AXUIElement, _ size: CGSize) throws {
+    var value = size
+    guard let attributeValue = AXValueCreate(.cgSize, &value),
+          AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, attributeValue) == .success else { throw HelperError.unknownOutcome }
+}
+
+private func stageDesktop(_ request: Request, target: DesktopTarget) throws -> Response {
+    guard let expected = request.expectedRevision, let display = request.display,
+          display.width > 0, display.height > 0 else { throw HelperError.invalidRequest }
+    let displayBounds = CGRect(x: display.x, y: display.y, width: display.width, height: display.height)
+    guard displayBounds.width > 0, displayBounds.height > 0 else { throw HelperError.agentDisplayUnavailable }
+    let (window, revision, _) = try desktopSnapshot(target)
+    guard revision == expected else { throw HelperError.staleRevision }
+    guard let element = window.element else { throw HelperError.windowNotMovable }
+    let original = try axFrame(element)
+    try requireSettable(element, kAXPositionAttribute)
+    try requireSettable(element, kAXSizeAttribute)
+    let margin = 16.0
+    let origin = CGPoint(x: displayBounds.minX + margin, y: displayBounds.minY + margin)
+    let size = CGSize(
+        width: min(original.width, max(1, displayBounds.width - margin * 2)),
+        height: min(original.height, max(1, displayBounds.height - margin * 2)),
+    )
+    try setWindowPosition(element, origin)
+    try setWindowSize(element, size)
+    let settledPosition = try axFrame(element).origin
+    if abs(settledPosition.x - origin.x) > 1 || abs(settledPosition.y - origin.y) > 1 {
+        try setWindowPosition(element, origin)
+    }
+    let settled: String
+    do { settled = try settledRevision { try desktopSnapshot(target).1 } }
+    catch { throw HelperError.unknownOutcome }
+    return success(request.action, settled, originalFrame: Bounds(x: original.minX, y: original.minY, width: original.width, height: original.height))
+}
+
+private func unstageDesktop(_ request: Request, target: DesktopTarget) throws -> Response {
+    guard let original = request.originalFrame, original.width > 0, original.height > 0 else { throw HelperError.invalidRequest }
+    let window: DesktopWindow
+    do { window = try desktopWindow(target) }
+    catch { throw HelperError.targetNotFound }
+    guard let element = window.element else { throw HelperError.targetNotFound }
+    try requireSettable(element, kAXPositionAttribute)
+    try requireSettable(element, kAXSizeAttribute)
+    let origin = CGPoint(x: original.x, y: original.y)
+    try setWindowPosition(element, origin)
+    try setWindowSize(element, CGSize(width: original.width, height: original.height))
+    let restoredPosition = try axFrame(element).origin
+    if abs(restoredPosition.x - origin.x) > 1 || abs(restoredPosition.y - origin.y) > 1 {
+        try setWindowPosition(element, origin)
+    }
+    let settled: String
+    do { settled = try settledRevision { try desktopSnapshot(target).1 } }
+    catch { throw HelperError.unknownOutcome }
+    return success(request.action, settled)
+}
+
 // Target-only posting and window stamping follow trycua/cua (MIT), libs/cua-driver/rust/crates/platform-macos/src/input/{skylight,mouse}.rs.
 // An unavailable private route fails closed; never send a global HID event or warp the cursor.
 private enum BackgroundPost {
@@ -1124,6 +1226,14 @@ private func handle(_ request: Request) async throws -> Response {
     case ("desktop.quit", nil):
         guard let bundleID = request.bundleID, !bundleID.isEmpty, let pid = request.pid else { throw HelperError.invalidRequest }
         return success(request.action, "", exited: try gracefulQuit(bundleID: bundleID, pid: pid))
+    case ("desktop.stage", .desktop(let target)):
+        return try stageDesktop(request, target: target)
+    case ("desktop.unstage", .desktop(let target)):
+        do { return try unstageDesktop(request, target: target) }
+        catch let error as HelperError {
+            if case .appNotRunning = error { throw HelperError.targetNotFound }
+            throw error
+        }
     case ("desktop.inspect", .desktop(let target)):
         let (window, revision, elements) = try desktopSnapshot(target)
         return success(request.action, revision, elements: elements, accessible: window.element != nil)
@@ -1256,17 +1366,73 @@ private func encode(_ response: Response) -> Data? {
     try? JSONEncoder().encode(response)
 }
 
+private func writeResponse(_ response: Response, to destination: URL) -> Bool {
+    guard let data = encode(response) else { return false }
+    let temporary = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+    guard FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return false }
+    do {
+        try FileManager.default.moveItem(at: temporary, to: destination)
+        return true
+    } catch {
+        try? FileManager.default.removeItem(at: temporary)
+        return false
+    }
+}
+
+private func holdAgentDisplay(_ request: Request, responseURL: URL) throws {
+    guard !request.owner.sessionID.isEmpty, !request.owner.callID.isEmpty,
+          let controlDirectory = request.controlDirectory, (controlDirectory as NSString).isAbsolutePath,
+          let ownerPID = request.ownerPID, ownerPID > 0,
+          (try? FileManager.default.attributesOfItem(atPath: controlDirectory)[.type] as? FileAttributeType) == .typeDirectory else {
+        throw HelperError.invalidRequest
+    }
+    let descriptor = CGVirtualDisplayDescriptor()
+    descriptor.queue = DispatchQueue.main
+    descriptor.name = "YCoding Agent Display"
+    descriptor.maxPixelsWide = 1920
+    descriptor.maxPixelsHigh = 1200
+    descriptor.sizeInMillimeters = CGSize(width: 300, height: 190)
+    descriptor.productID = 0x1234
+    descriptor.vendorID = 0x3456
+    descriptor.serialNum = 0x0001
+    guard let display = CGVirtualDisplay(descriptor: descriptor) else { throw HelperError.agentDisplayUnavailable }
+    let settings = CGVirtualDisplaySettings()
+    settings.modes = [CGVirtualDisplayMode(width: 1920, height: 1200, refreshRate: 60)]
+    settings.hiDPI = 0
+    guard display.apply(settings) else { throw HelperError.agentDisplayUnavailable }
+    let deadline = Date().addingTimeInterval(5)
+    var bounds = CGDisplayBounds(display.displayID)
+    while (bounds.width <= 0 || bounds.height <= 0) && Date() < deadline {
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.2))
+        bounds = CGDisplayBounds(display.displayID)
+    }
+    guard display.displayID > 0, bounds.width > 0, bounds.height > 0 else { throw HelperError.agentDisplayUnavailable }
+    let info = AgentDisplay(id: display.displayID, x: bounds.minX, y: bounds.minY, width: bounds.width, height: bounds.height)
+    guard writeResponse(success(request.action, "", display: info), to: responseURL) else { throw HelperError.agentDisplayUnavailable }
+    withExtendedLifetime(display) {
+        while !FileManager.default.fileExists(atPath: URL(fileURLWithPath: controlDirectory).appendingPathComponent("stop").path),
+              kill(ownerPID, 0) == 0 {
+            let next = Date().addingTimeInterval(0.2)
+            _ = RunLoop.current.run(mode: .default, before: next)
+            let remaining = next.timeIntervalSinceNow
+            if remaining > 0 { Thread.sleep(forTimeInterval: remaining) }
+        }
+    }
+    try? FileManager.default.removeItem(atPath: controlDirectory)
+}
+
 let arguments = CommandLine.arguments
 guard arguments.count == 3 else { exit(64) }
 let input = (try? Data(contentsOf: URL(fileURLWithPath: arguments[1]))) ?? Data()
+let responseURL = URL(fileURLWithPath: arguments[2])
+if let request = try? JSONDecoder().decode(Request.self, from: input), request.action == "display.hold" {
+    do { try holdAgentDisplay(request, responseURL: responseURL) }
+    catch let error as HelperError { _ = writeResponse(error.response, to: responseURL) }
+    catch { _ = writeResponse(HelperError.agentDisplayUnavailable.response, to: responseURL) }
+    exit(0)
+}
 private let response: Response
 do { response = try await handle(JSONDecoder().decode(Request.self, from: input)) }
 catch let error as HelperError { response = error.response }
 catch { response = HelperError.invalidRequest.response }
-if let data = encode(response) {
-    let destination = URL(fileURLWithPath: arguments[2])
-    let temporary = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
-    if FileManager.default.createFile(atPath: temporary.path, contents: data, attributes: [.posixPermissions: 0o600]) {
-        try? FileManager.default.moveItem(at: temporary, to: destination)
-    }
-}
+_ = writeResponse(response, to: responseURL)

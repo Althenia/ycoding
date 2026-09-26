@@ -11,7 +11,7 @@ import { SessionV2 } from "@ycoding-ai/core/session"
 import { SessionEvent } from "@ycoding-ai/core/session/event"
 import { Cause, Context, DateTime, Effect, Exit, Fiber, Layer, PubSub, Schema, Scope, Stream } from "effect"
 import path from "node:path"
-import { readFile, stat, writeFile } from "node:fs/promises"
+import { readFile, rm, stat, writeFile } from "node:fs/promises"
 import { statSync } from "node:fs"
 
 const owner = SessionV2.ID.make("ses_computer_owner")
@@ -439,6 +439,167 @@ describe("native computer helper resolution", () => {
 })
 
 describe("native computer target ownership", () => {
+  test("holds one private display owner for multiple staged windows and stops it after the last unstage", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "display.hold")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "", display: { id: 91, x: -1280, y: 0, width: 1280, height: 800 } })
+      if (request.action === "desktop.inspect")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: `rev-${request.target.windowID}`, elements: [] })
+      if (request.action === "desktop.stage")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: `staged-${request.target.windowID}`, originalFrame: { x: 20, y: 30, width: 600, height: 400 } })
+      if (request.action === "desktop.unstage") return Effect.succeed({ status: "ok" as const, action: request.action, revision: `unstaged-${request.target.windowID}` })
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "" })
+    }, "darwin")
+    const secondWindow = { ...desktop, windowID: 74 }
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "inspect-73", target: desktop }))
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "inspect-74", target: secondWindow }))
+    await Effect.runPromise(computer.stage({ sessionID: owner, callID: "stage-73", target: desktop, expectedRevision: "rev-73" }))
+    await Effect.runPromise(computer.stage({ sessionID: owner, callID: "stage-74", target: secondWindow, expectedRevision: "rev-74" }))
+    expect(requests.filter((request) => request.action === "display.hold")).toHaveLength(1)
+    expect(requests.filter((request) => request.action === "desktop.stage").map((request) => request.action === "desktop.stage" ? request.display : undefined)).toEqual([
+      { x: -1280, y: 0, width: 1280, height: 800 },
+      { x: -1280, y: 0, width: 1280, height: 800 },
+    ])
+    expect(await Effect.runPromise(computer.unstage({ sessionID: owner, callID: "unstage-73", target: desktop }))).toMatchObject({ revision: "unstaged-73" })
+    const controlDirectory = requests.find((request) => request.action === "display.hold")?.controlDirectory
+    expect(controlDirectory).toBeString()
+    if (!controlDirectory) throw new Error("Display owner request omitted its control directory")
+    expect(await stat(path.join(controlDirectory, "stop")).then(() => true, () => false)).toBe(false)
+    await Effect.runPromise(computer.unstage({ sessionID: owner, callID: "unstage-74", target: secondWindow }))
+    expect(requests.filter((request) => request.action === "desktop.unstage").map((request) => request.action === "desktop.unstage" ? request.originalFrame : undefined)).toEqual([
+      { x: 20, y: 30, width: 600, height: 400 },
+      { x: 20, y: 30, width: 600, height: 400 },
+    ])
+    expect(await stat(path.join(controlDirectory, "stop")).then(() => true, () => false)).toBe(true)
+    await rm(controlDirectory, { recursive: true, force: true })
+  })
+
+  test("releaseSession restores only its staged windows", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "display.hold")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "", display: { id: 92, x: -1280, y: 0, width: 1280, height: 800 } })
+      if (request.action === "desktop.inspect")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: `rev-${request.target.windowID}`, elements: [] })
+      if (request.action === "desktop.stage")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: `staged-${request.target.windowID}`, originalFrame: { x: 0, y: 0, width: 500, height: 300 } })
+      if (request.action === "desktop.unstage") return Effect.succeed({ status: "ok" as const, action: request.action, revision: `unstaged-${request.target.windowID}` })
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "" })
+    }, "darwin")
+    const otherWindow = { ...desktop, windowID: 74 }
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "inspect-owner", target: desktop }))
+    await Effect.runPromise(computer.inspect({ sessionID: other, callID: "inspect-other", target: otherWindow }))
+    await Effect.runPromise(computer.stage({ sessionID: owner, callID: "stage-owner", target: desktop, expectedRevision: "rev-73" }))
+    await Effect.runPromise(computer.stage({ sessionID: other, callID: "stage-other", target: otherWindow, expectedRevision: "rev-74" }))
+    await Effect.runPromise(computer.releaseSession(owner))
+    expect(requests.filter((request) => request.action === "desktop.unstage").map((request) => request.action === "desktop.unstage" ? request.target.windowID : undefined)).toEqual([73])
+    await Effect.runPromise(computer.unstage({ sessionID: other, callID: "unstage-other", target: otherWindow }))
+    const controlDirectory = requests.find((request) => request.action === "display.hold")?.controlDirectory
+    if (controlDirectory) await rm(controlDirectory, { recursive: true, force: true })
+  })
+
+  test("drops a stale staged-window record when native restoration reports a missing target", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "display.hold")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "", display: { id: 95, x: -1280, y: 0, width: 1280, height: 800 } })
+      if (request.action === "desktop.inspect") return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-73", elements: [] })
+      if (request.action === "desktop.stage")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "staged-73", originalFrame: { x: 0, y: 0, width: 500, height: 300 } })
+      if (request.action === "desktop.unstage")
+        return Effect.fail(new Computer.NativeError({ code: "target_not_found", message: "window disappeared", outcome: "not_started" }))
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "" })
+    }, "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "inspect-73", target: desktop }))
+    await Effect.runPromise(computer.stage({ sessionID: owner, callID: "stage-73", target: desktop, expectedRevision: "rev-73" }))
+    const result = await Effect.runPromiseExit(computer.unstage({ sessionID: owner, callID: "unstage-73", target: desktop }))
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "target_not_found", outcome: "not_started" })
+    await Effect.runPromise(computer.releaseSession(owner))
+    expect(requests.filter((request) => request.action === "desktop.unstage")).toHaveLength(1)
+    const controlDirectory = requests.find((request) => request.action === "display.hold")?.controlDirectory
+    if (!controlDirectory) throw new Error("Display owner request omitted its control directory")
+    expect(await stat(path.join(controlDirectory, "stop")).then(() => true, () => false)).toBe(true)
+    await rm(controlDirectory, { recursive: true, force: true })
+  })
+
+  test("location scope finalization restores every staged window and stops its display owner", async () => {
+    const requests: Array<typeof fixtureRequest.Type> = []
+    let controlDirectory: string | undefined
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers((request) => {
+        requests.push(request)
+        if (request.action === "display.hold") {
+          controlDirectory = request.controlDirectory
+          return Effect.succeed({ status: "ok" as const, action: request.action, revision: "", display: { id: 94, x: -1280, y: 0, width: 1280, height: 800 } })
+        }
+        if (request.action === "desktop.inspect") return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-73", elements: [] })
+        if (request.action === "desktop.stage") return Effect.succeed({ status: "ok" as const, action: request.action, revision: "staged-73", originalFrame: { x: 10, y: 20, width: 500, height: 300 } })
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "unstaged-73" })
+      })
+      yield* locations.first.inspect({ sessionID: owner, callID: "scope-inspect", target: desktop })
+      yield* locations.first.stage({ sessionID: owner, callID: "scope-stage", target: desktop, expectedRevision: "rev-73" })
+      yield* locations.close
+      expect(requests.filter((request) => request.action === "desktop.unstage")).toHaveLength(1)
+      const directory = controlDirectory
+      expect(directory).toBeString()
+      if (!directory) throw new Error("Display owner request omitted its control directory")
+      expect(yield* Effect.promise(() => stat(path.join(directory, "stop")).then(() => true, () => false))).toBe(true)
+    })))
+    if (controlDirectory) await rm(controlDirectory, { recursive: true, force: true })
+  })
+
+  test("rejects a stale stage revision before display startup or native movement", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-current", elements: [] })
+    }, "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "stage-current", target: desktop }))
+    const stale = await Effect.runPromiseExit(computer.stage({ sessionID: owner, callID: "stage-stale", target: desktop, expectedRevision: "rev-stale" }))
+    expect(Exit.isFailure(stale)).toBe(true)
+    expect(requests.map((request) => request.action)).toEqual(["desktop.inspect"])
+  })
+
+  test("fails stage with not_started when the display owner does not return its bounds", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "display.hold")
+        return Effect.fail(new Computer.NativeError({ code: "background_unavailable", message: "display unavailable", outcome: "not_started" }))
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-1", elements: [] })
+    }, "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "owner-inspect", target: desktop }))
+    const result = await Effect.runPromiseExit(computer.stage({ sessionID: owner, callID: "owner-stage", target: desktop, expectedRevision: "rev-1" }))
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "background_unavailable", outcome: "not_started" })
+    expect(requests.map((request) => request.action)).toEqual(["desktop.inspect", "display.hold"])
+  })
+
+  test("invalidates a stage claim after an unknown native outcome", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "display.hold")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "", display: { id: 93, x: -1280, y: 0, width: 1280, height: 800 } })
+      if (request.action === "desktop.inspect")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-1", elements: [] })
+      return Effect.fail(new Computer.NativeError({ code: "unknown_outcome", message: "uncertain stage", outcome: "unknown" }))
+    }, "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "unknown-inspect", target: desktop }))
+    const unknown = await Effect.runPromiseExit(computer.stage({ sessionID: owner, callID: "unknown-stage", target: desktop, expectedRevision: "rev-1" }))
+    expect(Exit.isFailure(unknown)).toBe(true)
+    const replay = await Effect.runPromiseExit(computer.stage({ sessionID: owner, callID: "stage-replay", target: desktop, expectedRevision: "rev-1" }))
+    expect(Exit.isFailure(replay)).toBe(true)
+    expect(requests.map((request) => request.action)).toEqual(["desktop.inspect", "display.hold", "desktop.stage"])
+    const controlDirectory = requests.find((request) => request.action === "display.hold")?.controlDirectory
+    if (controlDirectory) await rm(controlDirectory, { recursive: true, force: true })
+  })
+
   test("encodes browser JavaScript as a typed request value", () => {
     const script = "document.title = 'typed value'"
     const request = MacOSComputer.browserActionRequest({ sessionID: owner, callID: "eval" }, browserWindow, "rev-1", { type: "webbrowser.eval", script })
@@ -756,7 +917,7 @@ describe("native computer target ownership", () => {
         platform: "macos",
         application: "desktop",
         identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-        operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key"],
+        operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key", "stage", "unstage"],
       },
       {
         platform: "macos",
@@ -839,6 +1000,9 @@ const fixtureRequest = Schema.Struct({
     "webbrowser.new_tab",
     "webbrowser.close_tab",
     "webbrowser.eval",
+    "display.hold",
+    "desktop.stage",
+    "desktop.unstage",
   ]),
   owner: Schema.Struct({ callID: Schema.String }),
   target: Schema.Unknown.pipe(Schema.optional),
@@ -846,6 +1010,10 @@ const fixtureRequest = Schema.Struct({
   expectedRevision: Schema.String.pipe(Schema.optional),
   url: Schema.String.pipe(Schema.optional),
   script: Schema.String.pipe(Schema.optional),
+  controlDirectory: Schema.String.pipe(Schema.optional),
+  ownerPID: Schema.Int.pipe(Schema.optional),
+  display: Schema.Unknown.pipe(Schema.optional),
+  originalFrame: Schema.Unknown.pipe(Schema.optional),
 })
 const decodeFixtureRequest = Schema.decodeUnknownSync(Schema.fromJsonString(fixtureRequest))
 
@@ -858,7 +1026,7 @@ function makeLocationComputers(
   onLaunch?: (args: ReadonlyArray<string>, signal?: AbortSignal) => void,
   invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean | {
     readonly status: "error"
-    readonly code: "focus_restore_failed" | "quit_pending"
+    readonly code: "focus_restore_failed" | "quit_pending" | "background_unavailable" | "stale_revision" | "unknown_outcome" | "target_not_found"
     readonly message: string
     readonly outcome: "unknown" | "not_started"
   },

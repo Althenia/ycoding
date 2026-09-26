@@ -13,6 +13,7 @@ export interface ComputerHelperTarget {
 
 interface ComputerHelperBuild {
   readonly source: string
+  readonly bridgingHeader: string
   readonly application: string
   readonly target: string
 }
@@ -21,6 +22,7 @@ export function computerHelperBuild(target: ComputerHelperTarget, binDirectory: 
   if (target.platform !== "darwin") return undefined
   return {
     source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
+    bridgingHeader: path.resolve(import.meta.dir, "../../core/computer-use/CGVirtualDisplay.h"),
     application: path.join(binDirectory, COMPUTER_HELPER_APPLICATION),
     target: `${target.arch === "x64" ? "x86_64" : target.arch}-apple-macosx13.0`,
   }
@@ -63,6 +65,8 @@ async function compileComputerHelper(plan: ComputerHelperBuild) {
     "-O",
     "-target",
     plan.target,
+    "-import-objc-header",
+    plan.bridgingHeader,
     plan.source,
     "-o",
     path.join(plan.application, "Contents", "MacOS", COMPUTER_HELPER_BINARY),

@@ -19,6 +19,7 @@ import { registerToolPlugin, settleTool, toolIdentity, waitForTool } from "./lib
 const calls: string[] = []
 const actions: Computer.Action[] = []
 let denyBrowser = false
+let denyStage = false
 const sessionID = SessionV2.ID.make("ses_computer_tool")
 
 const computer = Layer.mock(Computer.Service, {
@@ -69,6 +70,14 @@ const computer = Layer.mock(Computer.Service, {
     return Effect.succeed({ status: "ok" as const, action: input.action.type, revision: "window-rev-2", tabIndex: 2,
       ...(input.action.type === "webbrowser.eval" ? { value: "x".repeat(16_384), truncated: true } : {}) })
   },
+  stage: (input) => {
+    calls.push(`native:desktop.stage:${input.target.windowID}`)
+    return Effect.succeed({ status: "ok" as const, action: "desktop.stage" as const, revision: "staged-revision", originalFrame: { x: 1, y: 2, width: 300, height: 200 } })
+  },
+  unstage: (input) => {
+    calls.push(`native:desktop.unstage:${input.target.windowID}`)
+    return Effect.succeed({ status: "ok" as const, action: "desktop.unstage" as const, revision: "restored-revision" })
+  },
 })
 const permission = Layer.mock(PermissionV2.Service, {
   assert: (input) => {
@@ -79,7 +88,8 @@ const permission = Layer.mock(PermissionV2.Service, {
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: (input) => {
     calls.push(`guardrail:${input.action}:${input.resources.join(",")}:${input.skipReview}`)
-    if (denyBrowser && input.resources.some((resource) => resource.includes("/webbrowser."))) return Effect.fail(new SessionGuardrail.BlockedError({ rootSessionID: sessionID, sessionID, action: "computer", ruleIDs: ["deny-browser"], reason: "blocked" }))
+    if ((denyBrowser && input.resources.some((resource) => resource.includes("/webbrowser."))) || (denyStage && input.resources.some((resource) => resource.endsWith("/stage"))))
+      return Effect.fail(new SessionGuardrail.BlockedError({ rootSessionID: sessionID, sessionID, action: "computer", ruleIDs: ["deny-computer"], reason: "blocked" }))
     return Effect.succeed({ release: Effect.sync(() => calls.push("guardrail:release")) })
   },
 })
@@ -117,6 +127,44 @@ const call = (input: Record<string, unknown>, id: string) => ({
 })
 
 describe("computer tool policy ordering", () => {
+  it.effect("uses stage permission and guardrail resources for stage and unstage", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(registry, call({ action: "desktop.stage", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73, expected_revision: "rev-1" }, "stage-window"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/stage",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:true",
+        "native:desktop.stage:73",
+        "guardrail:release",
+      ])
+      calls.length = 0
+      yield* settleTool(registry, call({ action: "desktop.unstage", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73 }, "unstage-window"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/stage",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:true",
+        "native:desktop.unstage:73",
+        "guardrail:release",
+      ])
+    }),
+  )
+
+  it.effect("does not stage a window rejected by a guardrail deny rule", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      denyStage = true
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(registry, call({ action: "desktop.stage", platform: "macos", bundle_id: "com.example.fixture", pid: 451, window_id: 73, expected_revision: "rev-1" }, "stage-denied"))
+      denyStage = false
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/stage",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/stage:true",
+      ])
+    }),
+  )
+
   test("accepts only Safari and Chrome and bounds browser input", () => {
     const decode = Schema.decodeUnknownSync(ComputerTool.Input)
     expect(() => decode({ action: "webbrowser.tabs", platform: "macos", bundle_id: "com.apple.Safari" })).not.toThrow()

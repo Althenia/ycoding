@@ -70,6 +70,7 @@ describe("macOS computer helper packaging", () => {
     const arm64 = computerHelperBuild({ platform: "darwin", arch: "arm64" }, "/tmp/bin")
     expect(arm64).toEqual({
       source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
+      bridgingHeader: path.resolve(import.meta.dir, "../../core/computer-use/CGVirtualDisplay.h"),
       application: "/tmp/bin/YCoding Computer Use.app",
       target: "arm64-apple-macosx13.0",
     })
@@ -107,6 +108,7 @@ describe("macOS computer helper packaging", () => {
   test("plans the explicit source-development helper in Core's ignored cache", () => {
     expect(developmentComputerHelperBuild()).toEqual({
       source: path.resolve(import.meta.dir, "../../core/computer-use/main.swift"),
+      bridgingHeader: path.resolve(import.meta.dir, "../../core/computer-use/CGVirtualDisplay.h"),
       application: path.resolve(import.meta.dir, "../../core/.cache/computer-use/YCoding Computer Use.app"),
       target: `${process.arch === "x64" ? "x86_64" : process.arch}-apple-macosx13.0`,
     })

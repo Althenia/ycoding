@@ -72,6 +72,8 @@ export const Input = Schema.Union([
   Schema.Struct({ action: Schema.Literal("desktop.quit"), ...MacOS, bundle_id: DesktopTarget.bundle_id, pid: DesktopTarget.pid }),
   Schema.Struct({ action: Schema.Literal("desktop.inspect"), ...DesktopTarget }),
   Schema.Struct({ action: Schema.Literal("desktop.capture"), ...DesktopTarget }),
+  Schema.Struct({ action: Schema.Literal("desktop.stage"), ...DesktopTarget, ...Revision }),
+  Schema.Struct({ action: Schema.Literal("desktop.unstage"), ...DesktopTarget }),
   Schema.Struct({
     action: Schema.Literal("desktop.click"),
     ...DesktopTarget,
@@ -153,6 +155,8 @@ export const Output = Schema.Union([
       "desktop.type",
       "desktop.scroll",
       "desktop.key",
+      "desktop.stage",
+      "desktop.unstage",
       "webbrowser.tabs", "webbrowser.navigate", "webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.new_tab", "webbrowser.close_tab", "webbrowser.eval",
     ]),
     revision: Schema.String,
@@ -229,7 +233,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting.",
+              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting. Stage a window on a private agent display for off-Space Chromium/Electron/WebKit pixel input and capture; unstage it when done.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) =>
@@ -281,6 +285,23 @@ export const Plugin = {
                     : input.action === "webbrowser.eval" ? { type: input.action, script: input.script }
                     : { type: input.action }
                   return result(yield* computer.browserAct({ sessionID: context.sessionID, callID: context.callID, target, expectedRevision: input.expected_revision, action }).pipe(Effect.ensuring(reservation.release)))
+                }
+                if (input.action === "desktop.stage" || input.action === "desktop.unstage") {
+                  const target: MacOSComputer.DesktopTarget = {
+                    platform: "macos",
+                    application: "desktop",
+                    bundleID: input.bundle_id,
+                    pid: input.pid,
+                    windowID: input.window_id,
+                  }
+                  const resource = `macos.bundle_id/${target.bundleID}/stage`
+                  yield* permission.assert({ action: name, resources: [resource], save: [resource],
+                    metadata: { platform: target.platform, application: target.application }, sessionID: context.sessionID, agent: context.agent, source })
+                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID, action: "computer", resources: [resource],
+                    metadata: { operation: input.action, platform: target.platform, application: target.application }, skipReview: true })
+                  return input.action === "desktop.stage"
+                    ? result(yield* computer.stage({ sessionID: context.sessionID, callID: context.callID, target, expectedRevision: input.expected_revision }).pipe(Effect.ensuring(reservation.release)))
+                    : result(yield* computer.unstage({ sessionID: context.sessionID, callID: context.callID, target }).pipe(Effect.ensuring(reservation.release)))
                 }
                 if (input.action === "desktop.list" || input.action === "desktop.launch" || input.action === "desktop.quit") {
                   const resource = input.action === "desktop.list" ? "macos.desktop/list"

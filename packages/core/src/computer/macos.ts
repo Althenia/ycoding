@@ -7,7 +7,7 @@ import { watch } from "node:fs"
 import { Effect, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "../process"
-import { NativeError, type Capability, type NativeSuccess } from "./types"
+import { NativeError, type Capability, type ComputerFrame, type NativeSuccess } from "./types"
 
 export interface ItermTarget {
   readonly platform: "macos"
@@ -77,6 +77,7 @@ interface Owner {
 }
 
 export type Request =
+  | { readonly action: "display.hold"; readonly owner: Owner; readonly controlDirectory: string; readonly ownerPID: number }
   | { readonly action: "webbrowser.tabs"; readonly owner: Owner; readonly bundleID: BrowserTarget["bundleID"] }
   | { readonly action: "webbrowser.navigate"; readonly owner: Owner; readonly target: BrowserTarget; readonly expectedRevision: string; readonly url: string }
   | { readonly action: "webbrowser.back" | "webbrowser.forward" | "webbrowser.reload" | "webbrowser.close_tab"; readonly owner: Owner; readonly target: BrowserTarget; readonly expectedRevision: string }
@@ -96,6 +97,8 @@ export type Request =
     }
   | { readonly action: "finder.inspect"; readonly owner: Owner; readonly target: FinderTarget }
   | { readonly action: "desktop.inspect" | "desktop.capture"; readonly owner: Owner; readonly target: DesktopTarget }
+  | { readonly action: "desktop.stage"; readonly owner: Owner; readonly target: DesktopTarget; readonly expectedRevision: string; readonly display: ComputerFrame }
+  | { readonly action: "desktop.unstage"; readonly owner: Owner; readonly target: DesktopTarget; readonly originalFrame: ComputerFrame }
   | {
       readonly action: "desktop.click" | "desktop.drag" | "desktop.type" | "desktop.scroll" | "desktop.key"
       readonly owner: Owner
@@ -145,7 +148,7 @@ export const capabilities = [
     platform: "macos",
     application: "desktop",
     identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
-    operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key"],
+    operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key", "stage", "unstage"],
   },
   {
     platform: "macos",
@@ -211,6 +214,9 @@ export const captureRequest = (owner: Owner, target: DesktopTarget): Request => 
 export const listRequest = (owner: Owner): Request => ({ action: "desktop.list", owner })
 export const launchRequest = (owner: Owner, bundleID: string, remoteDebugging?: boolean): Request => ({ action: "desktop.launch", owner, bundleID, remoteDebugging })
 export const quitRequest = (owner: Owner, bundleID: string, pid: number): Request => ({ action: "desktop.quit", owner, bundleID, pid })
+export const displayHoldRequest = (owner: Owner, controlDirectory: string, ownerPID: number): Request => ({ action: "display.hold", owner, controlDirectory, ownerPID })
+export const stageRequest = (owner: Owner, target: DesktopTarget, expectedRevision: string, display: ComputerFrame): Request => ({ action: "desktop.stage", owner, target, expectedRevision, display })
+export const unstageRequest = (owner: Owner, target: DesktopTarget, originalFrame: ComputerFrame): Request => ({ action: "desktop.unstage", owner, target, originalFrame })
 
 export function actionRequest(
   owner: Owner,
@@ -290,6 +296,7 @@ const Response = Schema.Union([
       "desktop.type",
       "desktop.scroll",
       "desktop.key",
+      "desktop.stage", "desktop.unstage", "display.hold",
       "webbrowser.tabs", "webbrowser.navigate", "webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.new_tab", "webbrowser.close_tab", "webbrowser.eval",
     ]),
     revision: Schema.String,
@@ -316,6 +323,8 @@ const Response = Schema.Union([
     tabIndex: Schema.Int.pipe(Schema.optional),
     value: Schema.String.pipe(Schema.optional),
     truncated: Schema.Boolean.pipe(Schema.optional),
+    display: Schema.Struct({ id: Schema.Int, x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }).pipe(Schema.optional),
+    originalFrame: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }).pipe(Schema.optional),
   }),
   Schema.Struct({
     status: Schema.Literal("error"),
