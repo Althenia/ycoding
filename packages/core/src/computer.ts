@@ -27,6 +27,8 @@ export interface Interface {
   readonly list: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string }) => Effect.Effect<NativeSuccess, Error>
   readonly launch: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: string; readonly remoteDebugging?: boolean }) => Effect.Effect<NativeSuccess, Error>
   readonly quit: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: string; readonly pid: number }) => Effect.Effect<NativeSuccess, Error>
+  readonly browserTabs: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: MacOSComputer.BrowserTarget["bundleID"] }) => Effect.Effect<NativeSuccess, Error>
+  readonly browserAct: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly target: MacOSComputer.BrowserTarget; readonly expectedRevision: string; readonly action: MacOSComputer.BrowserAction }) => Effect.Effect<NativeSuccess, Error>
   readonly inspect: (input: {
     readonly sessionID: SessionSchema.ID
     readonly callID: string
@@ -246,7 +248,34 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
             )
           : Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" })),
       ),
+      browserTabs: Effect.fn("Computer.browserTabs")((input) =>
+        platform !== "darwin"
+          ? Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" }))
+          : runUnclaimed(locationToken, input, MacOSComputer.browserTabsRequest({ sessionID: input.sessionID, callID: input.callID }, input.bundleID)).pipe(
+              Effect.flatMap((result) => Effect.gen(function* () {
+                const windows = result.browserWindows ?? []
+                const targets = windows.map((window) => ({ platform: "macos" as const, application: "webbrowser" as const, bundleID: input.bundleID, windowID: window.window_id, tabIndex: 1 }))
+                for (const target of targets) {
+                  const claim = claims.get(MacOSComputer.targetKey(target))
+                  if (claim && (claim.sessionID !== input.sessionID || claim.locationToken !== locationToken))
+                    return yield* new OwnershipError({ message: "Browser window is owned by another Session or Location" })
+                }
+                for (const [key, claim] of claims) {
+                  if (claim.sessionID === input.sessionID && key.startsWith(`macos\0webbrowser\0${input.bundleID}\0`)) claims.delete(key)
+                }
+                for (const [index, target] of targets.entries()) claims.set(MacOSComputer.targetKey(target), { locationToken, sessionID: input.sessionID, revision: windows[index].revision })
+                return result
+              })),
+            ),
+      ),
+      browserAct: Effect.fn("Computer.browserAct")((input) => {
+        if (platform !== "darwin") return Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" }))
+        const request = MacOSComputer.browserActionRequest({ sessionID: input.sessionID, callID: input.callID }, input.target, input.expectedRevision, input.action)
+        return run(locationToken, input, request, input.expectedRevision)
+      }),
       inspect: Effect.fn("Computer.inspect")((input) => {
+        if (input.target.application === "webbrowser")
+          return Effect.fail(new NativeError({ code: "invalid_request", message: "Use browserTabs to inspect browser windows and tabs", outcome: "not_started" }))
         if (platform !== "darwin")
           return Effect.fail(
             new NativeError({

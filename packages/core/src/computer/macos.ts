@@ -30,7 +30,35 @@ export interface DesktopTarget {
   readonly windowID: number
 }
 
-export type Target = ItermTarget | FinderTarget | DesktopTarget
+export interface BrowserTarget {
+  readonly platform: "macos"
+  readonly application: "webbrowser"
+  readonly bundleID: "com.apple.Safari" | "com.google.Chrome"
+  readonly windowID: string
+  readonly tabIndex: number
+}
+
+export type BrowserAction =
+  | { readonly type: "webbrowser.navigate"; readonly url: string }
+  | { readonly type: "webbrowser.back" | "webbrowser.forward" | "webbrowser.reload" | "webbrowser.close_tab" }
+  | { readonly type: "webbrowser.new_tab"; readonly url?: string }
+  | { readonly type: "webbrowser.eval"; readonly script: string }
+
+export interface BrowserTab {
+  readonly index: number
+  readonly title: string
+  readonly url: string
+  readonly active: boolean
+}
+
+export interface BrowserWindow {
+  readonly window_id: string
+  readonly index: number
+  readonly revision: string
+  readonly tabs: ReadonlyArray<BrowserTab>
+}
+
+export type Target = ItermTarget | FinderTarget | DesktopTarget | BrowserTarget
 
 export type Action =
   | { readonly type: "iterm.send_text"; readonly text: string; readonly newline: boolean }
@@ -49,6 +77,11 @@ interface Owner {
 }
 
 export type Request =
+  | { readonly action: "webbrowser.tabs"; readonly owner: Owner; readonly bundleID: BrowserTarget["bundleID"] }
+  | { readonly action: "webbrowser.navigate"; readonly owner: Owner; readonly target: BrowserTarget; readonly expectedRevision: string; readonly url: string }
+  | { readonly action: "webbrowser.back" | "webbrowser.forward" | "webbrowser.reload" | "webbrowser.close_tab"; readonly owner: Owner; readonly target: BrowserTarget; readonly expectedRevision: string }
+  | { readonly action: "webbrowser.new_tab"; readonly owner: Owner; readonly target: BrowserTarget; readonly expectedRevision: string; readonly url?: string }
+  | { readonly action: "webbrowser.eval"; readonly owner: Owner; readonly target: BrowserTarget; readonly expectedRevision: string; readonly script: string }
   | { readonly action: "desktop.list"; readonly owner: Owner }
   | { readonly action: "desktop.launch"; readonly owner: Owner; readonly bundleID: string; readonly remoteDebugging?: boolean }
   | { readonly action: "desktop.quit"; readonly owner: Owner; readonly bundleID: string; readonly pid: number }
@@ -114,6 +147,12 @@ export const capabilities = [
     identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
     operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key"],
   },
+  {
+    platform: "macos",
+    application: "webbrowser",
+    identity: { kind: "macos.bundle_id", value: "com.apple.Safari,com.google.Chrome" },
+    operations: ["tabs", "navigate", "back", "forward", "reload", "new_tab", "close_tab", "eval"],
+  },
 ] as const satisfies ReadonlyArray<Capability>
 
 export const targetKey = (target: Target) =>
@@ -121,7 +160,9 @@ export const targetKey = (target: Target) =>
     ? `${target.platform}\0${target.application}\0${target.windowID}\0${target.tabIndex}\0${target.sessionID}`
     : target.application === "finder"
       ? `${target.platform}\0${target.application}\0${target.path}`
-      : `${target.platform}\0${target.application}\0${target.bundleID}\0${target.pid}\0${target.windowID}`
+      : target.application === "webbrowser"
+        ? `${target.platform}\0${target.application}\0${target.bundleID}\0${target.windowID}`
+        : `${target.platform}\0${target.application}\0${target.bundleID}\0${target.pid}\0${target.windowID}`
 
 export const identity = (target: Target) => {
   if (target.application === "iterm") return capabilities[0].identity
@@ -134,12 +175,32 @@ export const matches = (target: Target, action: Action) =>
   (target.application === "finder" && action.type === "finder.move") ||
   (target.application === "desktop" && action.type.startsWith("desktop."))
 
+export const browserTabsRequest = (owner: Owner, bundleID: BrowserTarget["bundleID"]): Request => ({
+  action: "webbrowser.tabs",
+  owner,
+  bundleID,
+})
+
+export const browserActionRequest = (
+  owner: Owner,
+  target: BrowserTarget,
+  expectedRevision: string,
+  action: BrowserAction,
+): Request => {
+  if (action.type === "webbrowser.navigate") return { action: action.type, url: action.url, owner, target, expectedRevision }
+  if (action.type === "webbrowser.new_tab") return { action: action.type, url: action.url, owner, target, expectedRevision }
+  if (action.type === "webbrowser.eval") return { action: action.type, script: action.script, owner, target, expectedRevision }
+  return { action: action.type, owner, target, expectedRevision }
+}
+
 export const inspectRequest = (owner: Owner, target: Target): Request =>
   target.application === "iterm"
     ? { action: "iterm.inspect", owner, target }
     : target.application === "finder"
       ? { action: "finder.inspect", owner, target }
-      : { action: "desktop.inspect", owner, target }
+      : target.application === "desktop"
+        ? { action: "desktop.inspect", owner, target }
+        : browserTabsRequest(owner, target.bundleID)
 
 export const captureRequest = (owner: Owner, target: DesktopTarget): Request => ({
   action: "desktop.capture",
@@ -229,6 +290,7 @@ const Response = Schema.Union([
       "desktop.type",
       "desktop.scroll",
       "desktop.key",
+      "webbrowser.tabs", "webbrowser.navigate", "webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.new_tab", "webbrowser.close_tab", "webbrowser.eval",
     ]),
     revision: Schema.String,
     accessible: Schema.Boolean.pipe(Schema.optional),
@@ -249,6 +311,11 @@ const Response = Schema.Union([
     windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
       bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })).pipe(Schema.optional),
     exited: Schema.Boolean.pipe(Schema.optional),
+    browserWindows: Schema.Array(Schema.Struct({ window_id: Schema.String, index: Schema.Int, revision: Schema.String,
+      tabs: Schema.Array(Schema.Struct({ index: Schema.Int, title: Schema.String, url: Schema.String, active: Schema.Boolean })) })).pipe(Schema.optional),
+    tabIndex: Schema.Int.pipe(Schema.optional),
+    value: Schema.String.pipe(Schema.optional),
+    truncated: Schema.Boolean.pipe(Schema.optional),
   }),
   Schema.Struct({
     status: Schema.Literal("error"),
@@ -276,6 +343,7 @@ export function invokeWith(
     const mutating =
       request.action === "iterm.send_text" ||
       request.action === "finder.move" || request.action === "desktop.launch" || request.action === "desktop.quit" ||
+      request.action.startsWith("webbrowser.") && request.action !== "webbrowser.tabs" ||
       (request.action.startsWith("desktop.") &&
         request.action !== "desktop.inspect" &&
         request.action !== "desktop.capture" && request.action !== "desktop.list")
@@ -456,10 +524,10 @@ function awaitResponse(directory: string): Promise<string> {
       try {
         const response = await open(responsePath, "r")
         try {
-          const buffer = Buffer.alloc(900_000 + 1)
+          const buffer = Buffer.alloc(2 * 1024 * 1024 + 1)
           const { bytesRead } = await response.read(buffer, 0, buffer.length, 0)
           settle(
-            bytesRead > 900_000
+            bytesRead > 2 * 1024 * 1024
               ? new Error("Native helper response exceeds the output limit")
               : buffer.subarray(0, bytesRead).toString("utf8"),
           )

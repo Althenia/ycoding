@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { AppNodeBuilder } from "@ycoding-ai/core/effect/app-node-builder"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
@@ -18,6 +18,7 @@ import { registerToolPlugin, settleTool, toolIdentity, waitForTool } from "./lib
 
 const calls: string[] = []
 const actions: Computer.Action[] = []
+let denyBrowser = false
 const sessionID = SessionV2.ID.make("ses_computer_tool")
 
 const computer = Layer.mock(Computer.Service, {
@@ -29,7 +30,7 @@ const computer = Layer.mock(Computer.Service, {
     calls.push(`inspect:${input.target.application}`)
     return Effect.succeed({
       status: "ok" as const,
-      action: `${input.target.application}.inspect` as const,
+      action: input.target.application === "webbrowser" ? "webbrowser.tabs" as const : `${input.target.application}.inspect` as const,
       revision: "rev-1",
       ...(input.target.application === "desktop" ? { accessible: false, elements: [] } : {}),
     })
@@ -59,6 +60,15 @@ const computer = Layer.mock(Computer.Service, {
   },
   cancel: () => Effect.succeed(false),
   releaseSession: () => Effect.void,
+  browserTabs: (input) => {
+      calls.push(`native:webbrowser.tabs:${input.bundleID}`)
+    return Effect.succeed({ status: "ok" as const, action: "webbrowser.tabs" as const, revision: "", windows: [{ window_id: "17", index: 1, revision: "window-rev", tabs: [{ index: 1, title: "Example", url: "https://example.com", active: true }] }] })
+  },
+  browserAct: (input) => {
+    calls.push(`native:${input.action.type}`)
+    return Effect.succeed({ status: "ok" as const, action: input.action.type, revision: "window-rev-2", tabIndex: 2,
+      ...(input.action.type === "webbrowser.eval" ? { value: "x".repeat(16_384), truncated: true } : {}) })
+  },
 })
 const permission = Layer.mock(PermissionV2.Service, {
   assert: (input) => {
@@ -69,6 +79,7 @@ const permission = Layer.mock(PermissionV2.Service, {
 const guardrail = Layer.mock(SessionGuardrail.Service, {
   assert: (input) => {
     calls.push(`guardrail:${input.action}:${input.resources.join(",")}:${input.skipReview}`)
+    if (denyBrowser && input.resources.some((resource) => resource.includes("/webbrowser."))) return Effect.fail(new SessionGuardrail.BlockedError({ rootSessionID: sessionID, sessionID, action: "computer", ruleIDs: ["deny-browser"], reason: "blocked" }))
     return Effect.succeed({ release: Effect.sync(() => calls.push("guardrail:release")) })
   },
 })
@@ -106,6 +117,81 @@ const call = (input: Record<string, unknown>, id: string) => ({
 })
 
 describe("computer tool policy ordering", () => {
+  test("accepts only Safari and Chrome and bounds browser input", () => {
+    const decode = Schema.decodeUnknownSync(ComputerTool.Input)
+    expect(() => decode({ action: "webbrowser.tabs", platform: "macos", bundle_id: "com.apple.Safari" })).not.toThrow()
+    expect(() => decode({ action: "webbrowser.tabs", platform: "macos", bundle_id: "com.apple.finder" })).toThrow()
+    expect(() => decode({ action: "webbrowser.navigate", platform: "macos", bundle_id: "com.google.Chrome", window_id: "17", tab_index: 1, expected_revision: "rev", url: "javascript:alert(1)" })).toThrow()
+    expect(() => decode({ action: "webbrowser.navigate", platform: "macos", bundle_id: "com.google.Chrome", window_id: "17", tab_index: 1, expected_revision: "rev", url: "https://example.com" })).not.toThrow()
+    expect(() => decode({ action: "webbrowser.navigate", platform: "macos", bundle_id: "com.google.Chrome", window_id: "17", tab_index: 1, expected_revision: "rev", url: "https:relative" })).toThrow()
+    expect(() => decode({ action: "webbrowser.back", platform: "macos", bundle_id: "com.google.Chrome", window_id: "17", tab_index: 101, expected_revision: "rev" })).toThrow()
+    expect(() => decode({ action: "webbrowser.eval", platform: "macos", bundle_id: "com.apple.Safari", window_id: "17", tab_index: 1, expected_revision: "rev", script: "x".repeat(65537) })).toThrow()
+    const output = Schema.decodeUnknownSync(ComputerTool.Output)
+    expect(() => output({ type: "result", action: "webbrowser.eval", revision: "rev", value: "é".repeat(8193) })).toThrow()
+  })
+
+  it.effect("checks browser permission then deny-capable guardrail before tab inspection", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(registry, call({ action: "webbrowser.tabs", platform: "macos", bundle_id: "com.apple.Safari" }, "browser-tabs"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.apple.Safari/webbrowser.tabs",
+        "guardrail:computer:macos.bundle_id/com.apple.Safari/webbrowser.tabs:true",
+        "native:webbrowser.tabs:com.apple.Safari",
+        "guardrail:release",
+      ])
+    }),
+  )
+
+  it.effect("does not dispatch a browser operation rejected by a guardrail deny rule", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      denyBrowser = true
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(registry, call({ action: "webbrowser.tabs", platform: "macos", bundle_id: "com.apple.Safari" }, "browser-denied"))
+      denyBrowser = false
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.apple.Safari/webbrowser.tabs",
+        "guardrail:computer:macos.bundle_id/com.apple.Safari/webbrowser.tabs:true",
+      ])
+    }),
+  )
+
+  it.effect("chains the settled revision and tab index returned from a browser mutation", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(registry, call({ action: "webbrowser.new_tab", platform: "macos", bundle_id: "com.google.Chrome", window_id: "17", expected_revision: "window-rev", url: "https://example.com" }, "browser-new-tab"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.google.Chrome/webbrowser.new_tab",
+        "guardrail:computer:macos.bundle_id/com.google.Chrome/webbrowser.new_tab:true",
+        "native:webbrowser.new_tab",
+        "guardrail:release",
+      ])
+      expect(settlement.output?.content).toContainEqual({ type: "text", text: expect.stringContaining('"tab_index":2') })
+    }),
+  )
+
+  it.effect("returns the bounded evaluation value and truncation flag", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      const settlement = yield* settleTool(registry, call({ action: "webbrowser.eval", platform: "macos", bundle_id: "com.apple.Safari", window_id: "17", tab_index: 1, expected_revision: "window-rev", script: "document.title" }, "browser-eval"))
+      const content = settlement.output?.content?.find((part) => part.type === "text")
+      expect(content?.type === "text" ? JSON.parse(content.text) : undefined).toMatchObject({ action: "webbrowser.eval", revision: "window-rev-2", truncated: true })
+      expect(content?.type === "text" ? JSON.parse(content.text).value : "").toHaveLength(16_384)
+      expect(calls.slice(0, 2)).toEqual([
+        "permission:computer:macos.bundle_id/com.apple.Safari/webbrowser.eval",
+        "guardrail:computer:macos.bundle_id/com.apple.Safari/webbrowser.eval:true",
+      ])
+    }),
+  )
+
   it.effect("uses separate permission resources for opt-in debugging and graceful quit", () =>
     Effect.gen(function* () {
       calls.length = 0

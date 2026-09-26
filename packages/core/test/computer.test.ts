@@ -30,6 +30,13 @@ const desktop = {
   pid: 451,
   windowID: 73,
 }
+const browserWindow = {
+  platform: "macos" as const,
+  application: "webbrowser" as const,
+  bundleID: "com.apple.Safari" as const,
+  windowID: "17",
+  tabIndex: 1,
+}
 
 describe("scoped desktop control", () => {
   test("surfaces a graceful-quit refusal instead of relaunching a running Electron app", async () => {
@@ -432,6 +439,59 @@ describe("native computer helper resolution", () => {
 })
 
 describe("native computer target ownership", () => {
+  test("encodes browser JavaScript as a typed request value", () => {
+    const script = "document.title = 'typed value'"
+    const request = MacOSComputer.browserActionRequest({ sessionID: owner, callID: "eval" }, browserWindow, "rev-1", { type: "webbrowser.eval", script })
+    expect(JSON.parse(JSON.stringify(request))).toEqual({
+      action: "webbrowser.eval",
+      owner: { sessionID: owner, callID: "eval" },
+      target: browserWindow,
+      expectedRevision: "rev-1",
+      script,
+    })
+  })
+
+  test("writes browser URL and JavaScript as separate typed helper request fields", async () => {
+    const requests: Array<typeof fixtureRequest.Type> = []
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers((request) => {
+        requests.push(request)
+        return Effect.succeed({
+          status: "ok" as const,
+          action: request.action,
+          revision: "rev-2",
+          ...(request.action === "webbrowser.tabs" ? { browserWindows: [{ window_id: "17", index: 1, revision: "rev-1", tabs: [{ index: 1, title: "Fixture", url: "https://example.com", active: true }] }] } : {}),
+        })
+      })
+      yield* locations.first.browserTabs({ sessionID: owner, callID: "browser-list", bundleID: "com.apple.Safari" })
+      yield* locations.first.browserAct({ sessionID: owner, callID: "browser-eval", target: browserWindow, expectedRevision: "rev-1", action: { type: "webbrowser.eval", script: "document.title = 'safe'" } })
+      expect(requests[0]).toMatchObject({ action: "webbrowser.tabs", bundleID: "com.apple.Safari" })
+      expect(requests[1]).toMatchObject({ action: "webbrowser.eval", target: browserWindow, expectedRevision: "rev-1", script: "document.title = 'safe'" })
+      yield* locations.close
+    })))
+  })
+
+  test("claims browser windows per Session, chains settled revisions, and invalidates uncertain mutations", async () => {
+    const requests: Computer.NativeRequest[] = []
+    const computer = Computer.make((request) => {
+      requests.push(request)
+      if (request.action === "webbrowser.tabs")
+        return Effect.succeed({ status: "ok" as const, action: request.action, revision: "", browserWindows: [{ window_id: "17", index: 1, revision: "rev-1", tabs: [{ index: 1, title: "A", url: "https://example.com", active: true }] }] })
+      if (request.action === "webbrowser.navigate" && request.url === "unknown")
+        return Effect.fail(new Computer.NativeError({ code: "unknown_outcome", message: "uncertain", outcome: "unknown" }))
+      return Effect.succeed({ status: "ok" as const, action: request.action, revision: "rev-2" })
+    }, "darwin")
+    expect(await Effect.runPromise(computer.browserTabs({ sessionID: owner, callID: "browser-tabs", bundleID: "com.apple.Safari" }))).toMatchObject({ browserWindows: [{ window_id: "17", revision: "rev-1" }] })
+    expect(Exit.isFailure(await Effect.runPromiseExit(computer.browserAct({ sessionID: other, callID: "other-owner", target: browserWindow, expectedRevision: "rev-1", action: { type: "webbrowser.back" } })))).toBe(true)
+    expect(Exit.isFailure(await Effect.runPromiseExit(computer.browserAct({ sessionID: owner, callID: "stale", target: browserWindow, expectedRevision: "stale", action: { type: "webbrowser.back" } })))).toBe(true)
+    expect(await Effect.runPromise(computer.browserAct({ sessionID: owner, callID: "navigate", target: browserWindow, expectedRevision: "rev-1", action: { type: "webbrowser.navigate", url: "https://example.com" } }))).toMatchObject({ revision: "rev-2" })
+    const uncertain = await Effect.runPromiseExit(computer.browserAct({ sessionID: owner, callID: "unknown", target: browserWindow, expectedRevision: "rev-2", action: { type: "webbrowser.navigate", url: "unknown" } }))
+    expect(Exit.isFailure(uncertain)).toBe(true)
+    expect(Exit.isFailure(await Effect.runPromiseExit(computer.browserAct({ sessionID: owner, callID: "no-replay", target: browserWindow, expectedRevision: "rev-2", action: { type: "webbrowser.back" } })))).toBe(true)
+    expect(requests.map((request) => request.action)).toEqual(["webbrowser.tabs", "webbrowser.navigate", "webbrowser.navigate"])
+    expect(requests[1]).toMatchObject({ target: browserWindow, expectedRevision: "rev-1", url: "https://example.com" })
+  })
+
   test("fences one host target across distinct Location service instances", async () => {
     const started = Promise.withResolvers<void>()
     const settled = Promise.withResolvers<Computer.NativeSuccess>()
@@ -698,6 +758,12 @@ describe("native computer target ownership", () => {
         identity: { kind: "macos.bundle_id", value: "explicit-running-app" },
         operations: ["list", "launch", "inspect", "capture", "click", "drag", "type", "scroll", "key"],
       },
+      {
+        platform: "macos",
+        application: "webbrowser",
+        identity: { kind: "macos.bundle_id", value: "com.apple.Safari,com.google.Chrome" },
+        operations: ["tabs", "navigate", "back", "forward", "reload", "new_tab", "close_tab", "eval"],
+      },
     ])
   })
 
@@ -765,8 +831,21 @@ const fixtureRequest = Schema.Struct({
     "desktop.type",
     "desktop.scroll",
     "desktop.key",
+    "webbrowser.tabs",
+    "webbrowser.navigate",
+    "webbrowser.back",
+    "webbrowser.forward",
+    "webbrowser.reload",
+    "webbrowser.new_tab",
+    "webbrowser.close_tab",
+    "webbrowser.eval",
   ]),
   owner: Schema.Struct({ callID: Schema.String }),
+  target: Schema.Unknown.pipe(Schema.optional),
+  bundleID: Schema.String.pipe(Schema.optional),
+  expectedRevision: Schema.String.pipe(Schema.optional),
+  url: Schema.String.pipe(Schema.optional),
+  script: Schema.String.pipe(Schema.optional),
 })
 const decodeFixtureRequest = Schema.decodeUnknownSync(Schema.fromJsonString(fixtureRequest))
 

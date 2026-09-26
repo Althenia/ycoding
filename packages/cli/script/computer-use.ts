@@ -110,7 +110,7 @@ async function compileComputerHelper(plan: ComputerHelperBuild) {
 <key>CFBundleName</key><string>YCoding Computer Use</string>
 <key>CFBundleDisplayName</key><string>YCoding Computer Use</string>
 <key>CFBundleIconFile</key><string>YCoding.icns</string>
-<key>NSAppleEventsUsageDescription</key><string>YCoding Computer Use controls the iTerm sessions and Finder items you ask YCoding to operate.</string>
+<key>NSAppleEventsUsageDescription</key><string>YCoding Computer Use controls the iTerm sessions, Finder items, and Safari or Chrome tabs you ask YCoding to operate.</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSUIElement</key><true/>

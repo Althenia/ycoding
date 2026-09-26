@@ -32,6 +32,13 @@ export interface AppInfo {
   readonly windows: ReadonlyArray<WindowInfo>
 }
 
+export interface BrowserWindowInfo {
+  readonly window_id: string
+  readonly index: number
+  readonly revision: string
+  readonly tabs: ReadonlyArray<{ readonly index: number; readonly title: string; readonly url: string; readonly active: boolean }>
+}
+
 export type NativeSuccess<Action extends string = string> = {
   readonly status: "ok"
   readonly action: Action
@@ -54,8 +61,12 @@ export type NativeSuccess<Action extends string = string> = {
   readonly scale?: number
   readonly apps?: ReadonlyArray<AppInfo>
   readonly pid?: number
-  readonly windows?: ReadonlyArray<WindowInfo>
+  readonly windows?: ReadonlyArray<WindowInfo | BrowserWindowInfo>
+  readonly browserWindows?: ReadonlyArray<BrowserWindowInfo>
   readonly exited?: boolean
+  readonly tabIndex?: number
+  readonly value?: string
+  readonly truncated?: boolean
 }
 
 export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Computer.NativeError", {

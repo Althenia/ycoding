@@ -16,6 +16,7 @@ export const name = "computer"
 const MacOS = { platform: Schema.Literal("macos") }
 const Integer = Schema.Union([Schema.Int, Schema.NumberFromString.pipe(Schema.check(Schema.isInt()))])
 const Positive = Integer.check(Schema.isGreaterThan(0))
+const BrowserTabIndex = Integer.check(Schema.isBetween({ minimum: 1, maximum: 100 }))
 const Nonnegative = Integer.check(Schema.isGreaterThanOrEqualTo(0))
 const ItermTarget = {
   ...MacOS,
@@ -33,8 +34,28 @@ const Element = Schema.Array(Nonnegative).check(Schema.isMaxLength(12))
 const Revision = { expected_revision: Schema.String }
 const Key = Schema.String.check(Schema.isPattern(/^(?:enter|return|tab|escape|space|delete|forward_delete|up|down|left|right|home|end|page_up|page_down|f(?:[1-9]|1[0-2])|[^\x00-\x1f\x7f])$/))
 const Modifiers = Schema.Array(Schema.Literals(["command", "shift", "option", "control", "fn"]))
+const BrowserBundle = Schema.Literals(["com.apple.Safari", "com.google.Chrome"])
+const WebURL = Schema.String.check(Schema.makeFilter((value) => {
+  try {
+    const url = new URL(value)
+    return /^https?:\/\//i.test(value) && ["http:", "https:"].includes(url.protocol) && url.host.length > 0
+  } catch {
+    return false
+  }
+}, { expected: "absolute http or https URL" }))
+const BrowserTarget = { ...MacOS, bundle_id: BrowserBundle, window_id: Schema.String.check(Schema.isMinLength(1)), tab_index: BrowserTabIndex, expected_revision: Schema.String }
+const BrowserWindowTarget = { ...MacOS, bundle_id: BrowserBundle, window_id: Schema.String.check(Schema.isMinLength(1)), expected_revision: Schema.String }
+const BrowserInspect = { ...MacOS, bundle_id: BrowserBundle }
+const BrowserMutation = [
+  Schema.Struct({ action: Schema.Literal("webbrowser.tabs"), ...BrowserInspect }),
+  Schema.Struct({ action: Schema.Literal("webbrowser.navigate"), ...BrowserTarget, url: WebURL }),
+  ...(["webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.close_tab"] as const).map((action) => Schema.Struct({ action: Schema.Literal(action), ...BrowserTarget })),
+  Schema.Struct({ action: Schema.Literal("webbrowser.new_tab"), ...BrowserWindowTarget, url: WebURL.pipe(Schema.optional) }),
+  Schema.Struct({ action: Schema.Literal("webbrowser.eval"), ...BrowserTarget, script: Schema.String.check(Schema.makeFilter((value) => new TextEncoder().encode(value).byteLength <= 65_536, { expected: "JavaScript source no larger than 65536 UTF-8 bytes" })) }),
+]
 
 export const Input = Schema.Union([
+  ...BrowserMutation,
   Schema.Struct({ action: Schema.Literal("status") }),
   Schema.Struct({ action: Schema.Literal("cancel"), call_id: Schema.String }),
   Schema.Struct({ action: Schema.Literal("iterm.inspect"), ...ItermTarget }),
@@ -97,6 +118,9 @@ export const Input = Schema.Union([
   }),
 ]).pipe(Schema.toTaggedUnion("action"))
 
+type BrowserInput = Extract<typeof Input.Type, { action: "webbrowser.tabs" | "webbrowser.navigate" | "webbrowser.back" | "webbrowser.forward" | "webbrowser.reload" | "webbrowser.new_tab" | "webbrowser.close_tab" | "webbrowser.eval" }>
+const isBrowserInput = (input: typeof Input.Type): input is BrowserInput => input.action.startsWith("webbrowser.")
+
 export const Output = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("status"),
@@ -129,6 +153,7 @@ export const Output = Schema.Union([
       "desktop.type",
       "desktop.scroll",
       "desktop.key",
+      "webbrowser.tabs", "webbrowser.navigate", "webbrowser.back", "webbrowser.forward", "webbrowser.reload", "webbrowser.new_tab", "webbrowser.close_tab", "webbrowser.eval",
     ]),
     revision: Schema.String,
     accessible: Schema.Boolean.pipe(Schema.optional),
@@ -148,9 +173,14 @@ export const Output = Schema.Union([
         bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })),
     })).pipe(Schema.optional),
     pid: Schema.Int.pipe(Schema.optional),
-    windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
-      bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })).pipe(Schema.optional),
     exited: Schema.Boolean.pipe(Schema.optional),
+    windows: Schema.Union([
+      Schema.Array(Schema.Struct({ window_id: Schema.String, index: Schema.Int, revision: Schema.String, tabs: Schema.Array(Schema.Struct({ index: Schema.Int, title: Schema.String, url: Schema.String, active: Schema.Boolean })) })),
+      Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String, bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })),
+    ]).pipe(Schema.optional),
+    tab_index: Schema.Int.pipe(Schema.optional),
+    value: Schema.String.check(Schema.makeFilter((value) => new TextEncoder().encode(value).byteLength <= 16_384, { expected: "evaluated value no larger than 16384 UTF-8 bytes" })).pipe(Schema.optional),
+    truncated: Schema.Boolean.pipe(Schema.optional),
   }),
 ])
 
@@ -179,6 +209,10 @@ const result = (output: Computer.NativeSuccess) => ({
   ...(output.apps ? { apps: output.apps } : {}),
   ...(output.pid !== undefined ? { pid: output.pid, windows: output.windows } : {}),
   ...(output.exited !== undefined ? { exited: output.exited } : {}),
+  ...(output.browserWindows ? { windows: output.browserWindows } : output.windows ? { windows: output.windows } : {}),
+  ...(output.tabIndex !== undefined ? { tab_index: output.tabIndex } : {}),
+  ...(output.value !== undefined ? { value: output.value } : {}),
+  ...(output.truncated !== undefined ? { truncated: output.truncated } : {}),
 })
 
 export const Plugin = {
@@ -195,7 +229,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets.",
+              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets. Safari/Chrome tabs: webbrowser.tabs first, then pass window_id, 1-based tab_index, and that window's revision; navigate/new_tab URLs must be absolute http(s); JavaScript runs only through webbrowser.eval (and Safari back/forward/reload), which needs the browser's Allow JavaScript from Apple Events setting.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) =>
@@ -230,6 +264,23 @@ export const Plugin = {
                   type: "tool" as const,
                   messageID: context.messageID,
                   callID: context.callID,
+                }
+                if (isBrowserInput(input)) {
+                  const bundleID = input.bundle_id
+                  const operation = input.action.slice("webbrowser.".length)
+                  const resource = `macos.bundle_id/${bundleID}/webbrowser.${operation}`
+                  yield* permission.assert({ action: name, resources: [resource], save: [resource],
+                    metadata: { platform: "macos", application: "webbrowser", bundleID }, sessionID: context.sessionID, agent: context.agent, source })
+                  const reservation = yield* guardrail.assert({ sessionID: context.sessionID, action: "computer", resources: [resource],
+                    metadata: { operation: input.action, platform: "macos", application: "webbrowser", bundleID }, skipReview: true })
+                  if (input.action === "webbrowser.tabs")
+                    return result(yield* computer.browserTabs({ sessionID: context.sessionID, callID: context.callID, bundleID }).pipe(Effect.ensuring(reservation.release)))
+                  const target: MacOSComputer.BrowserTarget = { platform: "macos", application: "webbrowser", bundleID, windowID: input.window_id, tabIndex: input.action === "webbrowser.new_tab" ? 1 : input.tab_index }
+                  const action: MacOSComputer.BrowserAction = input.action === "webbrowser.navigate" ? { type: input.action, url: input.url }
+                    : input.action === "webbrowser.new_tab" ? { type: input.action, url: input.url }
+                    : input.action === "webbrowser.eval" ? { type: input.action, script: input.script }
+                    : { type: input.action }
+                  return result(yield* computer.browserAct({ sessionID: context.sessionID, callID: context.callID, target, expectedRevision: input.expected_revision, action }).pipe(Effect.ensuring(reservation.release)))
                 }
                 if (input.action === "desktop.list" || input.action === "desktop.launch" || input.action === "desktop.quit") {
                   const resource = input.action === "desktop.list" ? "macos.desktop/list"

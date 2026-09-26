@@ -32,6 +32,27 @@ private struct DesktopTarget: Decodable {
     let pid: Int32
     let windowID: UInt32
 }
+private struct BrowserTarget: Decodable {
+    let platform: String
+    let application: String
+    let bundleID: String
+    let windowID: String
+    let tabIndex: Int?
+}
+
+private struct BrowserTab: Encodable {
+    let index: Int
+    let title: String
+    let url: String
+    let active: Bool
+}
+
+private struct BrowserWindow: Encodable {
+    let window_id: String
+    let index: Int
+    let revision: String
+    let tabs: [BrowserTab]
+}
 
 private struct Element: Encodable {
     let path: [Int]
@@ -71,6 +92,8 @@ private struct Request: Decodable {
     let action: String
     let owner: Owner
     let target: Target?
+    let url: String?
+    let script: String?
     let bundleID: String?
     let remoteDebugging: Bool?
     let pid: Int32?
@@ -97,6 +120,7 @@ private struct Request: Decodable {
         case iterm(ItermTarget)
         case finder(FinderTarget)
         case desktop(DesktopTarget)
+        case webbrowser(BrowserTarget)
 
         private enum CodingKeys: String, CodingKey { case platform, application }
 
@@ -109,6 +133,7 @@ private struct Request: Decodable {
             case "iterm": self = .iterm(try ItermTarget(from: decoder))
             case "finder": self = .finder(try FinderTarget(from: decoder))
             case "desktop": self = .desktop(try DesktopTarget(from: decoder))
+            case "webbrowser": self = .webbrowser(try BrowserTarget(from: decoder))
             default: throw HelperError.invalidRequest
             }
         }
@@ -130,6 +155,10 @@ private struct Response: Encodable {
     let apps: [AppInfo]?
     let pid: Int32?
     let windows: [WindowInfo]?
+    let browserWindows: [BrowserWindow]?
+    let tabIndex: Int?
+    let value: String?
+    let truncated: Bool?
     let accessible: Bool?
     let effect: String?
     let exited: Bool?
@@ -147,6 +176,7 @@ private enum HelperError: Error {
     case staleRevision
     case targetConflict
     case nativeFailure
+    case javascriptEvaluationFailed
     case captureFailed(String)
     case unknownOutcome
     case accessibilityDenied
@@ -171,6 +201,8 @@ private enum HelperError: Error {
             return failure("target_conflict", "The requested destination already exists")
         case .nativeFailure:
             return failure("native_failure", "The application rejected the native command")
+        case .javascriptEvaluationFailed:
+            return failure("native_failure", "Browser JavaScript evaluation failed. If JavaScript from Apple Events is disabled in Safari or Chrome, enable that setting; inspect the tab before retrying.", outcome: "unknown")
         case .captureFailed(let reason):
             return failure("native_failure", "Window capture failed: \(reason.prefix(200))")
         case .unknownOutcome:
@@ -190,14 +222,18 @@ private enum HelperError: Error {
 }
 
 private func failure(_ code: String, _ message: String, outcome: String = "not_started") -> Response {
-    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, accessible: nil, effect: nil, exited: nil)
+    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, browserWindows: nil, tabIndex: nil, value: nil, truncated: nil, accessible: nil, effect: nil, exited: nil)
 }
 
 private func success(_ action: String, _ revision: String, elements: [Element]? = nil, image: String? = nil,
                      width: Int? = nil, height: Int? = nil, scale: Double? = nil, apps: [AppInfo]? = nil,
-                     pid: Int32? = nil, windows: [WindowInfo]? = nil, accessible: Bool? = nil, effect: String? = nil, exited: Bool? = nil) -> Response {
+                     pid: Int32? = nil, windows: [WindowInfo]? = nil, browserWindows: [BrowserWindow]? = nil,
+                     tabIndex: Int? = nil, value: String? = nil, truncated: Bool? = nil,
+                     accessible: Bool? = nil, effect: String? = nil, exited: Bool? = nil) -> Response {
     Response(status: "ok", action: action, revision: revision, code: nil, message: nil, outcome: nil,
-             elements: elements, image: image, width: width, height: height, scale: scale, apps: apps, pid: pid, windows: windows, accessible: accessible, effect: effect, exited: exited)
+             elements: elements, image: image, width: width, height: height, scale: scale, apps: apps, pid: pid, windows: windows,
+             browserWindows: browserWindows, tabIndex: tabIndex, value: value, truncated: truncated,
+             accessible: accessible, effect: effect, exited: exited)
 }
 
 private func gracefulQuit(bundleID: String, pid: Int32) throws -> Bool {
@@ -335,6 +371,163 @@ private func get(
     return result
 }
 
+private func browserApplication(_ bundleID: String) throws -> (ApplicationTarget, Bool) {
+    guard bundleID == "com.apple.Safari" || bundleID == "com.google.Chrome" else { throw HelperError.invalidRequest }
+    let application = try requireRunning(bundleID)
+    try requireAutomation(application, eventClass: UInt32(kAECoreSuite), eventID: UInt32(kAEGetData))
+    return (application, bundleID == "com.apple.Safari")
+}
+
+private func browserWindow(_ id: String, safari: Bool) throws -> NSAppleEventDescriptor {
+    let key: NSAppleEventDescriptor
+    if safari {
+        guard let value = Int32(id) else { throw HelperError.invalidRequest }
+        key = NSAppleEventDescriptor(int32: value)
+    } else {
+        key = NSAppleEventDescriptor(string: id)
+    }
+    return try objectSpecifier(desiredClass: fourCC("cwin"), keyForm: UInt32(formUniqueID), keyData: key, container: NSAppleEventDescriptor.null())
+}
+
+private func browserTab(_ window: NSAppleEventDescriptor, index: Int, safari: Bool) throws -> NSAppleEventDescriptor {
+    guard index > 0 else { throw HelperError.invalidRequest }
+    return try objectSpecifier(desiredClass: fourCC(safari ? "bTab" : "CrTb"), keyForm: UInt32(formAbsolutePosition), keyData: NSAppleEventDescriptor(int32: Int32(index)), container: window)
+}
+
+private func browserRoot() throws -> NSAppleEventDescriptor {
+    NSAppleEventDescriptor.null()
+}
+
+private func browserCount(_ app: ApplicationTarget, code: String) throws -> Int {
+    let reply = try send(app, eventClass: UInt32(kAECoreSuite), eventID: fourCC("corecnte"), directObject: try browserRoot(),
+                         parameters: [(fourCC("kocl"), NSAppleEventDescriptor(typeCode: fourCC(code)))])
+    guard let count = reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.int32Value, count >= 0 else { throw HelperError.nativeFailure }
+    return Int(count)
+}
+
+private func browserSnapshot(_ bundleID: String) throws -> (ApplicationTarget, Bool, [BrowserWindow]) {
+    let (app, safari) = try browserApplication(bundleID)
+    let windowCount = min(16, try browserCount(app, code: "cwin"))
+    if windowCount == 0 { return (app, safari, []) }
+    let windows = try (1...windowCount).map { index -> BrowserWindow in
+        let window = try objectSpecifier(desiredClass: fourCC("cwin"), keyForm: UInt32(formAbsolutePosition), keyData: NSAppleEventDescriptor(int32: Int32(index)), container: try browserRoot())
+        let id = try get(app, propertyCode: fourCC("ID  "), of: window)
+        let windowID = safari ? String(id.int32Value) : (id.stringValue ?? "")
+        guard !windowID.isEmpty else { throw HelperError.targetNotFound }
+        let total = try browserCountForWindow(app, window, safari: safari)
+        let count = min(100, total)
+        let activeIndex: Int
+        if safari {
+            let activeTab = try get(app, propertyCode: fourCC("cTab"), of: window)
+            activeIndex = Int(try get(app, propertyCode: fourCC("pidx"), of: activeTab).int32Value)
+        } else {
+            activeIndex = Int(try get(app, propertyCode: fourCC("acTI"), of: window).int32Value)
+        }
+        let values: [(BrowserTab, [String])]
+        if count == 0 { values = [] }
+        else {
+            values = try (1...count).map { tabIndex -> (BrowserTab, [String]) in
+                let tab = try browserTab(window, index: tabIndex, safari: safari)
+                let title = try get(app, propertyCode: fourCC("pnam"), of: tab).stringValue ?? ""
+                let urlCode = safari ? fourCC("pURL") : fourCC("URL ")
+                let url = try get(app, propertyCode: urlCode, of: tab).stringValue ?? ""
+                let active = activeIndex == tabIndex
+                return (BrowserTab(index: tabIndex, title: boundedUTF8(title, maximum: 200), url: boundedUTF8(url, maximum: 400), active: active), [title, url, active ? "1" : "0"])
+            }
+        }
+        let tabs = values.map(\.0)
+        let revision = sha256(values.flatMap(\.1) + [String(activeIndex), String(total)])
+        return BrowserWindow(window_id: windowID, index: index, revision: revision, tabs: tabs)
+    }
+    return (app, safari, windows)
+}
+
+private func browserCountForWindow(_ app: ApplicationTarget, _ window: NSAppleEventDescriptor, safari: Bool) throws -> Int {
+    let reply = try send(app, eventClass: UInt32(kAECoreSuite), eventID: fourCC("corecnte"), directObject: window,
+                         parameters: [(fourCC("kocl"), NSAppleEventDescriptor(typeCode: fourCC(safari ? "bTab" : "CrTb")))])
+    guard let count = reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?.int32Value, count >= 0 else { throw HelperError.nativeFailure }
+    return Int(count)
+}
+
+private func browserTabs(_ request: Request) throws -> Response {
+    guard let bundleID = request.bundleID else { throw HelperError.invalidRequest }
+    let (_, _, windows) = try browserSnapshot(bundleID)
+    return success(request.action, "", browserWindows: windows)
+}
+
+private func isWebURL(_ value: String) -> Bool {
+    guard let url = URL(string: value) else { return false }
+    return value.range(of: #"^https?://"#, options: .regularExpression.union(.caseInsensitive)) != nil &&
+        ["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host?.isEmpty == false
+}
+
+private func browserMutation(_ request: Request, target: BrowserTarget) throws -> Response {
+    guard target.platform == "macos", target.application == "webbrowser",
+          let tabIndex = target.tabIndex, tabIndex > 0, tabIndex <= 100,
+          let expected = request.expectedRevision else { throw HelperError.invalidRequest }
+    let (app, safari, windows) = try browserSnapshot(target.bundleID)
+    guard let before = windows.first(where: { $0.window_id == target.windowID }), before.revision == expected else { throw HelperError.staleRevision }
+    if request.action == "webbrowser.new_tab", before.tabs.count >= 100 { throw HelperError.invalidRequest }
+    let window = try browserWindow(target.windowID, safari: safari)
+    let tab = try browserTab(window, index: tabIndex, safari: safari)
+    let core = UInt32(kAECoreSuite)
+    if request.action == "webbrowser.new_tab", let url = request.url, !isWebURL(url) { throw HelperError.invalidRequest }
+    do {
+        switch request.action {
+        case "webbrowser.navigate":
+            guard let url = request.url, isWebURL(url) else { throw HelperError.invalidRequest }
+            let code = safari ? fourCC("pURL") : fourCC("URL ")
+            _ = try send(app, eventClass: core, eventID: UInt32(kAESetData), directObject: try property(code, of: tab), parameters: [(fourCC("data"), NSAppleEventDescriptor(string: url))])
+        case "webbrowser.back", "webbrowser.forward", "webbrowser.reload":
+            if safari {
+                let source = request.action == "webbrowser.back" ? "history.back()" : request.action == "webbrowser.forward" ? "history.forward()" : "location.reload()"
+                _ = try send(app, eventClass: fourCC("sfri"), eventID: fourCC("sfridojs"), directObject: NSAppleEventDescriptor(string: source), parameters: [(fourCC("dcnm"), tab)])
+            } else {
+                let eventID = request.action == "webbrowser.back" ? fourCC("CrSuBack") : request.action == "webbrowser.forward" ? fourCC("CrSuFwd ") : fourCC("CrSuRlod")
+                _ = try send(app, eventClass: fourCC("CrSu"), eventID: eventID, directObject: tab)
+            }
+        case "webbrowser.new_tab":
+            let properties = NSAppleEventDescriptor.record()
+            if let url = request.url {
+                guard isWebURL(url) else { throw HelperError.invalidRequest }
+                properties.setDescriptor(NSAppleEventDescriptor(string: url), forKeyword: AEKeyword(safari ? fourCC("pURL") : fourCC("URL ")))
+            }
+            _ = try send(app, eventClass: core, eventID: UInt32(kAECreateElement), directObject: NSAppleEventDescriptor.null(), parameters: [(fourCC("kocl"), NSAppleEventDescriptor(typeCode: fourCC(safari ? "bTab" : "CrTb"))), (fourCC("insh"), window), (fourCC("prdt"), properties)])
+        case "webbrowser.close_tab":
+            _ = try send(app, eventClass: core, eventID: fourCC("coreclos"), directObject: tab)
+        case "webbrowser.eval":
+            guard let script = request.script, script.utf8.count <= 65_536 else { throw HelperError.invalidRequest }
+            let reply = try send(app, eventClass: safari ? fourCC("sfri") : fourCC("CrSu"), eventID: safari ? fourCC("sfridojs") : fourCC("CrSuExJa"), directObject: safari ? NSAppleEventDescriptor(string: script) : tab, parameters: [(safari ? fourCC("dcnm") : fourCC("JvSc"), safari ? tab : NSAppleEventDescriptor(string: script))])
+            let valueDescriptor = reply.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))
+            let raw = valueDescriptor?.stringValue ?? valueDescriptor?.description ?? ""
+            let value = boundedUTF8(raw, maximum: 16_384)
+            return success(request.action, settledBrowserWindow(target)?.revision ?? before.revision, value: value, truncated: raw.utf8.count > 16_384)
+        default: throw HelperError.invalidRequest
+        }
+    } catch let error as HelperError {
+        if case .nativeFailure = error,
+           (request.action == "webbrowser.eval" || (safari && ["webbrowser.back", "webbrowser.forward", "webbrowser.reload"].contains(request.action))) {
+            throw HelperError.javascriptEvaluationFailed
+        }
+        if case .nativeFailure = error { throw HelperError.unknownOutcome }
+        throw error
+    }
+    catch { throw HelperError.unknownOutcome }
+    guard let settled = settledBrowserWindow(target) else { throw HelperError.unknownOutcome }
+    return success(request.action, settled.revision, tabIndex: request.action == "webbrowser.new_tab" ? settled.tabs.count : nil)
+}
+
+private func settledBrowserWindow(_ target: BrowserTarget) -> BrowserWindow? {
+    var previous: BrowserWindow?
+    for _ in 0..<14 {
+        Thread.sleep(forTimeInterval: 0.15)
+        guard let current = try? browserSnapshot(target.bundleID).2.first(where: { $0.window_id == target.windowID }) else { return nil }
+        if current.revision == previous?.revision { return current }
+        previous = current
+    }
+    return previous
+}
+
 private func itermTarget(_ target: ItermTarget) throws -> (window: NSAppleEventDescriptor, session: NSAppleEventDescriptor) {
     let window = try objectSpecifier(
         desiredClass: fourCC("cwin"),
@@ -361,6 +554,12 @@ private func sha256(_ values: [String]) -> String {
     SHA256.hash(data: Data(values.joined(separator: "\u{0}").utf8))
         .map { String(format: "%02x", $0) }
         .joined()
+}
+
+private func boundedUTF8(_ value: String, maximum: Int) -> String {
+    var bytes = Array(value.utf8.prefix(maximum))
+    while String(bytes: bytes, encoding: .utf8) == nil { bytes.removeLast() }
+    return String(bytes: bytes, encoding: .utf8) ?? ""
 }
 
 private func inspectIterm(_ input: ItermTarget) throws -> (ApplicationTarget, String) {
@@ -877,6 +1076,16 @@ private func keyboard(_ request: Request, _ target: DesktopTarget) throws {
 private func handle(_ request: Request) async throws -> Response {
     guard !request.owner.sessionID.isEmpty, !request.owner.callID.isEmpty else { throw HelperError.invalidRequest }
     switch (request.action, request.target) {
+    case ("webbrowser.tabs", nil):
+        return try browserTabs(request)
+    case ("webbrowser.navigate", .webbrowser(let target)),
+         ("webbrowser.back", .webbrowser(let target)),
+         ("webbrowser.forward", .webbrowser(let target)),
+         ("webbrowser.reload", .webbrowser(let target)),
+         ("webbrowser.new_tab", .webbrowser(let target)),
+         ("webbrowser.close_tab", .webbrowser(let target)),
+         ("webbrowser.eval", .webbrowser(let target)):
+        return try browserMutation(request, target: target)
     case ("desktop.list", nil):
         return success(request.action, "", apps: runningApps())
     case ("desktop.launch", nil):
