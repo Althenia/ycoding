@@ -47,7 +47,8 @@ export const Input = Schema.Union([
   }),
   Schema.Struct({ action: Schema.Literal("finder.inspect"), ...MacOS, path: Schema.String }),
   Schema.Struct({ action: Schema.Literal("desktop.list"), ...MacOS }),
-  Schema.Struct({ action: Schema.Literal("desktop.launch"), ...MacOS, bundle_id: DesktopTarget.bundle_id }),
+  Schema.Struct({ action: Schema.Literal("desktop.launch"), ...MacOS, bundle_id: DesktopTarget.bundle_id, remote_debugging: Schema.Boolean.pipe(Schema.optional) }),
+  Schema.Struct({ action: Schema.Literal("desktop.quit"), ...MacOS, bundle_id: DesktopTarget.bundle_id, pid: DesktopTarget.pid }),
   Schema.Struct({ action: Schema.Literal("desktop.inspect"), ...DesktopTarget }),
   Schema.Struct({ action: Schema.Literal("desktop.capture"), ...DesktopTarget }),
   Schema.Struct({
@@ -121,6 +122,7 @@ export const Output = Schema.Union([
       "desktop.inspect",
       "desktop.list",
       "desktop.launch",
+      "desktop.quit",
       "desktop.capture",
       "desktop.click",
       "desktop.drag",
@@ -148,6 +150,7 @@ export const Output = Schema.Union([
     pid: Schema.Int.pipe(Schema.optional),
     windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
       bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })).pipe(Schema.optional),
+    exited: Schema.Boolean.pipe(Schema.optional),
   }),
 ])
 
@@ -175,6 +178,7 @@ const result = (output: Computer.NativeSuccess) => ({
   ...(output.width !== undefined ? { width: output.width, height: output.height, scale: output.scale } : {}),
   ...(output.apps ? { apps: output.apps } : {}),
   ...(output.pid !== undefined ? { pid: output.pid, windows: output.windows } : {}),
+  ...(output.exited !== undefined ? { exited: output.exited } : {}),
 })
 
 export const Plugin = {
@@ -191,7 +195,7 @@ export const Plugin = {
           name,
           Tool.make({
             description:
-              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Inspect first; prefer AX element paths (also off-Space). If accessible:false, capture and use pixel coordinates; otherwise capture only if AX is insufficient. Capture pixels and element frames share one window-local space. Pass each successful window call's settled revision to chained actions; do not re-inspect between successes. Mutation effect: changed when the AX tree or window image changed, unchanged when neither did, unverified when neither can be observed. On unchanged, never repeat the same action: use an AX element or keyboard route, or report that the app ignores background input (pointer input often does not reach Chromium/Electron windows or toolbars on another Space; keyboard and AX routes do). On stale_revision inspect once then retry once; on unknown_outcome or focus_restore_failed inspect before any mutation and never replay blindly; on background_unavailable use an AX route instead of repeating. Raw pointer/key routes briefly shift keyboard focus to the target then restore it; user keystrokes during that interval may reach the target. AX routes do not shift focus. No window raising, Space switch, hardware cursor movement, or clipboard. iTerm and Finder require explicit targets.",
+              "macOS desktop: list once for exact bundle_id/pid/window_id; never guess. Launch if absent. Quit only when asked; unsaved-work prompts belong to the app. Inspect first; prefer AX paths off-Space. Safari off-Space page capture can be blank while AX reads/links work; command shortcuts and menu items may be ignored. Capture only if AX is insufficient; frames and pixels share one window-local space. Off-Space Electron capture/pixel/type automatically use a PID-owned bridge when available. Use launch remote_debugging:true only when explicitly requested for a fuse-off Electron app; it gracefully quits/relaunches and leaves a localhost debug port open. Chain returned settled revisions. On effect unchanged do not repeat; use AX or report no effect. On stale_revision inspect once and retry once; on unknown_outcome, focus_restore_failed, or inspector_close_failed inspect before mutation, never replay blindly. Native raw input briefly shifts key focus then restores it; concurrent user keystrokes may reach the target. No window raising, Space switch, hardware cursor warp, or clipboard. iTerm and Finder need explicit targets.",
             input: Input,
             output: Output,
             toModelOutput: ({ output }) =>
@@ -227,14 +231,16 @@ export const Plugin = {
                   messageID: context.messageID,
                   callID: context.callID,
                 }
-                if (input.action === "desktop.list" || input.action === "desktop.launch") {
-                  const resource = input.action === "desktop.list" ? "macos.desktop/list" : `macos.bundle_id/${input.bundle_id}/launch`
+                if (input.action === "desktop.list" || input.action === "desktop.launch" || input.action === "desktop.quit") {
+                  const resource = input.action === "desktop.list" ? "macos.desktop/list"
+                    : `macos.bundle_id/${input.bundle_id}/${input.action === "desktop.quit" ? "quit" : input.remote_debugging ? "remote_debugging" : "launch"}`
                   yield* permission.assert({ action: name, resources: [resource], save: [resource],
                     metadata: { platform: "macos", application: "desktop" }, sessionID: context.sessionID, agent: context.agent, source })
                   const reservation = yield* guardrail.assert({ sessionID: context.sessionID, action: "computer", resources: [resource],
                     metadata: { operation: input.action, platform: "macos", application: "desktop" }, skipReview: true })
                   if (input.action === "desktop.list") return result(yield* computer.list({ sessionID: context.sessionID, callID: context.callID }).pipe(Effect.ensuring(reservation.release)))
-                  return result(yield* computer.launch({ sessionID: context.sessionID, callID: context.callID, bundleID: input.bundle_id }).pipe(Effect.ensuring(reservation.release)))
+                  if (input.action === "desktop.quit") return result(yield* computer.quit({ sessionID: context.sessionID, callID: context.callID, bundleID: input.bundle_id, pid: input.pid }).pipe(Effect.ensuring(reservation.release)))
+                  return result(yield* computer.launch({ sessionID: context.sessionID, callID: context.callID, bundleID: input.bundle_id, remoteDebugging: input.remote_debugging }).pipe(Effect.ensuring(reservation.release)))
                 }
                 if (
                   input.action === "desktop.inspect" ||

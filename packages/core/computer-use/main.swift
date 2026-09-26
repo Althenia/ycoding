@@ -72,6 +72,8 @@ private struct Request: Decodable {
     let owner: Owner
     let target: Target?
     let bundleID: String?
+    let remoteDebugging: Bool?
+    let pid: Int32?
     let expectedRevision: String?
     let text: String?
     let newline: Bool?
@@ -130,6 +132,7 @@ private struct Response: Encodable {
     let windows: [WindowInfo]?
     let accessible: Bool?
     let effect: String?
+    let exited: Bool?
 }
 
 private struct ApplicationTarget {
@@ -150,6 +153,7 @@ private enum HelperError: Error {
     case screenRecordingDenied
     case backgroundUnavailable
     case focusRestoreFailed
+    case quitPending
 
     var response: Response {
         switch self {
@@ -179,19 +183,33 @@ private enum HelperError: Error {
             return failure("background_unavailable", "Target-only background input is unavailable; use an Accessibility element route")
         case .focusRestoreFailed:
             return failure("focus_restore_failed", "Original foreground focus could not be restored after background input; inspect before any further mutation", outcome: "unknown")
+        case .quitPending:
+            return failure("quit_pending", "Application did not exit after a graceful quit request; resolve its prompt before relaunch", outcome: "not_started")
         }
     }
 }
 
 private func failure(_ code: String, _ message: String, outcome: String = "not_started") -> Response {
-    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, accessible: nil, effect: nil)
+    Response(status: "error", action: nil, revision: nil, code: code, message: message, outcome: outcome, elements: nil, image: nil, width: nil, height: nil, scale: nil, apps: nil, pid: nil, windows: nil, accessible: nil, effect: nil, exited: nil)
 }
 
 private func success(_ action: String, _ revision: String, elements: [Element]? = nil, image: String? = nil,
                      width: Int? = nil, height: Int? = nil, scale: Double? = nil, apps: [AppInfo]? = nil,
-                     pid: Int32? = nil, windows: [WindowInfo]? = nil, accessible: Bool? = nil, effect: String? = nil) -> Response {
+                     pid: Int32? = nil, windows: [WindowInfo]? = nil, accessible: Bool? = nil, effect: String? = nil, exited: Bool? = nil) -> Response {
     Response(status: "ok", action: action, revision: revision, code: nil, message: nil, outcome: nil,
-             elements: elements, image: image, width: width, height: height, scale: scale, apps: apps, pid: pid, windows: windows, accessible: accessible, effect: effect)
+             elements: elements, image: image, width: width, height: height, scale: scale, apps: apps, pid: pid, windows: windows, accessible: accessible, effect: effect, exited: exited)
+}
+
+private func gracefulQuit(bundleID: String, pid: Int32) throws -> Bool {
+    guard pid > 0, let app = NSRunningApplication(processIdentifier: pid),
+          app.bundleIdentifier == bundleID, !app.isTerminated else { throw HelperError.appNotRunning }
+    guard app.terminate() else { return false }
+    let deadline = Date().addingTimeInterval(10)
+    while Date() < deadline {
+        if app.isTerminated || NSRunningApplication(processIdentifier: pid) == nil { return true }
+        Thread.sleep(forTimeInterval: 0.1)
+    }
+    return app.isTerminated || NSRunningApplication(processIdentifier: pid) == nil
 }
 
 private func windowInfos() -> [Int32: [WindowInfo]] {
@@ -863,6 +881,25 @@ private func handle(_ request: Request) async throws -> Response {
         return success(request.action, "", apps: runningApps())
     case ("desktop.launch", nil):
         guard let bundleID = request.bundleID, !bundleID.isEmpty else { throw HelperError.invalidRequest }
+        if request.remoteDebugging == true {
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
+                  FileManager.default.fileExists(atPath: url.appendingPathComponent("Contents/Frameworks/Electron Framework.framework/Electron Framework").path) else {
+                throw HelperError.backgroundUnavailable
+            }
+            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
+               !running.isTerminated, !((try? gracefulQuit(bundleID: bundleID, pid: running.processIdentifier)) ?? false) {
+                throw HelperError.quitPending
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = false
+            configuration.addsToRecentItems = false
+            configuration.arguments = ["--remote-debugging-port=0"]
+            do {
+                let launched = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
+                guard launched.bundleIdentifier == bundleID else { throw HelperError.unknownOutcome }
+                return success(request.action, "", pid: launched.processIdentifier, windows: windowInfos()[launched.processIdentifier] ?? [])
+            } catch { throw HelperError.unknownOutcome }
+        }
         let app: NSRunningApplication
         if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first { app = running }
         else {
@@ -875,6 +912,9 @@ private func handle(_ request: Request) async throws -> Response {
         }
         guard app.bundleIdentifier == bundleID else { throw HelperError.unknownOutcome }
         return success(request.action, "", pid: app.processIdentifier, windows: windowInfos()[app.processIdentifier] ?? [])
+    case ("desktop.quit", nil):
+        guard let bundleID = request.bundleID, !bundleID.isEmpty, let pid = request.pid else { throw HelperError.invalidRequest }
+        return success(request.action, "", exited: try gracefulQuit(bundleID: bundleID, pid: pid))
     case ("desktop.inspect", .desktop(let target)):
         let (window, revision, elements) = try desktopSnapshot(target)
         return success(request.action, revision, elements: elements, accessible: window.element != nil)

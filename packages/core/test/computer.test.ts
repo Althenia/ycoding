@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Computer } from "@ycoding-ai/core/computer"
 import { MacOSComputer } from "@ycoding-ai/core/computer/macos"
+import { ElectronComputer } from "@ycoding-ai/core/computer/electron"
 import { Node } from "@ycoding-ai/core/effect/app-node"
 import { LayerNode } from "@ycoding-ai/core/effect/layer-node"
 import { EventV2 } from "@ycoding-ai/core/event"
@@ -31,6 +32,78 @@ const desktop = {
 }
 
 describe("scoped desktop control", () => {
+  test("surfaces a graceful-quit refusal instead of relaunching a running Electron app", async () => {
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const locations = yield* makeLocationComputers(
+        (request) => Effect.succeed({ status: "ok" as const, action: request.action, revision: "" }),
+        Stream.never, undefined,
+        (action) => action === "desktop.launch"
+          ? { status: "error" as const, code: "quit_pending" as const, message: "Save prompt is pending", outcome: "not_started" as const }
+          : false,
+      )
+      const result = yield* locations.first.launch({ sessionID: owner, callID: "relaunch-pending", bundleID: desktop.bundleID,
+        remoteDebugging: true }).pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toMatchObject({ code: "quit_pending", outcome: "not_started" })
+      yield* locations.close
+    })))
+  })
+  test("routes only off-Space Electron capture and pixels through the bridge, preserving native revisions", async () => {
+    const routed: string[] = []
+    const bridge = ElectronComputer.make({ appPath: async () => undefined, fuseBytes: async () => Buffer.alloc(0),
+      ownedPorts: async () => [], signal: async () => {}, sleep: async () => {} })
+    const injected = { ...bridge, isElectron: async () => true, perform: async (_target: typeof desktop, _window: { on_screen: boolean }, operation: ElectronComputer.Operation) => {
+      routed.push(operation.type)
+      return operation.type === "capture" ? { type: "capture" as const, image: "base64", width: 800, height: 500, scale: 1 }
+        : { type: "action" as const, effect: "changed" as const }
+    } }
+    const processLayer = Layer.mock(AppProcess.Service, { run: (command) => Effect.promise(async () => {
+      if (command._tag !== "StandardCommand") throw new Error("Expected native app launch")
+      const requestFile = command.args.at(-2)
+      const responseFile = command.args.at(-1)
+      if (!requestFile || !responseFile) throw new Error("Missing native handoff")
+      const request = Schema.decodeUnknownSync(Schema.Struct({ action: Schema.String }))(JSON.parse(await readFile(requestFile, "utf8")))
+      const response = request.action === "desktop.list"
+        ? { status: "ok", action: request.action, revision: "", apps: [{ bundle_id: desktop.bundleID, pid: desktop.pid,
+          name: "Fixture", is_active: false, is_hidden: false, windows: [{ window_id: desktop.windowID, title: "Fixture",
+            bounds: { x: 0, y: 0, width: 800, height: 500 }, on_screen: false }] }] }
+        : { status: "ok", action: request.action, revision: "native-revision" }
+      await writeFile(responseFile, JSON.stringify(response))
+      return { command: "fixture", exitCode: 0, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), stdoutTruncated: false, stderrTruncated: false }
+    }) })
+    await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
+      const context = yield* Layer.build(processLayer)
+      const processes = Context.get(context, AppProcess.Service)
+      const invoke = MacOSComputer.invokeWithBridge(processes, "darwin", MacOSComputer.applicationPath(), injected)
+      const captured = yield* invoke({ action: "desktop.capture", owner: { sessionID: "s", callID: "c" }, target: desktop }, new AbortController().signal)
+      expect(captured).toMatchObject({ revision: "native-revision", width: 800, image: "base64" })
+      const clicked = yield* invoke({ action: "desktop.click", owner: { sessionID: "s", callID: "a" }, target: desktop,
+        expectedRevision: "native-revision", x: 20, y: 30 }, new AbortController().signal)
+      expect(clicked).toMatchObject({ revision: "native-revision", effect: "changed" })
+      expect(routed).toEqual(["capture", "action"])
+    })))
+  })
+  test("graceful quit invalidates all window claims for its pid even if exit is pending", async () => {
+    const computer = Computer.make((request) => Effect.succeed({ status: "ok" as const,
+      action: request.action, revision: "rev-before-quit", ...(request.action === "desktop.quit" ? { exited: false } : {}) }), "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "before-quit", target: desktop }))
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "other-window", target: { ...desktop, windowID: 74 } }))
+    expect(await Effect.runPromise(computer.quit({ sessionID: owner, callID: "quit", bundleID: desktop.bundleID, pid: desktop.pid }))).toMatchObject({ action: "desktop.quit", exited: false })
+    const stale = await Effect.runPromiseExit(computer.act({ sessionID: owner, callID: "after-quit", target: { ...desktop, windowID: 74 },
+      expectedRevision: "rev-before-quit", action: { type: "desktop.click", element: [0] } }))
+    expect(Exit.isFailure(stale)).toBe(true)
+    if (Exit.isFailure(stale)) expect(stale.cause.toString()).toContain("must be inspected")
+  })
+  test("remote-debugging relaunch releases prior app window claims", async () => {
+    const computer = Computer.make((request) => Effect.succeed({ status: "ok" as const, action: request.action,
+      revision: "rev-old", ...(request.action === "desktop.launch" ? { pid: desktop.pid, windows: [] } : {}) }), "darwin")
+    await Effect.runPromise(computer.inspect({ sessionID: owner, callID: "before-relaunch", target: desktop }))
+    await Effect.runPromise(computer.launch({ sessionID: owner, callID: "remote-relaunch", bundleID: desktop.bundleID, remoteDebugging: true }))
+    const stale = await Effect.runPromiseExit(computer.act({ sessionID: owner, callID: "after-relaunch", target: desktop,
+      expectedRevision: "rev-old", action: { type: "desktop.click", x: 20, y: 30 } }))
+    expect(Exit.isFailure(stale)).toBe(true)
+    if (Exit.isFailure(stale)) expect(stale.cause.toString()).toContain("must be inspected")
+  })
   test("decodes native app/window and capture metadata and treats invalid launch response as uncertain", async () => {
     await Effect.runPromise(Effect.scoped(Effect.gen(function* () {
       const windows = [{ window_id: 73, title: "Fixture", bounds: { x: 10, y: 20, width: 300, height: 200 }, on_screen: false }]
@@ -685,6 +758,7 @@ const fixtureRequest = Schema.Struct({
     "desktop.inspect",
     "desktop.list",
     "desktop.launch",
+    "desktop.quit",
     "desktop.capture",
     "desktop.click",
     "desktop.drag",
@@ -705,9 +779,9 @@ function makeLocationComputers(
   onLaunch?: (args: ReadonlyArray<string>, signal?: AbortSignal) => void,
   invalidResponse?: (action: typeof fixtureRequest.Type.action) => boolean | {
     readonly status: "error"
-    readonly code: "focus_restore_failed"
+    readonly code: "focus_restore_failed" | "quit_pending"
     readonly message: string
-    readonly outcome: "unknown"
+    readonly outcome: "unknown" | "not_started"
   },
   respondAfterOpen = false,
 ) {

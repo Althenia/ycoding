@@ -24,6 +24,7 @@ const computer = Layer.mock(Computer.Service, {
   status: Effect.succeed({ platform: "macos", state: "supported" as const, capabilities: [] }),
   list: () => { calls.push("native:desktop.list"); return Effect.succeed({ status: "ok" as const, action: "desktop.list" as const, revision: "rev-list", apps: [] }) },
   launch: () => { calls.push("native:desktop.launch"); return Effect.succeed({ status: "ok" as const, action: "desktop.launch" as const, revision: "rev-launch", pid: 451, windows: [] }) },
+  quit: () => { calls.push("native:desktop.quit"); return Effect.succeed({ status: "ok" as const, action: "desktop.quit" as const, revision: "", exited: false }) },
   inspect: (input) => {
     calls.push(`inspect:${input.target.application}`)
     return Effect.succeed({
@@ -105,6 +106,27 @@ const call = (input: Record<string, unknown>, id: string) => ({
 })
 
 describe("computer tool policy ordering", () => {
+  it.effect("uses separate permission resources for opt-in debugging and graceful quit", () =>
+    Effect.gen(function* () {
+      calls.length = 0
+      const registry = yield* ToolRegistry.Service
+      yield* waitForTool(registry, "computer")
+      yield* settleTool(registry, call({ action: "desktop.launch", platform: "macos", bundle_id: "com.example.fixture", remote_debugging: true }, "debug-launch"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/remote_debugging",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/remote_debugging:true",
+        "native:desktop.launch", "guardrail:release",
+      ])
+      calls.length = 0
+      const settlement = yield* settleTool(registry, call({ action: "desktop.quit", platform: "macos", bundle_id: "com.example.fixture", pid: "451" }, "graceful-quit"))
+      expect(calls).toEqual([
+        "permission:computer:macos.bundle_id/com.example.fixture/quit",
+        "guardrail:computer:macos.bundle_id/com.example.fixture/quit:true",
+        "native:desktop.quit", "guardrail:release",
+      ])
+      expect(settlement.output?.content).toEqual([{ type: "text", text: JSON.stringify({ type: "result", action: "desktop.quit", revision: "", exited: false }) }])
+    }),
+  )
   it.effect("shows unchanged pointer effect so a caller does not repeat a dropped pixel click", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

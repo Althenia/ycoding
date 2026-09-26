@@ -50,7 +50,8 @@ interface Owner {
 
 export type Request =
   | { readonly action: "desktop.list"; readonly owner: Owner }
-  | { readonly action: "desktop.launch"; readonly owner: Owner; readonly bundleID: string }
+  | { readonly action: "desktop.launch"; readonly owner: Owner; readonly bundleID: string; readonly remoteDebugging?: boolean }
+  | { readonly action: "desktop.quit"; readonly owner: Owner; readonly bundleID: string; readonly pid: number }
   | { readonly action: "iterm.inspect"; readonly owner: Owner; readonly target: ItermTarget }
   | {
       readonly action: "iterm.send_text"
@@ -147,7 +148,8 @@ export const captureRequest = (owner: Owner, target: DesktopTarget): Request => 
 })
 
 export const listRequest = (owner: Owner): Request => ({ action: "desktop.list", owner })
-export const launchRequest = (owner: Owner, bundleID: string): Request => ({ action: "desktop.launch", owner, bundleID })
+export const launchRequest = (owner: Owner, bundleID: string, remoteDebugging?: boolean): Request => ({ action: "desktop.launch", owner, bundleID, remoteDebugging })
+export const quitRequest = (owner: Owner, bundleID: string, pid: number): Request => ({ action: "desktop.quit", owner, bundleID, pid })
 
 export function actionRequest(
   owner: Owner,
@@ -184,6 +186,23 @@ export function actionRequest(
   return undefined
 }
 
+function bridgeAction(request: Request): Action | undefined {
+  if (request.action === "desktop.click")
+    return request.element ? { type: "desktop.click", element: request.element }
+      : request.x !== undefined && request.y !== undefined
+        ? { type: "desktop.click", x: request.x, y: request.y, button: request.button, count: request.count } : undefined
+  if (request.action === "desktop.drag")
+    return request.fromX !== undefined && request.fromY !== undefined && request.toX !== undefined && request.toY !== undefined
+      ? { type: "desktop.drag", fromX: request.fromX, fromY: request.fromY, toX: request.toX, toY: request.toY } : undefined
+  if (request.action === "desktop.scroll")
+    return request.element && request.direction ? { type: "desktop.scroll", element: request.element, direction: request.direction }
+      : request.x !== undefined && request.y !== undefined && request.deltaX !== undefined && request.deltaY !== undefined
+        ? { type: "desktop.scroll", x: request.x, y: request.y, deltaX: request.deltaX, deltaY: request.deltaY } : undefined
+  if (request.action === "desktop.type") return request.text === undefined ? undefined : { type: "desktop.type", text: request.text, element: request.element }
+  if (request.action === "desktop.key") return request.key === undefined ? undefined : { type: "desktop.key", key: request.key, modifiers: request.modifiers, element: request.element }
+  return undefined
+}
+
 export const helperBinary = "ycoding-computer-use"
 // macOS privacy settings display an app bundle by its filename.
 export const helperApplication = "YCoding Computer Use.app"
@@ -203,6 +222,7 @@ const Response = Schema.Union([
       "desktop.inspect",
       "desktop.list",
       "desktop.launch",
+      "desktop.quit",
       "desktop.capture",
       "desktop.click",
       "desktop.drag",
@@ -228,6 +248,7 @@ const Response = Schema.Union([
     pid: Schema.Int.pipe(Schema.optional),
     windows: Schema.Array(Schema.Struct({ window_id: Schema.Int, title: Schema.String,
       bounds: Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }), on_screen: Schema.Boolean })).pipe(Schema.optional),
+    exited: Schema.Boolean.pipe(Schema.optional),
   }),
   Schema.Struct({
     status: Schema.Literal("error"),
@@ -254,7 +275,7 @@ export function invokeWith(
       )
     const mutating =
       request.action === "iterm.send_text" ||
-      request.action === "finder.move" || request.action === "desktop.launch" ||
+      request.action === "finder.move" || request.action === "desktop.launch" || request.action === "desktop.quit" ||
       (request.action.startsWith("desktop.") &&
         request.action !== "desktop.inspect" &&
         request.action !== "desktop.capture" && request.action !== "desktop.list")
@@ -331,6 +352,86 @@ export function invokeWith(
             ),
       ),
     )
+  }
+}
+
+export function invokeWithBridge(processes: AppProcess.Interface, platform: NodeJS.Platform = process.platform, application = applicationPath(), electron?: ReturnType<typeof import("./electron").make>): Invoke {
+  const native = invokeWith(processes, platform, application)
+  return (request, signal) => {
+    if (platform !== "darwin" || !request.action.startsWith("desktop.")) return native(request, signal)
+    if (request.action === "desktop.list" || request.action === "desktop.inspect" || request.action === "desktop.quit") return native(request, signal)
+    return Effect.gen(function* () {
+      const { ElectronComputer } = yield* Effect.promise(() => import("./electron"))
+      const bridge = electron ?? ElectronComputer.make()
+      if (request.action === "desktop.launch") {
+        if (!request.remoteDebugging) return yield* native(request, signal)
+        const listed = yield* native({ action: "desktop.list", owner: request.owner }, signal)
+        const existing = listed.apps?.find((app) => app.bundle_id === request.bundleID)
+        if (existing) {
+          const active = yield* Effect.promise(() => bridge.ownedEndpoint(existing.pid))
+          if (active?.targets.some((entry) => entry.type === "page"))
+            return yield* native({ ...request, remoteDebugging: false }, signal)
+        }
+        const launched = yield* native(request, signal)
+        if (launched.pid === undefined) return yield* new NativeError({ code: "unknown_outcome", message: "Electron relaunch returned no PID", outcome: "unknown" })
+        const ready = yield* Effect.promise(async () => {
+          const deadline = Date.now() + 3000
+          while (Date.now() < deadline) {
+            if ((await bridge.ownedEndpoint(launched.pid!))?.targets.some((entry) => entry.type === "page")) return true
+            await Bun.sleep(50)
+          }
+          return false
+        })
+        if (!ready) return yield* new NativeError({ code: "unknown_outcome", message: "Electron relaunch did not expose a PID-owned renderer endpoint", outcome: "unknown" })
+        return launched
+      }
+      if (request.action === "desktop.capture" || request.action === "desktop.click" || request.action === "desktop.drag" ||
+          request.action === "desktop.scroll" || request.action === "desktop.type" || request.action === "desktop.key") {
+        if ("element" in request && request.element) return yield* native(request, signal)
+        if (!(yield* Effect.promise(() => bridge.isElectron(request.target.pid)))) return yield* native(request, signal)
+        const listed = yield* native({ action: "desktop.list", owner: request.owner }, signal)
+        const target = request.target
+        const window = listed.apps?.find((app) => app.pid === target.pid && app.bundle_id === target.bundleID)?.windows.find((item) => item.window_id === target.windowID)
+        if (!window) return yield* new NativeError({ code: "target_not_found", message: "Exact Core Graphics window is unavailable", outcome: "not_started" })
+        if (window.on_screen && request.action !== "desktop.capture") return yield* native(request, signal)
+        const nativeCapture = window.on_screen && request.action === "desktop.capture"
+          ? yield* native(request, signal).pipe(
+              Effect.map((value) => ({ value })),
+              Effect.catch((error) => Effect.succeed({ error })),
+            ) : undefined
+        if (nativeCapture && "value" in nativeCapture) return nativeCapture.value
+        if ("expectedRevision" in request) {
+          const before = yield* native({ action: "desktop.inspect", owner: request.owner, target }, signal)
+          if (before.revision !== request.expectedRevision)
+            return yield* new NativeError({ code: "stale_revision", message: "Target state changed; inspect again", outcome: "not_started" })
+        }
+        const action = bridgeAction(request)
+        if (request.action !== "desktop.capture" && !action)
+          return yield* new NativeError({ code: "invalid_request", message: "Invalid Electron desktop action", outcome: "not_started" })
+        const operation = request.action === "desktop.capture" ? { type: "capture" as const }
+          : { type: "action" as const, action: action! }
+        const performed = yield* Effect.tryPromise({
+          try: () => bridge.perform(target, window, operation, signal),
+          catch: (cause) => cause instanceof NativeError ? cause : new NativeError({
+            code: operation.type === "action" ? "unknown_outcome" : "native_failure",
+            message: "Electron bridge failed; inspect before retrying", outcome: operation.type === "action" ? "unknown" : "not_started",
+          }),
+        })
+        if (performed) {
+          if (performed.type === "capture") {
+            const inspected = yield* native({ action: "desktop.inspect", owner: request.owner, target }, signal)
+            return { status: "ok" as const, action: request.action, revision: inspected.revision,
+              image: performed.image, width: performed.width, height: performed.height, scale: performed.scale }
+          }
+          const inspected = yield* native({ action: "desktop.inspect", owner: request.owner, target }, signal)
+          if (request.action === "desktop.capture") return yield* new NativeError({ code: "invalid_response", message: "Electron bridge returned an action for capture", outcome: "unknown" })
+          return { status: "ok" as const, action: request.action, revision: inspected.revision, effect: performed.effect }
+        }
+        if (nativeCapture && "error" in nativeCapture) return yield* nativeCapture.error
+        return yield* native(request, signal)
+      }
+      return yield* native(request, signal)
+    })
   }
 }
 

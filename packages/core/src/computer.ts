@@ -25,7 +25,8 @@ export type Error = NativeError | OwnershipError
 export interface Interface {
   readonly status: Effect.Effect<Status>
   readonly list: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string }) => Effect.Effect<NativeSuccess, Error>
-  readonly launch: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: string }) => Effect.Effect<NativeSuccess, Error>
+  readonly launch: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: string; readonly remoteDebugging?: boolean }) => Effect.Effect<NativeSuccess, Error>
+  readonly quit: (input: { readonly sessionID: SessionSchema.ID; readonly callID: string; readonly bundleID: string; readonly pid: number }) => Effect.Effect<NativeSuccess, Error>
   readonly inspect: (input: {
     readonly sessionID: SessionSchema.ID
     readonly callID: string
@@ -183,7 +184,9 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
     const active: Active = { locationToken, token: {}, sessionID: input.sessionID, callID: input.callID,
       targetKey: `unclaimed\0${invocationKey}`, controller: new AbortController() }
     activeCalls.set(invocationKey, active)
-    return yield* invoke(request, active.controller.signal).pipe(
+    const dispatch = invoke(request, active.controller.signal)
+    return yield* (request.action === "desktop.quit" || (request.action === "desktop.launch" && request.remoteDebugging)
+      ? desktopInput.withPermit(dispatch) : dispatch).pipe(
       Effect.tap(() => active.controller.signal.aborted
         ? Effect.fail(new OwnershipError({ message: "Computer call was cancelled" })) : Effect.void),
       Effect.ensuring(finish(active)),
@@ -226,7 +229,21 @@ function makeCoordinator(invoke: InvokeNative, platform: NodeJS.Platform): Coord
       ),
       launch: Effect.fn("Computer.launch")((input) =>
         platform === "darwin"
-          ? runUnclaimed(locationToken, input, MacOSComputer.launchRequest({ sessionID: input.sessionID, callID: input.callID }, input.bundleID))
+          ? runUnclaimed(locationToken, input, MacOSComputer.launchRequest({ sessionID: input.sessionID, callID: input.callID }, input.bundleID, input.remoteDebugging)).pipe(
+              Effect.ensuring(Effect.sync(() => {
+                if (input.remoteDebugging) for (const key of claims.keys())
+                  if (key.startsWith(`macos\0desktop\0${input.bundleID}\0`)) claims.delete(key)
+              })),
+            )
+          : Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" })),
+      ),
+      quit: Effect.fn("Computer.quit")((input) =>
+        platform === "darwin"
+          ? runUnclaimed(locationToken, input, MacOSComputer.quitRequest({ sessionID: input.sessionID, callID: input.callID }, input.bundleID, input.pid)).pipe(
+              Effect.ensuring(Effect.sync(() => {
+                for (const key of claims.keys()) if (key.startsWith(`macos\0desktop\0${input.bundleID}\0${input.pid}\0`)) claims.delete(key)
+              })),
+            )
           : Effect.fail(new NativeError({ code: "unsupported_platform", message: `Native computer use has no provider for ${platform}`, outcome: "not_started" })),
       ),
       inspect: Effect.fn("Computer.inspect")((input) => {
@@ -316,7 +333,7 @@ const coordinatorLayer = Layer.effect(
   Effect.gen(function* () {
     const processes = yield* AppProcess.Service
     const events = yield* EventV2.Service
-    const coordinator = makeCoordinator(MacOSComputer.invokeWith(processes), process.platform)
+    const coordinator = makeCoordinator(MacOSComputer.invokeWithBridge(processes), process.platform)
     yield* events.subscribe([SessionEvent.Moved, SessionEvent.Deleted, SessionEvent.Archived]).pipe(
       Stream.runForEach((event) => coordinator.releaseSession(event.data.sessionID)),
       Effect.forkScoped({ startImmediately: true }),

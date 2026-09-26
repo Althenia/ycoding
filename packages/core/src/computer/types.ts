@@ -55,6 +55,7 @@ export type NativeSuccess<Action extends string = string> = {
   readonly apps?: ReadonlyArray<AppInfo>
   readonly pid?: number
   readonly windows?: ReadonlyArray<WindowInfo>
+  readonly exited?: boolean
 }
 
 export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Computer.NativeError", {
@@ -74,6 +75,8 @@ export class NativeError extends Schema.TaggedErrorClass<NativeError>()("Compute
     "unknown_outcome",
     "background_unavailable",
     "focus_restore_failed",
+    "inspector_close_failed",
+    "quit_pending",
   ]),
   message: Schema.String,
   outcome: Schema.Literals(["not_started", "unknown"]).pipe(Schema.optional),
