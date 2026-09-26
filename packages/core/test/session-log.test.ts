@@ -26,7 +26,29 @@ import { eq } from "drizzle-orm"
 const projects = Layer.succeed(
   ProjectV2.Service,
   ProjectV2.Service.of({
-    list: () => Effect.succeed([]),
+    list: () =>
+      Effect.succeed([
+        {
+          id: ProjectV2.ID.make("report-other"),
+          worktree: "/report-other",
+          name: "Report other",
+          time: { created: 0, updated: 0 },
+          sandboxes: [],
+        },
+        {
+          id: ProjectV2.ID.make("usage-first"),
+          worktree: "/usage-first",
+          name: "Usage first",
+          time: { created: 0, updated: 0 },
+          sandboxes: [],
+        },
+        {
+          id: ProjectV2.ID.make("usage-second"),
+          worktree: "/usage-second",
+          time: { created: 0, updated: 0 },
+          sandboxes: [],
+        },
+      ]),
     resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
     directories: () => Effect.succeed([]),
     recordOpened: () => Effect.void,
@@ -320,7 +342,10 @@ describe("SessionV2.log", () => {
       expect(yield* session.usageReport({ sessionID: root.id, group: "session" })).toMatchObject({ rowCount: 3 })
       expect(yield* session.usageReport({ sessionID: root.id, group: "project" })).toMatchObject({
         rowCount: 2,
-        rows: [{ key: "global", logical: 1 }, { key: "report-other", logical: 2 }],
+        rows: [
+          { key: "global", label: "Global (no project)", logical: 1 },
+          { key: "report-other", label: "Report other · /report-other", logical: 2 },
+        ],
       })
       expect(yield* session.usageReport({ sessionID: child.id, group: "session" })).toMatchObject({
         rowCount: 1,
@@ -485,8 +510,8 @@ describe("SessionV2.log", () => {
       expect(yield* session.usageReportAll({ group: "project" })).toMatchObject({
         rowCount: 2,
         rows: [
-          { key: firstProject, logical: 2 },
-          { key: secondProject, logical: 1, costProvenance: "current_catalog" },
+          { key: firstProject, label: "Usage first · /usage-first", logical: 2 },
+          { key: secondProject, label: "/usage-second", logical: 1, costProvenance: "current_catalog" },
         ],
         total: { logical: 3 },
       })

@@ -209,22 +209,24 @@ test("requests server sorting before bounded pagination and gives selection, det
   try {
     app.mockInput.pressKey("ARROW_RIGHT")
     app.mockInput.pressKey("ARROW_RIGHT")
-    let frame = await waitFor(app, (value) => value.includes("Alpha") && value.includes("Beta"), "the Models report")
+    let frame = await waitFor(app, (value) => value.includes("Alpha") && value.includes("Gamma"), "the Models report")
     expect(calls.map((call) => ({ group: call.group, offset: call.offset, limit: call.limit, sort: call.sort, order: call.order }))).toEqual([
-      { group: "model", offset: 0, limit: 100, sort: "key", order: "asc" },
+      { group: "model", offset: 0, limit: 100, sort: "tokens", order: "desc" },
     ])
+    expect(frame).toContain("> Gamma")
     expect(frame.split("\n").every((line) => line.length <= 80)).toBe(true)
 
     app.mockInput.pressKey("d")
-    await waitFor(app, (value) => value.includes("> Delta"), "key descending sort")
-    expect(calls.at(-1)).toMatchObject({ group: "model", offset: 0, sort: "key", order: "desc" })
-    app.mockInput.pressKey("d")
     await waitFor(app, (value) => value.includes("> Alpha"), "key ascending sort")
     expect(calls.at(-1)).toMatchObject({ group: "model", offset: 0, sort: "key", order: "asc" })
+    app.mockInput.pressKey("d")
+    await waitFor(app, (value) => value.includes("> Delta"), "key descending sort")
+    expect(calls.at(-1)).toMatchObject({ group: "model", offset: 0, sort: "key", order: "desc" })
     app.mockInput.pressKey("c")
     frame = await waitFor(app, (value) => value.includes("> Gamma"), "global cost descending sort")
     expect(calls.at(-1)).toMatchObject({ group: "model", offset: 0, sort: "cost", order: "desc" })
-    expect(frame).toContain("$20.00 est.")
+    expect(frame).toContain("$20.00")
+    expect(frame).not.toContain("est.")
     app.mockInput.pressKey("c")
     await waitFor(app, (value) => value.includes("> Beta"), "global cost ascending sort")
     expect(calls.at(-1)).toMatchObject({ group: "model", offset: 0, sort: "cost", order: "asc" })
@@ -240,9 +242,9 @@ test("requests server sorting before bounded pagination and gives selection, det
     frame = await waitFor(app, (value) => value.includes("Usage details") && value.includes("Gamma"), "unknown token details")
     expect(frame).not.toContain("output subset")
     expect(frame).toContain("Visible output")
-    expect(frame).toContain("Cache read -")
-    expect(frame).toContain("Total tokens -")
-    expect(frame).toContain("$20.00 estimated")
+    expect(frame).toContain("Cache read ≥1,000")
+    expect(frame).toContain("Total tokens ≥6,875 · Cost $20.00")
+    expect(frame).not.toContain("estimated")
     app.mockInput.pressKey("ESCAPE")
     await waitFor(app, (value) => !value.includes("Usage details"), "unknown details dismissal")
     app.mockInput.pressKey("ARROW_DOWN")
@@ -274,11 +276,14 @@ test("requests server sorting before bounded pagination and gives selection, det
   }
 }, 30_000)
 
-test("derives Stats from complete daily retained usage and labels retention coverage honestly", async () => {
+test("derives a full-width colored Stats graph and summary from daily, model, and session reports", async () => {
   const calls: ReportInput[] = []
   const app = await renderUsage({
     load: async (query) => {
       calls.push(query)
+      if (query.group === "model")
+        return page("model", [{ key: "openai/gpt-6-luna", label: "openai/gpt-6-luna", ...metrics({ logical: 7, tokens: 7_000, cacheReadReported: true }) }], 3)
+      if (query.group === "session") return page("session", [], 7)
       if ((query.offset ?? 0) === 0)
         return page(
           query.group,
@@ -300,23 +305,48 @@ test("derives Stats from complete daily retained usage and labels retention cove
     for (let index = 0; index < 8; index++) app.mockInput.pressKey("ARROW_RIGHT")
     const frame = await waitFor(
       app,
-      (value) =>
-        calls.at(-1)?.group === "day" &&
-        value.includes("Activity graph") &&
-        value.toLowerCase().includes("retained") &&
-        value.toLowerCase().includes("coverage"),
-      "Stats retained coverage",
+      (value) => value.includes("Activity graph · last 52 weeks") && value.includes("Busiest day"),
+      "Stats graph and summary",
     )
-    expect(frame).toContain("2026-09-21")
-    expect(frame).toContain("2026-09-22")
-    expect(frame.split("\n").find((line) => /^\s*Mon /.test(line))).toContain("▓")
-    expect(frame.split("\n").find((line) => /^\s*Tue /.test(line))).toContain("█")
-    expect(frame.split("\n").find((line) => /^\s*Wed /.test(line))?.indexOf("▒"))
-      .toBe(frame.split("\n").find((line) => /^\s*Mon /.test(line))!.indexOf("▓") - 1)
-    expect(frame).toContain("Unreported")
+    const lines = frame.split("\n")
+    const spans = app.captureSpans().lines
+    const row = (label: string) => lines.findIndex((line) => new RegExp(`^\\s*${label} `).test(line))
+    const origin = lines[row("Sun")].indexOf("Sun") + 4
+    const cellColor = (label: string, week: number) => {
+      const column = origin + week * 3
+      const found = spans[row(label)].spans.reduce<{ start: number; color?: string }>(
+        (state, span) => ({
+          start: state.start + span.text.length,
+          color: state.color ?? (column >= state.start && column < state.start + span.text.length ? span.fg.toInts().join(",") : undefined),
+        }),
+        { start: 0 },
+      )
+      return found.color
+    }
+    expect(lines[row("Tue")].trimEnd()).toHaveLength(origin + 52 * 3)
+    expect(lines[row("Sun") - 1]).toContain("Sep")
+    expect(lines[row("Sun") - 1]).toContain("Oct")
+    const colors = [cellColor("Mon", 0), cellColor("Wed", 50), cellColor("Mon", 51), cellColor("Tue", 51)]
+    expect(new Set(colors).size).toBe(4)
+    expect(cellColor("Thu", 0)).toBe(colors[0])
+    expect(lines[row("Wed")].slice(origin + 51 * 3).trim()).toBe("")
+    expect(frame).toContain("Favorite model: openai/gpt-6-luna")
+    expect(frame).toContain("Sessions: 7")
+    expect(frame).toContain("Current streak: 2 days")
+    expect(frame).toContain("Longest streak: 2 days")
+    expect(frame).toContain("Active days: 3/360")
+    expect(frame).toContain("Total tokens: 4,125")
+    expect(frame).toContain("Total cost: $1.50")
+    expect(frame).toContain("Busiest day: 2026-09-22 · ≥5,500 tokens")
+    expect(frame).toContain("Usage before 2026-09-16 is unreported")
+    expect(frame).not.toContain("est.")
     expect(calls.filter((call) => call.limit === 200).map((call) => ({ group: call.group, offset: call.offset, limit: call.limit }))).toEqual([
       { group: "day", offset: 0, limit: 200 },
       { group: "day", offset: 200, limit: 200 },
+    ])
+    expect(calls.filter((call) => call.limit === 1).map((call) => ({ group: call.group, sort: call.sort, order: call.order }))).toEqual([
+      { group: "model", sort: "tokens", order: "desc" },
+      { group: "session", sort: "key", order: "asc" },
     ])
   } finally {
     app.renderer.destroy()

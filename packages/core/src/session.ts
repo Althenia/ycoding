@@ -422,6 +422,7 @@ export class Service extends Context.Service<Service, Interface>()("@ycoding/v2/
 function usageReportGroup(
   group: ProviderRequest.ReportGroup,
   item: { readonly record: SessionProviderRequest.CostedRecord; readonly session: SessionSchema.Info },
+  projects: ReadonlyArray<ProjectV2.Info>,
 ) {
   if (group === "model") {
     const variant = item.record.model.variant
@@ -434,7 +435,15 @@ function usageReportGroup(
     }
   }
   if (group === "session") return { key: item.session.id, label: item.session.title }
-  if (group === "project") return { key: item.session.projectID, label: item.session.projectID }
+  if (group === "project") {
+    if (item.session.projectID === ProjectV2.ID.global)
+      return { key: item.session.projectID, label: "Global (no project)" }
+    const project = projects.find((project) => project.id === item.session.projectID)
+    return {
+      key: item.session.projectID,
+      label: project ? (project.name ? `${project.name} · ${project.worktree}` : project.worktree) : item.session.projectID,
+    }
+  }
   if (group === "agent") return { key: item.record.agent, label: item.record.agent }
   const iso = new Date(DateTime.toEpochMillis(item.record.time)).toISOString()
   if (group === "hour") return { key: `${iso.slice(0, 13)}:00:00.000Z`, label: `${iso.slice(0, 13)}:00 UTC` }
@@ -469,6 +478,7 @@ function buildUsageReport(
     readonly record: SessionProviderRequest.CostedRecord
     readonly session: SessionSchema.Info
   }>,
+  projects: ReadonlyArray<ProjectV2.Info>,
 ): ProviderRequest.Report {
   const records = items.filter(({ record }) => {
     const time = DateTime.toEpochMillis(record.time)
@@ -479,7 +489,7 @@ function buildUsageReport(
     { readonly label: string; readonly records: SessionProviderRequest.CostedRecord[] }
   >()
   for (const item of records) {
-    const group = usageReportGroup(input.group, item)
+    const group = usageReportGroup(input.group, item, projects)
     const current = grouped.get(group.key)
     if (current) {
       current.records.push(item.record)
@@ -894,11 +904,13 @@ const layer = Layer.effect(
       }),
       usageReport: Effect.fn("V2Session.usageReport")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        const projectInfos = input.group === "project" ? yield* projects.list() : []
         return buildUsageReport(
           input,
           yield* Effect.forEach(yield* family(session), (item) =>
             costedRecords(item).pipe(Effect.map((records) => records.map((record) => ({ record, session: item })))),
           ).pipe(Effect.map((items) => items.flat())),
+          projectInfos,
         )
       }),
       usageAll: Effect.fn("V2Session.usageAll")(function* () {
@@ -912,11 +924,13 @@ const layer = Layer.effect(
       }),
       usageReportAll: Effect.fn("V2Session.usageReportAll")(function* (input) {
         const sessions = (yield* result.list({ order: "asc" })).data
+        const projectInfos = input.group === "project" ? yield* projects.list() : []
         return buildUsageReport(
           input,
           yield* Effect.forEach(sessions, (session) =>
             costedRecords(session).pipe(Effect.map((records) => records.map((record) => ({ record, session })))),
           ).pipe(Effect.map((items) => items.flat())),
+          projectInfos,
         )
       }),
       autonomy: {

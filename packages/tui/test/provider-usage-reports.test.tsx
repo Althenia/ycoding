@@ -125,10 +125,12 @@ test("defaults tables to all retained history and exposes normalized metrics plu
   })
   try {
     let frame = await waitFor(app, (value) => value.includes("All retained history") && value.includes("Alpha"), "the initial table")
-    expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "key", order: "asc" })
-    expect(frame).toContain("VISIBLE OUT")
-    expect(frame).toContain("REASON")
-    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s-(\s|$)/)
+    expect(calls[0]).toEqual({ group: "model", offset: 0, limit: 100, sort: "tokens", order: "desc" })
+    for (const column of ["STEPS", "INPUT", "OUTPUT", "REASON", "CACHE READ", "CACHE WRITE", "TOTAL", "COST"]) expect(frame).toContain(column)
+    expect(frame).toContain("STEPS model calls")
+    expect(frame.split("\n").find((line) => line.includes("Alpha"))).toMatch(/\s-\s.*\s≥5,540\s/)
+    expect(frame.split("\n").find((line) => line.includes("Beta"))).toContain("$0.30")
+    expect(frame).not.toContain("est.")
     expect(frame).not.toContain("output subset")
 
     app.mockInput.pressKey("RETURN")
@@ -136,7 +138,8 @@ test("defaults tables to all retained history and exposes normalized metrics plu
     expect(frame).toContain("Visible output 1,200")
     expect(frame).toContain("Reasoning 300")
     expect(frame).toContain("Cache read -")
-    expect(frame).toContain("Total tokens -")
+    expect(frame).toContain("Total tokens ≥5,540 · Cost unreported")
+    expect(frame).toContain("≥ marks a lower bound")
     app.mockInput.pressKey("ESCAPE")
     await waitFor(app, (value) => !value.includes("Usage details"), "details dismissal")
 
@@ -271,4 +274,36 @@ test("invalidates late report work when the screen unmounts", async () => {
   app.renderer.destroy()
   requests[0].resolve(report("model", [{ key: "late", label: "Late after unmount", logical: 4 }]))
   await Bun.sleep(30)
+}, 30_000)
+
+test("keeps large-value rows on one line with compact token columns", async () => {
+  const large = {
+    logical: 295,
+    physical: 296,
+    helpers: 0,
+    continued: 0,
+    fallback: 0,
+    tokens: { input: 2_773, output: 271_369, reasoning: 0, cache: { read: 103_554_080, write: 553_293 } },
+    cost: 1_711.29,
+    costProvenance: "current_catalog" as const,
+    cacheReadReported: true,
+  }
+  const app = await renderReports({
+    load: async (query) => ({
+      group: query.group,
+      rows: [{ key: "large", label: "Investigate YCoding macOS Safari window inspection in a separate worktree", ...large }],
+      total: large,
+      rowCount: 1,
+    }),
+  })
+  try {
+    const frame = await waitFor(app, (value) => value.includes("Investigate YCoding"), "large row")
+    const lines = frame.split("\n")
+    const row = lines.find((line) => line.includes("Investigate YCoding"))!
+    expect(lines.every((line) => line.length <= 189)).toBe(true)
+    for (const value of ["295", "2,773", "271.4K", "103.6M", "553.3K", "104.4M", "$1711.29"]) expect(row).toContain(value)
+    expect(lines[lines.indexOf(row) + 1].trim()).not.toMatch(/^\d/)
+  } finally {
+    app.renderer.destroy()
+  }
 }, 30_000)
