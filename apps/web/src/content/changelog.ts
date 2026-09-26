@@ -28,7 +28,7 @@ export const RELEASES: readonly ReleaseEntry[] = [
     tags: ["Added", "Changed", "Fixed"],
     changes: [
       { tag: "Added", text: "Run provider-native compaction on the owner request with a bounded local fallback; persist private compaction items across model switches; enable Copilot Responses compaction and Claude Chat cache markers." },
-      { tag: "Added", text: "Ship the signed YCoding Computer Use app beside release executables; resolve desktop windows by CG window ID, probe other Spaces, request Accessibility/Screen Recording/Automation access, and require Developer ID signing so privacy grants persist across updates." },
+      { tag: "Added", text: "Ship the ad-hoc signed YCoding Computer Use app beside release executables; resolve desktop windows by CG window ID, probe other Spaces, and request Accessibility/Screen Recording/Automation access. Re-allow the app in Privacy & Security after each update; clear com.apple.quarantine on browser-downloaded archives." },
       { tag: "Added", text: "Install and update the paired Chrome extension alongside the CLI release with a fixed manifest public key." },
       { tag: "Added", text: "Show provider usage by profile in the TUI: one quota snapshot per stored credential profile, hide providers without usable credentials, render unreported values as '-'. Add built-in git worktree guidance to core instructions." },
       { tag: "Added", text: "Sign in to the remote workspace from a dedicated OAuth screen (Google); read the documentation as Markdown for AI agents at /llms.txt, /llms-full.txt, and /docs/<page>.md." },

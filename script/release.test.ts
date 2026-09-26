@@ -83,14 +83,11 @@ test("release workflow packages and checksums every CLI archive", () => {
   expect(workflow).toContain("needs: [build, isolated-browser-acceptance]")
 })
 
-test("macOS release builds sign the app with the configured Developer ID identity", () => {
-  expect(workflow).toContain("MACOS_SIGNING_CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}")
-  expect(workflow).toContain("MACOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}")
-  expect(workflow).toContain("MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}")
-  expect(workflow).toContain('echo "YCODING_MACOS_SIGNING_IDENTITY=$MACOS_SIGNING_IDENTITY" >>"$GITHUB_ENV"')
-  expect(workflow).toContain('{ echo "Missing MACOS_SIGNING_CERTIFICATE Actions secret" >&2; exit 1; }')
-  expect(workflow).toContain("designated => cdhash")
-  expect(workflow.indexOf("Import macOS signing identity")).toBeLessThan(workflow.indexOf("Build TUI artifact"))
+test("macOS release builds ship an ad-hoc signed app without signing secrets", () => {
+  expect(workflow).not.toContain("secrets.MACOS_SIGNING")
+  expect(workflow).not.toContain("Import macOS signing identity")
+  expect(workflow).not.toContain("designated => cdhash")
+  expect(workflow).toContain('codesign --verify --deep --strict "$staging/YCoding Computer Use.app"')
 })
 
 test("isolated-browser acceptance accepts installed Chrome 152 or newer", () => {

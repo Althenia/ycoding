@@ -20,6 +20,20 @@ describe("inlineSegments", () => {
     expect(inlineSegments("Quote with ` alone")).toEqual([{ code: false, text: "Quote with ` alone" }])
   })
 
+  test("marks **bold** pairs outside code as strong", () => {
+    expect(inlineSegments("**Symptom:** `ycoding` is not found.")).toEqual([
+      { code: false, strong: true, text: "Symptom:" },
+      { code: false, text: " " },
+      { code: true, text: "ycoding" },
+      { code: false, text: " is not found." },
+    ])
+    expect(inlineSegments("Globs like `src/**` stay code.")).toEqual([
+      { code: false, text: "Globs like " },
+      { code: true, text: "src/**" },
+      { code: false, text: " stay code." },
+    ])
+  })
+
   test("drops empty runs", () => {
     expect(inlineSegments("`cli.json`")).toEqual([{ code: true, text: "cli.json" }])
   })

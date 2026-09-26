@@ -177,32 +177,6 @@ jobs:
             }
           '
 
-      # A stable Developer ID signature keeps macOS privacy grants for YCoding Computer Use across updates.
-      - name: Import macOS signing identity
-        if: ${{ runner.os == 'macOS' }}
-        env:
-          MACOS_SIGNING_CERTIFICATE: ${{ secrets.MACOS_SIGNING_CERTIFICATE }}
-          MACOS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_SIGNING_CERTIFICATE_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          test -n "$MACOS_SIGNING_CERTIFICATE" || { echo "Missing MACOS_SIGNING_CERTIFICATE Actions secret" >&2; exit 1; }
-          test -n "$MACOS_SIGNING_CERTIFICATE_PASSWORD" || { echo "Missing MACOS_SIGNING_CERTIFICATE_PASSWORD Actions secret" >&2; exit 1; }
-          test -n "$MACOS_SIGNING_IDENTITY" || { echo "Missing MACOS_SIGNING_IDENTITY Actions secret" >&2; exit 1; }
-          keychain="$RUNNER_TEMP/ycoding-signing.keychain-db"
-          keychain_password="$(openssl rand -hex 24)"
-          printf '%s' "$MACOS_SIGNING_CERTIFICATE" | base64 --decode >"$RUNNER_TEMP/ycoding-signing.p12"
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$RUNNER_TEMP/ycoding-signing.p12" -k "$keychain" -P "$MACOS_SIGNING_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          rm -f "$RUNNER_TEMP/ycoding-signing.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          security find-identity -v -p codesigning "$keychain" | grep -F "\"$MACOS_SIGNING_IDENTITY\"" >/dev/null ||
-            { echo "MACOS_SIGNING_IDENTITY is not a valid code-signing identity in MACOS_SIGNING_CERTIFICATE" >&2; exit 1; }
-          echo "YCODING_MACOS_SIGNING_IDENTITY=$MACOS_SIGNING_IDENTITY" >>"$GITHUB_ENV"
-
       - name: Build TUI artifact
         run: bun run build:tui
 
@@ -226,11 +200,8 @@ jobs:
           cp -R "dist/tui/tui-${{ matrix.target }}/bin/ycoding-chrome-extension" "$staging/"
           if [ "${{ runner.os }}" = "macOS" ]; then
             cp -R "dist/tui/tui-${{ matrix.target }}/bin/YCoding Computer Use.app" "$staging/"
+            # The app is ad-hoc signed; the signature must still be complete and valid.
             codesign --verify --deep --strict "$staging/YCoding Computer Use.app"
-            if codesign -d -r- "$staging/YCoding Computer Use.app" 2>&1 | grep -F "designated => cdhash" >/dev/null; then
-              echo "YCoding Computer Use.app must be signed with the stable Developer ID identity" >&2
-              exit 1
-            fi
           fi
 
       - name: Upload native executables

@@ -26,7 +26,7 @@ The agent, repository, filesystem, shell, tools, and model execution remain in t
 curl -fsSL https://ycoding.althenia.app/install.sh | sh
 ```
 
-The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. macOS releases from v0.7.1 also install a signed computer helper app; window control requires Accessibility and Screen Recording grants to that installed app. Follow the PATH instructions, then open a new terminal and run:
+The installer downloads the latest release, verifies its SHA-256 checksum, and installs `ycoding` in `~/.local/bin`. macOS releases from v0.7.1 also install an ad-hoc signed computer helper app; window control requires Accessibility and Screen Recording grants to that installed app, granted again after each update. If you download a release archive with a browser instead, clear the quarantine attribute after extracting it: `xattr -dr com.apple.quarantine <extracted-folder>`. Follow the PATH instructions, then open a new terminal and run:
 
 ```sh
 ycoding

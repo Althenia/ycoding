@@ -158,6 +158,11 @@ export const gettingStartedPages: readonly DocPage[] = [
             title: "Review the installer before running it",
             text: "The shell command downloads and runs the published installer. If you prefer to inspect or verify assets yourself, download the matching archive and checksum file from GitHub Releases and follow the release's published checksums.",
           },
+          {
+            kind: "paragraph",
+            text: "macOS release builds are ad-hoc signed. An archive downloaded with a web browser carries the `com.apple.quarantine` attribute, so after extracting it, clear that attribute before the first run. The curl installer and `ycoding update` download without it.",
+          },
+          { kind: "code", language: "sh", label: "Clear quarantine on a browser-downloaded macOS archive", code: "xattr -dr com.apple.quarantine <extracted-folder>" },
         ],
       },
       {
@@ -184,7 +189,7 @@ export const gettingStartedPages: readonly DocPage[] = [
         blocks: [
           {
             kind: "paragraph",
-            text: "Run the explicit update command to install the newest release. It verifies the archive checksum and contents before replacing an installed binary. Self-update supports macOS arm64/x64 and Linux x64; on Windows, close YCoding and replace the executable manually with the release ZIP contents.",
+            text: "Run the explicit update command to install the newest release. It verifies the archive checksum and contents before replacing an installed binary. Self-update supports macOS arm64/x64 and Linux x64; on Windows, close YCoding and replace the executable manually with the release ZIP contents. On macOS, each release installs a new ad-hoc signed `YCoding Computer Use.app`: after updating, remove the existing YCoding Computer Use entries in Privacy & Security and allow the new ones when the next computer operation asks.",
           },
           { kind: "code", language: "sh", label: "Install the newest release", code: "ycoding update" },
           {

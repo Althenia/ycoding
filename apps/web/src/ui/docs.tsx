@@ -81,7 +81,7 @@ export function CodeBlock(props: {
 function Inline(props: { readonly text: string }): JSX.Element {
   return (
     <For each={inlineSegments(props.text)}>
-      {(segment) => (segment.code ? <code class="inline-code">{segment.text}</code> : segment.text)}
+      {(segment) => (segment.code ? <code class="inline-code">{segment.text}</code> : segment.strong ? <strong>{segment.text}</strong> : segment.text)}
     </For>
   )
 }

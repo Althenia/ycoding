@@ -67,7 +67,7 @@ Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
 
 - TUI and web share one release version and one nonempty note at `docs/releases/v<version>.md`.
 - When preparing a release, add its user-facing changes to `apps/web/src/content/changelog.ts` in newest-first order and update the changelog test; include every version since the last listed release using its `docs/releases/v<version>.md` note as evidence.
-- The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies both surfaces, deploys web to Cloudflare after required checks, and creates one TUI GitHub Release with the note and native assets only after deployment succeeds. Configure `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret for deployment. Configure `MACOS_SIGNING_CERTIFICATE` (base64-encoded Developer ID Application `.p12`), `MACOS_SIGNING_CERTIFICATE_PASSWORD`, and `MACOS_SIGNING_IDENTITY` as GitHub Actions secrets; macOS builds fail without them and reject an ad-hoc-signed computer-use app. Manual runs prepare assets without publishing or deploying.
+- The release workflow (`release.yml`) triggers on `push` to `v<version>` tags. It verifies both surfaces, deploys web to Cloudflare after required checks, and creates one TUI GitHub Release with the note and native assets only after deployment succeeds. Configure `CLOUDFLARE_API_TOKEN` as a GitHub Actions secret for deployment. macOS builds ship an ad-hoc-signed computer-use app and require no signing secrets; the workflow verifies that signature before staging. Manual runs prepare assets without publishing or deploying.
 
 ## Commits and PR titles
 
