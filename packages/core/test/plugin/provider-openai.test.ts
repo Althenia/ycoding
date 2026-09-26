@@ -4,7 +4,7 @@ import { describe, expect } from "bun:test"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { Deferred, Effect } from "effect"
 import { TestClock } from "effect/testing"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { HttpClient, HttpClientResponse, UrlParams } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Credential } from "@ycoding-ai/core/credential"
 import { Integration } from "@ycoding-ai/core/integration"
@@ -72,9 +72,9 @@ describe("OpenAIPlugin", () => {
           metadata: { accountID: "fixture-account" },
         }),
       })
-      const requests: string[] = []
+      const requests: Array<{ url: string; params: string; agent: string | undefined }> = []
       const http = HttpClient.make((request) => Effect.sync(() => {
-        requests.push(request.url)
+        requests.push({ url: request.url, params: UrlParams.toString(request.urlParams), agent: request.headers["user-agent"] })
         expect(request.headers.authorization).toBe("Bearer fixture-access")
         expect(request.headers["chatgpt-account-id"]).toBe("fixture-account")
         return HttpClientResponse.fromWeb(request, Response.json({ models: [
@@ -88,7 +88,9 @@ describe("OpenAIPlugin", () => {
       yield* addPlugin(http)
       yield* TestClock.adjust("500 millis")
       expect(requests).toHaveLength(1)
-      expect(requests[0]).toStartWith("https://chatgpt.com/backend-api/codex/models")
+      expect(requests[0]?.url).toBe("https://chatgpt.com/backend-api/codex/models")
+      expect(requests[0]?.params).toBe("client_version=0.157.1")
+      expect(requests[0]?.agent).toStartWith("ycoding/")
       expect(required(yield* catalog.model.get(ProviderV2.ID.openai, ModelV2.ID.make("gpt-5.6-luna")))).toMatchObject({
         name: "gpt-5.6-luna", enabled: true, daybreak: ["daybreak_blue"],
       })

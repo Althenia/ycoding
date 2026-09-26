@@ -507,21 +507,23 @@ export const resolve = (
 ) =>
   withVariant(model, session.model?.variant).pipe(
     Effect.flatMap((model) =>
-      fromCatalogModel(withDaybreak(model, session.daybreak, credential), credential, dependencies, connection),
+      fromCatalogModel(model, credential, dependencies, connection).pipe(
+        Effect.map((resolved) => {
+          const daybreak = session.daybreak;
+          if (
+            daybreak === undefined ||
+            model.providerID !== ProviderV2.ID.openai ||
+            !OpenAICodex.isChatGPT(credential) ||
+            !model.daybreak?.includes(daybreak) ||
+            !OpenAICodex.isRoute(resolved.route.id)
+          ) return resolved;
+          return Model.update(resolved, {
+            route: resolved.route.with({ http: { body: { access_programs: { cyber: daybreak } } } }),
+          });
+        }),
+      ),
     ),
   );
-
-const withDaybreak = (
-  model: ModelV2.Info,
-  daybreak: SessionSchema.Info["daybreak"],
-  credential: Credential.Value | undefined,
-) => {
-  if (daybreak === undefined || !OpenAICodex.isChatGPT(credential)) return model;
-  if (!model.daybreak?.includes(daybreak)) return model;
-  return produce(model, (draft) => {
-    draft.body = ProviderV2.mergeOverlay(draft.body, { access_programs: { cyber: daybreak } });
-  });
-};
 
 export const supported = (model: ModelV2.Info) => Boolean(model.package);
 

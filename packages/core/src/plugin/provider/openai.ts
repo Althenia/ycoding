@@ -199,7 +199,7 @@ export const OpenAIPlugin = define({
       const response = yield* HttpClient.filterStatusOk(http)
         .execute(
           HttpClientRequest.get(`${OpenAICodex.baseURL}/models`).pipe(
-            HttpClientRequest.setUrlParam("client_version", InstallationVersion),
+            HttpClientRequest.setUrlParam("client_version", OpenAICodex.catalogClientVersion),
             HttpClientRequest.bearerToken(input.credential.access),
             HttpClientRequest.setHeader("chatgpt-account-id", accountID),
             HttpClientRequest.setHeader("User-Agent", `ycoding/${InstallationVersion}`),

@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, useContext } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import { InstallationVersion } from "@ycoding-ai/core/installation/version"
-import type { SessionMessageAssistant } from "@ycoding-ai/client"
+import type { ModelDaybreak, SessionMessageAssistant } from "@ycoding-ai/client"
 import { useData } from "../../context/data"
 import { Keymap } from "../../context/keymap"
 import { LocalContext } from "../../context/local"
@@ -38,7 +38,7 @@ type SessionHeaderTimedState = Extract<
   { type: "working" } | { type: "thinking" } | { type: "tool-running" }
 >
 
-export type SessionHeaderSegmentKey = "path" | "branch" | "agent" | "profile" | "model" | "variant"
+export type SessionHeaderSegmentKey = "path" | "branch" | "agent" | "profile" | "model" | "daybreak" | "variant"
 
 export type SessionHeaderIdentity = {
   path?: string
@@ -52,6 +52,7 @@ export type SessionHeaderIdentity = {
    */
   profile?: string
   model?: string
+  daybreak?: { program: ModelDaybreak; active: boolean }
   variant?: string
   pendingAgent?: string
   pendingModel?: string
@@ -109,6 +110,9 @@ export function headerSegments(input: SessionHeaderIdentity & { width: number })
     ["agent", input.agent],
     ["profile", profile],
     ["model", model],
+    ["daybreak", model && input.daybreak
+      ? `Daybreak ${input.daybreak.program === "daybreak_blue" ? "Blue" : "Red"}${input.daybreak.active ? "" : " (inactive)"}`
+      : undefined],
     ["variant", variant],
   ]
   return ordered.flatMap(([key, label]) => (label ? [{ key, label }] : []))
@@ -248,6 +252,7 @@ export function Header(
       agent: identity().agent,
       profile: identity().profile,
       model: identity().model,
+      daybreak: identity().daybreak,
       variant: identity().variant,
     }),
   )
@@ -274,6 +279,8 @@ export function Header(
     // secondary ink instead of competing with the agent's own configured colour.
     if (key === "profile") return themeV2.text.subdued
     if (key === "model") return themeV2.text.subdued
+    if (key === "daybreak")
+      return identity().daybreak?.active ? themeV2.text.feedback.info.default : themeV2.text.feedback.warning.default
     if (key === "variant") return themeV2.text.feedback.success.default
     // The agent carries its own configured colour, so the header names it the way every other
     // agent affordance does instead of rendering it as plain default ink.

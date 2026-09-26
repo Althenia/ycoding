@@ -291,6 +291,47 @@ describe("header profile segment", () => {
   })
 })
 
+describe("header Daybreak indicator", () => {
+  for (const width of [80, 120, 160]) {
+    test(`renders active Daybreak beside the model at ${width} columns`, async () => {
+      const app = await renderHeader(width, { type: "ready" }, {
+        identity: {
+          ...identity,
+          model: "openai/GPT 6 Luna",
+          variant: "high",
+          daybreak: { program: "daybreak_blue", active: true },
+        },
+      })
+      try {
+        expect(app.captureCharFrame()).toContain("openai/GPT 6 Luna · Daybreak Blue · high")
+        expect(app.captureCharFrame()).not.toContain("inactive")
+      } finally {
+        app.renderer.destroy()
+      }
+    })
+  }
+
+  test("distinguishes a saved but inactive program from an active one", async () => {
+    const app = await renderHeader(120, { type: "ready" }, {
+      identity: { ...identity, daybreak: { program: "daybreak_red", active: false } },
+    })
+    try {
+      expect(app.captureCharFrame()).toContain("anthropic/claude-opus-5 · Daybreak Red (inactive) · max")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("omits the indicator when Daybreak is off", async () => {
+    const app = await renderHeader(120, { type: "ready" })
+    try {
+      expect(app.captureCharFrame()).not.toContain("Daybreak")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+})
+
 function HeaderKeymap(props: Parameters<typeof Header>[0]) {
   Keymap.createLayer(() => ({
     commands: [

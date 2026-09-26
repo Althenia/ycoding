@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import type { ModelDaybreak, YCodingEvent } from "@ycoding-ai/client"
+import type { ModelDaybreak, SessionMessageModelSelected, YCodingEvent } from "@ycoding-ai/client"
 import { json, type FetchHandler } from "../fixture/tui-client"
 import { renderScreen } from "./harness"
 
@@ -22,25 +22,29 @@ const baseSession = {
 }
 
 let advertised: ModelDaybreak[] = []
+let sessionModel = baseSession.model
 let sessionDaybreak: ModelDaybreak | undefined
 let daybreakSets: Array<{ daybreak: ModelDaybreak | null }> = []
 let promptRequests: Array<{ id: string; text: string }> = []
 let eventSeq = 0
+const modelMessages = new Map<string, SessionMessageModelSelected>()
 
 function resetFixture(input: { advertised: ModelDaybreak[]; daybreak?: ModelDaybreak }) {
   advertised = input.advertised
+  sessionModel = baseSession.model
   sessionDaybreak = input.daybreak
   daybreakSets = []
   promptRequests = []
   eventSeq = 0
+  modelMessages.clear()
 }
 
 const route: FetchHandler = async (url, request) => {
   if (url.pathname === "/api/fs/list") return json({ location, data: [] })
   if (url.pathname === "/api/location") return json(location)
-  if (url.pathname === "/api/session") return json({ data: [{ ...baseSession, daybreak: sessionDaybreak }], cursor: {} })
+  if (url.pathname === "/api/session") return json({ data: [{ ...baseSession, model: sessionModel, daybreak: sessionDaybreak }], cursor: {} })
   if (url.pathname === "/api/session/active") return json({ data: {} })
-  if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...baseSession, daybreak: sessionDaybreak } })
+  if (url.pathname === `/api/session/${sessionID}`) return json({ data: { ...baseSession, model: sessionModel, daybreak: sessionDaybreak } })
   if (url.pathname === `/api/session/${sessionID}/daybreak` && request.method === "POST") {
     const body = (await request.json()) as { daybreak: ModelDaybreak | null }
     daybreakSets.push(body)
@@ -67,6 +71,8 @@ const route: FetchHandler = async (url, request) => {
     })
   }
   if (url.pathname === `/api/session/${sessionID}/message`) return json({ data: [], cursor: {} })
+  if (url.pathname.startsWith(`/api/session/${sessionID}/message/`))
+    return json({ data: modelMessages.get(url.pathname.split("/").at(-1)!) })
   if (url.pathname === `/api/session/${sessionID}/subagent`)
     return json({ data: [], summary: { total: 0, active: 0, running: 0, waiting: 0 }, cursor: {} })
   if (url.pathname === `/api/session/${sessionID}/guardrail`)
@@ -116,21 +122,22 @@ const route: FetchHandler = async (url, request) => {
     return json({
       location,
       data: [
-        {
-          id: baseSession.model.id,
-          modelID: baseSession.model.id,
-          providerID: baseSession.model.providerID,
-          name: "GPT 5.6 Terra",
-          capabilities: { tools: true, input: ["text"], output: ["text"] },
-          variants: [{ id: baseSession.model.variant }, { id: "low" }],
-          time: { released: 0 },
-          cost: [],
-          status: "active",
-          enabled: true,
-          ...(advertised.length > 0 ? { daybreak: advertised } : {}),
-          limit: { context: 200_000, output: 32_000 },
-        },
-      ],
+        { ...baseSession.model, name: "GPT 5.6 Terra", daybreak: advertised },
+        ...unsupportedModels,
+      ].map((model) => ({
+        id: model.id,
+        modelID: model.id,
+        providerID: model.providerID,
+        name: model.name,
+        capabilities: { tools: true, input: ["text"], output: ["text"] },
+        variants: [{ id: baseSession.model.variant }, { id: "low" }],
+        time: { released: 0 },
+        cost: [],
+        status: "active",
+        enabled: true,
+        ...("daybreak" in model && model.daybreak.length > 0 ? { daybreak: model.daybreak } : {}),
+        limit: { context: 200_000, output: 32_000 },
+      })),
     })
   if (url.pathname === "/api/provider") return json({ location, data: [{ id: "openai", name: "OpenAI" }] })
   if (url.pathname === "/api/skill") return json({ location, data: [] })
@@ -145,6 +152,13 @@ const route: FetchHandler = async (url, request) => {
 }
 
 type Screen = Awaited<ReturnType<typeof renderScreen>>
+
+const unsupportedModels = [
+  { providerID: "openai", id: "gpt-6-astra", name: "GPT 6 Astra" },
+  { providerID: "openrouter", id: "openai/gpt-6-luna", name: "GPT 6 Luna" },
+  { providerID: "anthropic", id: "claude-opus-5", name: "Claude Opus 5" },
+  { providerID: "deepseek", id: "deepseek-chat", name: "DeepSeek Chat" },
+]
 
 async function waitUntil(screen: Screen, predicate: () => boolean, label: string) {
   for (let attempt = 0; attempt < 250; attempt++) {
@@ -181,6 +195,22 @@ function emitDaybreak(screen: Screen, daybreak?: ModelDaybreak) {
   } satisfies YCodingEvent)
 }
 
+function emitModel(screen: Screen, model: typeof baseSession.model) {
+  const previous = sessionModel
+  sessionModel = model
+  eventSeq += 1
+  const messageID = `msg_daybreak_model_${eventSeq}`
+  modelMessages.set(messageID, { id: messageID, type: "model-switched", model, previous, time: { created: eventSeq } })
+  screen.events.emit({
+    id: `evt_daybreak_model_${eventSeq}`,
+    created: eventSeq,
+    type: "session.model.selected",
+    durable: { aggregateID: sessionID, seq: eventSeq, version: 1 },
+    data: { sessionID, model },
+    location: { directory },
+  } satisfies YCodingEvent)
+}
+
 /** Syncs on the durable patch by reading the palette's reactive title, then closes it. */
 async function expectPaletteTitle(screen: Screen, title: string) {
   screen.input.pressKey("p", { ctrl: true })
@@ -195,9 +225,14 @@ async function expectPaletteTitle(screen: Screen, title: string) {
   )
 }
 
-function boot(advertisedPrograms: ModelDaybreak[], daybreak?: ModelDaybreak) {
+async function boot(advertisedPrograms: ModelDaybreak[], daybreak?: ModelDaybreak) {
   resetFixture({ advertised: advertisedPrograms, daybreak })
-  return renderScreen({ width: 120, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  const screen = await renderScreen({ width: 120, height: 69, args: { sessionID }, route, settle: "Message YCoding…" })
+  await waitUntil(screen, () => screen.lines()[1].includes("openai/GPT 5.6 Terra"), "the resolved model").catch(async (error) => {
+    await screen.dispose()
+    throw error
+  })
+  return screen
 }
 
 test("lists the Daybreak command in the palette with the Session's current state", async () => {
@@ -208,6 +243,93 @@ test("lists the Daybreak command in the palette with the Session's current state
 
     emitDaybreak(screen, "daybreak_red")
     await expectPaletteTitle(screen, "Daybreak: red (cycle off→blue→red, /daybreak blue|red|off)")
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("rehydrates and updates the header indicator from durable Daybreak state", async () => {
+  const screen = await boot(["daybreak_blue", "daybreak_red"], "daybreak_blue")
+  try {
+    await screen.waitForEventStream()
+    expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Blue · high")
+
+    emitDaybreak(screen, "daybreak_red")
+    await waitUntil(screen, () => screen.lines()[1].includes("Daybreak Red"), "the red indicator")
+    expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Red · high")
+
+    emitDaybreak(screen)
+    await expectPaletteTitle(screen, "Daybreak: off (cycle off→blue→red, /daybreak blue|red|off)")
+    expect(screen.lines()[1]).not.toContain("Daybreak")
+    expect(daybreakSets).toEqual([])
+    expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("marks a saved Daybreak program inactive on a model that does not advertise it", async () => {
+  const screen = await boot([], "daybreak_blue")
+  try {
+    expect(screen.lines()[1]).toContain("openai/GPT 5.6 Terra · Daybreak Blue (inactive)")
+    expect(daybreakSets).toEqual([])
+    expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("keeps Daybreak inactive on unsupported models and providers, and restores it on the supported model", async () => {
+  const screen = await boot(["daybreak_blue"], "daybreak_blue")
+  try {
+    await screen.waitForEventStream()
+    for (const model of unsupportedModels) {
+      emitModel(screen, { providerID: model.providerID, id: model.id, variant: "high" })
+      await waitUntil(
+        screen,
+        () => screen.lines()[1].includes(`${model.providerID}/${model.name} · Daybreak Blue (inactive)`),
+        `the inactive ${model.providerID}/${model.id} indicator`,
+      )
+    }
+    emitModel(screen, baseSession.model)
+    await waitUntil(
+      screen,
+      () => screen.lines()[1].includes("openai/GPT 5.6 Terra · Daybreak Blue · high"),
+      "the restored indicator",
+    )
+    expect(sessionDaybreak).toBe("daybreak_blue")
+    expect(daybreakSets).toEqual([])
+    expect(promptRequests).toEqual([])
+  } finally {
+    await screen.dispose()
+  }
+}, 30_000)
+
+test("refreshes Daybreak activity when the account's advertised programs change", async () => {
+  const screen = await boot(["daybreak_blue"], "daybreak_blue")
+  try {
+    await screen.waitForEventStream()
+    const programSets: ModelDaybreak[][] = [[], ["daybreak_blue"]]
+    for (const programs of programSets) {
+      advertised = programs
+      eventSeq += 1
+      screen.events.emit({
+        id: `evt_daybreak_catalog_${eventSeq}`,
+        type: "catalog.updated",
+        created: eventSeq,
+        data: {},
+        location: { directory },
+      } satisfies YCodingEvent)
+      await waitUntil(
+        screen,
+        () => screen.lines()[1].includes(programs.includes("daybreak_blue")
+          ? "Daybreak Blue · high"
+          : "Daybreak Blue (inactive)"),
+        "the refreshed catalog indicator",
+      )
+    }
+    expect(sessionDaybreak).toBe("daybreak_blue")
+    expect(daybreakSets).toEqual([])
   } finally {
     await screen.dispose()
   }

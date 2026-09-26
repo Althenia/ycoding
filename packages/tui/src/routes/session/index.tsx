@@ -512,6 +512,13 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     return `${model.providerID}/${name}`
   })
   const headerVariant = createMemo(() => currentHeaderModel()?.variant)
+  const headerDaybreak = createMemo(() => {
+    const program = session()?.daybreak
+    if (!program) return
+    const model = currentHeaderModel()
+    const info = models().find((item) => item.providerID === model?.providerID && item.id === model?.id)
+    return { program, active: model?.providerID === "openai" && info?.daybreak?.includes(program) === true }
+  })
   const pendingHeaderModel = createMemo(() => {
     // While a switch is in flight, show the desired target as pending progress. The durable Session
     // model is still the active one until the switch settles.
@@ -1478,6 +1485,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
         pendingAgent={pendingHeaderAgent()}
         profile={headerProfile()}
         model={headerModel()}
+        daybreak={headerDaybreak()}
         variant={headerVariant()}
         pendingModel={pendingHeaderModel()}
         pendingVariant={pendingHeaderVariant()}

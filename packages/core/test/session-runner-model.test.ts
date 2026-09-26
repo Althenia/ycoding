@@ -103,6 +103,23 @@ const chatgptCredential = () =>
     metadata: { accountID: "fixture-account" },
   });
 
+const captureRequestBody = (model: Model) => Effect.gen(function* () {
+  const requests: unknown[] = [];
+  yield* LLMClient.generate(LLM.request({ model, prompt: "Hello" })).pipe(
+    Effect.provide(LLMClient.configured()),
+    Effect.provideService(RequestExecutor.Service, {
+      execute: (request) => Effect.sync(() => {
+        if (request.body._tag !== "Uint8Array") throw new Error("Expected a JSON byte body");
+        requests.push(JSON.parse(new TextDecoder().decode(request.body.body)));
+        return HttpClientResponse.fromWeb(request, new Response("Fixture rejected request", { status: 400 }));
+      }),
+    }),
+    Effect.flip,
+  );
+  expect(requests).toHaveLength(1);
+  return requests[0];
+});
+
 const cacheSystem = [SystemPart.make("Stable cache system")];
 const cacheTools = [
   ToolDefinition.make({
@@ -964,6 +981,61 @@ describe("SessionRunnerModel", () => {
     }),
   );
 
+  it.effect("does not attach Daybreak to a custom OpenAI provider using a ChatGPT credential", () =>
+    Effect.gen(function* () {
+      const resolved = yield* SessionRunnerModel.resolve(
+        sessionInfo("ses_daybreak_custom", "daybreak_blue"),
+        model(ProviderV2.aisdk("@ai-sdk/openai"), {
+          providerID: "custom-openai",
+          modelID: "gpt-6-luna",
+          daybreak: ["daybreak_blue"],
+        }),
+        chatgptCredential(),
+      );
+      expect(yield* captureRequestBody(resolved)).not.toHaveProperty("access_programs");
+    }),
+  );
+
+  for (const providerID of ["openai", "openrouter", "deepseek"]) {
+    it.effect(`does not attach Daybreak to a non-Codex ${providerID} route with stale metadata`, () =>
+      Effect.gen(function* () {
+        const resolved = yield* SessionRunnerModel.resolve(
+          sessionInfo("ses_daybreak_non_codex", "daybreak_blue"),
+          model(ProviderV2.aisdk("@ai-sdk/openai-compatible"), {
+            providerID,
+            modelID: "gpt-6-luna",
+            settings: { baseURL: "https://provider.example/v1", api: "responses" },
+            daybreak: ["daybreak_blue"],
+          }),
+          chatgptCredential(),
+        );
+        expect(resolved.route.id).not.toBe("openai-codex-responses");
+        expect(yield* captureRequestBody(resolved)).not.toHaveProperty("access_programs");
+      }),
+    );
+  }
+
+  for (const scenario of [
+    { providerID: "openrouter", package: "@ycoding-ai/ai/providers/openrouter", modelID: "openai/gpt-6-luna" },
+    { providerID: "anthropic", package: "@ai-sdk/anthropic", modelID: "claude-opus-5" },
+    { providerID: "deepseek", package: "@ai-sdk/openai-compatible", modelID: "deepseek-chat" },
+  ]) {
+    it.effect(`keeps the saved Daybreak selection out of ${scenario.providerID} requests`, () =>
+      Effect.gen(function* () {
+        const resolved = yield* SessionRunnerModel.resolve(
+          sessionInfo("ses_daybreak_other_provider", "daybreak_blue"),
+          model(scenario.package.startsWith("@ai-sdk/") ? ProviderV2.aisdk(scenario.package) : scenario.package, {
+            providerID: scenario.providerID,
+            modelID: scenario.modelID,
+            settings: { baseURL: "https://provider.example/v1" },
+          }),
+          Credential.Key.make({ type: "key", key: "fixture-key" }),
+        );
+        expect(yield* captureRequestBody(resolved)).not.toHaveProperty("access_programs");
+      }),
+    );
+  }
+
   for (const program of ["daybreak_blue", "daybreak_red"] as const) for (const transport of ["http", "websocket"] as const) {
     it.effect(`routes a ${program} selection over ${transport} with explicit access selection`, () =>
       Effect.gen(function* () {
@@ -1014,7 +1086,11 @@ describe("SessionRunnerModel", () => {
             }),
           }),
         );
-        expect(requests).toEqual([expect.objectContaining({ model: "gpt-5.6-luna", access_programs: { cyber: program } })]);
+        expect(requests).toEqual([expect.objectContaining({
+          model: "gpt-5.6-luna",
+          access_programs: { cyber: program },
+          custom_extension: { enabled: true },
+        })]);
       }),
     );
   }
