@@ -30,13 +30,14 @@ const keyName = (key: string) => namedKeys[key]
 const field = (value: unknown, name: string): unknown =>
   value && typeof value === "object" ? Reflect.get(value, name) : undefined
 
-function cdpBounds(value: unknown): Rect | undefined {
-  const x = field(value, "left")
-  const y = field(value, "top")
-  const width = field(value, "width")
-  const height = field(value, "height")
-  return [x, y, width, height].every((part) => typeof part === "number" && Number.isFinite(part))
-    ? { x: Number(x), y: Number(y), width: Number(width), height: Number(height) } : undefined
+// A page-target session has no Browser domain, so the renderer reports its own window placement.
+async function pagePlacement(cdp: CDP) {
+  const value = await cdp.evaluate("({screenX,screenY,outerWidth,outerHeight,innerWidth,innerHeight})")
+  const [x, y, outerWidth, outerHeight, innerWidth, innerHeight] = ["screenX", "screenY", "outerWidth", "outerHeight", "innerWidth", "innerHeight"]
+    .map((name) => field(value, name)).map((part) => typeof part === "number" && Number.isFinite(part) ? part : Number.NaN)
+  if (![x, y, outerWidth, outerHeight, innerWidth, innerHeight].every((part) => Number.isFinite(part))) return undefined
+  return { bounds: { x, y, width: outerWidth, height: outerHeight },
+    content: { x: x + (outerWidth - innerWidth) / 2, y: y + outerHeight - innerHeight, width: innerWidth, height: innerHeight } }
 }
 
 export function inspectFuse(bytes: Uint8Array): "on" | "off" | "removed" | "absent" {
@@ -211,7 +212,10 @@ async function inspectorWork(cdp: CDP, target: MacOSComputer.DesktopTarget, wind
   const info = geometry(await cdp.evaluate(`(()=>{const w=${selector};return w?{bounds:w.getBounds(),content:w.getContentBounds()}:null})()`))
   if (!info || !exact(window.bounds, window.title, info.bounds, window.title)) throw missing()
   const capture = async () => {
-    const image = await cdp.evaluate(`(async()=>{const w=${selector};return w?await w.webContents.capturePage().then(i=>i.toDataURL()):null})()`)
+    // A hidden (off-Space) page returns the frame painted before its latest change; the first capture makes it repaint,
+    // and lazily rendered content can take several frames, so return once two captures agree (bounded to ~750 ms).
+    await cdp.evaluate(`(async()=>{const w=${selector};if(!w)return null;await w.webContents.capturePage();w.webContents.invalidate();return null})()`)
+    const image = await cdp.evaluate(`(async()=>{const w=${selector};if(!w)return null;let last='';for(let i=0;i<5;i++){await new Promise(r=>setTimeout(r,150));const next=(await w.webContents.capturePage()).toDataURL();if(next===last)return next;last=next}return last})()`)
     if (typeof image !== "string") throw missing()
     return render(image, info.bounds, info.content)
   }
@@ -249,23 +253,15 @@ async function inspectorWork(cdp: CDP, target: MacOSComputer.DesktopTarget, wind
     const point = contentPoint(info.bounds, info.content, before.scale, action.x, action.y)
     await send({ type: "mouseWheel", ...point, deltaX: action.deltaX, deltaY: action.deltaY })
   } else throw unavailable()
-  const after = await capture()
-  return { type: "action", effect: before.image === after.image ? "unchanged" : "changed" }
+  // Hidden pages run throttled timers, so an input's visible result can lag the first settled capture.
+  const changed = async (attempt: number): Promise<boolean> =>
+    (await capture()).image !== before.image || (attempt < 3 && changed(attempt + 1))
+  return { type: "action", effect: await changed(1) ? "changed" : "unchanged" }
 }
 
-async function rendererWork(cdp: CDP, targetID: string, window: WindowInfo, operation: Operation, onDispatch: () => void): Promise<BridgeResult> {
-  const outer = await cdp.send("Browser.getWindowForTarget", { targetId: targetID })
-  const bounds = cdpBounds(field(outer, "bounds"))
-  if (!bounds) throw missing()
-  if (!exact(window.bounds, window.title, bounds, window.title)) throw missing()
-  const size = await cdp.evaluate("({width:innerWidth,height:innerHeight,outerWidth,outerHeight})")
-  const innerWidth = field(size, "width")
-  const innerHeight = field(size, "height")
-  const outerWidth = field(size, "outerWidth")
-  const outerHeight = field(size, "outerHeight")
-  if (![innerWidth, innerHeight, outerWidth, outerHeight].every((part) => typeof part === "number" && Number.isFinite(part))) throw missing()
-  const content = { x: bounds.x + (Number(outerWidth) - Number(innerWidth)) / 2,
-    y: bounds.y + Number(outerHeight) - Number(innerHeight), width: Number(innerWidth), height: Number(innerHeight) }
+async function rendererWork(cdp: CDP, placement: { bounds: Rect; content: Rect }, operation: Operation, onDispatch: () => void): Promise<BridgeResult> {
+  const bounds = placement.bounds
+  const content = placement.content
   const capture = async () => {
     const response = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false })
     const data = field(response, "data")
@@ -341,10 +337,9 @@ export function make(runtime: Runtime = live) {
           const cdp = await CDP.connect(page.webSocketDebuggerUrl)
           let dispatched = false
           try {
-            const response = await cdp.send("Browser.getWindowForTarget", { targetId: page.id })
-            const bounds = cdpBounds(field(response, "bounds"))
-            if (!bounds || !exact(window.bounds, window.title, bounds, page.title ?? "")) continue
-            return await rendererWork(cdp, page.id!, window, operation, () => {
+            const placement = await pagePlacement(cdp)
+            if (!placement || !exact(window.bounds, window.title, placement.bounds, page.title ?? "")) continue
+            return await rendererWork(cdp, placement, operation, () => {
               if (signal?.aborted) throw dispatched ? new NativeError({ code: "unknown_outcome", message: "Electron input was interrupted", outcome: "unknown" }) : unavailable()
               dispatched = true
             })

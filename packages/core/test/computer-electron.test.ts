@@ -88,6 +88,10 @@ describe("Electron computer bridge", () => {
     let opened = false
     let closed = false
     let clicked = false
+    // A hidden off-Space page returns the frame painted before its latest change, then paints the current state.
+    // Its throttled timers apply the click only after several capture requests.
+    let painted = 100
+    let pendingCaptures = 0
     const png = (color: number) => {
       const image = new PhotonImage(new Uint8Array(Array.from({ length: 4 * 4 }, () => [color, 0, 0, 255]).flat()), 4, 4)
       try { return `data:image/png;base64,${Buffer.from(image.get_bytes()).toString("base64")}` }
@@ -104,8 +108,13 @@ describe("Electron computer bridge", () => {
         if (expression.includes("inspector').close()")) { closed = true; return }
         const value = expression.includes("getContentBounds")
           ? { bounds: window.bounds, content: { x: 100, y: 222, width: 800, height: 478 } }
-          : expression.includes("capturePage") ? png(clicked ? 200 : 100)
-            : expression.includes("sendInputEvent") ? (clicked = true) : null
+          : expression.includes("capturePage") ? (() => {
+            if (pendingCaptures > 0 && --pendingCaptures === 0) clicked = true
+            const frame = png(painted)
+            painted = clicked ? 200 : 100
+            return frame
+          })()
+            : expression.includes("sendInputEvent") ? (pendingCaptures = 3, true) : null
         ws.send(JSON.stringify({ id: command.id, result: { result: { value } } }))
       } },
     })
@@ -129,6 +138,14 @@ describe("Electron computer bridge", () => {
       const acted = await bridge.perform(target, window, { type: "action", action: { type: "desktop.click", x: 40, y: 60 } })
       expect(acted).toEqual({ type: "action", effect: "changed" })
       expect(closed).toBe(true)
+      clicked = false
+      opened = false
+      closed = false
+      const restored = await bridge.perform(target, window, { type: "capture" })
+      if (restored?.type !== "capture") throw new Error("Expected a capture")
+      const decoded = PhotonImage.new_from_byteslice(Buffer.from(restored.image, "base64"))
+      try { expect(decoded.get_raw_pixels()[(60 * 800 + 40) * 4]).toBeLessThan(150) }
+      finally { decoded.free() }
     } finally { await server.stop(true) }
   })
 
@@ -154,9 +171,13 @@ describe("Electron computer bridge", () => {
           changed = true
           dispatched.push({ method: command.method, params: command.params })
         }
-        const result = command.method === "Browser.getWindowForTarget"
-          ? { windowId: 1, bounds: { left: 100, top: 200, width: 800, height: 500 } }
-          : command.method === "Runtime.evaluate" ? { result: { value: { width: 800, height: 478, outerWidth: 800, outerHeight: 500 } } }
+        // A page-target session exposes no Browser domain; window geometry comes from the page itself.
+        if (command.method?.startsWith("Browser.")) {
+          ws.send(JSON.stringify({ id: command.id, error: { code: -32601, message: `'${command.method}' wasn't found` } }))
+          return
+        }
+        const result = command.method === "Runtime.evaluate"
+          ? { result: { value: { screenX: 100, screenY: 200, outerWidth: 800, outerHeight: 500, innerWidth: 800, innerHeight: 478 } } }
             : command.method === "Page.captureScreenshot" ? { data: changed ? changedPNG : png } : {}
         ws.send(JSON.stringify({ id: command.id, result }))
       } },
