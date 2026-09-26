@@ -117,7 +117,7 @@ export function Composer(props: { readonly sessionID?: string; readonly running:
           </button>
         </div>
       </div>
-      <p class="composer__note">Steering applies at the next safe boundary; queueing waits until the session is idle.</p>
+      <p class="composer__note">Steer applies at the next step boundary. Queue waits until idle.</p>
     </div>
   )
 }

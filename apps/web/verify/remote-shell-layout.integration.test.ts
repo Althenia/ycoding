@@ -230,7 +230,7 @@ describe("remote shell layout", () => {
 
   test("uses the SVG chevron primitive without polluting the Device control name at compact and desktop widths", async () => {
     for (const width of [390, 1440] as const) {
-      const page = await fixture("stitch=r01&specimen=768", width, "Studio Mac")
+      const page = await fixture("scenario=conversation-workspace-768", width, "Studio Mac")
       const state = await page.evaluate<{
         readonly controlName: string
         readonly glyph: boolean
@@ -239,7 +239,7 @@ describe("remote shell layout", () => {
         readonly icon: { readonly top: number; readonly bottom: number; readonly triggerTop: number; readonly triggerBottom: number }
         readonly label: { readonly right: number; readonly iconLeft: number; readonly scrollWidth: number; readonly width: number }
       }>(`(() => {
-        const trigger=document.querySelector('[aria-label="Device"]');
+        const trigger=document.querySelector('[aria-label="Machine"]');
         const icon=trigger?.querySelector('.custom-select__chevron');
         const label=trigger?.querySelector('.custom-select__value');
         const iconBox=icon?.getBoundingClientRect();
@@ -254,7 +254,7 @@ describe("remote shell layout", () => {
           label:{right:labelBox?.right ?? 0,iconLeft:iconBox?.left ?? 0,scrollWidth:label?.scrollWidth ?? 0,width:label?.clientWidth ?? 0},
         };
       })()`)
-      expect(state.controlName).toBe("Device")
+      expect(state.controlName).toBe("Machine")
       expect(state.glyph).toBe(false)
       expect(state.path).toBe(true)
       expect(state.hidden).toBe("true")
@@ -262,11 +262,11 @@ describe("remote shell layout", () => {
       expect(state.icon.bottom).toBeLessThanOrEqual(state.icon.triggerBottom)
       expect(state.label.right).toBeLessThanOrEqual(state.label.iconLeft)
       expect(state.label.scrollWidth).toBeGreaterThanOrEqual(state.label.width)
-      await page.evaluate(`document.querySelector('[aria-label="Device"]')?.focus()`)
+      await page.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
       await page.pressKey("Enter", "Enter", 13)
-      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Device"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
       await page.pressEscape()
-      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Device'`)).toBe(true)
+      expect(await page.evaluate<boolean>(`document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
       await page.close()
     }
   }, 30_000)
@@ -275,27 +275,29 @@ describe("remote shell layout", () => {
     for (const width of [2048, 1440, 768, 390] as const) {
       const page = await fixture("view=conversation&account=unavailable&sessions=empty", width, "Remote access is not available")
       const state = await page.evaluate<{
-        readonly panelCenter: number
-        readonly stackCenter: number
+        readonly headingCenter: number
+        readonly actionsCenter: number
         readonly mainCenter: number
         readonly order: boolean
+        readonly emptyCards: number
         readonly overflow: boolean
       }>(`(() => {
         const main=document.querySelector('.workspace__main')?.getBoundingClientRect();
-        const panel=[...document.querySelectorAll('.empty')].find(element=>element.textContent?.includes('Remote access is not available'))?.getBoundingClientRect();
-        const stack=document.querySelector('.app--empty .workspace__scroll > *')?.getBoundingClientRect();
-        const empty=[...document.querySelectorAll('.empty')].map(element=>element.getBoundingClientRect());
+        const heading=document.querySelector('.page-head')?.getBoundingClientRect();
+        const actions=document.querySelector('.workspace__main .pane')?.getBoundingClientRect();
         return {
-          panelCenter:(panel?.left ?? 0)+(panel?.width ?? 0)/2,
-          stackCenter:(stack?.left ?? 0)+(stack?.width ?? 0)/2,
+          headingCenter:(heading?.left ?? 0)+(heading?.width ?? 0)/2,
+          actionsCenter:(actions?.left ?? 0)+(actions?.width ?? 0)/2,
           mainCenter:(main?.left ?? 0)+(main?.width ?? 0)/2,
-          order:empty.length < 2 || empty[0].bottom <= empty[1].top,
+          order:(heading?.bottom ?? Infinity) <= (actions?.top ?? -Infinity),
+          emptyCards:document.querySelectorAll('.workspace__main .empty').length,
           overflow:document.documentElement.scrollWidth > document.documentElement.clientWidth,
         };
       })()`)
-      expect(Math.abs(state.panelCenter - state.mainCenter)).toBeLessThanOrEqual(1)
-      expect(Math.abs(state.stackCenter - state.mainCenter)).toBeLessThanOrEqual(1)
+      expect(Math.abs(state.headingCenter - state.mainCenter)).toBeLessThanOrEqual(1)
+      expect(Math.abs(state.actionsCenter - state.mainCenter)).toBeLessThanOrEqual(1)
       expect(state.order).toBe(true)
+      expect(state.emptyCards).toBe(0)
       expect(state.overflow).toBe(false)
       await page.close()
     }
@@ -353,9 +355,9 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the R01 mobile device sheet usable over the branded four-tab workspace", async () => {
+  test("keeps the mobile machine picker usable over the four-tab conversation workspace", async () => {
     for (const theme of ["dark", "light"] as const) {
-      const page = await fixture("stitch=r01&specimen=390", 390, "Select Active Device", theme, 620)
+      const page = await fixture("scenario=conversation-workspace-390", 390, "Select Active Machine", theme, 620)
       const state = await page.evaluate<{
         readonly brandVisible: boolean
         readonly tabs: readonly string[]
@@ -380,15 +382,15 @@ describe("remote shell layout", () => {
       expect(state.options.every((option) => option.height >= 44)).toBe(true)
       expect(state.overflow).toBe(false)
       await page.evaluate(`document.querySelector('.custom-select__option[aria-selected="false"]')?.click()`)
-      expect(await page.evaluate<string>(`document.querySelector('[aria-label="Device"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
+      expect(await page.evaluate<string>(`document.querySelector('[aria-label="Machine"] .custom-select__value')?.textContent?.trim() ?? ''`)).toBe("Dev Linux")
       expect(await page.evaluate<boolean>(`document.querySelector('.custom-select__surface') === null`)).toBe(true)
       await page.close()
     }
   }, 30_000)
 
-  test("keeps the R03 mobile composer compact without shrinking delivery or send controls", async () => {
+  test("keeps the mobile composer compact and sizes dense controls for the active pointer", async () => {
     for (const theme of ["dark", "light"] as const) {
-      const page = await fixture("stitch=r03&specimen=390", 390, "Run sanity checks on worker threads.", theme, 620)
+      const page = await fixture("scenario=conversation-tool-terminal-output-390", 390, "Run sanity checks on worker threads.", theme, 620)
       const state = await page.evaluate<{
         readonly height: number
         readonly input: number
@@ -408,18 +410,20 @@ describe("remote shell layout", () => {
       expect(state.height).toBeLessThanOrEqual(160)
       expect(state.input).toBeGreaterThanOrEqual(44)
       expect(state.actions.map((action) => action.label)).toContain("Send prompt")
-      expect(state.actions.every((action) => action.height >= 44), JSON.stringify(state.actions)).toBe(true)
+      expect(state.actions.every((action) => action.height >= 36), JSON.stringify(state.actions)).toBe(true)
       expect(state.messages).toBe(2)
       expect(state.overflow).toBe(false)
+      await page.setCoarsePointer(true)
+      expect(await page.evaluate<boolean>(`[...document.querySelectorAll('.composer button')].every(button => button.getBoundingClientRect().height >= 44)`)).toBe(true)
       await page.evaluate(`document.querySelector('.composer__delivery-option:nth-child(2)')?.click()`)
       expect(await page.evaluate<boolean>(`document.querySelector('.composer__delivery-option:nth-child(2)')?.getAttribute('aria-pressed') === 'true'`)).toBe(true)
       await page.close()
     }
   }, 30_000)
 
-  test("densifies R04 mobile Activity while keeping decisions and event actions visible", async () => {
+  test("keeps mobile Activity decisions and event actions visible in a compact layout", async () => {
     for (const theme of ["dark", "light"] as const) {
-      const page = await fixture("stitch=r04&specimen=390", 390, "Authorize branch push for feat/ast-cache", theme, 901)
+      const page = await fixture("scenario=activity-pending-decisions-390", 390, "Authorize branch push for feat/ast-cache", theme, 901)
       const state = await page.evaluate<{
         readonly sectionPadding: readonly number[]
         readonly eventRows: number
@@ -443,13 +447,13 @@ describe("remote shell layout", () => {
     }
   }, 30_000)
 
-  test("keeps the approved remote families responsive at 320, 390, 768, and 1440px in both themes", async () => {
+  test("keeps remote scenarios usable at 320, 390, 768, and 1440px in both themes", async () => {
     for (const width of [320, 390, 768, 1440] as const) {
       for (const theme of ["dark", "light"] as const) {
-        const workspace = await fixture("stitch=r01&specimen=390", width, "Token expiry refactor", theme, 901)
+        const workspace = await fixture("scenario=conversation-workspace-390", width, "Token expiry refactor", theme, 901)
         const workspaceState = await workspace.evaluate<{ readonly overflow: boolean; readonly trigger: number; readonly tabs: number }>(`(() => ({
           overflow:document.documentElement.scrollWidth > innerWidth,
-          trigger:document.querySelector('[aria-label="Device"]')?.getBoundingClientRect().height ?? 0,
+          trigger:document.querySelector('[aria-label="Machine"]')?.getBoundingClientRect().height ?? 0,
           tabs:[...document.querySelectorAll('.bottom-nav__item')].filter(item=>item.getBoundingClientRect().width>0).length,
         }))()`)
         expect(workspaceState.overflow).toBe(false)
@@ -458,7 +462,7 @@ describe("remote shell layout", () => {
         expect(await workspace.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await workspace.close()
 
-        const conversation = await fixture("stitch=r03&specimen=390", width, "Run sanity checks on worker threads.", theme, 901)
+        const conversation = await fixture("scenario=conversation-tool-terminal-output-390", width, "Run sanity checks on worker threads.", theme, 901)
         const conversationState = await conversation.evaluate<{ readonly overflow: boolean; readonly messages: number; readonly input: number; readonly inputWidth: number; readonly send: number }>(`(() => ({
           overflow:document.documentElement.scrollWidth > innerWidth,
           messages:document.querySelectorAll('.transcript > .message').length,
@@ -469,21 +473,32 @@ describe("remote shell layout", () => {
         expect(conversationState.overflow).toBe(false)
         expect(conversationState.messages).toBe(2)
         expect(conversationState.input).toBeGreaterThanOrEqual(44)
-        expect(conversationState.send).toBeGreaterThanOrEqual(44)
+        expect(conversationState.send).toBeGreaterThanOrEqual(36)
         if (width < 480) expect(conversationState.inputWidth, `${width}px composer input`).toBeGreaterThanOrEqual(96)
         expect(await conversation.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await conversation.close()
 
-        const activity = await fixture("stitch=r04&specimen=390", width, "Authorize branch push for feat/ast-cache", theme, 901)
+        const activity = await fixture("scenario=activity-pending-decisions-390", width, "Authorize branch push for feat/ast-cache", theme, 901)
         const activityState = await activity.evaluate<{ readonly overflow: boolean; readonly rows: number; readonly decisions: number; readonly actions: readonly number[] }>(`(() => ({
           overflow:document.documentElement.scrollWidth > innerWidth,
           rows:document.querySelectorAll('.activity-page__events .activity-row').length,
           decisions:document.querySelectorAll('.activity-page__decisions .request').length,
           actions:[...document.querySelectorAll('.activity-page__decisions .request__actions button')].map(button=>button.getBoundingClientRect().height),
         }))()`)
+        const activityOrder = await activity.evaluate<{ readonly columns: number; readonly decisionsTop: number; readonly eventsTop: number }>(`(() => {
+          const page=document.querySelector('.activity-page')
+          if (!(page instanceof HTMLElement)) throw new Error('Activity page missing')
+          return {
+            columns:getComputedStyle(page).gridTemplateColumns.split(' ').filter(Boolean).length,
+            decisionsTop:document.querySelector('.activity-page__decisions')?.getBoundingClientRect().top ?? Infinity,
+            eventsTop:document.querySelector('.activity-page__events')?.getBoundingClientRect().top ?? -Infinity,
+          }
+        })()`)
         expect(activityState.overflow).toBe(false)
         expect(activityState.rows).toBeGreaterThan(0)
         expect(activityState.decisions).toBe(2)
+        expect(activityOrder.columns).toBe(width < 1280 ? 1 : 2)
+        if (width < 1280) expect(activityOrder.decisionsTop).toBeLessThan(activityOrder.eventsTop)
         if (width < 1024) expect(activityState.actions.every((height) => height >= 44)).toBe(true)
         expect(await activity.evaluate<string>(`document.documentElement.dataset.theme`)).toBe(theme)
         await activity.close()

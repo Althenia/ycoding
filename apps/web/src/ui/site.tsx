@@ -152,29 +152,33 @@ export function MarketingLayout(props: { readonly children: JSX.Element }): JSX.
 
       <footer class="site-footer">
         <div class="container">
-          <div class="footer__compact">
-            <Link href="/" class="brand">
-              <BrandMark compact />
-            </Link>
-            <nav class="footer__links" aria-label="Footer">
-              <Link href="/">Home</Link>
+          <div class="footer">
+            <div class="footer__brand">
+              <Link href="/" class="brand">
+                <BrandMark compact />
+              </Link>
+              <p>MIT licensed.</p>
+            </div>
+            <nav class="footer__columns" aria-label="Footer">
               <For each={SITE.footerColumns}>
                 {(column) => (
-                  <For each={column.links}>
-                    {(link) =>
-                      link.href.startsWith("http") ? (
-                        <a href={link.href} rel="noreferrer noopener" target="_blank">
-                          {link.label}
-                        </a>
-                      ) : (
-                        <Link href={link.href}>{link.label}</Link>
-                      )
-                    }
-                  </For>
+                  <div class="footer__column">
+                    <p class="footer__title">{column.title}</p>
+                    <For each={column.links}>
+                      {(link) =>
+                        link.href.startsWith("http") ? (
+                          <a href={link.href} rel="noreferrer noopener" target="_blank">
+                            {link.label}
+                          </a>
+                        ) : (
+                          <Link href={link.href}>{link.label}</Link>
+                        )
+                      }
+                    </For>
+                  </div>
                 )}
               </For>
             </nav>
-            <span>MIT licensed. Terminal-first, local execution.</span>
           </div>
         </div>
       </footer>

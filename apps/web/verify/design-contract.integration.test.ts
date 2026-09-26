@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { SITEMAP_PATHS } from "../src/seo/sitemap"
-import { STITCH_REMOTE_SCENARIOS } from "./stitch-remote-data"
+import { REMOTE_SCENARIOS } from "./remote-scenarios"
 import { launchBrowser } from "./cdp"
 
 const port = 4197
@@ -69,27 +69,30 @@ describe("web design contract inventory", () => {
     const routeSource = await Bun.file(new URL("../src/app.tsx", import.meta.url)).text()
     const routerPaths = [...routeSource.matchAll(/path:\s*"([^"]+)"/g)].map((match) => match[1]!)
     const remoteRoutes = routerPaths.filter((path) => path.startsWith("/remote"))
-    const fixtureViews = new Set(STITCH_REMOTE_SCENARIOS.map((scenario) => fixturePath(scenario.view)))
+    const fixtureViews = new Set(REMOTE_SCENARIOS.map((scenario) => fixturePath(scenario.view)))
     expect([...fixtureViews].filter((path) => !remoteRoutes.includes(path))).toEqual([])
     expect(remoteRoutes.filter((path) => !fixtureViews.has(path))).toEqual([])
 
     const page = await requireBrowser().openPage()
-    for (const scenario of STITCH_REMOTE_SCENARIOS) {
-      await page.setViewport(scenario.specimen, 900)
-      await page.navigate(`${url("/verify/remote.html")}?stitch=${scenario.family}&specimen=${scenario.specimen}`)
-      const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string }>(`(() => ({
+    for (const scenario of REMOTE_SCENARIOS) {
+      await page.setViewport(scenario.viewport, 900)
+      await page.navigate(`${url("/verify/remote.html")}?scenario=${scenario.name}-${scenario.viewport}`)
+      const state = await page.evaluate<{ readonly theme: string; readonly background: string; readonly ink: string; readonly overflow: boolean; readonly path: string; readonly signIn: boolean }>(`(() => ({
         theme: document.documentElement.dataset.theme ?? "",
         background: getComputedStyle(document.documentElement).getPropertyValue("--yc-bg").trim(),
         ink: getComputedStyle(document.documentElement).getPropertyValue("--yc-text").trim(),
         overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         path: document.querySelector(".app")?.className ?? "",
+        signIn: document.querySelector("main.sign-in") !== null,
       }))()`)
       expect({ id: scenario.id, theme: state.theme }).toEqual({ id: scenario.id, theme: scenario.theme })
       expect(state.background).not.toBe("")
       expect(state.ink).not.toBe("")
       expect({ id: scenario.id, overflow: state.overflow }).toEqual({ id: scenario.id, overflow: false })
-      expect(state.path).toContain(`app--${scenario.view === "chat" ? "conversation" : scenario.view}`)
-      if (scenario.view !== "chat") {
+      // A signed-out browser sees only the sign-in screen, on every remote route.
+      expect({ id: scenario.id, signIn: state.signIn }).toEqual({ id: scenario.id, signIn: scenario.account === "signedout" })
+      if (!state.signIn) expect(state.path).toContain(`app--${scenario.view === "chat" ? "conversation" : scenario.view}`)
+      if (!state.signIn && scenario.view !== "chat") {
         expect(await page.evaluate<string>(`document.querySelector('.remote-nav a[aria-current="page"]')?.textContent?.trim() ?? ""`)).toBe(
           scenario.view === "sessions" ? "Sessions" : scenario.view === "activity" ? "Activity" : "Settings",
         )
@@ -182,21 +185,21 @@ describe("web design contract inventory", () => {
     expect(ownership.edges.length).toBeGreaterThan(1)
     expect(ownership.edges.every((edge) => Math.abs(edge.left - ownership.edges[0]!.left) <= 1 && Math.abs(edge.right - ownership.edges[0]!.right) <= 1)).toBe(true)
 
-    await page.navigate(`${url("/verify/remote.html")}?stitch=r01&specimen=390`)
+    await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-390`)
     const dropdown = await page.evaluate<{ readonly expanded: boolean; readonly withinViewport: boolean }>(`(() => {
-      const trigger = document.querySelector('[aria-label="Device"]')
+      const trigger = document.querySelector('[aria-label="Machine"]')
       const list = document.querySelector('[role="listbox"]')
       if (!(trigger instanceof HTMLElement) || !(list instanceof HTMLElement)) return { expanded: false, withinViewport: false }
       const rect = list.getBoundingClientRect()
       return { expanded: trigger.getAttribute("aria-expanded") === "true", withinViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight }
     })()`)
     expect(dropdown).toEqual({ expanded: true, withinViewport: true })
-    await page.evaluate(`document.querySelector('[aria-label="Device"]')?.focus()`)
+    await page.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
     await page.pressEscape()
-    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Device"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Device"`)).toBe(true)
+    expect(await page.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute("aria-expanded") === "false" && document.activeElement?.getAttribute("aria-label") === "Machine"`)).toBe(true)
 
     await page.setViewport(768, 900)
-    await page.navigate(`${url("/verify/remote.html")}?stitch=r01&specimen=768`)
+    await page.navigate(`${url("/verify/remote.html")}?scenario=conversation-workspace-768`)
     await page.evaluate(`document.querySelector('button[aria-label="Open activity"]')?.click()`)
     await page.evaluate<void>(`Promise.all([...document.querySelector('dialog[aria-label="Activity"] .overlay__surface')?.getAnimations() ?? []].map(animation => animation.finished))`)
     const modal = await page.evaluate<{ readonly open: boolean; readonly focused: boolean; readonly withinViewport: boolean; readonly bounds: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number } }>(`(() => {

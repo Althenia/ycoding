@@ -3,9 +3,10 @@ import { Link } from "../../router/router"
 import { Chip } from "../../ui/chip"
 import { Icon, type IconName } from "../../ui/icon"
 import { Modal } from "../../ui/modal"
-import { ThemeToggle } from "../../ui/site"
+import { BrandMark, ThemeToggle } from "../../ui/site"
 import { CustomSelect } from "../../ui/custom-select"
 import { useRemote } from "../context"
+import { SIGN_IN_PROVIDERS } from "../http"
 import {
   modelLabel,
   type ActivityItem,
@@ -17,13 +18,17 @@ import type { SessionInfoView } from "../store"
 import type { RemoteTransportStatus } from "../transport"
 import {
   accountReadState,
+  cachedSessionsView,
   connectionBanner,
   deviceAvailabilityView,
+  devicePickerNote,
+  remoteEntryView,
   sessionAvailabilityView,
   sessionProjectLabel,
   sessionStateChips,
   summarizeConnection,
   type ConnectionTone,
+  type DeviceAvailabilityView,
   type RemoteConnectionState,
   type RemoteSessionStatus,
   type RemoteSessionSummary,
@@ -50,68 +55,126 @@ export function RemoteShell(props: { readonly path: string }): JSX.Element {
   const selected = () => activeSession() !== undefined
   const composition = () => remoteSurfaceComposition(view, selected())
   const viewClass = view === "/remote" ? "conversation" : view.slice("/remote/".length)
+  const entry = () => remoteEntryView(accountReadState({ connection: state().connection, owner: state().owner }))
 
   return (
-    <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}`}>
-      <a class="skip-link" href="#remote-main">Skip to content</a>
-      <RemoteHeader
-        navOpen={navOpen()}
-        activityOpen={activityOpen()}
-        onOpenNav={() => setNavOpen(true)}
-        onOpenActivity={() => setActivityOpen(true)}
-        view={view}
-      />
+    <Show when={entry() === "workspace"} fallback={<SignInScreen />}>
+      <div class={`app app--${viewClass}${selected() ? " app--selected" : view === "/remote" ? " app--empty" : ""}`}>
+        <a class="skip-link" href="#remote-main">Skip to content</a>
+        <RemoteHeader
+          navOpen={navOpen()}
+          activityOpen={activityOpen()}
+          onOpenNav={() => setNavOpen(true)}
+          onOpenActivity={() => setActivityOpen(true)}
+          view={view}
+        />
 
-      <ConnectionStrip />
+        <ConnectionStrip />
 
-      <div class="workspace">
-        <Show when={composition().showSessionRail}>
-          <aside class="workspace__rail" aria-label="Sessions">
-            <SessionPanel />
-          </aside>
+        <div class="workspace">
+          <Show when={composition().showSessionRail}>
+            <aside class="workspace__rail" aria-label="Sessions">
+              <SessionPanel />
+            </aside>
+          </Show>
+
+          <main id="remote-main" tabindex="-1" class="workspace__main">
+            <div class="workspace__scroll">
+              <Notices />
+              <Show when={view === "/remote"}>
+                <ConversationView title={activeSession()?.title ?? noSessionTitle} />
+              </Show>
+              <Show when={view === "/remote/sessions"}>
+                <SessionsPage />
+              </Show>
+              <Show when={view === "/remote/activity"}>
+                <ActivityPage />
+              </Show>
+              <Show when={view === "/remote/settings"}>
+                <SettingsPage />
+              </Show>
+            </div>
+            <Show when={composition().showComposer}>
+              <Composer
+                sessionID={state().activeSessionID}
+                running={state().view?.status === "running"}
+                canSend={
+                  state().transport.kind === "open" &&
+                  state().connection.kind !== "offline" &&
+                  state().activeSessionID !== undefined
+                }
+              />
+            </Show>
+          </main>
+
+        </div>
+
+        <BottomNav view={view} />
+
+        <Show when={navOpen()}>
+          <Modal class="overlay--slideover" label="Sessions" onClose={() => setNavOpen(false)}>
+            <SessionPanel onNavigate={() => setNavOpen(false)} />
+          </Modal>
         </Show>
 
-        <main id="remote-main" tabindex="-1" class="workspace__main">
-          <div class="workspace__scroll">
-            <Notices />
-            <Show when={view === "/remote"}>
-              <ConversationView title={activeSession()?.title ?? noSessionTitle} />
-            </Show>
-            <Show when={view === "/remote/sessions"}>
-              <SessionsPage />
-            </Show>
-            <Show when={view === "/remote/activity"}>
-              <ActivityPage />
-            </Show>
-            <Show when={view === "/remote/settings"}>
-              <SettingsPage />
-            </Show>
-          </div>
-          <Show when={composition().showComposer}>
-            <Composer
-              sessionID={state().activeSessionID}
-              running={state().view?.status === "running"}
-              canSend={state().transport.kind === "open" && state().activeSessionID !== undefined}
-            />
-          </Show>
-        </main>
-
+        <Show when={activityOpen()}>
+          <Modal class="overlay--slideover" label="Activity" onClose={() => setActivityOpen(false)}>
+            <ActivityPanel onNavigate={() => setActivityOpen(false)} />
+          </Modal>
+        </Show>
       </div>
+    </Show>
+  )
+}
 
-      <BottomNav view={view} />
-
-      <Show when={navOpen()}>
-        <Modal class="overlay--slideover" label="Sessions" onClose={() => setNavOpen(false)}>
-          <SessionPanel onNavigate={() => setNavOpen(false)} />
-        </Modal>
-      </Show>
-
-      <Show when={activityOpen()}>
-        <Modal class="overlay--slideover" label="Activity" onClose={() => setActivityOpen(false)}>
-          <ActivityPanel onNavigate={() => setActivityOpen(false)} />
-        </Modal>
-      </Show>
-    </div>
+/**
+ * A signed-out browser sees one task: choose an OAuth provider. The workspace chrome is
+ * absent because nothing in it can load before the account is known.
+ */
+function SignInScreen(): JSX.Element {
+  const remote = useRemote()
+  return (
+    <main id="remote-main" class="sign-in">
+      <div class="sign-in__panel">
+        <div class="sign-in__top">
+          <Link href="/" class="brand" title="YCoding home">
+            <BrandMark compact />
+          </Link>
+          <ThemeToggle />
+        </div>
+        <div class="sign-in__head">
+          <h1 class="sign-in__title">Sign in to your workspace</h1>
+          <p class="sign-in__lede">
+            Continue the sessions running on your machines. The workspace reaches only the machines enrolled to
+            the account you sign in with.
+          </p>
+        </div>
+        <Show when={remote.authError}>
+          {(error) => (
+            <p class="sign-in__error" role="alert">
+              <Icon name="alert" size={16} />
+              <span>{error()}</span>
+            </p>
+          )}
+        </Show>
+        <div class="sign-in__providers">
+          <For each={SIGN_IN_PROVIDERS}>
+            {(provider, index) => (
+              <button
+                type="button"
+                class={`button ${index() === 0 ? "button--primary" : "button--secondary"} sign-in__provider`}
+                onClick={() => remote.signIn(provider.id)}
+              >
+                {provider.label}
+              </button>
+            )}
+          </For>
+        </div>
+        <p class="sign-in__note">
+          <Link href="/docs/usage/remote" class="text-link">How remote access works</Link>
+        </p>
+      </div>
+    </main>
   )
 }
 
@@ -217,6 +280,8 @@ export type QueueRowView = {
   readonly kind: string
   readonly title: string
   readonly detail: string
+  /** A hard review needs a human answer at every autonomy level and is drawn apart. */
+  readonly hard: boolean
 }
 
 /**
@@ -275,7 +340,7 @@ export function reportedEvents(view: SessionView | undefined): readonly Activity
 export function queueRowView(request: PendingRequestView): QueueRowView {
   if (request.kind === "permission") {
     const target = request.resources.length === 0 ? request.action : `${request.action} on ${request.resources.join(", ")}`
-    return { id: request.id, icon: "shield", kind: "Permission", title: target, detail: "waits for a decision" }
+    return { id: request.id, icon: "shield", kind: "Permission", title: target, detail: "waits for a decision", hard: false }
   }
   if (request.kind === "guardrail") {
     return {
@@ -284,6 +349,7 @@ export function queueRowView(request: PendingRequestView): QueueRowView {
       kind: request.hardReview ? "Guardrail review (human decision required)" : "Guardrail review",
       title: request.action,
       detail: request.reason,
+      hard: request.hardReview,
     }
   }
   return {
@@ -292,6 +358,7 @@ export function queueRowView(request: PendingRequestView): QueueRowView {
     kind: request.form.metadata?.kind === "question" ? "Question" : "Form",
     title: request.form.title,
     detail: "waits for your answer",
+    hard: false,
   }
 }
 
@@ -307,15 +374,11 @@ function RemoteHeader(props: {
   const remote = useRemote()
   const state = () => remote.state()
   const connection = () => summarizeConnection(state().connection)
-  const devices = () =>
-    deviceAvailabilityView(
-      accountReadState({ connection: state().connection, owner: state().owner }),
-      state().devices.length,
-      { devices: state().devices, activeDeviceID: state().activeDeviceID, sessionCount: state().sessions.length },
-    )
+  const devices = useDeviceAvailability()
   const selectableDevices = () => state().devices.filter((device) => device.status === "active" && device.online)
+  const pickerNote = () => devicePickerNote(state().devices)
   return (
-    <header class={`app-header app-header--${props.view === "/remote" ? "conversation" : props.view.slice("/remote/".length)}`}>
+    <header class="app-header">
       <div class="app-header__inner">
         <button
           type="button"
@@ -338,13 +401,15 @@ function RemoteHeader(props: {
         <div class="remote-device">
           <CustomSelect
             class="remote-device__select"
-            label="Device"
-            sheetTitle="Select Active Device"
+            label="Machine"
+            sheetTitle="Select Active Machine"
+            sheetSubtitle="Online machines you can connect to"
             value={state().activeDeviceID}
             placeholder={devices().placeholder}
             disabled={!devices().selectable}
             options={selectableDevices().map((device) => ({ value: device.id, label: device.name, badge: "Online" }))}
             onChange={(deviceID) => remote.store.connect(deviceID)}
+            footer={pickerNote() === undefined ? undefined : <Link href="/remote/settings">{pickerNote()}</Link>}
           />
           <span class="remote-connection">
             <span class={`status-dot status-dot--${connection().tone}`} aria-hidden="true" />
@@ -480,6 +545,7 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
   const state = () => remote.state()
   const deviceName = () => state().devices.find((device) => device.id === state().activeDeviceID)?.name
   const sessions = () => filterSessions(state().sessions, query())
+  const cached = () => cachedSessionsView(state().connection, state().sessions.length)
   const advertised = () => {
     const total = state().sessions.length
     const name = deviceName()
@@ -498,7 +564,21 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
             state().connection.kind === "connecting" ||
             state().connection.kind === "loading")
         }
-        fallback={<DeviceEmptyState onNavigate={props.onNavigate} />}
+        fallback={
+          <>
+            <DeviceEmptyState onNavigate={props.onNavigate} />
+            <Show when={cached()}>
+              {(view) => (
+                <>
+                  <p class="panel__note">{view().note}</p>
+                  <div class="session-list">
+                    <For each={state().sessions}>{(session) => <SessionRow session={session} readOnly />}</For>
+                  </div>
+                </>
+              )}
+            </Show>
+          </>
+        }
       >
         <Show when={state().sessions.length > 0} fallback={<NoSessionsState />}>
           <label class="field">
@@ -533,7 +613,11 @@ function SessionPanel(props: { readonly onNavigate?: () => void }): JSX.Element 
   )
 }
 
-function SessionRow(props: { readonly session: SessionInfoView; readonly onNavigate?: () => void }): JSX.Element {
+function SessionRow(props: {
+  readonly session: SessionInfoView
+  readonly readOnly?: boolean
+  readonly onNavigate?: () => void
+}): JSX.Element {
   const remote = useRemote()
   const active = () => remote.state().activeSessionID === props.session.id
   const chips = () => sessionChips(props.session, remote.state().view)
@@ -542,14 +626,12 @@ function SessionRow(props: { readonly session: SessionInfoView; readonly onNavig
       type="button"
       class={`session-row${active() ? " session-row--active" : ""}`}
       aria-pressed={active()}
+      disabled={props.readOnly}
       onClick={() => {
         void remote.store.selectSession(props.session.id)
         props.onNavigate?.()
       }}
     >
-      <span class="session-row__mark">
-        <Icon name={active() ? "chat" : "sessions"} size={16} />
-      </span>
       <span class="session-row__body">
         <span class="session-row__title">{props.session.title}</span>
         <span class="session-row__meta">
@@ -563,14 +645,19 @@ function SessionRow(props: { readonly session: SessionInfoView; readonly onNavig
   )
 }
 
-function SessionSummaryRow(props: { readonly session: SessionInfoView }): JSX.Element {
+function SessionSummaryRow(props: { readonly session: SessionInfoView; readonly readOnly?: boolean }): JSX.Element {
   const remote = useRemote()
   const summary = () => summarizeSession(props.session, remote.state().view)
   const chips = () => sessionChips(props.session, remote.state().view)
   return (
     <div class="sessions-table__row" role="row">
       <span class="sessions-table__title" role="cell">
-        <button type="button" class="sessions-table__select" onClick={() => void remote.store.selectSession(props.session.id)}>
+        <button
+          type="button"
+          class="sessions-table__select"
+          disabled={props.readOnly}
+          onClick={() => void remote.store.selectSession(props.session.id)}
+        >
           {props.session.title}
         </button>
       </span>
@@ -594,8 +681,52 @@ function SessionSummaryRow(props: { readonly session: SessionInfoView }): JSX.El
  * never reported as having no machines at all.
  */
 function DeviceEmptyState(props: { readonly onNavigate?: () => void }): JSX.Element {
+  const devices = useDeviceAvailability()
+  return (
+    <div class="empty">
+      <p class="empty__title">{devices().title}</p>
+      <p>{devices().body}</p>
+      <DeviceActions view={devices} onNavigate={props.onNavigate} />
+    </div>
+  )
+}
+
+/** What the reader can do about the device state: run the connect command or open settings. */
+function DeviceActions(props: { readonly view: () => DeviceAvailabilityView; readonly onNavigate?: () => void }): JSX.Element {
+  return (
+    <>
+      <Show when={props.view().command}>
+        {(command) => (
+          <figure class="code-block">
+            <figcaption class="code-block__head">
+              <span class="code-block__label">On the machine running YCoding</span>
+              <button
+                type="button"
+                class="button button--ghost button--small code-block__copy"
+                onClick={() => void navigator.clipboard?.writeText(command())}
+              >
+                <Icon name="copy" size={16} />
+                Copy command
+              </button>
+            </figcaption>
+            <pre tabindex="0">
+              <code>{command()}</code>
+            </pre>
+          </figure>
+        )}
+      </Show>
+      <Show when={props.view().showSettings}>
+        <Link href="/remote/settings" class="button button--secondary button--small" onClick={props.onNavigate}>
+          Open settings
+        </Link>
+      </Show>
+    </>
+  )
+}
+
+function useDeviceAvailability() {
   const remote = useRemote()
-  const devices = () =>
+  return () =>
     deviceAvailabilityView(
       accountReadState({ connection: remote.state().connection, owner: remote.state().owner }),
       remote.state().devices.length,
@@ -603,19 +734,9 @@ function DeviceEmptyState(props: { readonly onNavigate?: () => void }): JSX.Elem
         devices: remote.state().devices,
         activeDeviceID: remote.state().activeDeviceID,
         sessionCount: remote.state().sessions.length,
+        unreachable: remote.state().connection.kind === "offline",
       },
     )
-  return (
-    <div class="empty">
-      <p class="empty__title">{devices().title}</p>
-      <p>{devices().body}</p>
-      <Show when={devices().showSettings}>
-        <Link href="/remote/settings" class="button button--secondary button--small" onClick={props.onNavigate}>
-          Open settings
-        </Link>
-      </Show>
-    </div>
-  )
 }
 
 function NoSessionsState(): JSX.Element {
@@ -626,6 +747,7 @@ function NoSessionsState(): JSX.Element {
     <div class="empty">
       <p class="empty__title">{availability()?.title ?? "No sessions"}</p>
       <p>{availability()?.body ?? "Start YCoding in your project folder on this machine."}</p>
+      <Show when={availability()?.note}>{(note) => <p class="panel__note">{note()}</p>}</Show>
     </div>
   )
 }
@@ -637,8 +759,11 @@ function ConversationView(props: { readonly title: string }): JSX.Element {
   const requests = () => view()?.requests ?? []
   const messages = () => view()?.messages ?? []
   const selectedSession = () => state().sessions.find((session) => session.id === state().activeSessionID)
-  const availability = () => state().activeDeviceID === undefined
-    ? undefined
+  const devices = useDeviceAvailability()
+  // Without a reachable machine the device state is the page's one explanation.
+  const blocked = () => state().activeDeviceID === undefined || state().connection.kind === "offline"
+  const availability = () => blocked()
+    ? devices()
     : sessionAvailabilityView(state().connection, state().sessions.length)
   return (
     <Show
@@ -649,13 +774,13 @@ function ConversationView(props: { readonly title: string }): JSX.Element {
             <div>
               <h1 class="page-head__title">{availability()?.title ?? noSessionTitle}</h1>
               <p class="page-head__support">
-                {availability()?.body ?? "Connect a machine and select a session to view its conversation."}
+                {availability()?.body ?? "Select a session to view its conversation."}
               </p>
             </div>
           </div>
           <div class="pane">
-            <Show when={state().activeDeviceID === undefined || state().connection.kind === "offline"}>
-              <DeviceEmptyState />
+            <Show when={blocked()}>
+              <DeviceActions view={devices} />
             </Show>
             <Link href="/docs/usage/remote" class="button button--secondary button--small">
               How remote access works
@@ -679,11 +804,6 @@ function ConversationView(props: { readonly title: string }): JSX.Element {
         </Show>
       </div>
       <div class="pane conversation-pane">
-        <Show when={requests().length > 0}>
-          <div class="requests">
-            <RequestCards requests={requests} activeSessionID={state().activeSessionID} />
-          </div>
-        </Show>
         <Show
           when={messages().length > 0}
           fallback={
@@ -694,6 +814,11 @@ function ConversationView(props: { readonly title: string }): JSX.Element {
           }
         >
           <Transcript messages={messages} />
+        </Show>
+        <Show when={requests().length > 0}>
+          <div class="requests">
+            <RequestCards requests={requests} activeSessionID={state().activeSessionID} />
+          </div>
         </Show>
       </div>
     </Show>
@@ -735,6 +860,7 @@ function SessionsPage(): JSX.Element {
   const [query, setQuery] = createSignal("")
   const [filter, setFilter] = createSignal<SessionFilter>("all")
   const sessions = () => filterSessions(remote.state().sessions, query(), filter())
+  const cached = () => cachedSessionsView(remote.state().connection, remote.state().sessions.length)
   return (
     <div class="pane sessions-page">
       <h1 class="visually-hidden">Sessions</h1>
@@ -746,6 +872,7 @@ function SessionsPage(): JSX.Element {
           </Show>
         }
       >
+        <Show when={cached()}>{(view) => <p class="panel__note">{view().note}</p>}</Show>
         <div class="filter-bar">
           <label class="field" style={{ flex: "1" }}>
             <span class="visually-hidden">Filter sessions</span>
@@ -790,7 +917,7 @@ function SessionsPage(): JSX.Element {
                 <span role="columnheader">Status</span>
                 <span role="columnheader">Updated</span>
               </div>
-              <For each={sessions()}>{(session) => <SessionSummaryRow session={session} />}</For>
+              <For each={sessions()}>{(session) => <SessionSummaryRow session={session} readOnly={cached() !== undefined} />}</For>
             </div>
           </div>
         </Show>
@@ -818,8 +945,7 @@ function ActivityPage(): JSX.Element {
             <span class="queue__count">{requestCount(requests().length)}</span>
           </Show>
         </div>
-        <Show when={requests().length > 0}>
-          <p class="pane__title">Waiting for you</p>
+        <Show when={requests().length > 0} fallback={<p class="panel__note">Nothing is waiting for you.</p>}>
           <RequestCards requests={requests} activeSessionID={remote.state().activeSessionID} />
         </Show>
       </div>
@@ -855,9 +981,6 @@ function ActivityPanel(props: { readonly onNavigate?: () => void }): JSX.Element
   const requests = () => remote.state().view?.requests ?? []
   return (
     <div class="pane">
-      <div class="pane__head">
-        <p class="pane__title">Activity</p>
-      </div>
       <Show when={requests().length > 0}>
         <div class="queue">
           <div class="queue__head">
@@ -875,7 +998,7 @@ function ActivityPanel(props: { readonly onNavigate?: () => void }): JSX.Element
 function QueueRow(props: { readonly request: PendingRequestView; readonly onNavigate?: () => void }): JSX.Element {
   const row = () => queueRowView(props.request)
   return (
-    <div class="queue-row">
+    <div class={`queue-row${row().hard ? " queue-row--hard" : ""}`}>
       <span class="queue-row__icon" aria-hidden="true">
         <Icon name={row().icon} size={16} />
       </span>

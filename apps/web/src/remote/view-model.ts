@@ -382,12 +382,18 @@ const unreadableAccountDetail = "The account check did not finish, so this brows
 
 const checkingAccountDetail = "Checking account. This browser's sign-in state is not known yet."
 
-export type AccountAction = "sign-in" | "retry"
-
 /**
- * The account section either shows the account it knows or one message about why
- * it cannot. Sign-in is offered only for a definitive signed-out answer.
+ * A definitive signed-out answer replaces the workspace with the sign-in screen. Every
+ * other read keeps the workspace, so a slow or failed account check never looks like a
+ * sign-out.
  */
+export function remoteEntryView(read: AccountReadState): "sign-in" | "workspace" {
+  return read.kind === "signed-out" ? "sign-in" : "workspace"
+}
+
+export type AccountAction = "retry"
+
+/** The account section either shows the account it knows or one message about why it cannot. */
 export type AccountSectionView =
   | { readonly kind: "signed-in"; readonly expiresAt: number }
   | { readonly kind: "message"; readonly detail: string; readonly actions: readonly AccountAction[] }
@@ -398,7 +404,7 @@ export function accountSectionView(read: AccountReadState, authError?: string): 
     return {
       kind: "message",
       detail: authError ?? "This browser is not signed in, so no device or session is available.",
-      actions: ["sign-in"],
+      actions: [],
     }
   }
   if (read.kind === "checking") {
@@ -432,12 +438,16 @@ export type DeviceAvailabilityView = {
   readonly selectable: boolean
   /** Whether the session panel offers the settings entry point. */
   readonly showSettings: boolean
+  /** A command to run on the machine, shown as a copyable block. */
+  readonly command?: string
 }
 
 export type DeviceAvailabilityContext = {
   readonly devices: readonly Readonly<Pick<import("@ycoding-ai/remote").RemoteDeviceInfo, "id" | "name" | "status" | "online">>[]
   readonly activeDeviceID?: string
   readonly sessionCount?: number
+  /** The selected machine's local agent did not answer, whatever its listed presence. */
+  readonly unreachable?: boolean
 }
 
 const devicePanelBody =
@@ -460,7 +470,7 @@ export function deviceAvailabilityView(
         showSettings: true,
       }
     }
-    if (selected?.status === "active" && !selected.online) {
+    if (selected?.status === "active" && (!selected.online || context?.unreachable === true)) {
       return {
         title: `${selected.name} is not reachable`,
         body: "The selected machine is offline or YCoding is not running there. Reconnect after it is available.",
@@ -475,30 +485,31 @@ export function deviceAvailabilityView(
       const hasActiveEnrollment = context?.devices.some((device) => device.status === "active") ?? false
       if (hasActiveEnrollment) {
         return {
-          title: "No devices online",
-          body: "Your enrolled machines are offline. Run ycoding remote connect on a machine to make it available.",
+          title: "No machines online",
+          body: "Your enrolled machines are offline. Run this command on a machine to make it available.",
           hint: "No enrolled machines are online right now.",
-          placeholder: "No devices online",
+          placeholder: "No machines online",
           selectable: false,
           showSettings: false,
+          command: "ycoding remote connect",
         }
       }
     }
     if ((onlineDevices?.length ?? deviceCount) > 0) {
       return {
-        title: "No device selected",
+        title: "No machine selected",
         body: "Choose a machine above to load its sessions.",
         hint: "",
-        placeholder: "Select a device",
+        placeholder: "Select a machine",
         selectable: true,
         showSettings: false,
       }
     }
     return {
-      title: "No device is enrolled",
+      title: "No machine is enrolled",
       body: devicePanelBody,
-      hint: "No device is enrolled to this account yet.",
-      placeholder: "No device enrolled",
+      hint: "No machine is enrolled to this account yet.",
+      placeholder: "No machine enrolled",
       selectable: false,
       showSettings: true,
     }
@@ -508,7 +519,7 @@ export function deviceAvailabilityView(
       title: "Checking account",
       body: "Enrolled machines appear once this browser's account check finishes.",
       hint: "Checking this browser's account before listing enrolled machines.",
-      placeholder: "Checking devices",
+      placeholder: "Checking machines",
       selectable: false,
       showSettings: false,
     }
@@ -518,7 +529,7 @@ export function deviceAvailabilityView(
       title: "Signed out",
       body: "Sign in to list this account's enrolled machines and reach them from this browser.",
       hint: "Sign in to list this account's enrolled machines.",
-      placeholder: "Sign in to select a device",
+      placeholder: "Sign in to select a machine",
       selectable: false,
       showSettings: true,
     }
@@ -546,6 +557,8 @@ export function deviceAvailabilityView(
 export type SessionAvailabilityView = {
   readonly title: string
   readonly body: string
+  /** What the signed-in owner can reach on this machine. */
+  readonly note?: string
   readonly loading: boolean
 }
 
@@ -566,6 +579,7 @@ export function sessionAvailabilityView(
     return {
       title: "No sessions",
       body: "Start YCoding in your project folder on this machine.",
+      note: "Every existing and future session on this machine appears here while it is connected.",
       loading: false,
     }
   }
@@ -642,4 +656,19 @@ function shellOutputStatus(fetch: ShellOutputFetch | undefined): ShellOutputStat
   if (fetch.state === "error") return { kind: "error", label: fetch.message }
   if (fetch.state === "stalled") return { kind: "stalled", label: shellOutputStalledLabel }
   return { kind: "idle" }
+}
+
+/** The machine picker lists only online machines, so it names where the others are managed. */
+export function devicePickerNote(devices: DeviceAvailabilityContext["devices"]): string | undefined {
+  const hidden = devices.filter((device) => device.status !== "active" || !device.online).length
+  if (hidden === 0) return undefined
+  return hidden === 1
+    ? "1 offline or revoked machine is managed in Settings → Devices."
+    : `${hidden} offline or revoked machines are managed in Settings → Devices.`
+}
+
+/** An offline machine's last session list stays visible but cannot be opened or prompted. */
+export function cachedSessionsView(connection: RemoteConnectionState, sessionCount: number): { readonly note: string } | undefined {
+  if (connection.kind !== "offline" || sessionCount === 0) return undefined
+  return { note: `Last session list from ${connection.deviceName}. Sessions are read-only until it reconnects.` }
 }

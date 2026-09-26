@@ -25,10 +25,15 @@ export type RemoteHttpOptions = {
   readonly fetch?: typeof fetch
 }
 
-/** Same-origin sign-in entry point. `redirectAfter` must begin with `/remote`. */
-export function signInURL(redirectAfter: string, baseURL = ""): string {
+/** The OAuth providers the relay accepts, in the order the sign-in screen offers them. */
+export const SIGN_IN_PROVIDERS = [{ id: "google", label: "Continue with Google" }] as const
+
+export type SignInProvider = (typeof SIGN_IN_PROVIDERS)[number]["id"]
+
+/** Same-origin sign-in entry point for one provider. `redirectAfter` must begin with `/remote`. */
+export function signInURL(provider: SignInProvider, redirectAfter: string, baseURL = ""): string {
   const target = redirectAfter.startsWith("/remote") ? redirectAfter : "/remote"
-  return `${baseURL}/api/auth/google/start?redirect_after=${encodeURIComponent(target)}`
+  return `${baseURL}/api/auth/${provider}/start?redirect_after=${encodeURIComponent(target)}`
 }
 
 export function createRemoteHttp(options: RemoteHttpOptions = {}): RemoteHttp {

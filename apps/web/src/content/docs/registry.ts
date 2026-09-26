@@ -18,15 +18,28 @@ export const DOC_INDEX: DocPage = {
       blocks: [
         {
           kind: "paragraph",
-          text: "YCoding is a terminal coding agent. The terminal application is the primary surface: it owns sessions, tool execution, permissions, and model requests on your own machine.",
+          text: "YCoding is a terminal coding agent. Its terminal interface is the primary product surface: Sessions, repository access, tool execution, permission reviews, and model requests run in the local process on your machine. Start in your project directory, connect a model provider, then send a focused task.",
         },
         {
           kind: "steps",
           items: [
             { title: "Install", text: "Install a checksum-verified release build, or run from a checkout with Bun 1.4.2." },
-            { title: "Connect a provider", text: "Add credentials for at least one model provider so requests can run." },
-            { title: "Start a session", text: "Run `ycoding` for the terminal interface, or pass a prompt for one direct run." },
+            { title: "Connect a provider", text: "Start `ycoding`, enter `/connect`, and finish the sign-in or credential flow for a provider you can use." },
+            { title: "Start a session", text: "In your project directory, run `ycoding` and send a focused prompt. Use a direct `--model` run only when the task does not need an interactive approval." },
           ],
+        },
+        {
+          kind: "table",
+          head: ["First run", "Expected result", "Verify"],
+          rows: [
+            ["`ycoding`", "The interactive terminal interface opens in the current directory.", "The Session view and composer are available."],
+            ["`/connect` in the composer", "The selected provider profile is connected.", "Select a model exposed for that provider before sending a prompt."],
+            ["Submit a prompt in the TUI", "The Session transcript shows the prompt and response.", "Resolve any permission or guardrail review shown in the transcript."],
+          ],
+        },
+        {
+          kind: "paragraph",
+          text: "For AI agents, the public docs are also available as Markdown: start with `https://ycoding.althenia.app/llms.txt`, use `https://ycoding.althenia.app/llms-full.txt` for the full documentation, or fetch an individual page such as `https://ycoding.althenia.app/docs/quickstart.md`.",
         },
         {
           kind: "cards",

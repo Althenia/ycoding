@@ -1,13 +1,13 @@
 import { RemoteWebSocketPath } from "@ycoding-ai/remote"
 import { createContext, createSignal, onCleanup, useContext, type Accessor, type JSX } from "solid-js"
-import { createRemoteHttp } from "./http"
+import { createRemoteHttp, type SignInProvider } from "./http"
 import { createRemoteStore, type RemoteStore, type RemoteStoreState } from "./store"
 import { createRemoteTransport } from "./transport"
 
 export type RemoteContextValue = {
   readonly store: RemoteStore
   readonly state: Accessor<RemoteStoreState>
-  readonly signIn: () => void
+  readonly signIn: (provider: SignInProvider) => void
   /** Set when the OAuth callback reported a failure. */
   readonly authError: string | undefined
 }
@@ -43,7 +43,8 @@ export function RemoteProvider(props: { readonly children: JSX.Element; readonly
   const value: RemoteContextValue = {
     store,
     state,
-    signIn: () => window.location.assign(store.signInURL("/remote/")),
+    // Return to the route the reader opened, so signing in from Settings lands on Settings.
+    signIn: (provider) => window.location.assign(store.signInURL(provider, window.location.pathname)),
     authError,
   }
   return <RemoteContext.Provider value={value}>{props.children}</RemoteContext.Provider>

@@ -4,10 +4,13 @@ import {
   REMOTE_CAPABILITY_NAMES,
   accountReadState,
   accountSectionView,
+  cachedSessionsView,
   connectionBanner,
   createUnavailableRemoteViewModel,
   describeUnavailableReason,
   deviceAvailabilityView,
+  devicePickerNote,
+  remoteEntryView,
   enrollmentInstructions,
   sessionAvailabilityView,
   sessionStateChips,
@@ -283,19 +286,15 @@ describe("accountReadState", () => {
 })
 
 describe("accountSectionView", () => {
-  test("offers sign-in only after a definitive signed-out answer", () => {
+  test("opens the sign-in screen only after a definitive signed-out answer", () => {
     const reads: readonly AccountReadState[] = [
       { kind: "checking" },
       { kind: "unresolved", detail: "The account service could not be reached" },
       { kind: "unavailable", reason: "not-configured" },
       { kind: "signed-in", expiresAt: 1 },
     ]
-    for (const read of reads) {
-      const view = accountSectionView(read)
-      expect(view.kind === "message" ? view.actions : []).not.toContain("sign-in")
-    }
-    const signedOut = accountSectionView({ kind: "signed-out" })
-    expect(signedOut.kind === "message" ? signedOut.actions : []).toContain("sign-in")
+    expect(reads.map(remoteEntryView)).toEqual(["workspace", "workspace", "workspace", "workspace"])
+    expect(remoteEntryView({ kind: "signed-out" })).toBe("sign-in")
   })
 
   test("says the account is still being checked instead of signing the browser out", () => {
@@ -349,7 +348,7 @@ describe("deviceAvailabilityView", () => {
     for (const read of unansweredAccount) {
       const view = deviceAvailabilityView(read, 0)
       for (const text of [view.title, view.body, view.hint, view.placeholder]) {
-        expect(text).not.toMatch(/no device is enrolled|no device enrolled/i)
+        expect(text).not.toMatch(/no (device|machine) is enrolled|no (device|machine) enrolled/i)
       }
       expect(view.selectable).toBe(false)
     }
@@ -364,18 +363,18 @@ describe("deviceAvailabilityView", () => {
 
   test("keeps the enrolled-device copy once the account is known and has no machine", () => {
     const view = deviceAvailabilityView({ kind: "signed-in", expiresAt: 1 }, 0)
-    expect(view.title).toBe("No device is enrolled")
-    expect(view.hint).toBe("No device is enrolled to this account yet.")
-    expect(view.placeholder).toBe("No device enrolled")
+    expect(view.title).toBe("No machine is enrolled")
+    expect(view.hint).toBe("No machine is enrolled to this account yet.")
+    expect(view.placeholder).toBe("No machine enrolled")
     expect(view.selectable).toBe(false)
     expect(view.showSettings).toBe(true)
   })
 
   test("asks for a machine to be chosen when the account already has one", () => {
     const view = deviceAvailabilityView({ kind: "signed-in", expiresAt: 1 }, 2)
-    expect(view.title).toBe("No device selected")
+    expect(view.title).toBe("No machine selected")
     expect(view.body).toMatch(/machine/i)
-    expect(view.placeholder).toBe("Select a device")
+    expect(view.placeholder).toBe("Select a machine")
     expect(view.selectable).toBe(true)
   })
 
@@ -396,6 +395,20 @@ describe("deviceAvailabilityView", () => {
     expect(`${view.title} ${view.body}`).not.toMatch(/no device selected|no sessions/i)
   })
 
+  test("reports a listed-online selected machine whose local agent is unavailable as not reachable", () => {
+    const view = deviceAvailabilityView(
+      { kind: "signed-in", expiresAt: 1 },
+      1,
+      {
+        devices: [{ id: "dev_studio", name: "Studio Mac", status: "active", online: true }],
+        activeDeviceID: "dev_studio",
+        unreachable: true,
+      },
+    )
+    expect(view.title).toBe("Studio Mac is not reachable")
+    expect(view.placeholder).toBe("Studio Mac")
+  })
+
   test("distinguishes enrolled machines that are all offline from no enrollment", () => {
     const view = deviceAvailabilityView(
       { kind: "signed-in", expiresAt: 1 },
@@ -407,9 +420,11 @@ describe("deviceAvailabilityView", () => {
         ],
       },
     )
-    expect(view.title).toBe("No devices online")
+    expect(view.title).toBe("No machines online")
     expect(view.body).toMatch(/not responding|offline|running YCoding/i)
-    expect(view.placeholder).toBe("No devices online")
+    expect(view.body).not.toContain("ycoding remote connect")
+    expect(view.command).toBe("ycoding remote connect")
+    expect(view.placeholder).toBe("No machines online")
     expect(view.selectable).toBe(false)
   })
 
@@ -441,8 +456,41 @@ describe("sessionAvailabilityView", () => {
     expect(sessionAvailabilityView({ kind: "connected", deviceName: "Studio Mac" }, 0)).toEqual({
       title: "No sessions",
       body: "Start YCoding in your project folder on this machine.",
+      note: "Every existing and future session on this machine appears here while it is connected.",
       loading: false,
     })
+  })
+})
+
+describe("devicePickerNote", () => {
+  test("points offline and revoked machines to device settings", () => {
+    expect(
+      devicePickerNote([
+        { id: "dev_studio", name: "Studio Mac", status: "active", online: true },
+        { id: "dev_sleep", name: "Sleeping Mac", status: "active", online: false },
+        { id: "dev_old", name: "Old Mac", status: "revoked", online: false },
+      ]),
+    ).toBe("2 offline or revoked machines are managed in Settings → Devices.")
+    expect(devicePickerNote([{ id: "dev_old", name: "Old Mac", status: "revoked", online: false }])).toBe(
+      "1 offline or revoked machine is managed in Settings → Devices.",
+    )
+  })
+
+  test("adds no note when every enrolled machine can be selected", () => {
+    expect(devicePickerNote([{ id: "dev_studio", name: "Studio Mac", status: "active", online: true }])).toBeUndefined()
+  })
+})
+
+describe("cachedSessionsView", () => {
+  test("keeps an offline machine's last session list read-only until it reconnects", () => {
+    expect(cachedSessionsView({ kind: "offline", deviceName: "Studio Mac" }, 3)).toEqual({
+      note: "Last session list from Studio Mac. Sessions are read-only until it reconnects.",
+    })
+  })
+
+  test("leaves a reachable machine's list interactive and an empty offline list to the offline state", () => {
+    expect(cachedSessionsView({ kind: "connected", deviceName: "Studio Mac" }, 3)).toBeUndefined()
+    expect(cachedSessionsView({ kind: "offline", deviceName: "Studio Mac" }, 0)).toBeUndefined()
   })
 })
 

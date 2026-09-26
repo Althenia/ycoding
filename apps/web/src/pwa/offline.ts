@@ -52,12 +52,16 @@ export function shouldCacheStaticAsset(request: CacheableRequest, origin: string
   return url.pathname.startsWith("/assets/")
 }
 
-/** True for same-origin document navigations that may fall back to the cached shell. */
+/**
+ * True for same-origin application route navigations that may fall back to the
+ * cached shell. Navigations to files such as `/llms.txt` or `/docs/usage.md` stay
+ * on the network, because a handled navigation response replaces the cached shell.
+ */
 export function shouldHandleNavigation(request: CacheableRequest): boolean {
   if (!isCacheableGet(request)) return false
   if (request.mode !== "navigate") return false
   const url = parseUrl(request.url)
-  return url !== undefined && !isBlockedPath(url.pathname)
+  return url !== undefined && !isBlockedPath(url.pathname) && !/\.[^/]+$/.test(url.pathname)
 }
 
 function isCacheableGet(request: CacheableRequest): boolean {

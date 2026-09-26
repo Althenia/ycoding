@@ -20,6 +20,12 @@
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   block-size: 100dvh;
   overflow: hidden;
+  /* Terminal geometry: every workspace component draws near-square corners. */
+  --yc-radius-sm: 2px;
+  --yc-radius-md: 4px;
+  --yc-radius-lg: 6px;
+  /* The selected conversation reads as one centered column. */
+  --remote-column: 880px;
 }
 
 html:has(.app),
@@ -34,6 +40,126 @@ body:has(.app) {
 /* The bar row keeps its height at every width. */
 .app > .app-header {
   min-block-size: var(--yc-header-h);
+}
+
+/* --- sign-in ------------------------------------------------------------
+   A signed-out browser sees one centered panel with the OAuth providers. It shares
+   the workspace's terminal geometry but none of its chrome. */
+
+.sign-in {
+  --yc-radius-sm: 2px;
+  --yc-radius-md: 4px;
+  --yc-radius-lg: 6px;
+  display: grid;
+  place-items: center;
+  min-block-size: 100dvh;
+  padding: var(--yc-space-8) var(--yc-gutter);
+}
+
+.sign-in__panel {
+  display: grid;
+  gap: var(--yc-space-5);
+  inline-size: min(100%, 420px);
+  padding: var(--yc-space-8) var(--yc-space-6);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-lg);
+  background: var(--yc-surface-raised);
+}
+
+.sign-in__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--yc-space-3);
+}
+
+.sign-in__head {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.sign-in__title {
+  font-size: var(--yc-size-xl);
+  line-height: var(--yc-leading-xl);
+  letter-spacing: var(--yc-tracking-tight);
+}
+
+.sign-in__lede {
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-sm);
+}
+
+.sign-in__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--yc-space-2);
+  padding: var(--yc-space-3);
+  border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-danger-soft);
+  color: var(--yc-danger);
+  font-size: var(--yc-size-xs);
+}
+
+.sign-in__providers {
+  display: grid;
+  gap: var(--yc-space-2);
+}
+
+.sign-in__provider {
+  inline-size: 100%;
+  min-block-size: var(--yc-hit-min);
+}
+
+.sign-in__note {
+  font-size: var(--yc-size-xs);
+}
+
+/* --- terminal type roles -------------------------------------------------
+   Labels, state, metadata, and actions read as terminal output in the monospace
+   face; titles and prose stay in the sans face. */
+
+.app .pane__title {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+  text-transform: uppercase;
+}
+
+.app .status-strip,
+.app .button {
+  font-family: var(--yc-font-mono);
+}
+
+.app .button {
+  font-size: var(--yc-size-xs);
+  font-weight: var(--yc-weight-medium);
+}
+
+.app .chip {
+  font-family: var(--yc-font-mono);
+  min-block-size: 22px;
+  padding-inline: 6px;
+  border-radius: var(--yc-radius-sm);
+  font-weight: var(--yc-weight-regular);
+}
+
+.app .empty {
+  border-style: solid;
+  background: var(--yc-surface-raised);
+}
+
+/* A notice is a bounded message in the working column, not a page-wide rule. */
+.app .notice-strip {
+  margin-block-end: var(--yc-space-4);
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-md);
+}
+
+.app .app-header__end .button--icon,
+.app .app-header__menu {
+  --button-border: var(--yc-border);
 }
 
 /* --- remote header ------------------------------------------------------ */
@@ -60,9 +186,10 @@ body:has(.app) {
   align-items: center;
   min-block-size: var(--yc-control-h);
   padding-inline: var(--yc-space-3);
-  border-radius: var(--yc-radius-md);
+  border-radius: 0;
   color: var(--yc-text-muted);
-  font-size: var(--yc-size-sm);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
   font-weight: var(--yc-weight-medium);
   text-decoration: none;
 }
@@ -88,18 +215,35 @@ body:has(.app) {
   min-inline-size: 90px;
 }
 
+.remote-device__select .custom-select__trigger {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
+}
+
 .remote-connection {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: none;
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
 }
 
 .remote-connection-label {
   display: none;
 }
 
-@media (min-width: 768px) {
+/* Below 1024 the header row has no room for the label; the status strip beneath
+   it states the same connection in full. */
+@media (min-width: 1024px) {
+  .remote-connection {
+    min-block-size: 32px;
+    padding-inline: 10px;
+    border: var(--yc-border-width) solid var(--yc-border);
+    border-radius: var(--yc-radius-sm);
+    background: var(--yc-surface-sunken);
+  }
+
   .remote-connection-label {
     display: inline;
   }
@@ -191,23 +335,24 @@ body:has(.app) {
 
 /* --- session list ------------------------------------------------------- */
 
+/* The list runs edge to edge of its pane, one ruled row per Session. */
 .session-list {
   display: grid;
-  gap: 2px;
+  margin-inline: calc(-1 * var(--yc-space-4));
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
 }
 
 /* No trailing status column: at the 288px rail a trailing chip left the session
    title about 60px, so the state chips sit on the meta line instead. */
 .session-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
   align-items: start;
-  gap: var(--yc-space-3);
   inline-size: 100%;
   min-block-size: 64px;
-  padding: var(--yc-space-3);
-  border: var(--yc-border-width) solid transparent;
-  border-radius: var(--yc-radius-md);
+  padding: var(--yc-space-3) var(--yc-space-4);
+  border: 0;
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
+  border-radius: 0;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -215,29 +360,18 @@ body:has(.app) {
   cursor: pointer;
 }
 
-.session-row:hover {
+.session-row:hover:not(:disabled) {
   background: var(--yc-surface-sunken);
 }
 
+.session-row:disabled,
+.sessions-table__select:disabled {
+  cursor: default;
+}
+
 .session-row--active {
-  background: var(--yc-green-soft);
-  border-color: color-mix(in srgb, var(--yc-green-strong) 35%, transparent);
-}
-
-.session-row__mark {
-  inline-size: 28px;
-  block-size: 28px;
-  display: grid;
-  place-content: center;
-  border-radius: var(--yc-radius-sm);
   background: var(--yc-surface-raised);
-  border: var(--yc-border-width) solid var(--yc-border);
-  color: var(--yc-text-muted);
-}
-
-.session-row--active .session-row__mark {
-  color: var(--yc-green-strong);
-  border-color: color-mix(in srgb, var(--yc-green-strong) 35%, transparent);
+  box-shadow: inset 2px 0 var(--yc-green-strong);
 }
 
 .session-row__body {
@@ -257,16 +391,14 @@ body:has(.app) {
 .session-row__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--yc-space-2);
+  align-items: center;
+  gap: var(--yc-space-1) var(--yc-space-2);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   color: var(--yc-text-muted);
 }
 
-.session-row__meta > * + *::before {
-  content: "·";
-  margin-inline-end: var(--yc-space-2);
-  color: var(--yc-border-strong);
-}
+
 
 .session-row__status {
   display: flex;
@@ -285,23 +417,35 @@ body:has(.app) {
   inline-size: 100%;
   table-layout: fixed;
   border-collapse: collapse;
-  background: var(--yc-surface);
+  border: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface-raised);
   font-size: var(--yc-size-xs);
 }
 
 .notification-table th,
 .notification-table td {
-  padding: var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-3);
   border-block-end: var(--yc-border-width) solid var(--yc-border);
   text-align: center;
+  vertical-align: middle;
 }
 
 .notification-table th:first-child {
   text-align: start;
 }
 
+.notification-table thead th {
+  background: var(--yc-surface-sunken);
+  color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+  white-space: nowrap;
+}
+
+/* A channel column holds its one-line label and a centered switch. */
 .notification-table thead th:not(:first-child) {
-  inline-size: 72px;
+  inline-size: 128px;
 }
 
 .notification-table th .field__hint {
@@ -334,8 +478,10 @@ body:has(.app) {
   padding-inline: var(--yc-space-3);
   border: var(--yc-border-width) solid var(--yc-border);
   border-radius: var(--yc-radius-sm);
-  background: var(--yc-surface-raised);
+  background: transparent;
   color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
   cursor: pointer;
 }
 
@@ -350,7 +496,6 @@ body:has(.app) {
 .transcript {
   display: grid;
   gap: var(--yc-space-4);
-  max-inline-size: var(--yc-measure);
   min-inline-size: 0;
 }
 
@@ -364,6 +509,7 @@ body:has(.app) {
   display: flex;
   align-items: center;
   gap: var(--yc-space-2);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   color: var(--yc-text-muted);
 }
@@ -442,6 +588,12 @@ body:has(.app) {
 
 .tool__header {
   display: flex;
+  background: var(--yc-surface-sunken);
+  font-family: var(--yc-font-mono);
+}
+
+.tool__header:not(:last-child) {
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
 }
 
 .tool__toggle {
@@ -470,6 +622,7 @@ body:has(.app) {
 
 .tool__status {
   margin-inline-start: auto;
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   color: var(--yc-text-muted);
   white-space: nowrap;
@@ -478,11 +631,11 @@ body:has(.app) {
 .tool__body {
   display: grid;
   gap: var(--yc-space-2);
-  padding: 0 var(--yc-space-3) var(--yc-space-3);
+  padding: var(--yc-space-3);
 }
 
 .tool__note {
-  padding: 0 var(--yc-space-3) var(--yc-space-2);
+  padding: var(--yc-space-2) var(--yc-space-3);
   color: var(--yc-text-muted);
   font-size: var(--yc-size-xs);
   margin: 0;
@@ -529,7 +682,7 @@ body:has(.app) {
 
 .shell__status {
   margin-inline-start: auto;
-  font-family: var(--yc-font-sans);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   color: var(--yc-text-muted);
   white-space: nowrap;
@@ -575,28 +728,18 @@ body:has(.app) {
 }
 
 /* --- request cards ------------------------------------------------------
-   The cards in one thread keep one declared gap: two cards that touch read as a
-   single card. */
+   Permission, guardrail, and question cards share one anatomy: a tinted header bar
+   naming the decision, a body stating what is asked, and a footer bar holding the
+   answers on the end edge. Cards stack in one column with one declared gap. */
 
 .requests {
   display: grid;
-  gap: var(--yc-space-6);
-}
-
-@media (min-width: 1024px) {
-  .requests {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .requests > .request--hard,
-  .requests > .request:last-child {
-    grid-column: 1 / -1;
-  }
+  gap: var(--yc-space-4);
 }
 
 .request {
   border: var(--yc-border-width) solid color-mix(in srgb, var(--yc-yellow) 45%, var(--yc-border));
-  border-radius: var(--yc-radius-lg);
+  border-radius: var(--yc-radius-md);
   background: var(--yc-surface-raised);
   overflow: hidden;
 }
@@ -605,25 +748,27 @@ body:has(.app) {
   display: flex;
   align-items: center;
   gap: var(--yc-space-2);
-  padding: var(--yc-space-3);
+  min-block-size: 40px;
+  padding-inline: var(--yc-space-3);
+  border-block-end: var(--yc-border-width) solid color-mix(in srgb, var(--yc-yellow) 30%, var(--yc-border));
   background: var(--yc-yellow-soft);
+  color: var(--yc-yellow-strong);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-xs);
   font-weight: var(--yc-weight-semibold);
 }
 
-.request--guardrail .request__header {
-  color: var(--yc-yellow-strong);
-}
-
-.request--permission .request__header {
-  color: var(--yc-text-muted);
-}
-
 .request__body {
-  padding: var(--yc-space-3) var(--yc-space-3) 0;
+  padding: var(--yc-space-3);
   margin: 0;
   font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-sm);
   overflow-wrap: anywhere;
+}
+
+.request__body strong {
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
 }
 
 .request__body code {
@@ -635,7 +780,7 @@ body:has(.app) {
 }
 
 .request__note {
-  padding: var(--yc-space-1) var(--yc-space-3) 0;
+  padding: 0 var(--yc-space-3) var(--yc-space-3);
   color: var(--yc-text-muted);
   font-size: var(--yc-size-2xs);
   margin: 0;
@@ -644,24 +789,43 @@ body:has(.app) {
 .request__actions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--yc-space-2);
-  padding: var(--yc-space-3);
+  padding: var(--yc-space-2) var(--yc-space-3);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface-sunken);
 }
 
-/* A hard review is a human decision at every autonomy level. */
+/* A hard review is a human decision at every autonomy level, so it is the one card
+   drawn in the danger role with a heavier outline, a halo, and a "Human only" badge. */
 .request--hard {
-  border-color: color-mix(in srgb, var(--yc-danger) 45%, var(--yc-border));
-  background: color-mix(in srgb, var(--yc-danger-soft) 40%, var(--yc-surface-raised));
+  border: 2px solid var(--yc-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--yc-danger) 18%, transparent);
 }
 
 .request--hard .request__header {
+  border-block-end-color: color-mix(in srgb, var(--yc-danger) 40%, var(--yc-border));
   background: var(--yc-danger-soft);
   color: var(--yc-danger);
 }
 
+.request--hard .request__body {
+  background: color-mix(in srgb, var(--yc-danger-soft) 35%, var(--yc-surface-raised));
+}
+
+.request__badge {
+  flex: none;
+  margin-inline-start: auto;
+  padding: 2px 6px;
+  border: var(--yc-border-width) solid currentColor;
+  border-radius: var(--yc-radius-sm);
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+}
+
 .fieldset {
   border: 0;
-  padding: var(--yc-space-2) var(--yc-space-3) 0;
+  padding: var(--yc-space-3) var(--yc-space-3) 0;
   margin: 0;
   display: grid;
   gap: var(--yc-space-2);
@@ -677,38 +841,77 @@ body:has(.app) {
   font-size: var(--yc-size-sm);
 }
 
+/* A question is a legend, an optional description, and a ruled list of choices. */
 .question {
+  display: grid;
+  gap: var(--yc-space-2);
   border: 0;
   margin: 0;
-  padding: var(--yc-space-2) var(--yc-space-3) 0;
+  padding: var(--yc-space-3);
+}
+
+.question + .question {
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
 }
 
 .question legend {
+  float: inline-start;
+  inline-size: 100%;
+  padding: 0;
+  font-size: var(--yc-size-sm);
   font-weight: var(--yc-weight-semibold);
+}
+
+.question > p {
+  color: var(--yc-text-muted);
   font-size: var(--yc-size-xs);
 }
 
 .question__option {
   display: flex;
-  gap: var(--yc-space-2);
+  gap: var(--yc-space-3);
   align-items: flex-start;
   min-block-size: var(--yc-hit-min);
-  padding: var(--yc-space-2);
+  padding: var(--yc-space-3);
   border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-sm);
   background: var(--yc-surface-sunken);
+  font-size: var(--yc-size-sm);
+  line-height: var(--yc-leading-sm);
+  cursor: pointer;
+}
+
+.question__option + .question__option {
+  margin-block-start: calc(-1 * var(--yc-space-2) - var(--yc-border-width));
+}
+
+.question__option:first-of-type {
+  border-start-start-radius: var(--yc-radius-sm);
+  border-start-end-radius: var(--yc-radius-sm);
+}
+
+.question__option:last-of-type {
+  border-end-start-radius: var(--yc-radius-sm);
+  border-end-end-radius: var(--yc-radius-sm);
+}
+
+.question__option input {
+  flex: none;
+  margin-block-start: 3px;
+  accent-color: var(--yc-green-strong);
 }
 
 .question__option:has(input:checked) {
+  position: relative;
   border-color: var(--yc-green-strong);
   background: var(--yc-green-soft);
+  box-shadow: inset 2px 0 var(--yc-green-strong);
 }
 
 .question__custom {
   display: flex;
   flex-direction: column;
   gap: var(--yc-space-1);
-  margin-top: var(--yc-space-2);
+  font-size: var(--yc-size-xs);
 }
 
 .question__custom input,
@@ -776,6 +979,7 @@ body:has(.app) {
 
 .activity-row__status {
   color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   text-transform: capitalize;
 }
@@ -827,6 +1031,16 @@ body:has(.app) {
   color: var(--yc-yellow-strong);
 }
 
+.queue-row--hard {
+  border: 2px solid var(--yc-danger);
+  background: color-mix(in srgb, var(--yc-danger-soft) 60%, var(--yc-surface-raised));
+}
+
+.queue-row--hard .queue-row__icon,
+.queue-row--hard .queue-row__detail {
+  color: var(--yc-danger);
+}
+
 .queue-row__body {
   display: grid;
   gap: 2px;
@@ -851,29 +1065,23 @@ body:has(.app) {
   padding-block-end: max(var(--yc-space-3), env(safe-area-inset-bottom));
 }
 
+/* The composer is one terminal box at every width: the field spans the box and a
+   footer bar holds delivery on the start edge and the actions on the end edge, so a
+   narrow screen never trades field width for controls. Focus moves to the box. */
 .composer__row {
   display: flex;
-  align-items: flex-end;
-  gap: var(--yc-space-2);
+  flex-direction: column;
+  border: var(--yc-border-width) solid var(--yc-border-strong);
+  border-radius: var(--yc-radius-md);
+  background: var(--yc-surface-raised);
 }
 
-/* Keep compact delivery controls inline with the field while retaining touch-sized actions. */
-@media (max-width: 479px) {
-  .composer__row {
-    display: flex;
-  }
-
-  .composer__controls {
-    justify-content: space-between;
-    gap: var(--yc-space-1);
-  }
-
-  .composer__delivery {
-    inline-size: min(128px, 40vw);
-  }
+.composer__row:has(.composer__input:focus-visible) {
+  border-color: var(--yc-focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--yc-focus) 24%, transparent);
 }
 
-/* --- approved Stitch screen compositions ------------------------------ */
+/* --- screen compositions ---------------------------------------------- */
 
 .app--sessions .workspace__main,
 .app--activity .workspace__main,
@@ -891,9 +1099,20 @@ body:has(.app) {
   padding: 0;
 }
 
+/* Notices keep the top of the column; the explanation centers in the space below. */
 .app--empty .workspace__scroll {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--yc-space-4);
+}
+
+.app--empty .page-head {
+  margin-block-start: auto;
+}
+
+.app--empty .workspace__scroll > :last-child {
+  margin-block-end: auto;
 }
 
 .app--empty .workspace__scroll > * {
@@ -906,14 +1125,21 @@ body:has(.app) {
   text-align: center;
 }
 
-.app--empty .pane {
-  border: var(--yc-border-width) solid var(--yc-border);
-  padding: var(--yc-space-6);
+.app--empty .page-head {
+  border-block-end: 0;
 }
 
-.app--empty .empty {
-  margin-inline: auto;
+/* The heading carries the explanation; the pane holds only what the reader can do. */
+.app--empty .pane {
+  justify-items: center;
+  padding: 0;
 }
+
+.app--empty .pane > .code-block {
+  justify-self: stretch;
+  text-align: start;
+}
+
 
 .app--settings .workspace__scroll {
   overflow-x: clip;
@@ -935,7 +1161,6 @@ body:has(.app) {
   align-items: center;
   gap: var(--yc-space-2);
   min-block-size: 42px;
-  max-inline-size: var(--yc-measure);
   padding-block-end: var(--yc-space-3);
   border-block-end: var(--yc-border-width) solid var(--yc-border);
   color: var(--yc-text-muted);
@@ -970,7 +1195,23 @@ body:has(.app) {
 }
 
 .conversation-pane {
+  gap: var(--yc-space-6);
+  padding-inline: 0;
   padding-block-start: var(--yc-space-4);
+}
+
+/* Notices, breadcrumb, transcript, pending requests, and the composer share the
+   conversation column's edges at every width. */
+.app--conversation.app--selected .workspace__scroll > *,
+.app--conversation.app--selected .composer > * {
+  inline-size: min(100%, var(--remote-column));
+  margin-inline: auto;
+}
+
+/* The page already sits inside the workspace gutter; a second pane inset would
+   indent it past every other screen's edge. */
+.sessions-page {
+  padding-inline: 0;
 }
 
 .sessions-page .page-head {
@@ -994,7 +1235,7 @@ body:has(.app) {
 .sessions-table__head,
 .sessions-table__row {
   display: grid;
-  grid-template-columns: minmax(240px, 2fr) minmax(140px, 1fr) 140px minmax(160px, 1fr);
+  grid-template-columns: minmax(240px, 2fr) minmax(120px, 1fr) 184px 200px;
   align-items: center;
   gap: var(--yc-space-4);
   min-inline-size: 0;
@@ -1004,6 +1245,7 @@ body:has(.app) {
 .sessions-table__head {
   background: var(--yc-surface-sunken);
   color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   font-weight: var(--yc-weight-semibold);
   letter-spacing: var(--yc-tracking-wide);
@@ -1048,11 +1290,25 @@ body:has(.app) {
   font-size: var(--yc-size-xs);
 }
 
+.sessions-table__updated {
+  white-space: nowrap;
+}
+
+/* Decisions lead the page in one column; from 1280 they take a side column beside
+   the event feed, the first width where both keep a full action row. */
 .activity-page {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   min-block-size: 100%;
   padding: 0;
+}
+
+@media (min-width: 1280px) {
+  .activity-page {
+    grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr);
+    align-content: stretch;
+  }
 }
 
 .activity-page__events,
@@ -1068,8 +1324,17 @@ body:has(.app) {
 }
 
 .activity-page__decisions {
-  border-inline-start: var(--yc-border-width) solid var(--yc-border);
+  order: -1;
+  border-block-end: var(--yc-border-width) solid var(--yc-border);
   background: var(--yc-surface-sunken);
+}
+
+@media (min-width: 1280px) {
+  .activity-page__decisions {
+    order: 0;
+    border-block-end: 0;
+    border-inline-start: var(--yc-border-width) solid var(--yc-border);
+  }
 }
 
 .activity-page .page-head__title {
@@ -1087,48 +1352,6 @@ body:has(.app) {
   border-radius: var(--yc-radius-lg);
   overflow: hidden;
   background: var(--yc-surface-raised);
-}
-
-.account-card__sign-in {
-  display: grid;
-  justify-items: center;
-  gap: var(--yc-space-2);
-  padding: var(--yc-space-3) var(--yc-space-4);
-  text-align: center;
-}
-
-.account-card__icon {
-  display: grid;
-  place-items: center;
-  inline-size: var(--yc-hit-min);
-  block-size: var(--yc-hit-min);
-  border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-md);
-  color: var(--yc-green-strong);
-}
-
-.account-card__sign-in h3 {
-  font-size: var(--yc-size-lg);
-}
-
-.account-card__detail {
-  max-inline-size: var(--yc-measure);
-  color: var(--yc-text-muted);
-}
-
-.account-card__actions {
-  inline-size: 100%;
-}
-
-.account-card__sign-in .button {
-  inline-size: 100%;
-  min-block-size: var(--yc-hit-min);
-}
-
-@media (max-width: 639px) {
-  .account-card .button--primary {
-    inline-size: 100%;
-  }
 }
 
 .device-access-note {
@@ -1152,7 +1375,8 @@ body:has(.app) {
 .device-table__head,
 .device-table .device {
   display: grid;
-  grid-template-columns: minmax(180px, 1.4fr) 120px 120px minmax(150px, 1fr) auto;
+  /* Every track is definite so the head and each device row resolve the same columns. */
+  grid-template-columns: minmax(180px, 1.4fr) 120px 120px minmax(150px, 1fr) 104px;
   align-items: center;
   gap: var(--yc-space-3);
 }
@@ -1161,6 +1385,7 @@ body:has(.app) {
   padding: var(--yc-space-2) var(--yc-space-4);
   background: var(--yc-surface-sunken);
   color: var(--yc-text-muted);
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   font-weight: var(--yc-weight-semibold);
   letter-spacing: var(--yc-tracking-wide);
@@ -1238,6 +1463,10 @@ body:has(.app) {
 }
 
 @media (min-width: 768px) and (max-width: 1023px) {
+  .remote-nav__link {
+    padding-inline: var(--yc-space-2);
+  }
+
   .remote-nav__link:last-child {
     display: none;
   }
@@ -1248,52 +1477,26 @@ body:has(.app) {
     padding-block-start: var(--yc-space-3);
   }
 
-  .app--activity .remote-nav {
-    display: flex;
-    grid-column: 1 / -1;
-    justify-content: space-around;
-    order: 3;
-    inline-size: 100%;
-    border-block-start: var(--yc-border-width) solid var(--yc-border);
-  }
-
-  .app-header--activity .app-header__inner {
-    flex-wrap: wrap;
-  }
-
-  .app--activity .bottom-nav {
-    display: none;
-  }
-
-  .activity-page {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .activity-page__decisions {
-    order: -1;
-    border-inline-start: 0;
-    border-block-end: var(--yc-border-width) solid var(--yc-border);
-  }
-
   .sessions-table__head {
     display: none;
   }
 
   .sessions-table {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--yc-space-2);
   }
 
   .sessions-results {
     border: 0;
-    overflow: visible;
+    border-block-start: var(--yc-border-width) solid var(--yc-border);
+    border-radius: 0;
   }
 
   .sessions-table__row {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: var(--yc-space-2);
-    border: var(--yc-border-width) solid var(--yc-border);
-    border-radius: var(--yc-radius-md);
+    border-block-start: 0;
+    border-block-end: var(--yc-border-width) solid var(--yc-border);
+    background: transparent;
   }
 
   .sessions-table__project,
@@ -1301,10 +1504,6 @@ body:has(.app) {
     grid-column: 1 / -1;
   }
 
-  .sessions-table__updated {
-    padding-block-start: var(--yc-space-2);
-    border-block-start: var(--yc-border-width) solid var(--yc-border);
-  }
 
   .device-table__head {
     display: none;
@@ -1396,10 +1595,6 @@ body:has(.app) {
     grid-column: 1 / -1;
   }
 
-  .sessions-table__updated {
-    padding-block-start: var(--yc-space-2);
-    border-block-start: var(--yc-border-width) solid var(--yc-border);
-  }
 }
 
 @media (max-width: 1023px) {
@@ -1421,26 +1616,12 @@ body:has(.app) {
   .activity-page .request__actions .button {
     min-block-size: var(--yc-hit-min);
   }
-
-  .request--hard .request__actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .request--hard .request__actions .button {
-    inline-size: 100%;
-  }
 }
 
+/* On a compact screen the answers share the footer row and wrap as a group. */
 @media (max-width: 767px) {
-  .request__actions,
-  .request--hard .request__actions {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .request__actions .button {
-    inline-size: 100%;
+    flex: 1 1 auto;
   }
 }
 
@@ -1457,6 +1638,11 @@ body:has(.app) {
   .notification-table td {
     padding-inline: var(--yc-space-1);
   }
+
+  .notification-table thead th:not(:first-child) {
+    inline-size: 72px;
+    white-space: normal;
+  }
 }
 
 .composer__field {
@@ -1468,33 +1654,55 @@ body:has(.app) {
   inline-size: 100%;
   min-block-size: 52px;
   max-block-size: 180px;
-  resize: vertical;
+  field-sizing: content;
+  resize: none;
+}
+
+.composer__input,
+.composer__input:hover,
+.composer__input:focus-visible {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .composer__controls {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--yc-space-2);
+  padding: var(--yc-space-2);
+  border-block-start: var(--yc-border-width) solid var(--yc-border);
+  background: var(--yc-surface-sunken);
 }
 
 .composer__delivery {
   flex: none;
+  margin-inline-end: auto;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  inline-size: 176px;
+  inline-size: 152px;
   border: var(--yc-border-width) solid var(--yc-border-strong);
   border-radius: var(--yc-radius-md);
   overflow: hidden;
 }
 
 .composer__delivery-option {
-  min-block-size: var(--yc-control-h);
+  min-block-size: var(--yc-control-h-dense);
   padding-inline: var(--yc-space-2);
   border: 0;
   background: var(--yc-surface-raised);
   color: var(--yc-text-muted);
-  font: inherit;
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-xs);
   cursor: pointer;
+}
+
+/* Footer actions are dense on a fine pointer; the dense token restores 44px on touch. */
+.composer__controls .button--icon {
+  inline-size: var(--yc-control-h-dense);
+  min-block-size: var(--yc-control-h-dense);
 }
 
 .composer__delivery-option + .composer__delivery-option {
@@ -1511,6 +1719,16 @@ body:has(.app) {
   font-size: var(--yc-size-2xs);
   color: var(--yc-text-subtle);
   margin-block-start: var(--yc-space-2);
+}
+
+@media (max-width: 479px) {
+  .composer__input {
+    min-block-size: var(--yc-hit-min);
+  }
+
+  .composer__controls {
+    padding: var(--yc-space-1);
+  }
 }
 
 .mutation {
@@ -1718,6 +1936,7 @@ body:has(.app) {
 }
 
 .defs__key {
+  font-family: var(--yc-font-mono);
   font-size: var(--yc-size-xs);
   font-weight: var(--yc-weight-semibold);
   color: var(--yc-text-muted);
@@ -1872,10 +2091,6 @@ body:has(.app) {
 }
 
 @media (max-width: 479px) {
-  .app--activity .remote-nav__link {
-    padding-inline: var(--yc-space-2);
-  }
-
   .app-header__inner {
     gap: var(--yc-space-2);
   }
@@ -1886,14 +2101,6 @@ body:has(.app) {
 
   .remote-device__select {
     min-inline-size: 82px;
-  }
-
-  .composer__delivery {
-    inline-size: min(100%, 190px);
-  }
-
-  .request__actions > .button {
-    flex: 1 1 100%;
   }
 
   .device {
@@ -1908,11 +2115,5 @@ body:has(.app) {
 
   .device__action .button {
     inline-size: 100%;
-  }
-}
-
-@media (max-width: 359px) {
-  .app--activity .remote-nav__link {
-    padding-inline: var(--yc-space-1);
   }
 }

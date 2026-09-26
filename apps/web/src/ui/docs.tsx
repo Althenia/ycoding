@@ -5,6 +5,7 @@ import { searchDocs } from "../content/docs/search"
 import type { DocBlock, DocPage, DocSection } from "../content/docs/types"
 import { Modal } from "./modal"
 import { Icon } from "./icon"
+import { inlineSegments } from "../content/docs/inline"
 
 export function DocsNav(props: { readonly onNavigate?: () => void }): JSX.Element {
   const router = useRouter()
@@ -76,21 +77,30 @@ export function CodeBlock(props: {
   )
 }
 
+/** Documentation text with its backtick spans rendered as inline code. */
+function Inline(props: { readonly text: string }): JSX.Element {
+  return (
+    <For each={inlineSegments(props.text)}>
+      {(segment) => (segment.code ? <code class="inline-code">{segment.text}</code> : segment.text)}
+    </For>
+  )
+}
+
 function Block(props: { readonly block: DocBlock }): JSX.Element {
   const block = props.block
   switch (block.kind) {
     case "paragraph":
-      return <p class="prose">{block.text}</p>
+      return <p class="prose"><Inline text={block.text} /></p>
     case "code":
       return <CodeBlock code={block.code} language={block.language} label={block.label} />
     case "list":
       return block.ordered ? (
         <ol class="prose">
-          <For each={block.items}>{(item) => <li>{item}</li>}</For>
+          <For each={block.items}>{(item) => <li><Inline text={item} /></li>}</For>
         </ol>
       ) : (
         <ul class="prose">
-          <For each={block.items}>{(item) => <li>{item}</li>}</For>
+          <For each={block.items}>{(item) => <li><Inline text={item} /></li>}</For>
         </ul>
       )
     case "steps":
@@ -100,8 +110,8 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
             {(item) => (
               <li class="steps__item">
                 <div>
-                  <p class="steps__title">{item.title}</p>
-                  <p class="steps__text">{item.text}</p>
+                  <p class="steps__title"><Inline text={item.title} /></p>
+                  <p class="steps__text"><Inline text={item.text} /></p>
                 </div>
               </li>
             )}
@@ -111,8 +121,8 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
     case "callout":
       return (
         <aside class={`callout callout--${block.tone}`}>
-          <p class="callout__title">{block.title}</p>
-          <p>{block.text}</p>
+          <p class="callout__title"><Inline text={block.title} /></p>
+          <p><Inline text={block.text} /></p>
         </aside>
       )
     case "table":
@@ -121,14 +131,14 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
           <table class="doc-table">
             <thead>
               <tr>
-                <For each={block.head}>{(cell) => <th scope="col">{cell}</th>}</For>
+                <For each={block.head}>{(cell) => <th scope="col"><Inline text={cell} /></th>}</For>
               </tr>
             </thead>
             <tbody>
               <For each={block.rows}>
                 {(row) => (
                   <tr>
-                    <For each={row}>{(cell) => <td>{cell}</td>}</For>
+                    <For each={row}>{(cell) => <td><Inline text={cell} /></td>}</For>
                   </tr>
                 )}
               </For>
@@ -144,8 +154,7 @@ function Block(props: { readonly block: DocBlock }): JSX.Element {
               <li class="card">
                 <Link href={item.href} class="card__link">
                   <span class="card__title">{item.title}</span>
-                  <span class="card__text">{item.text}</span>
-                  <Icon name="chevron-right" size={16} />
+                  <span class="card__text"><Inline text={item.text} /></span>
                 </Link>
               </li>
             )}
@@ -383,7 +392,7 @@ export function DocsShell(props: {
         <article class="docs-article">
           <Breadcrumbs page={props.page} label={props.crumbLabel} class="breadcrumbs--article" />
           <h1>{props.page.title}</h1>
-          <p class="docs-article__lede">{props.page.description}</p>
+          <p class="docs-article__lede"><Inline text={props.page.description} /></p>
           {props.children}
         </article>
         <Show when={showToc()}>
@@ -426,8 +435,7 @@ export function DocsIndexPage(): JSX.Element {
                     <li class="card">
                       <Link href={`/docs/${page.slug}`} class="card__link">
                         <span class="card__title">{page.title}</span>
-                        <span class="card__text">{page.description}</span>
-                        <Icon name="chevron-right" size={16} />
+                        <span class="card__text"><Inline text={page.description} /></span>
                       </Link>
                     </li>
                   )}

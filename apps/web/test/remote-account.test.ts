@@ -313,7 +313,7 @@ describe("remote account lifecycle", () => {
       expect(test.store.state().activeDeviceID).toBe("dev_studio")
       expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
       expect(test.store.state().owner).toBeDefined()
-      expect(test.store.state().sessions).toEqual([])
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
       expect(test.store.state().activeSessionID).toBeUndefined()
     } finally {
       await test.stop()

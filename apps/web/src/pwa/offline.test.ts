@@ -111,6 +111,12 @@ describe("shouldHandleNavigation", () => {
     expect(shouldHandleNavigation({ url: `${origin}/ws/v3/client`, method: "GET", mode: "cors" })).toBe(false)
     expect(shouldHandleNavigation({ url: `${origin}/docs/usage`, method: "POST", mode: "navigate" })).toBe(false)
   })
+
+  test("leaves navigations to published text files to the network so they never replace the cached shell", () => {
+    for (const path of ["/llms.txt", "/llms-full.txt", "/docs/quickstart.md", "/docs/index.md", "/sitemap.xml"]) {
+      expect({ path, handled: shouldHandleNavigation({ url: `${origin}${path}`, method: "GET", mode: "navigate" }) }).toEqual({ path, handled: false })
+    }
+  })
 })
 
 describe("service worker source", () => {

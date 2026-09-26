@@ -1,8 +1,8 @@
 import type { RemoteDeviceInfo } from "@ycoding-ai/remote"
 
-export type StitchFamily = "r01" | "r02" | "r03" | "r04" | "r05" | "r06" | "r07" | "r08"
-export type StitchSpecimen = 1440 | 768 | 390
-export type StitchView = "chat" | "sessions" | "activity" | "settings"
+export type RemoteScenarioName = "conversation-workspace" | "session-list" | "conversation-tool-terminal-output" | "activity-pending-decisions" | "permission-guardrail-hard-review-form-requests" | "empty-backend" | "selected-machine-offline" | "signed-out" | "devices-enrollment" | "autonomy-goal-notification-settings"
+export type RemoteScenarioViewport = 1440 | 768 | 390
+export type RemoteScenarioView = "chat" | "sessions" | "activity" | "settings"
 
 type WireSession = {
   readonly id: string
@@ -26,11 +26,11 @@ type WireForm = {
   readonly fields: readonly (Readonly<Record<string, unknown>> & { readonly type: string })[]
 }
 
-export type StitchRemoteScenario = {
-  readonly id: `${StitchFamily}-${StitchSpecimen}`
-  readonly family: StitchFamily
-  readonly specimen: StitchSpecimen
-  readonly view: StitchView
+export type RemoteScenario = {
+  readonly id: string
+  readonly name: RemoteScenarioName
+  readonly viewport: RemoteScenarioViewport
+  readonly view: RemoteScenarioView
   readonly theme: "dark" | "light"
   readonly account: "ok" | "signedout"
   readonly accountID: string
@@ -45,7 +45,6 @@ export type StitchRemoteScenario = {
   readonly autonomy: Readonly<Record<string, unknown>>
   readonly openControl?: "device" | "enrollment"
   readonly expectedText: readonly string[]
-  readonly exclusions: readonly string[]
 }
 
 const sessionID = "ses_fixture"
@@ -163,25 +162,25 @@ const form = (
   kind: "question" | "form" = "question",
 ): WireForm => ({ id, sessionID, title, metadata: { kind }, fields })
 
-const r01Sessions = [
+const conversationWorkspaceSessions = [
   baseSession(),
   baseSession({ id: "ses_indexer", title: "Query batch indexer", projectID: "project-indexer", location: { directory: "/workspace/ycoding-engine/indexer" }, running: true, time: time(120) }),
   baseSession({ id: "ses_mesh", title: "Mesh peer sync daemon", projectID: "project-mesh", location: { directory: "/workspace/ycoding-engine/mesh" }, time: time(600) }),
 ]
 
-const r02Sessions = [
+const sessionListSessions = [
   baseSession({ title: "Async Auth Token Revocation Migration", location: { directory: "/workspace/auth-gate" }, running: true, time: time(24) }),
   baseSession({ id: "ses_telemetry", title: "Telemetry Event Buffer Flush Daemon", location: { directory: "/workspace/telemetry-daemon" }, running: true, time: time(120) }),
   baseSession({ id: "ses_redis", title: "Redis Cache Cluster Rebalancing Spec", location: { directory: "/workspace/cache-redis" }, time: time(1_080) }),
   baseSession({ id: "ses_postgres", title: "Postgres Partition Pruning Worker", location: { directory: "/workspace/db-pruner" }, time: time(3_600) }),
 ]
 
-function r01Messages(specimen: StitchSpecimen): readonly WireMessage[] {
-  if (specimen === 1440) return [
+function conversationWorkspaceMessages(viewport: RemoteScenarioViewport): readonly WireMessage[] {
+  if (viewport === 1440) return [
     assistant("msg_assistant", [text("I've examined the token expiry check in auth_guard.go. Would you like me to update the lock retention duration and dispatch tests on Studio Mac?")], 19),
     user("msg_user", "Proceed with non-blocking lock retention and verify auth expiration tests.", 18),
   ]
-  if (specimen === 768) return [
+  if (viewport === 768) return [
     assistant("msg_assistant", [text("Connected to Studio Mac. Updated lock retention parameters are ready for execution.")], 19),
     user("msg_user", "Run test suite against auth services.", 18),
   ]
@@ -191,8 +190,8 @@ function r01Messages(specimen: StitchSpecimen): readonly WireMessage[] {
   ]
 }
 
-function r03Messages(specimen: StitchSpecimen): readonly WireMessage[] {
-  if (specimen === 1440) return [
+function conversationToolTerminalOutputMessages(viewport: RemoteScenarioViewport): readonly WireMessage[] {
+  if (viewport === 1440) return [
     user("msg_user", "Please check the session bus synchronization logic during agent cancellation and review the diff patch.", 18),
     assistant("msg_assistant", [
       tool("call_ast", "Tool Output AST Symbol Analysis", { path: "session_bus.rs" }, "// Evaluated session bus dispatch\npub async fn cancel_session(&self, id: SessionId) -> Result<(), DaemonError> {\n  let mut session = self.active_sessions.lock().await;\n}", 17),
@@ -200,7 +199,7 @@ function r03Messages(specimen: StitchSpecimen): readonly WireMessage[] {
       tool("call_diff", "Diff Preview: session_bus.rs", { path: "session_bus.rs" }, "184 - let mut session = self.active_sessions.lock().await;\n184 + { let mut session = self.active_sessions.lock().await; session.mark_cancelled(id); }", 15),
     ], 17),
   ]
-  if (specimen === 768) return [
+  if (viewport === 768) return [
     user("msg_user", "Add defensive timeout handling to the WebSocket connector in ws_adapter.rs.", 16),
     assistant("msg_assistant", [
       text("Updated connection logic with 5000ms handshake deadline."),
@@ -216,10 +215,10 @@ function r03Messages(specimen: StitchSpecimen): readonly WireMessage[] {
   ]
 }
 
-function r04Messages(specimen: StitchSpecimen): readonly WireMessage[] {
+function activityPendingDecisionsMessages(viewport: RemoteScenarioViewport): readonly WireMessage[] {
   const first = assistant("msg_phase", [tool("call_phase", "Agent Phase Transition", {}, "Syntax graph validation started for rewrite", 35)], 35)
   const second = assistant("msg_file", [tool("call_file", "File Updated", { path: "src/core/compiler/ast_transformer.rs" }, "Modified src/core/compiler/ast_transformer.rs", 34)], 34)
-  if (specimen !== 1440) return [first, second]
+  if (viewport !== 1440) return [first, second]
   return [first, second, {
     id: "msg_command",
     type: "shell",
@@ -232,8 +231,8 @@ function r04Messages(specimen: StitchSpecimen): readonly WireMessage[] {
   }]
 }
 
-function r05Forms(specimen: StitchSpecimen): readonly WireForm[] {
-  if (specimen === 768) return [form("frm_endpoints", "Multi-Choice Question Prompt", [{
+function permissionGuardrailHardReviewFormRequestsForms(viewport: RemoteScenarioViewport): readonly WireForm[] {
+  if (viewport === 768) return [form("frm_endpoints", "Multi-Choice Question Prompt", [{
     key: "endpoints",
     type: "multiselect",
     title: "Select telemetry endpoints to bridge for this remote session",
@@ -245,7 +244,7 @@ function r05Forms(specimen: StitchSpecimen): readonly WireForm[] {
       { value: "prometheus", label: "prometheus metrics scrape (/metrics)" },
     ],
   }], "form")]
-  if (specimen === 390) return [form("frm_cluster", "Select Target Cluster", [{
+  if (viewport === 390) return [form("frm_cluster", "Select Target Cluster", [{
     key: "cluster",
     type: "string",
     title: "Select Target Cluster",
@@ -288,17 +287,12 @@ function r05Forms(specimen: StitchSpecimen): readonly WireForm[] {
   ]
 }
 
-const baseExclusions = [
-  "Source-only timestamps remain native browser dates rather than invented relative labels.",
-  "Source icon glyph names and specimen labels are not application wire data.",
-]
-
-function scenario(family: StitchFamily, specimen: StitchSpecimen): StitchRemoteScenario {
+function scenario(name: RemoteScenarioName, viewport: RemoteScenarioViewport): RemoteScenario {
   const common = {
-    id: `${family}-${specimen}` as const,
-    family,
-    specimen,
-    theme: specimen === 768 ? "light" as const : "dark" as const,
+    id: `${name}-${viewport}`,
+    name,
+    viewport,
+    theme: viewport === 768 ? "light" as const : "dark" as const,
     account: "ok" as const,
     accountID: "user_fixture",
     connection: "open" as const,
@@ -311,123 +305,100 @@ function scenario(family: StitchFamily, specimen: StitchSpecimen): StitchRemoteS
     forms: [] as readonly WireForm[],
     autonomy: { mode: "normal", yolo: 0 },
     expectedText: [] as readonly string[],
-    exclusions: baseExclusions,
   }
 
-  if (family === "r01") return {
+  if (name === "conversation-workspace") return {
     ...common,
     view: "chat",
     devices: [studio(), devLinux],
-    sessions: r01Sessions,
-    messages: r01Messages(specimen),
-    ...(specimen === 1440 || specimen === 390 ? { openControl: "device" as const } : {}),
-    expectedText: specimen === 390
-      ? ["Session bound to Studio Mac in auth.", "Verify non-blocking lock on expiration.", "Select Active Device", "Studio Mac", "Dev Linux"]
-      : ["Token expiry refactor", "Query batch indexer", "Mesh peer sync daemon", "auth", specimen === 768 ? "Run test suite against auth services." : "auth_guard.go"],
-    exclusions: [
-      ...baseExclusions,
-      "The native project label presents the directory basename; the full source directory remains available as its tooltip.",
-    ],
+    sessions: conversationWorkspaceSessions,
+    messages: conversationWorkspaceMessages(viewport),
+    ...(viewport === 1440 || viewport === 390 ? { openControl: "device" as const } : {}),
+    expectedText: viewport === 390
+      ? ["Session bound to Studio Mac in auth.", "Verify non-blocking lock on expiration.", "Select Active Machine", "Studio Mac", "Dev Linux"]
+      : ["Token expiry refactor", "Query batch indexer", "Mesh peer sync daemon", "auth", viewport === 768 ? "Run test suite against auth services." : "auth_guard.go"],
   }
-  if (family === "r02") return {
+  if (name === "session-list") return {
     ...common,
     view: "sessions",
-    sessions: r02Sessions,
+    sessions: sessionListSessions,
     expectedText: ["Async Auth Token Revocation Migration", "auth-gate", "Telemetry Event Buffer Flush Daemon", "telemetry-daemon", "Redis Cache Cluster Rebalancing Spec", "cache-redis", "Postgres Partition Pruning Worker", "db-pruner"],
   }
-  if (family === "r03") return {
+  if (name === "conversation-tool-terminal-output") return {
     ...common,
     view: "chat",
-    messages: r03Messages(specimen),
-    expectedText: specimen === 1440
+    messages: conversationToolTerminalOutputMessages(viewport),
+    expectedText: viewport === 1440
       ? ["session bus synchronization", "Test Suite Execution Output", "Diff Preview: session_bus.rs"]
-      : specimen === 768
+      : viewport === 768
         ? ["Add defensive timeout handling", "write_file_patch", "5000ms handshake deadline"]
         : ["Run sanity checks on worker threads.", "Checked worker threads.", "pool_spin_ok"],
-    exclusions: [...baseExclusions, "The source's Senior Engineer role label maps to the native user-message label."],
   }
-  if (family === "r04") return {
+  if (name === "activity-pending-decisions") return {
     ...common,
     view: "activity",
-    messages: r04Messages(specimen),
+    messages: activityPendingDecisionsMessages(viewport),
     permissions: [permission("per_lock", "Overwrite Cargo.lock revision?")],
     guardrails: [guardrail("grq_push", "Authorize branch push for feat/ast-cache", "Remote push requires a decision", false)],
-    expectedText: ["Reported events", "Pending decisions", "Overwrite Cargo.lock revision?", "Authorize branch push for feat/ast-cache", "Agent Phase Transition", "File Updated", ...(specimen === 1440 ? ["Command Executed"] : [])],
-    exclusions: [
-      ...baseExclusions,
-      "Source View in Session links map to native actionable decision cards.",
-      "WRITE PERMISSION and REMOTE PUSH source badges are visual classifications without native request fields.",
-    ],
+    expectedText: ["Reported events", "Pending decisions", "Overwrite Cargo.lock revision?", "Authorize branch push for feat/ast-cache", "Agent Phase Transition", "File Updated", ...(viewport === 1440 ? ["Command Executed"] : [])],
   }
-  if (family === "r05") return {
+  if (name === "permission-guardrail-hard-review-form-requests") return {
     ...common,
     view: "chat",
-    permissions: specimen === 768 ? [] : [permission("per_socket", specimen === 390 ? "Network Socket Access" : "Write File Request", specimen === 390 ? ["bind 0.0.0.0:8080 (TCP / LISTEN)"] : ["/etc/systemd/system/ycoding-worker.service"])],
-    guardrails: specimen === 1440
+    messages: [user("msg_user", "Review the planned refactor and answer the pending questions.", 18)],
+    permissions: viewport === 768 ? [] : [permission("per_socket", viewport === 390 ? "Network Socket Access" : "Write File Request", viewport === 390 ? ["bind 0.0.0.0:8080 (TCP / LISTEN)"] : ["/etc/systemd/system/ycoding-worker.service"])],
+    guardrails: viewport === 1440
       ? [
           guardrail("grq_context", "High Context Consumption", "Refactoring involves 48 modules in src/compiler/*.", false),
           guardrail("grq_hard", "Destructive Database Alteration & Git Force Push", "A human decision is required, even at YOLO 3.", true),
         ]
-      : [guardrail("grq_hard", specimen === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required, even at YOLO 3.", true)],
-    forms: r05Forms(specimen),
-    expectedText: specimen === 390
+      : [guardrail("grq_hard", viewport === 768 ? "git reset --hard HEAD~12 && git push -f" : "rm -rf /var/log/audit/*", "A human decision is required, even at YOLO 3.", true)],
+    forms: permissionGuardrailHardReviewFormRequestsForms(viewport),
+    expectedText: viewport === 390
       ? ["Network Socket Access", "Guardrail review (human decision required)", "Select Target Cluster"]
-      : specimen === 768
+      : viewport === 768
         ? ["human decision is required", "git reset --hard HEAD~12 && git push -f", "Multi-Choice Question Prompt", "syslog daemon bridge", "opentelemetry otlp-grpc", "prometheus metrics scrape"]
         : ["Write File Request", "/etc/systemd/system/ycoding-worker.service", "High Context Consumption", "Destructive Database Alteration & Git Force Push", "Select Target Runtime Architecture", "Enable Optional Test Harnesses", "Clarify Disambiguation Query"],
-    exclusions: [...baseExclusions, "Source badge codes and estimated token price are not fields in native permission or guardrail requests."],
   }
-  if (family === "r06") {
-    if (specimen === 1440) return {
+  if (name === "empty-backend") return {
       ...common,
       view: "chat",
       emptyBackend: true,
       sessions: [],
       expectedText: ["No sessions", "Start YCoding in your project folder on this machine."],
     }
-    if (specimen === 768) return {
+  if (name === "selected-machine-offline") return {
       ...common,
       view: "chat",
       connection: "offline",
       devices: [studio(false)],
       sessions: [],
       expectedText: ["Studio Mac is not reachable", "Reconnect"],
-      exclusions: [...baseExclusions, "The native disconnected-state copy uses the product's consistent not-reachable wording."],
     }
-    return {
+  if (name === "signed-out") return {
       ...common,
       view: "settings",
       account: "signedout",
       devices: [],
       sessions: [],
-      expectedText: ["Signed out", "Sign in to YCoding", "Sign in with Google"],
-      exclusions: [
-        ...baseExclusions,
-        "The native sign-in action lives in the combined Settings route rather than a source-only standalone card.",
-      ],
+      expectedText: ["Sign in to your workspace", "Continue with Google"],
     }
-  }
-  if (family === "r07") return {
+  if (name === "devices-enrollment") return {
     ...common,
     view: "settings",
     accountID: "account_fixture",
     devices: [studio(), workstation, legacy],
     openControl: "enrollment",
     expectedText: ["Account", "Studio Mac", "Workstation-Box", "Legacy-MacBook", "Enrollment ID", "Enrollment code (shown once)"],
-    exclusions: [
-      ...baseExclusions,
-      "The account contract exposes an identifier, not the source's display-name placeholder or account type.",
-      "Source enrollment placeholders are replaced by schema-valid synthetic enrollment identifiers, code, and expiry.",
-    ],
   }
   return {
     ...common,
     view: "settings",
     autonomy: {
       mode: "goal",
-      yolo: specimen === 768 ? 1 : 2,
+      yolo: viewport === 768 ? 1 : 2,
       goal: {
-        text: specimen === 1440 ? "Refactor remote settings pane for responsive review board" : specimen === 768 ? "Refactor telemetry UI" : "Mobile refactor",
+        text: viewport === 1440 ? "Refactor remote settings pane for responsive review board" : viewport === 768 ? "Refactor telemetry UI" : "Mobile refactor",
         status: "active",
         iteration: 1,
         noProgress: 0,
@@ -437,8 +408,8 @@ function scenario(family: StitchFamily, specimen: StitchSpecimen): StitchRemoteS
     expectedText: [
       "Appearance",
       "Autonomy",
-      specimen === 768 ? "YOLO 1" : "YOLO 2",
-      specimen === 1440 ? "Refactor remote settings pane for responsive review board" : specimen === 768 ? "Refactor telemetry UI" : "Mobile refactor",
+      viewport === 768 ? "YOLO 1" : "YOLO 2",
+      viewport === 1440 ? "Refactor remote settings pane for responsive review board" : viewport === 768 ? "Refactor telemetry UI" : "Mobile refactor",
       "Notifications",
       "Agent completed",
       "Approval requested",
@@ -446,21 +417,20 @@ function scenario(family: StitchFamily, specimen: StitchSpecimen): StitchRemoteS
       "Error or failure",
       "Device disconnected",
     ],
-    exclusions: [
-      ...baseExclusions,
-      "Saved, Tablet Mode, Agent Policy, and specimen-state labels are reference annotations, not runtime fields.",
-      "The native Settings route retains Account and Devices above the source's appearance/autonomy/notifications specimen.",
-    ],
   }
 }
 
-const families: readonly StitchFamily[] = ["r01", "r02", "r03", "r04", "r05", "r06", "r07", "r08"]
-const specimens: readonly StitchSpecimen[] = [1440, 768, 390]
+const scenarioNames: readonly RemoteScenarioName[] = ["conversation-workspace", "session-list", "conversation-tool-terminal-output", "activity-pending-decisions", "permission-guardrail-hard-review-form-requests", "devices-enrollment", "autonomy-goal-notification-settings"]
+const viewports: readonly RemoteScenarioViewport[] = [1440, 768, 390]
 
-export const STITCH_REMOTE_SCENARIOS = families.flatMap((family) => specimens.map((specimen) => scenario(family, specimen)))
+export const REMOTE_SCENARIOS = [
+  ...scenarioNames.flatMap((name) => viewports.map((viewport) => scenario(name, viewport))),
+  scenario("empty-backend", 1440),
+  scenario("selected-machine-offline", 768),
+  scenario("signed-out", 390),
+]
 
-export function stitchRemoteScenario(params: URLSearchParams): StitchRemoteScenario | undefined {
-  const family = params.get("stitch")
-  const specimen = Number(params.get("specimen"))
-  return STITCH_REMOTE_SCENARIOS.find((candidate) => candidate.family === family && candidate.specimen === specimen)
+export function remoteScenario(params: URLSearchParams): RemoteScenario | undefined {
+  const id = params.get("scenario")
+  return REMOTE_SCENARIOS.find((candidate) => candidate.id === id)
 }

@@ -702,12 +702,11 @@ kbd {
   border-block-end: var(--yc-border-width) solid rgba(255, 255, 255, 0.08);
 }
 
+/* Labels are often file paths, so they keep their literal case. */
 .code-block__label {
   font-family: var(--yc-font-mono);
   font-size: var(--yc-size-2xs);
   color: var(--yc-terminal-dim);
-  letter-spacing: var(--yc-tracking-wide);
-  text-transform: uppercase;
 }
 
 .code-block__copy {

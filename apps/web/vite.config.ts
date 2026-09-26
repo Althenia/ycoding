@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from "vite"
 import solidPlugin from "vite-plugin-solid"
+import { markdownAssets } from "./src/seo/llms"
 import { buildSitemap } from "./src/seo/sitemap"
 
 // The verification fixture is an extra entry only for `YCODING_WEB_VERIFY=1`, so a
@@ -20,8 +21,22 @@ function sitemapPlugin(): Plugin {
   }
 }
 
+/**
+ * Emits `/llms.txt`, `/llms-full.txt`, and one `/docs/<slug>.md` per published
+ * page from the same registry, so agents read the documentation as Markdown.
+ */
+function llmsPlugin(): Plugin {
+  return {
+    name: "ycoding-llms",
+    apply: "build",
+    generateBundle() {
+      for (const asset of markdownAssets()) this.emitFile({ type: "asset", fileName: asset.fileName, source: asset.source })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [solidPlugin(), sitemapPlugin()],
+  plugins: [solidPlugin(), sitemapPlugin(), llmsPlugin()],
   server: { port: 3002 },
   build: {
     target: "esnext",

@@ -88,7 +88,7 @@ bun run test:web
 bun run test:remote
 ```
 
-The web build writes `apps/web/dist` and includes the maintained installer and generated configuration Schema. Deployment requires configured sign-in credentials and the reviewed authentication-metadata migration; building does not deploy anything.
+The web build writes `apps/web/dist` and includes the maintained installer, generated configuration Schema, and machine-readable documentation for AI agents: `/llms.txt`, `/llms-full.txt`, and one `/docs/<slug>.md` per published page. Deployment requires configured sign-in credentials and the reviewed authentication-metadata migration; building does not deploy anything.
 
 ## Release
 

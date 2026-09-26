@@ -69,7 +69,7 @@ for (const [decision, reply] of [
     const page = await browser!.openPage()
     try {
       await page.navigate(
-        `http://127.0.0.1:${port}/verify/remote.html?stitch=r05&specimen=1440&relay=${encodeURIComponent(`ws://127.0.0.1:${relay.port}`)}`,
+        `http://127.0.0.1:${port}/verify/remote.html?scenario=permission-guardrail-hard-review-form-requests-1440&relay=${encodeURIComponent(`ws://127.0.0.1:${relay.port}`)}`,
       )
       for (let attempt = 0; attempt < 50; attempt += 1) {
         if (await page.evaluate<boolean>(`document.querySelector('.request--hard') !== null`)) break

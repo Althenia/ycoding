@@ -18,6 +18,9 @@ export function CustomSelect(props: {
   readonly disabled?: boolean
   readonly class?: string
   readonly sheetTitle?: string
+  readonly sheetSubtitle?: string
+  /** Content under the options; activating anything in it closes the menu. */
+  readonly footer?: JSX.Element
   readonly onOpen?: () => void
   readonly onChange: (value: string) => void
 }): JSX.Element {
@@ -170,7 +173,7 @@ export function CustomSelect(props: {
           <div class="custom-select__sheet-head">
             <span>
               <strong>{props.sheetTitle ?? props.label}</strong>
-              <small>Available options</small>
+              <small>{props.sheetSubtitle ?? "Available options"}</small>
             </span>
             <button type="button" class="custom-select__close" aria-label={`Close ${props.label}`} onClick={() => closeMenu(true)}>×</button>
           </div>
@@ -197,6 +200,13 @@ export function CustomSelect(props: {
               )}
             </For>
           </div>
+          <Show when={props.footer}>
+            {(footer) => (
+              <div class="custom-select__footer" onClick={() => closeMenu(false)}>
+                {footer()}
+              </div>
+            )}
+          </Show>
         </div>
         </Portal>
       </Show>

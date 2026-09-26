@@ -1,11 +1,5 @@
-/**
- * Public documentation and changelog surfaces: the bar, the shell tracks, the
- * article body, the search overlay, release rows, and the filter rail.
- *
- * The rail arithmetic is why the tracks return where they do: the navigation rail
- * needs 248px and the article needs 640px, so 248 + 640 = 888 fits from 1024 and not
- * from 768.
- */
+/* Public documentation and changelog surfaces: the bar, shell tracks, article,
+   search overlay, release rows, and filter rail. */
 
 /* --- bar ---------------------------------------------------------------- */
 
@@ -104,7 +98,8 @@
   .docs-shell__nav {
     display: block;
     border-inline-end: var(--yc-border-width) solid var(--yc-border);
-    padding: var(--yc-space-5) var(--yc-space-4);
+    /* Link highlights start on the container edge shared with the header. */
+    padding: var(--yc-space-5) var(--yc-space-4) var(--yc-space-5) 0;
   }
 }
 
@@ -155,6 +150,11 @@
   color: var(--yc-text-muted);
   text-decoration: none;
   font-size: var(--yc-size-sm);
+}
+
+/* Links sit one step inside their group title, so the rail reads as a hierarchy. */
+.docs-nav__group .docs-nav__link {
+  padding-inline-start: var(--yc-space-6);
 }
 
 .docs-nav__link:hover {
@@ -240,12 +240,6 @@
   .docs--article .docs-article > h1 {
     font-size: 24px;
     line-height: 30px;
-  }
-}
-
-@media (min-width: 640px) and (max-width: 1023px) {
-  .docs--index [data-doc-group="configuration"] .card-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -352,9 +346,22 @@
   color: var(--yc-text-muted);
 }
 
+/* Every documentation card has one anatomy: the whole card is the link, holding a
+   title and a one-line summary. The index and article pages differ only in tracks. */
+/* Backtick spans in documentation text: commands, keys, paths, and literal values. */
+.inline-code {
+  padding: 1px 5px;
+  border: var(--yc-border-width) solid var(--yc-border);
+  border-radius: var(--yc-radius-sm);
+  background: var(--yc-surface-sunken);
+  font-family: var(--yc-font-mono);
+  font-size: 0.875em;
+  overflow-wrap: anywhere;
+}
+
 .card-grid {
   display: grid;
-  gap: var(--yc-space-4);
+  gap: var(--yc-space-3);
 }
 
 @media (min-width: 640px) {
@@ -363,9 +370,19 @@
   }
 }
 
+.card-grid > .card {
+  padding: 0;
+  border-radius: var(--yc-radius-md);
+}
+
 .card__link {
   display: grid;
+  align-content: start;
   gap: var(--yc-space-1);
+  block-size: 100%;
+  min-block-size: var(--yc-hit-min);
+  padding: var(--yc-space-4);
+  border-radius: inherit;
   text-decoration: none;
   color: inherit;
 }
@@ -414,7 +431,6 @@
 
 .doc-table td:first-child {
   font-weight: var(--yc-weight-semibold);
-  white-space: nowrap;
 }
 
 .docs-toc {
@@ -665,69 +681,39 @@
   background: var(--yc-surface-raised);
 }
 
-/* P10 is a topic index. Its grouped tiles are intentionally distinct from the
-   prose-and-steps article treatment used by P11 and the other documentation pages. */
+/* The topic index shares the bounded public container; group headings divide
+   sections while individual links carry the card treatment. */
 .docs--index .docs-article {
   max-inline-size: none;
-  padding-inline: 0;
 }
 
 @media (min-width: 1280px) {
   .docs--index .docs-shell {
-    max-inline-size: none;
     grid-template-columns: var(--yc-docs-nav-w) minmax(0, 1fr);
   }
 }
 
 .docs--index .doc-section {
   gap: var(--yc-space-3);
-  padding: var(--yc-space-5);
-  border: var(--yc-border-width) solid var(--yc-border);
-  border-radius: var(--yc-radius-md);
-  background: var(--yc-surface);
+  padding-block: var(--yc-space-5);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .docs--index .doc-section + .doc-section {
-  margin-block-start: var(--yc-space-4);
+  margin-block-start: 0;
 }
 
 .docs--index .doc-section h2 {
   font-size: var(--yc-size-md);
 }
 
-.docs--index .card-grid {
-  gap: var(--yc-space-2);
-}
-
-.docs--index .card {
-  padding: var(--yc-space-3);
-  border-radius: 3px;
-}
-
-.docs--index .card__link {
-  grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.docs--index .card__link svg {
-  display: none;
-}
-
-.docs--index .card__text {
-  grid-column: 1 / -1;
-}
-
 @media (min-width: 1024px) {
-  .docs--index [data-doc-group="configuration"] .card-grid {
+  /* Every group shares one three-track grid, so cards align across groups and an
+     incomplete row reads left to right like the rest of the page. */
+  .docs--index .card-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .docs--index [data-doc-group="get-started"] .card-grid,
-  .docs--index [data-doc-group="use"] .card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .docs--index [data-doc-group="help"] .card-grid {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -744,54 +730,12 @@
 
   .docs--index .doc-section {
     gap: var(--yc-space-2);
-    padding: var(--yc-space-3);
-  }
-
-  .docs--index .card-grid {
-    gap: var(--yc-space-1);
-  }
-
-  .docs--index .card__title {
-    font-size: var(--yc-size-sm);
-    line-height: var(--yc-leading-sm);
-  }
-
-  .docs--index .card__text {
-    font-size: var(--yc-size-2xs);
-    line-height: var(--yc-leading-2xs);
-  }
-
-  .docs--index [data-doc-group="configuration"] .card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .docs--index [data-doc-group="configuration"] .card {
-    padding: 0;
-  }
-
-  .docs--index [data-doc-group="configuration"] .card__link {
-    min-block-size: var(--yc-hit-min);
-    padding: var(--yc-space-2);
-  }
-
-  .docs--index [data-doc-group="configuration"] .card__text {
-    display: none;
-  }
-
-  .docs--index [data-doc-group]:not([data-doc-group="configuration"]) .card {
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
-
-  .docs--index [data-doc-group]:not([data-doc-group="configuration"]) .card__link {
-    min-block-size: var(--yc-hit-min);
-    padding: var(--yc-space-1) 0;
+    padding-block: var(--yc-space-3);
   }
 }
 
-/* P11 reserves density for readable articles while keeping the rail and TOC at
-   their existing responsive thresholds. */
+/* Articles keep a readable measure while the rail and TOC keep their responsive
+   thresholds. */
 .docs--article .docs-article {
   max-inline-size: calc(var(--yc-measure) + var(--yc-gutter) * 2);
   padding-block-end: var(--yc-space-10);
@@ -947,6 +891,14 @@
 
 .filters--release {
   gap: var(--yc-space-3);
+}
+
+/* In the desktop rail each filter sits one step inside its group legend, like the
+   documentation navigation. */
+@media (min-width: 1024px) {
+  .filters--release .filters__option {
+    padding-inline-start: var(--yc-space-6);
+  }
 }
 
 .docs-bar__nav-toggle,

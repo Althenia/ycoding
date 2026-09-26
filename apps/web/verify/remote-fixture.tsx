@@ -23,7 +23,7 @@ import type {
   RemoteTransportStatus,
 } from "../src/remote/transport"
 import type { RemoteDeviceInfo, RemoteOperation } from "@ycoding-ai/remote"
-import { stitchRemoteScenario } from "./stitch-remote-data"
+import { remoteScenario } from "./remote-scenarios"
 import "../src/styles/tokens.css"
 import "../src/styles/base.css"
 import "../src/styles/site.css"
@@ -49,12 +49,12 @@ const accountParams = new URLSearchParams(window.location.search)
 const relayURL = accountParams.get("relay")
 const relayAddress = relayURL === null ? undefined : new URL(relayURL)
 if (relayAddress !== undefined && (relayAddress.protocol !== "ws:" || relayAddress.hostname !== "127.0.0.1")) throw new Error("Verification relay must be loopback")
-const stitchScenario = stitchRemoteScenario(accountParams)
+const remoteScenarioData = remoteScenario(accountParams)
 /** `?account=pending|signedout|unavailable` plus `?accountDelay=<ms>` for a slow answer. */
-const accountMode = stitchScenario?.account ?? accountParams.get("account") ?? "ok"
+const accountMode = remoteScenarioData?.account ?? accountParams.get("account") ?? "ok"
 const accountDelayMs = Number(accountParams.get("accountDelay") ?? 0)
 /** `?connection=offline` selects a signed-in device whose open relay has no local agent. */
-const connectionMode = stitchScenario?.connection ?? accountParams.get("connection") ?? "open"
+const connectionMode = remoteScenarioData?.connection ?? accountParams.get("connection") ?? "open"
 /** `?form=all` adds every native field kind for browser verification. */
 const formMode = accountParams.get("form") ?? "question"
 /** Delays native Form settlement so the browser can observe disabled duplicate controls. */
@@ -63,9 +63,9 @@ const formDelayMs = Number(accountParams.get("formDelay") ?? 0)
 const formOutcome = accountParams.get("formOutcome")
 const promptOutcome = accountParams.get("promptOutcome")
 const deviceMode = accountParams.get("devices")
-const emptyBackend = stitchScenario?.emptyBackend ?? accountParams.get("sessions") === "empty"
-if (stitchScenario !== undefined) localStorage.setItem("ycoding.theme", stitchScenario.theme)
-if (stitchScenario !== undefined) devices = stitchScenario.devices
+const emptyBackend = remoteScenarioData?.emptyBackend ?? accountParams.get("sessions") === "empty"
+if (remoteScenarioData !== undefined) localStorage.setItem("ycoding.theme", remoteScenarioData.theme)
+if (remoteScenarioData !== undefined) devices = remoteScenarioData.devices
 if (deviceMode === "none") devices = []
 if (deviceMode === "offline") devices = devices.map((device) => ({ ...device, online: false }))
 if (deviceMode === "revoked") devices = devices.map((device) => ({ ...device, status: "revoked", online: false }))
@@ -77,7 +77,7 @@ const syntheticHttp: RemoteHttp = {
     if (accountMode === "signedout") return { ok: false, status: 401, message: "unauthorized", kind: "http" }
     if (accountMode === "unavailable")
       return { ok: false, status: 200, message: "The response was not an API document", kind: "unexpected-body" }
-    return ok({ user: { id: stitchScenario?.accountID ?? "user_fixture" }, session: { expiresAt: Date.now() + 86_400_000 }, devices })
+    return ok({ user: { id: remoteScenarioData?.accountID ?? "user_fixture" }, session: { expiresAt: Date.now() + 86_400_000 }, devices })
   },
   devices: async () => ok(devices),
   createEnrollment: async () =>
@@ -92,11 +92,11 @@ const syntheticHttp: RemoteHttp = {
 }
 
 const defaultSessions = [
-  { id: sessionID, title: "Stream remote output safely", projectID: "prj_stitch", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
+  { id: sessionID, title: "Stream remote output safely", projectID: "prj_remote", location: { directory: "/workspace/ycoding" }, agent: "god", model, time: { created: ago(42), updated: ago(1) }, running: true },
   { id: "ses_archived", title: "Archived: release notes", time: { created: ago(300), updated: ago(280), archived: ago(280) } },
   { id: "ses_child", title: "Child: fix flaky suite", parentID: sessionID, time: { created: ago(30), updated: ago(4) } },
 ]
-const sessions = stitchScenario?.sessions ?? defaultSessions
+const sessions = remoteScenarioData?.sessions ?? defaultSessions
 
 const longOutput = Array.from({ length: 60 }, (_, index) => `line ${index + 1}: bun test test/remote-sync.test.ts --filter case-${index}`).join("\n")
 
@@ -297,7 +297,7 @@ const defaultMessages = [
     time: { created: ago(2), completed: ago(2) },
   },
 ]
-const messages = stitchScenario?.messages ?? defaultMessages
+const messages = remoteScenarioData?.messages ?? defaultMessages
 
 const permission = { id: "per_fixture", sessionID, action: "shell", resources: ["bun test *"], metadata: {} }
 const guardrail = {
@@ -311,8 +311,8 @@ const guardrail = {
   standard: true,
   hardReview: true,
 }
-const permissions = stitchScenario?.permissions ?? [permission]
-const guardrails = stitchScenario?.guardrails ?? [guardrail]
+const permissions = remoteScenarioData?.permissions ?? [permission]
+const guardrails = remoteScenarioData?.guardrails ?? [guardrail]
 const form = {
   id: "frm_fixture",
   sessionID,
@@ -453,7 +453,7 @@ function createFixtureStore(): Fixture {
       return {
         status: "ok",
         value: {
-          data: stitchScenario?.autonomy ?? {
+          data: remoteScenarioData?.autonomy ?? {
             mode: "normal",
             yolo: 2,
             goal: { text: "Ship the remote workspace", status: "active", iteration: 3, noProgress: 0, maxNoProgress: 5 },
@@ -465,9 +465,9 @@ function createFixtureStore(): Fixture {
     if (operation === "session.guardrail.request.list") return { status: "ok", value: { data: unreplied(guardrails) } }
     if (operation === "session.form.list") return {
       status: "ok",
-      value: stitchScenario === undefined
+      value: remoteScenarioData === undefined
         ? formMode === "constraints" ? unreplied([constraintsForm]) : unreplied(formMode === "all" ? [form, allForm] : [form])
-        : unreplied(stitchScenario.forms),
+        : unreplied(remoteScenarioData.forms),
     }
     if (operation === "session.fileChange.list" && accountParams.get("files") === "recorded") return {
       status: "ok",
@@ -708,17 +708,17 @@ function remoteMutationReport() {
 ;(window as typeof window & { remoteFormReport?: typeof remoteFormReport }).remoteFormReport = remoteFormReport
 ;(window as typeof window & { remoteMutationReport?: typeof remoteMutationReport }).remoteMutationReport = remoteMutationReport
 
-const fixtureView = stitchScenario?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
+const fixtureView = remoteScenarioData?.view ?? new URLSearchParams(window.location.search).get("view") ?? "chat"
 const fixturePath = fixtureView === "chat" ? "/remote" : `/remote/${fixtureView}`
 
 function FixturePage() {
   onMount(() => {
-    if (stitchScenario?.openControl === undefined) return
+    if (remoteScenarioData?.openControl === undefined) return
     let attempts = 0
     const open = () => {
       attempts += 1
-      if (stitchScenario.openControl === "device") {
-        const button = document.querySelector<HTMLButtonElement>('[aria-label="Device"]')
+      if (remoteScenarioData.openControl === "device") {
+        const button = document.querySelector<HTMLButtonElement>('[aria-label="Machine"]')
         if (button !== null && !button.disabled) button.click()
         if ((button !== null && !button.disabled) || attempts === 40) clearInterval(timer)
         return

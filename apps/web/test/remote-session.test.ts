@@ -329,6 +329,49 @@ describe("remote store integration", () => {
     }
   })
 
+  test("keeps the last session list when a connected device's agent becomes unavailable", async () => {
+    let lists = 0
+    const test = await harness({
+      handler: (request) => {
+        if (request.operation !== "session.list") return "default"
+        lists += 1
+        return lists === 1 ? "default" : { ok: false, code: "agent_unavailable", message: "No local agent is connected" }
+      },
+    })
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+
+      test.relay.pushSessions(["ses_a", "ses_b"])
+      await test.runUntil(() => test.store.state().connection.kind === "offline")
+
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
+    } finally {
+      await test.stop()
+    }
+  })
+
+  test("keeps the selected device's last session list when an account refresh reports it offline", async () => {
+    const test = await harness()
+    try {
+      await test.store.load()
+      await test.runUntil(() => test.store.state().sessions.length === 2)
+
+      test.relay.setMe({
+        user: { id: "user_1" },
+        session: { expiresAt: 4_102_444_800_000 },
+        devices: [{ id: "dev_1", name: "Studio Mac", createdAt: 1, status: "active", online: false }],
+      })
+      await test.store.load()
+
+      expect(test.store.state().connection).toEqual({ kind: "offline", deviceName: "Studio Mac" })
+      expect(test.store.state().activeDeviceID).toBe("dev_1")
+      expect(test.store.state().sessions.map((session) => session.id)).toEqual(["ses_a", "ses_b"])
+    } finally {
+      await test.stop()
+    }
+  })
+
   test("reports a failed session list instead of presenting a connected empty backend", async () => {
     let lists = 0
     const test = await harness({
@@ -584,7 +627,8 @@ describe("remote store integration", () => {
     try {
       await store.load()
       expect(store.state().connection).toEqual({ kind: "unavailable", reason: "not-configured" })
-      expect(store.state().notice).toContain("not configured")
+      // The connection state already explains itself in the status strip and empty state.
+      expect(store.state().notice).toBeUndefined()
       expect(store.state().devices).toHaveLength(0)
       expect(store.state().sessions).toHaveLength(0)
     } finally {

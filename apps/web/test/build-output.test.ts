@@ -96,6 +96,22 @@ describe("built web output", () => {
     }
   })
 
+  test("serves the machine-readable documentation files as text beside the page routes", async () => {
+    const llms = await fetch(`${serverOrigin}/llms.txt`)
+    expect(llms.status).toBe(200)
+    expect(await llms.text()).toContain("- [Quickstart](https://ycoding.althenia.app/docs/quickstart.md): ")
+    for (const path of ["/llms-full.txt", "/docs/index.md", "/docs/quickstart.md", "/docs/configuration.md", "/docs/configuration/guardrails.md"]) {
+      const response = await fetch(`${serverOrigin}${path}`)
+      const body = await response.text()
+      expect({ path, status: response.status, shell: body.includes('id="app"') }).toEqual({ path, status: 200, shell: false })
+    }
+    // Page routes whose Markdown copies create same-named directories still reach the application shell.
+    for (const route of ["/docs", "/docs/configuration", "/docs/usage"]) {
+      const response = await fetch(`${serverOrigin}${route}`)
+      expect({ route, shell: (await response.text()).includes('id="app"') }).toEqual({ route, shell: true })
+    }
+  })
+
   test("ships responsive breakpoints for desktop, tablet, and mobile", async () => {
     const html = await (await fetch(`${serverOrigin}/`)).text()
     // Resolve the linked stylesheet instead of assuming a chunk name, so the check

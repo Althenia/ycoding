@@ -7,12 +7,27 @@ describe("release entries", () => {
   test("includes the latest TUI release at the top of the public changelog", () => {
     const latest = RELEASES[0]
     expect(latest).toMatchObject({
-      version: "0.7.1",
+      version: "0.7.2",
+      date: "2026-09-25",
+      title: "Provider compaction, signed computer-use app, and usage profiles",
+      tags: ["Added", "Changed", "Fixed"],
+    })
+    expect(latest?.changes.map((change) => change.text)).toEqual([
+      "Run provider-native compaction on the owner request with a bounded local fallback; persist private compaction items across model switches; enable Copilot Responses compaction and Claude Chat cache markers.",
+      "Ship the signed YCoding Computer Use app beside release executables; resolve desktop windows by CG window ID, probe other Spaces, request Accessibility/Screen Recording/Automation access, and require Developer ID signing so privacy grants persist across updates.",
+      "Install and update the paired Chrome extension alongside the CLI release with a fixed manifest public key.",
+      "Show provider usage by profile in the TUI: one quota snapshot per stored credential profile, hide providers without usable credentials, render unreported values as '-'. Add built-in git worktree guidance to core instructions.",
+      "Remove standard hard guardrail reviews for desktop access, Chrome owned opens, and Chrome profile mutations; site permissions and custom rules still apply.",
+      "Scope prompt_cache_key per Session on key-carrying routes while keeping shared ledger namespace; OpenRouter Responses replay reasoning under the openai metadata key; request encrypted reasoning for GPT-5.6+.",
+      "Avoid deadlock when a child asks its parent during session coordination; keep shell sidebar accurate for fast exits and unloaded owners.",
+    ])
+    const previous = RELEASES.find((item) => item.version === "0.7.1")
+    expect(previous).toMatchObject({
       date: "2026-09-25",
       title: "Chrome and desktop control",
       tags: ["Added", "Changed", "Fixed"],
     })
-    expect(latest?.changes.map((change) => change.text)).toEqual([
+    expect(previous?.changes.map((change) => change.text)).toEqual([
       "Pair Chrome from the Mini or full Session and use eligible open tabs, including the active tab.",
       "Open Session-owned background Chrome tabs and group or ungroup eligible inactive profile tabs.",
       "Inspect, capture, and control one targeted macOS app window with Accessibility and Screen Recording authorization.",
@@ -45,7 +60,7 @@ describe("release entries", () => {
 
   test("are unique and ordered newest first", () => {
     const versions = RELEASES.map((release) => release.version)
-    expect(versions.slice(0, 8)).toEqual(["0.7.1", "0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6", "0.6.5"])
+    expect(versions.slice(0, 8)).toEqual(["0.7.2", "0.7.1", "0.7.0", "0.6.10", "0.6.9", "0.6.8", "0.6.7", "0.6.6"])
     expect(new Set(versions).size).toBe(versions.length)
     const sorted = [...versions].sort((a, b) => compare(b, a))
     expect(versions).toEqual(sorted)

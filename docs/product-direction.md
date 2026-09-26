@@ -30,7 +30,7 @@ The terminal application is the primary product and release surface.
 
 Changes that affect sessions, prompts, tools, permissions, subagents, skills, project artifacts, cache diagnostics, or transcript history must be proven through the CLI/TUI path.
 
-Supported presentation surfaces are the terminal application and the SolidJS remote web client. The public site and remote client share `ycoding.althenia.app`. The browser and relay own no repository, shell, tool, model, or Session execution authority. There is no hosted-agent runtime, Electron shell, or native office client in the current product.
+Supported presentation surfaces are the terminal application and the SolidJS remote web client. The public site and remote client share `ycoding.althenia.app`. The public site publishes its documentation both as pages and as Markdown for AI agents (`/llms.txt`, `/llms-full.txt`, `/docs/<slug>.md`). Opening the remote client while signed out shows only an OAuth sign-in screen; Google is the supported provider. The browser and relay own no repository, shell, tool, model, or Session execution authority. There is no hosted-agent runtime, Electron shell, or native office client in the current product.
 
 ### 2. Current runtime architecture
 
@@ -102,7 +102,7 @@ The cached offline page provides Home, Documentation, and Changelog navigation a
 
 Remote questions use the runtime's native Forms. The workspace renders string, multiselect, number, integer, boolean, and external-step fields, preserves defaults and conditional visibility, and submits typed answers or explicit cancellation. External steps expose HTTP(S) links and require acknowledgement. Only pending Forms owned by the selected Session can be answered; the local runtime validates every answer.
 
-The device picker lists online, active enrollments. An account refresh that reports the selected machine offline preserves its name and reconnect action rather than switching to another machine. Settings retains offline and revoked enrollments and exposes notification preferences as five event categories with independent workspace and desktop channels.
+The machine picker lists online, active enrollments and states how many offline or revoked machines Settings manages. When the selected machine goes offline, the workspace preserves its name, reconnect action, and last session list; that list stays read-only until the machine reconnects, rather than switching to another machine. Settings retains offline and revoked enrollments and exposes notification preferences as five event categories with independent workspace and desktop channels.
 
 ## Compatibility policy
 

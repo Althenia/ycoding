@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { declarationsWhere, readStylesheet, widthThreshold, type Stylesheet } from "./css-rules"
 
 /**
- * Shared responsive and motion invariants. Source-matched browser comparisons
- * independently verify the displayed Stitch screen compositions.
+ * Shared responsive and motion invariants. Rendered browser suites under `verify`
+ * independently verify the displayed screen compositions.
  *
  * What responds is composition: how many columns a surface has, which rails exist,
  * the inline gutter step, and the display type step. Control height, hit area, body
@@ -92,8 +92,10 @@ describe("responsive contract", () => {
       { min: 640, tracks: 2 },
       { min: 1280, tracks: 4 },
     ])
-    expect(site.rules.filter((rule) => rule.header.includes(".footer__grid"))).toEqual([])
-    expect(base(site, ".footer__compact")).toMatchObject({ display: "flex", "flex-wrap": "wrap" })
+    // The footer is a brand block beside titled link columns, never one wrapped link row.
+    expect(columnSteps(site, ".footer")).toEqual([{ min: 768, tracks: 2 }])
+    expect(base(site, ".footer__columns")["grid-template-columns"]).toBe("repeat(2, minmax(0, 1fr))")
+    expect(columnSteps(site, ".footer__columns")).toEqual([{ min: 640, tracks: 3 }])
     expect(columnSteps(site, ".install")).toEqual([{ min: 1024, tracks: 2 }])
   })
 
@@ -154,6 +156,20 @@ describe("responsive contract", () => {
     const remote = await readStylesheet("remote.css")
     const app = declarationsWhere(remote, (rule) => rule.header === ".app" && rule.conditions.length === 0)
     expect(app["grid-template-columns"]).toBe("minmax(0, 1fr)")
+  })
+
+  test("gives the remote workspace terminal geometry and monospace labels", async () => {
+    const remote = await readStylesheet("remote.css")
+    expect(base(remote, ".app")).toMatchObject({
+      "--yc-radius-sm": "2px",
+      "--yc-radius-md": "4px",
+      "--yc-radius-lg": "6px",
+    })
+    for (const selector of [".app .pane__title", ".app .chip", ".remote-nav__link", ".tool__header", ".request__header"]) {
+      expect({ selector, font: base(remote, selector)["font-family"] }).toEqual({ selector, font: "var(--yc-font-mono)" })
+    }
+    expect(base(remote, ".app .pane__title")["text-transform"]).toBe("uppercase")
+    expect(base(remote, ".session-row--active")["box-shadow"]).toBe("inset 2px 0 var(--yc-green-strong)")
   })
 })
 

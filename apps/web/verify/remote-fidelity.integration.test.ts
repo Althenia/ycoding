@@ -26,9 +26,9 @@ afterAll(async () => {
   if (server) await server.exited
 })
 
-describe("approved remote fidelity invariants", () => {
+describe("remote responsive state behavior", () => {
   test("exposes one remote main landmark and the active narrow navigation destination", async () => {
-    const page = await scenario("r01", 390, "Token expiry refactor")
+    const page = await scenario("conversation-workspace", 390, "Token expiry refactor")
     try {
       expect(await page.evaluate<{ readonly main: number; readonly skip: string | null; readonly current: string | null }>(`({
         main: document.querySelectorAll('main').length,
@@ -44,7 +44,7 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 
   test("moves through theme and autonomy radios with one Tab stop per group", async () => {
-    const page = await scenario("r08", 390, "Mobile refactor")
+    const page = await scenario("autonomy-goal-notification-settings", 390, "Mobile refactor")
     try {
       await page.evaluate(`document.querySelector('.appearance-segments [role="radio"]')?.click()`)
       const group = (selector: string) => `(() => {
@@ -68,10 +68,10 @@ describe("approved remote fidelity invariants", () => {
     }
   }, 30_000)
 
-  test("matches the R01 adaptive workspace ownership and keeps Activity accessible", async () => {
+  test("matches conversation workspace behavior across desktop, tablet, and mobile while keeping Activity accessible", async () => {
     for (const width of [1440, 768, 390] as const) {
       for (const theme of ["dark", "light"] as const) {
-        const page = await scenario("r01", width, "Studio Mac", theme)
+        const page = await scenario("conversation-workspace", width, "Studio Mac", theme)
         const state = await page.evaluate<{
           readonly columns: number
           readonly railVisible: boolean
@@ -127,7 +127,7 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 
   test("keeps the desktop rail compact and project-oriented", async () => {
-    const page = await scenario("r01", 1440, "auth_guard.go")
+    const page = await scenario("conversation-workspace", 1440, "auth_guard.go")
     const rows = await page.evaluate<readonly { readonly height: number; readonly text: string }[]>(`[...document.querySelectorAll('.session-row')].map(row=>({height:row.getBoundingClientRect().height,text:row.textContent.replace(/\\s+/g,' ').trim()}))`)
     expect(rows).toHaveLength(3)
     expect(rows.every((row) => row.height <= 96)).toBe(true)
@@ -137,15 +137,15 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 
   test("uses the compact Sessions composition without a redundant page heading", async () => {
-    const page = await scenario("r02", 768, "Postgres Partition Pruning Worker")
+    const page = await scenario("session-list", 768, "Postgres Partition Pruning Worker")
     const state = await page.evaluate<{ readonly headingVisible: boolean; readonly columns: number }>(`(() => { const heading=document.querySelector('.sessions-page .page-head'); const grid=document.querySelector('.sessions-table'); return {headingVisible:heading instanceof HTMLElement&&getComputedStyle(heading).display!=='none',columns:grid instanceof HTMLElement?getComputedStyle(grid).gridTemplateColumns.split(' ').length:0} })()`)
     expect(state.headingVisible).toBe(false)
     expect(state.columns).toBe(2)
     await page.close()
   }, 30_000)
 
-  test("lets the R02 desktop Sessions table span the stage without losing rows or targets", async () => {
-    const page = await scenario("r02", 1440, "Postgres Partition Pruning Worker")
+  test("uses available desktop width for the session list without losing rows or targets", async () => {
+    const page = await scenario("session-list", 1440, "Postgres Partition Pruning Worker")
     for (const width of [1280, 1440, 2048] as const) {
       await page.setViewport(width, 900)
       const state = await page.evaluate<{
@@ -160,7 +160,7 @@ describe("approved remote fidelity invariants", () => {
         const table = document.querySelector('.sessions-results')
         const rows = [...document.querySelectorAll('.sessions-table__row')]
         const targets = [...document.querySelectorAll('.sessions-table__select')]
-        if (!(table instanceof HTMLElement) || !(rows[0] instanceof HTMLElement) || targets.length === 0) throw new Error('R02 Sessions table missing')
+        if (!(table instanceof HTMLElement) || !(rows[0] instanceof HTMLElement) || targets.length === 0) throw new Error('session list Sessions table missing')
         const rect = table.getBoundingClientRect()
         return {
           width: rect.width,
@@ -185,7 +185,7 @@ describe("approved remote fidelity invariants", () => {
   test("keeps every Sessions selection target touch-sized on compact layouts", async () => {
     for (const width of [390, 768] as const) {
       for (const theme of ["light", "dark"] as const) {
-        const page = await scenario("r02", width, "Async Auth Token Revocation Migration", theme)
+        const page = await scenario("session-list", width, "Async Auth Token Revocation Migration", theme)
         const targets = await page.evaluate<readonly { readonly height: number; readonly width: number }[]>(`[...document.querySelectorAll('.sessions-table__select')].map(button => ({ height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width }))`)
         expect(targets).toHaveLength(4)
         expect(targets.every((target) => target.height >= 44 && target.width >= 44)).toBe(true)
@@ -195,10 +195,10 @@ describe("approved remote fidelity invariants", () => {
     }
   }, 30_000)
 
-  test("keeps R02 compact Session status beside its title without losing metadata", async () => {
+  test("keeps session list compact Session status beside its title without losing metadata", async () => {
     for (const width of [390, 768] as const) {
       for (const theme of ["light", "dark"] as const) {
-        const page = await scenario("r02", width, "Async Auth Token Revocation Migration", theme)
+        const page = await scenario("session-list", width, "Async Auth Token Revocation Migration", theme)
         const state = await page.evaluate<{
           readonly rowHeight: number
           readonly statusOffset: number
@@ -212,7 +212,7 @@ describe("approved remote fidelity invariants", () => {
           const row = document.querySelector('.sessions-table__row')
           const title = row?.querySelector('.sessions-table__title')
           const status = row?.querySelector('.sessions-table__status')
-          if (!(row instanceof HTMLElement) || !(title instanceof HTMLElement) || !(status instanceof HTMLElement)) throw new Error('R02 Session row missing')
+          if (!(row instanceof HTMLElement) || !(title instanceof HTMLElement) || !(status instanceof HTMLElement)) throw new Error('session list Session row missing')
           return {
             rowHeight: row.getBoundingClientRect().height,
             statusOffset: status.getBoundingClientRect().top - title.getBoundingClientRect().top,
@@ -241,7 +241,7 @@ describe("approved remote fidelity invariants", () => {
 
   test("shows the selected Session's real state in the mobile conversation context", async () => {
     for (const theme of ["light", "dark"] as const) {
-      const page = await scenario("r01", 390, "Token expiry refactor", theme)
+      const page = await scenario("conversation-workspace", 390, "Token expiry refactor", theme)
       const status = await page.evaluate<{ readonly label: string; readonly visible: boolean }>(`(() => {
         const chip = document.querySelector('.conversation-breadcrumb .chip');
         return { label: chip?.textContent?.trim() ?? '', visible: chip instanceof HTMLElement && chip.getBoundingClientRect().height > 0 && getComputedStyle(chip.parentElement).display !== 'none' };
@@ -252,9 +252,9 @@ describe("approved remote fidelity invariants", () => {
     }
   }, 30_000)
 
-  test("aligns R04 desktop events and decisions with the reference column insets", async () => {
+  test("aligns Activity events and pending decisions within the desktop columns", async () => {
     for (const theme of ["light", "dark"] as const) {
-      const page = await scenario("r04", 1440, "Pending decisions", theme)
+      const page = await scenario("activity-pending-decisions", 1440, "Pending decisions", theme)
       const state = await page.evaluate<{
         readonly eventLeft: number
         readonly decisionLeft: number
@@ -266,7 +266,7 @@ describe("approved remote fidelity invariants", () => {
       }>(`(() => {
         const event = document.querySelector('.activity-page__events .activity-row')
         const decision = document.querySelector('.activity-page__decisions .request')
-        if (!(event instanceof HTMLElement) || !(decision instanceof HTMLElement)) throw new Error('R04 Activity cards missing')
+        if (!(event instanceof HTMLElement) || !(decision instanceof HTMLElement)) throw new Error('activity pending decisions Activity cards missing')
         return {
           eventLeft: event.getBoundingClientRect().left,
           decisionLeft: decision.getBoundingClientRect().left,
@@ -291,24 +291,33 @@ describe("approved remote fidelity invariants", () => {
     }
   }, 30_000)
 
-  test("lays out desktop decisions in two columns with hard and final prompts full width", async () => {
-    const page = await scenario("r05", 1440, "Clarify Disambiguation Query")
-    const cards = await page.evaluate<readonly { readonly x: number; readonly width: number; readonly hard: boolean }[]>(`[...document.querySelectorAll('.requests>.request')].map(card=>({x:card.getBoundingClientRect().x,width:card.getBoundingClientRect().width,hard:card.classList.contains('request--hard')}))`)
-    expect(cards).toHaveLength(6)
-    expect(cards[0]?.x).not.toBe(cards[1]?.x)
-    expect(cards.find((card) => card.hard)?.width).toBeGreaterThan((cards[0]?.width ?? 0) * 1.8)
-    expect(cards.at(-1)?.width).toBeGreaterThan((cards[0]?.width ?? 0) * 1.8)
+  test("aligns conversation decision cards with the transcript in one centered column", async () => {
+    const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
+    const layout = await page.evaluate<{ readonly transcript: { readonly left: number; readonly right: number }; readonly cards: readonly { readonly left: number; readonly right: number }[]; readonly requestsFollowTranscript: boolean }>(`(() => {
+      const transcript = document.querySelector('.transcript')
+      const requests = document.querySelector('.requests')
+      if (!(transcript instanceof HTMLElement) || !(requests instanceof HTMLElement)) throw new Error('Conversation transcript or pending decisions missing')
+      const bounds = transcript.getBoundingClientRect()
+      return {
+        transcript: { left: bounds.left, right: bounds.right },
+        cards: [...requests.querySelectorAll(':scope > .request')].map(card => { const rect = card.getBoundingClientRect(); return { left: rect.left, right: rect.right } }),
+        requestsFollowTranscript: Boolean(transcript.compareDocumentPosition(requests) & Node.DOCUMENT_POSITION_FOLLOWING),
+      }
+    })()`)
+    expect(layout.cards).toHaveLength(6)
+    expect(layout.cards.every((card) => Math.abs(card.left - layout.transcript.left) <= 1 && Math.abs(card.right - layout.transcript.right) <= 1)).toBe(true)
+    expect(layout.requestsFollowTranscript).toBe(true)
     await page.close()
   }, 30_000)
 
-  test("frames R05 choice rows without changing native answers or touch targets", async () => {
+  test("frames permission and guardrail reviews choice rows without changing native answers or touch targets", async () => {
     for (const [width, marker, optionCount, actionCount] of [
       [390, "Select Target Cluster", 2, 6],
       [768, "syslog daemon bridge", 3, 4],
       [1440, "Clarify Disambiguation Query", 4, 6],
     ] as const) {
       for (const theme of ["light", "dark"] as const) {
-        const page = await scenario("r05", width, marker, theme)
+        const page = await scenario("permission-guardrail-hard-review-form-requests", width, marker, theme)
         const state = await page.evaluate<{
           readonly options: number
           readonly minHeight: number
@@ -323,7 +332,7 @@ describe("approved remote fidelity invariants", () => {
           const options = [...document.querySelectorAll('.request .question__option')]
           const selected = options.find(option => option.querySelector('input:checked'))
           const other = options.find(option => option.querySelector('input:not(:checked)'))
-          if (!(selected instanceof HTMLElement) || !(other instanceof HTMLElement)) throw new Error('R05 choice states missing')
+          if (!(selected instanceof HTMLElement) || !(other instanceof HTMLElement)) throw new Error('permission and guardrail reviews choice states missing')
           return {
             options: options.length,
             minHeight: Math.min(...options.map(option => option.getBoundingClientRect().height)),
@@ -349,108 +358,56 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 
   test("keeps compact decision and account actions at least 44px", async () => {
-    const tablet = await scenario("r05", 768, "syslog daemon bridge")
+    const tablet = await scenario("permission-guardrail-hard-review-form-requests", 768, "syslog daemon bridge")
     const tabletHeights = await tablet.evaluate<readonly number[]>(`[...document.querySelectorAll('.requests button')].map(button=>button.getBoundingClientRect().height)`)
     expect(tabletHeights.length).toBeGreaterThan(0)
     expect(tabletHeights.every((height) => height >= 44)).toBe(true)
     await tablet.close()
 
-    const mobile = await scenario("r06", 390, "Sign in with Google")
-    expect(await mobile.evaluate<number>(`document.querySelector('#account-settings')?.closest('section')?.querySelector('button')?.getBoundingClientRect().height ?? 0`)).toBeGreaterThanOrEqual(44)
+    const mobile = await scenario("signed-out", 390, "Continue with Google")
+    expect(await mobile.evaluate<number>(`document.querySelector('.sign-in__provider')?.getBoundingClientRect().height ?? 0`)).toBeGreaterThanOrEqual(44)
     await mobile.close()
   }, 30_000)
 
-  test("fills the R06 mobile sign-in row without hiding its account explanation", async () => {
-    const page = await scenario("r06", 390, "Sign in with Google")
-    for (const width of [390, 320] as const) {
-      await page.setViewport(width, 620)
-      const state = await page.evaluate<{
-        readonly buttonWidth: number
-        readonly rowWidth: number
-        readonly buttonHeight: number
-        readonly accountText: string
-        readonly actionVisibleAboveNav: boolean
-        readonly overflowing: boolean
-      }>(`(() => {
-        const button = document.querySelector('.account-card .button--primary')
-        const row = button?.parentElement
-        const account = document.querySelector('#account-settings')?.closest('section')
-        const nav = document.querySelector('.bottom-nav')
-        if (!(button instanceof HTMLButtonElement) || !(row instanceof HTMLElement) || !(account instanceof HTMLElement) || !(nav instanceof HTMLElement)) throw new Error('Signed-out account action missing')
-        return {
-          buttonWidth: button.getBoundingClientRect().width,
-          rowWidth: row.getBoundingClientRect().width,
-          buttonHeight: button.getBoundingClientRect().height,
-          accountText: account.innerText,
-          actionVisibleAboveNav: button.getBoundingClientRect().bottom <= nav.getBoundingClientRect().top,
-          overflowing: document.documentElement.scrollWidth > innerWidth,
-        }
-      })()`)
-      expect(state.buttonWidth).toBeGreaterThanOrEqual(state.rowWidth - 2)
-      expect(state.buttonHeight).toBeGreaterThanOrEqual(44)
-      expect(state.accountText).toContain("not signed in")
-      expect(state.accountText).toContain("Sign in with Google")
-      if (width === 390) expect(state.actionVisibleAboveNav).toBe(true)
-      expect(state.overflowing).toBe(false)
-      if (width === 320) {
-        const reachable = await page.evaluate<boolean>(`(() => {
-          const button = document.querySelector('.account-card .button--primary')
-          const nav = document.querySelector('.bottom-nav')
-          if (!(button instanceof HTMLButtonElement) || !(nav instanceof HTMLElement)) return false
-          button.scrollIntoView({ block: 'end' })
-          return button.getBoundingClientRect().top >= 0 && button.getBoundingClientRect().bottom <= nav.getBoundingClientRect().top
+  test("replaces every remote route with one centered OAuth sign-in panel for a signed-out browser", async () => {
+    for (const view of ["chat", "sessions", "activity", "settings"] as const) {
+      const page = await fixture(`view=${view}&account=signedout`, 390, "Continue with Google")
+      for (const width of [320, 390, 768, 1440] as const) {
+        await page.setViewport(width, 844)
+        const state = await page.evaluate<{
+          readonly workspace: boolean
+          readonly heading: string
+          readonly providers: readonly { readonly label: string; readonly height: number; readonly width: number }[]
+          readonly panelWidth: number
+          readonly centered: boolean
+          readonly overflowing: boolean
+        }>(`(() => {
+          const panel = document.querySelector('.sign-in__panel')
+          if (!(panel instanceof HTMLElement)) throw new Error('sign-in panel missing')
+          const inner = panel.clientWidth - parseFloat(getComputedStyle(panel).paddingLeft) - parseFloat(getComputedStyle(panel).paddingRight)
+          const box = panel.getBoundingClientRect()
+          return {
+            workspace: document.querySelector('.app') !== null,
+            heading: document.querySelector('h1')?.textContent?.trim() ?? '',
+            providers: [...panel.querySelectorAll('.sign-in__provider')].map(button => ({ label: button.textContent.trim(), height: button.getBoundingClientRect().height, width: button.getBoundingClientRect().width })),
+            panelWidth: inner,
+            centered: Math.abs(box.left + box.width / 2 - innerWidth / 2) <= 2,
+            overflowing: document.documentElement.scrollWidth > innerWidth,
+          }
         })()`)
-        expect(reachable).toBe(true)
+        expect(state.workspace).toBe(false)
+        expect(state.heading).toBe("Sign in to your workspace")
+        expect(state.providers.map((provider) => provider.label)).toEqual(["Continue with Google"])
+        expect(state.providers.every((provider) => provider.height >= 44 && Math.abs(provider.width - state.panelWidth) <= 1)).toBe(true)
+        expect(state.centered).toBe(true)
+        expect(state.overflowing).toBe(false)
       }
+      await page.close()
     }
-    await page.close()
-  }, 30_000)
+  }, 60_000)
 
-  test("presents R06 sign-in as a centered action while retaining Settings context", async () => {
-    const page = await scenario("r06", 390, "Sign in with Google")
-    for (const width of [320, 390, 430] as const) {
-      await page.setViewport(width, 844)
-      const state = await page.evaluate<{
-        readonly heading: string
-        readonly detail: string
-        readonly explanation: string
-        readonly signInActions: number
-        readonly sections: number
-        readonly navVisible: boolean
-        readonly centered: boolean
-        readonly overflowing: boolean
-      }>(`(() => {
-        const panel = document.querySelector('.account-card')
-        const heading = panel?.querySelector('h3')
-        const detail = panel?.querySelector('.account-card__detail')
-        const action = panel?.querySelector('button')
-        if (!(panel instanceof HTMLElement) || !(heading instanceof HTMLElement) || !(detail instanceof HTMLElement) || !(action instanceof HTMLButtonElement)) throw new Error('R06 sign-in panel missing')
-        const middle = (element) => element.getBoundingClientRect().left + element.getBoundingClientRect().width / 2
-        return {
-          heading: heading.textContent.trim(),
-          detail: detail.textContent.trim(),
-          explanation: document.querySelector('#account-settings')?.nextElementSibling?.textContent?.trim() ?? '',
-          signInActions: panel.querySelectorAll('button').length,
-          sections: document.querySelectorAll('.settings__section').length,
-          navVisible: [...document.querySelectorAll('.bottom-nav a')].some((link) => link.getBoundingClientRect().height >= 44),
-          centered: Math.abs(middle(heading) - middle(panel)) <= 2 && Math.abs(middle(action) - middle(panel)) <= 2,
-          overflowing: document.documentElement.scrollWidth > innerWidth,
-        }
-      })()`)
-      expect(state.heading).toBe("Sign in to YCoding")
-      expect(state.detail).toContain("not signed in")
-      expect(state.explanation).toContain("This workspace reaches your machines")
-      expect(state.signInActions).toBe(1)
-      expect(state.sections).toBe(5)
-      expect(state.navVisible).toBe(true)
-      expect(state.centered).toBe(true)
-      expect(state.overflowing).toBe(false)
-    }
-    await page.close()
-  }, 30_000)
-
-  test("keeps R07 mobile device records compact with every live field and action", async () => {
-    const page = await scenario("r07", 390, "Enrollment code (shown once)")
+  test("keeps mobile device records compact with every reported field and action", async () => {
+    const page = await scenario("devices-enrollment", 390, "Enrollment code (shown once)")
     for (const width of [320, 390, 430] as const) {
       await page.setViewport(width, 844)
       const rows = await page.evaluate<readonly {
@@ -468,7 +425,7 @@ describe("approved remote fidelity invariants", () => {
         const connection = row.querySelector('.device__connection')
         const lastSeen = row.querySelector('.device__last-seen')
         const action = row.querySelector('.device__action button')
-        if (!(name instanceof HTMLElement) || !(registration instanceof HTMLElement) || !(connection instanceof HTMLElement) || !(lastSeen instanceof HTMLElement)) throw new Error('R07 device field missing')
+        if (!(name instanceof HTMLElement) || !(registration instanceof HTMLElement) || !(connection instanceof HTMLElement) || !(lastSeen instanceof HTMLElement)) throw new Error('device enrollment device field missing')
         const box = row.getBoundingClientRect()
         return {
           height: box.height,
@@ -501,24 +458,22 @@ describe("approved remote fidelity invariants", () => {
     const pending = await fixture("view=settings&account=pending", 768, "Checking account")
     const pendingText = await pending.evaluate<string>(`document.body.innerText`)
     expect(pendingText).not.toContain("Signed out")
-    expect(pendingText).not.toContain("Sign in with Google")
+    expect(pendingText).not.toContain("Continue with Google")
     await pending.close()
 
-    const signedOut = await scenario("r06", 390, "Sign in with Google")
-    const signedOutText = await signedOut.evaluate<string>(`document.querySelector('#account-settings')?.closest('section')?.innerText ?? ''`)
-    expect(signedOutText).toContain("not signed in")
-    expect(signedOutText).toContain("Sign in with Google")
+    const signedOut = await scenario("signed-out", 390, "Continue with Google")
+    expect(await signedOut.evaluate<boolean>(`document.querySelector('.app') === null && document.querySelector('main.sign-in') !== null`)).toBe(true)
     await signedOut.close()
 
-    const offline = await scenario("r06", 768, "Reconnect")
+    const offline = await scenario("selected-machine-offline", 768, "Reconnect")
     expect(await offline.evaluate<string>(`document.querySelector('.status-strip')?.innerText ?? ''`)).toContain("Studio Mac is not reachable")
     await offline.close()
 
-    const decisions = await scenario("r04", 1440, "Authorize branch push for feat/ast-cache")
+    const decisions = await scenario("activity-pending-decisions", 1440, "Authorize branch push for feat/ast-cache")
     expect(await decisions.evaluate<number>(`document.querySelectorAll('.activity-page__decisions .request').length`)).toBe(2)
     await decisions.close()
 
-    const devices = await scenario("r07", 1440, "Enrollment code (shown once)")
+    const devices = await scenario("devices-enrollment", 1440, "Enrollment code (shown once)")
     const deviceState = await devices.evaluate<{ readonly account: string; readonly revokedActions: number; readonly selected: boolean }>(`(() => {
       const rows=[...document.querySelectorAll('.device-table .device')];
       const revoked=rows.find(row=>row.textContent.includes('Legacy-MacBook'));
@@ -544,7 +499,7 @@ describe("approved remote fidelity invariants", () => {
         const read = () => ({
           status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
           account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
-          signIn: document.querySelector('.account-card .button--primary') !== null,
+          signIn: document.querySelector('main.sign-in') !== null,
         });
         new MutationObserver(() => {
           const next = read();
@@ -555,7 +510,7 @@ describe("approved remote fidelity invariants", () => {
       const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean }>(`({
         status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
         account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
-        signIn: document.querySelector('.account-card .button--primary') !== null,
+        signIn: document.querySelector('main.sign-in') !== null,
         overflow: document.documentElement.scrollWidth > innerWidth,
       })`)
       const pending = await read()
@@ -580,9 +535,9 @@ describe("approved remote fidelity invariants", () => {
     }
   }, 30_000)
 
-  test("resolves delayed account rejection and unavailable responses without an early sign-in action", async () => {
+  test("resolves delayed account rejection and unavailable responses without an early sign-in screen", async () => {
     for (const [mode, expectedStatus, expectedAccount, expectedSignIn] of [
-      ["signedout", "Signed out", "not signed in", true],
+      ["signedout", "", "", true],
       ["unavailable", "Remote access is not available yet", "not enabled", false],
     ] as const) {
       const page = await requireBrowser().openPage()
@@ -593,7 +548,7 @@ describe("approved remote fidelity invariants", () => {
           const read = () => ({
             status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
             account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
-            signIn: document.querySelector('.account-card .button--primary') !== null,
+            signIn: document.querySelector('main.sign-in') !== null,
           });
           new MutationObserver(() => {
             const next = read();
@@ -604,24 +559,27 @@ describe("approved remote fidelity invariants", () => {
         const read = () => page.evaluate<{ readonly status: string; readonly account: string; readonly signIn: boolean; readonly overflow: boolean }>(`({
           status: document.querySelector('.status-strip__body')?.textContent?.trim() ?? '',
           account: document.querySelector('#account-settings')?.closest('section')?.textContent?.trim() ?? '',
-          signIn: document.querySelector('.account-card .button--primary') !== null,
+          signIn: document.querySelector('main.sign-in') !== null,
           overflow: document.documentElement.scrollWidth > innerWidth,
         })`)
         expect(await read()).toMatchObject({ status: expect.stringContaining("Checking account"), signIn: false })
         await Bun.sleep(300)
         expect(await read()).toMatchObject({ status: expect.stringContaining("Checking account"), signIn: false })
-        for (let attempt = 0; attempt < 40 && !(await read()).status.includes(expectedStatus); attempt++) await Bun.sleep(50)
+        const settledNow = (state: { readonly status: string; readonly signIn: boolean }) => expectedSignIn ? state.signIn : state.status.includes(expectedStatus)
+        for (let attempt = 0; attempt < 40 && !settledNow(await read()); attempt++) await Bun.sleep(50)
         const settled = await read()
-        expect(settled.status).toContain(expectedStatus)
-        expect(settled.account).toContain(expectedAccount)
         expect(settled.signIn).toBe(expectedSignIn)
+        if (!expectedSignIn) {
+          expect(settled.status).toContain(expectedStatus)
+          expect(settled.account).toContain(expectedAccount)
+        }
         expect(settled.overflow).toBe(false)
         const samples = await page.evaluate<readonly { readonly status: string; readonly account: string; readonly signIn: boolean }[]>(`window.accountSamples`)
-        const boundary = samples.findIndex((sample) => sample.status.includes(expectedStatus))
+        const boundary = samples.findIndex(settledNow)
         expect(boundary).toBeGreaterThan(0)
         expect(samples.slice(0, boundary).every((sample) => !sample.signIn && !sample.status.includes("Signed out"))).toBe(true)
         expect(samples.at(-1)?.signIn).toBe(expectedSignIn)
-        if (mode === "unavailable") expect(samples.every((sample) => !sample.signIn && !sample.status.includes("Signed out"))).toBe(true)
+        if (mode === "unavailable") expect(samples.every((sample) => !sample.signIn)).toBe(true)
       } finally {
         await page.close()
       }
@@ -629,7 +587,7 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 
   test("renders truthful permission and guardrail actions without unsupported controls", async () => {
-    const page = await scenario("r05", 1440, "Clarify Disambiguation Query")
+    const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
     const actions = await page.evaluate<{
       readonly hard: readonly string[]
       readonly ordinary: readonly string[]
@@ -653,7 +611,7 @@ describe("approved remote fidelity invariants", () => {
 
   test("sends each rendered hard-review decision once and removes its pending card", async () => {
     for (const [label, reply] of [["Reject", "reject"], ["Approve once", "once"]] as const) {
-      const page = await scenario("r05", 1440, "Clarify Disambiguation Query")
+      const page = await scenario("permission-guardrail-hard-review-form-requests", 1440, "Clarify Disambiguation Query")
       try {
         expect(await page.evaluate<readonly string[]>(`[...document.querySelectorAll('.request--hard .request__actions button')].map(button => button.textContent.trim())`)).toEqual(["Approve once", "Reject"])
         await page.evaluate(`[...document.querySelectorAll('.request--hard .request__actions button')].find(button => button.textContent.trim() === ${JSON.stringify(label)})?.click()`)
@@ -675,12 +633,12 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 
   test("supports keyboard and coarse-pointer operation for device, delivery, autonomy, and overlays", async () => {
-    const workspace = await scenario("r01", 768, "Run test suite against auth services.")
-    await workspace.evaluate(`document.querySelector('[aria-label="Device"]')?.focus()`)
+    const workspace = await scenario("conversation-workspace", 768, "Run test suite against auth services.")
+    await workspace.evaluate(`document.querySelector('[aria-label="Machine"]')?.focus()`)
     await workspace.pressKey("Enter", "Enter", 13)
-    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Device"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
+    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'true' && document.querySelector('[role="listbox"]') !== null`)).toBe(true)
     await workspace.pressEscape()
-    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Device"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Device'`)).toBe(true)
+    expect(await workspace.evaluate<boolean>(`document.querySelector('[aria-label="Machine"]')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Machine'`)).toBe(true)
 
     await workspace.evaluate(`document.querySelector('.composer__delivery-option:nth-child(2)')?.focus()`)
     expect(await workspace.evaluate<boolean>(`document.activeElement?.textContent?.trim() === 'Queue'`)).toBe(true)
@@ -693,7 +651,7 @@ describe("approved remote fidelity invariants", () => {
     await workspace.pressEscape()
     await workspace.close()
 
-    const settings = await scenario("r08", 390, "Mobile refactor")
+    const settings = await scenario("autonomy-goal-notification-settings", 390, "Mobile refactor")
     await settings.setCoarsePointer(true)
     const coarse = await settings.evaluate<{ readonly minimum: number; readonly themes: number; readonly autonomy: number }>(`(() => {
       const appearance=document.querySelector('#appearance-settings')?.closest('section');
@@ -714,8 +672,8 @@ describe("approved remote fidelity invariants", () => {
     await settings.close()
   }, 30_000)
 
-  test("uses source order and density for the actual Settings controls", async () => {
-    const mobile = await scenario("r08", 390, "Device disconnected")
+  test("keeps Settings controls in product order and density", async () => {
+    const mobile = await scenario("autonomy-goal-notification-settings", 390, "Device disconnected")
     const state = await mobile.evaluate<{ readonly categoriesHidden: boolean; readonly themes: readonly string[]; readonly headingSizes: readonly number[] }>(`(() => ({
       categoriesHidden:[...document.querySelectorAll('#appearance-settings,#autonomy-settings,#notification-settings')].every(heading=>{const section=heading.closest('section');const category=section?.querySelector('.settings__category');return category instanceof HTMLElement&&getComputedStyle(category).display==='none'}),
       themes:[...document.querySelectorAll('.appearance-segments [role="radio"]')].map(button=>button.textContent.trim()).slice(0,3),
@@ -728,8 +686,8 @@ describe("approved remote fidelity invariants", () => {
   }, 30_000)
 })
 
-async function scenario(family: string, width: number, expected: string, theme?: "dark" | "light") {
-  return fixture(`stitch=${family}&specimen=${width}`, width, expected, theme)
+async function scenario(scenarioName: string, width: number, expected: string, theme?: "dark" | "light") {
+  return fixture(`scenario=${scenarioName}-${width}`, width, expected, theme)
 }
 
 async function fixture(query: string, width: number, expected: string, theme?: "dark" | "light") {

@@ -360,13 +360,6 @@
     line-height: var(--yc-leading-sm);
   }
 
-  .marketing .footer__compact .footer__links {
-    column-gap: var(--yc-space-2);
-  }
-
-  .marketing .footer__compact .footer__links a {
-    font-size: var(--yc-size-xs);
-  }
 }
 
 /* --- trust -------------------------------------------------------------- */
@@ -436,21 +429,65 @@
 
 /* --- footer ------------------------------------------------------------- */
 
-.footer__links {
+/* A brand block beside titled link columns; every column shares one baseline. */
+.footer {
   display: grid;
+  gap: var(--yc-space-6);
 }
 
-/* The compact footer overrides this stack with its wrapped navigation row. */
-.footer__links a {
+@media (min-width: 768px) {
+  .footer {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+}
+
+.footer__brand {
+  display: grid;
+  gap: var(--yc-space-2);
+  align-content: start;
+  justify-items: start;
+}
+
+.footer__brand p {
+  color: var(--yc-text-subtle);
+  font-size: var(--yc-size-2xs);
+}
+
+.footer__columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--yc-space-4);
+}
+
+@media (min-width: 640px) {
+  .footer__columns {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.footer__column {
+  display: grid;
+  align-content: start;
+}
+
+.footer__title {
+  margin-block-end: var(--yc-space-1);
   color: var(--yc-text-muted);
-  text-decoration: none;
-  font-size: var(--yc-size-sm);
-  min-block-size: var(--yc-control-h);
+  font-family: var(--yc-font-mono);
+  font-size: var(--yc-size-2xs);
+  letter-spacing: var(--yc-tracking-wide);
+}
+
+.footer__column a {
   display: inline-flex;
   align-items: center;
+  min-block-size: var(--yc-control-h);
+  color: var(--yc-text-muted);
+  font-size: var(--yc-size-sm);
+  text-decoration: none;
 }
 
-.footer__links a:hover {
+.footer__column a:hover {
   color: var(--yc-text);
 }
 
@@ -473,8 +510,14 @@
 
 /* P09 keeps installation in the hero flow: the command is a compact terminal row,
    not a second content section. */
+/* The hero keeps more room above than below, so it reads as the page's opening and
+   the capabilities follow it as one group. */
 .hero--compact {
-  padding-block: var(--yc-space-8) var(--yc-space-10);
+  padding-block: var(--yc-space-16) var(--yc-space-12);
+}
+
+.hero--compact + .features {
+  padding-block-start: 0;
 }
 
 .hero--compact .hero__content {
@@ -501,38 +544,7 @@
 }
 
 .marketing .site-footer {
-  padding-block: var(--yc-space-6);
-}
-
-.footer__compact {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--yc-space-2) var(--yc-space-4);
-  font-size: var(--yc-size-xs);
-}
-
-.footer__compact .footer__links {
-  display: flex;
-  flex: 1 1 34ch;
-  flex-wrap: wrap;
-  gap: 0 var(--yc-space-3);
-}
-
-.footer__compact .footer__links a {
-  min-block-size: var(--yc-control-h);
-  color: var(--yc-text-muted);
-}
-
-.footer__compact > span {
-  color: var(--yc-text-subtle);
-  font-size: var(--yc-size-2xs);
-}
-
-@media (min-width: 640px) and (max-width: 1023px) {
-  .marketing .site-footer {
-    padding-block: var(--yc-space-2);
-  }
+  padding-block: var(--yc-space-8);
 }
 
 .not-found {
@@ -550,6 +562,8 @@
   border: var(--yc-border-width) solid var(--yc-border-strong);
   border-radius: var(--yc-radius-md);
   background: var(--yc-surface);
+  /* Icon, heading, text, and actions share the card's start edge at every width. */
+  text-align: start;
 }
 
 .not-found__icon {
@@ -573,7 +587,7 @@
 }
 
 .not-found__workspace {
-  justify-self: center;
+  justify-self: start;
 }
 
 .not-found h1 {
@@ -636,12 +650,6 @@
   .not-found__workspace {
     grid-row: 4;
     justify-self: start;
-  }
-}
-
-@media (min-width: 1024px) {
-  .not-found__card {
-    min-block-size: 420px;
   }
 }
 

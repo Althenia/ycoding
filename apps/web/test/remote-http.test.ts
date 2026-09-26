@@ -1,18 +1,23 @@
 import { describe, expect, test } from "bun:test"
-import { createRemoteHttp, signInURL } from "../src/remote/http"
+import { SIGN_IN_PROVIDERS, createRemoteHttp, signInURL } from "../src/remote/http"
 import { startRelayDouble } from "./relay-double"
 
 describe("signInURL", () => {
-  test("targets the same-origin sign-in entry point with a /remote return path", () => {
-    expect(signInURL("/remote/activity")).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Factivity")
+  test("offers every supported OAuth provider, Google first", () => {
+    expect(SIGN_IN_PROVIDERS.map((provider) => provider.id)).toEqual(["google"])
+    expect(SIGN_IN_PROVIDERS[0]?.label).toBe("Continue with Google")
+  })
+
+  test("targets the provider's same-origin sign-in entry point with a /remote return path", () => {
+    expect(signInURL("google", "/remote/activity")).toBe("/api/auth/google/start?redirect_after=%2Fremote%2Factivity")
   })
 
   test("falls back to /remote for a return path outside the remote workspace", () => {
-    expect(signInURL("https://evil.example/steal")).toBe("/api/auth/google/start?redirect_after=%2Fremote")
+    expect(signInURL("google", "https://evil.example/steal")).toBe("/api/auth/google/start?redirect_after=%2Fremote")
   })
 
   test("supports an explicit base for cross-host development", () => {
-    expect(signInURL("/remote", "https://ycoding.althenia.app")).toBe(
+    expect(signInURL("google", "/remote", "https://ycoding.althenia.app")).toBe(
       "https://ycoding.althenia.app/api/auth/google/start?redirect_after=%2Fremote",
     )
   })

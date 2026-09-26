@@ -1,5 +1,5 @@
 import type { CreateEnrollmentResponse, RemoteDeviceInfo, RemoteOperation } from "@ycoding-ai/remote"
-import { signInURL, type RemoteHttp, type RemoteHttpResult } from "./http"
+import { signInURL, type RemoteHttp, type RemoteHttpResult, type SignInProvider } from "./http"
 import {
   createNotificationDelivery,
   notificationCategory,
@@ -107,7 +107,7 @@ export type RemoteStoreOptions = {
 export type RemoteStore = {
   readonly state: () => RemoteStoreState
   readonly subscribe: (listener: () => void) => () => void
-  readonly signInURL: (redirectAfter?: string) => string
+  readonly signInURL: (provider: SignInProvider, redirectAfter?: string) => string
   readonly load: () => Promise<void>
   readonly logout: () => Promise<void>
   readonly createEnrollment: () => Promise<RemoteHttpResult<CreateEnrollmentResponse>>
@@ -628,8 +628,9 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       // An open, authenticated browser relay reports this exact structured response
       // when its selected device has no local agent. Transport failures and every
       // other failed read remain connection errors, not a claim about device reachability.
+      // The last list stays as the device's read-only record until it answers again.
       if (listed.status === "failed" && listed.error.code === "agent_unavailable") {
-        setState({ connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") }, sessions: [] })
+        setState({ connection: { kind: "offline", deviceName: deviceName(state.activeDeviceID ?? "device") } })
         return
       }
       setState({ connection: { kind: "error", message: describeOutcome(listed, "Session list") } })
@@ -720,7 +721,7 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    signInURL: (redirectAfter = "/remote/") => signInURL(redirectAfter),
+    signInURL: (provider, redirectAfter = "/remote/") => signInURL(provider, redirectAfter),
     load: async () => {
       const token = ++accountToken
       const me = await options.http.me()
@@ -754,7 +755,6 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
             advertised: [],
             activeSessionID: undefined,
             view: undefined,
-            notice: "Remote access is not configured on this deployment yet.",
           })
           return
         }
@@ -772,10 +772,13 @@ export function createRemoteStore(options: RemoteStoreOptions): RemoteStore {
       const devices = me.value.devices
       const selected = devices.find((device) => device.id === state.activeDeviceID)
       if (selected?.status === "active" && !selected.online) {
+        // The disconnect clears the list, so the selected device's last list is restored read-only.
+        const sessions = state.sessions
         setState({ owner: { id: me.value.user.id, expiresAt: me.value.session.expiresAt }, devices })
         api.disconnect()
         setState({
           activeDeviceID: selected.id,
+          sessions,
           connection: { kind: "offline", deviceName: selected.name },
           transport: { kind: "idle" },
         })
