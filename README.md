@@ -78,6 +78,8 @@ bun run smoke:tui
 bun run smoke:runtime
 ```
 
+Install that local build on macOS or Linux with `bun run install:local`. It places `ycoding`, the macOS `YCoding Computer Use.app`, and `ycoding-chrome-extension` together in `~/.local/bin`.
+
 For targeted tests and repository checks, see [contributing guidance](./AGENTS.md). The [documentation index](./docs/README.md) links to architecture, configuration, and runtime details.
 
 Build the SolidJS/Vite public site and remote client:

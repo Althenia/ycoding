@@ -19,6 +19,7 @@
     "build": "bun run script/build.ts",
     "build:tui": "bun run script/build.ts --tui-only",
     "build:computer-use": "bun run script/computer-use.ts",
+    "install:local": "bun run script/install-local.ts",
     "smoke:tui": "bun run script/tui-smoke.ts",
     "smoke:runtime": "bun run script/runtime-smoke.ts",
     "build:node": "bun run script/build-node.ts",
