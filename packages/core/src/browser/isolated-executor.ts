@@ -772,12 +772,16 @@ function signalProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.Sign
   try {
     process.kill(-child.pid, signal)
   } catch (cause) {
-    if (!isProcessMissing(cause)) throw cause
+    if (!isProcessGroupGone(cause)) throw cause
   }
 }
 
-function isProcessMissing(cause: unknown) {
-  return cause instanceof globalThis.Error && "code" in cause && cause.code === "ESRCH"
+function isProcessGroupGone(cause: unknown) {
+  return (
+    cause instanceof globalThis.Error &&
+    "code" in cause &&
+    (cause.code === "ESRCH" || (process.platform === "darwin" && cause.code === "EPERM"))
+  )
 }
 
 async function cleanup(root: string) {
