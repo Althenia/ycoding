@@ -264,6 +264,8 @@ export interface Interface {
   readonly remove: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly archive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly unarchive: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly pin: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
+  readonly unpin: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
     limit?: number
@@ -1033,6 +1035,32 @@ const layer = Layer.effect(
                 const session = yield* result.get(sessionID)
                 if (!session.time.archived) return
                 yield* events.publish(SessionEvent.Unarchived, { sessionID })
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
+      ),
+      pin: Effect.fn("V2Session.pin")((sessionID) =>
+        db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const session = yield* result.get(sessionID)
+                if (session.time.pinned) return
+                yield* events.publish(SessionEvent.Pinned, { sessionID })
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(Effect.catch((error) => (error instanceof NotFoundError ? Effect.fail(error) : Effect.die(error)))),
+      ),
+      unpin: Effect.fn("V2Session.unpin")((sessionID) =>
+        db
+          .transaction(
+            () =>
+              Effect.gen(function* () {
+                const session = yield* result.get(sessionID)
+                if (!session.time.pinned) return
+                yield* events.publish(SessionEvent.Unpinned, { sessionID })
               }),
             { behavior: "immediate" },
           )

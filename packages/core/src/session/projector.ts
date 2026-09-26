@@ -47,6 +47,8 @@ type MessageEvent =
       | typeof SessionEvent.Deleted.Type
       | typeof SessionEvent.Archived.Type
       | typeof SessionEvent.Unarchived.Type
+      | typeof SessionEvent.Pinned.Type
+      | typeof SessionEvent.Unpinned.Type
       | typeof SessionEvent.InstructionsUpdated.Type
       | typeof SessionEvent.Task.Updated.Type
       | typeof SessionEvent.ProviderRequestRecorded.Type
@@ -831,6 +833,22 @@ const layer = Layer.effectDiscard(
       db
         .update(SessionTable)
         .set({ time_archived: null, time_updated: sql`${SessionTable.time_updated}` })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    yield* events.project(SessionEvent.Pinned, (event) =>
+      db
+        .update(SessionTable)
+        .set({ time_pinned: DateTime.toEpochMillis(event.created), time_updated: sql`${SessionTable.time_updated}` })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    yield* events.project(SessionEvent.Unpinned, (event) =>
+      db
+        .update(SessionTable)
+        .set({ time_pinned: null, time_updated: sql`${SessionTable.time_updated}` })
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
         .pipe(Effect.orDie),

@@ -78,6 +78,7 @@ export const SessionTable = sqliteTable(
     daybreak: text().$type<Model.Daybreak>(),
     ...Timestamps,
     time_archived: integer(),
+    time_pinned: integer(),
     time_suspended: integer(),
   },
   (table) => [

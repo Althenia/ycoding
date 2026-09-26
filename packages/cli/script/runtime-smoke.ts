@@ -555,6 +555,18 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     const unarchived = await client.session.get({ sessionID: session.id })
     if (unarchived.time.archived !== undefined || unarchived.time.updated !== session.time.updated)
       throw new Error("Unarchive did not clear archive state while preserving Session activity")
+    phase = "pin round trip"
+    await client.session.pin({ sessionID: session.id })
+    const pinned = await client.session.get({ sessionID: session.id })
+    if (pinned.time.pinned === undefined || pinned.time.updated !== session.time.updated)
+      throw new Error("Pin did not preserve Session activity or record its pin time")
+    await client.session.pin({ sessionID: session.id })
+    if ((await client.session.get({ sessionID: session.id })).time.pinned !== pinned.time.pinned)
+      throw new Error("Repeated pin changed the pin timestamp")
+    await client.session.unpin({ sessionID: session.id })
+    await client.session.unpin({ sessionID: session.id })
+    if ((await client.session.get({ sessionID: session.id })).time.pinned !== undefined)
+      throw new Error("Unpin did not clear pin state")
 
     phase = "first prompt"
     await client.session.prompt({ sessionID: session.id, text: "First turn" })

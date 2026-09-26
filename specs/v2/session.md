@@ -10,6 +10,12 @@ State transitions publish version-2 `session.archived` or `session.unarchived` e
 
 Automatic retention deletion is deferred for v0.1.1 pending cross-process safety. See [archive and unarchive](../../docs/runtime.md#archive-and-unarchive). Archiving does not start a deletion timer.
 
+## Pin Is Shared Session State
+
+`Session.Info.time.pinned` is optional and records the latest pin event time; clients order pinned Sessions by it. `POST /api/session/:sessionID/pin` pins one existing Session; `DELETE /api/session/:sessionID/pin` unpins it. Both operations are idempotent, return `204 No Content`, use Session Location middleware, and reject unknown Sessions with `SessionNotFoundError`.
+
+State transitions publish version-1 `session.pinned` or `session.unpinned` events containing only `{ sessionID }`. The projector sets or clears `time_pinned` without changing `time_updated`. Repeating a pin keeps the original pin time.
+
 ## Prompt Admission Precedes Execution
 
 `SessionV2.prompt(...)` records one durable `session.input.admitted` fact and one `session_pending` row before advisory execution begins. Pending input remains outside model-visible Session History until promotion. The promotion transaction publishes `session.input.promoted`, projects the visible message, and consumes the pending row atomically.

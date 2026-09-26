@@ -18,6 +18,10 @@ Reusing a Session ID adopts the existing session. Reusing a prompt message ID re
 
 The session list offers **archive/unarchive** for the selected Session (`ctrl+a` by default). Archive opens a confirmation; cancel returns to the list without changing the Session. Archived entries remain visible with an `Archived` label. Unarchive clears that state. Neither operation changes the last-activity timestamp or deletes history.
 
+### Pin and unpin
+
+The session list offers **pin/unpin** for the selected Session (`ctrl+f` by default). Pin state is stored on the Session in the backend, so every TUI connected to that backend and the web remote client show the same pins. Pinned Sessions are listed first under **Pinned**, ordered by when they were pinned; the first nine open with `<leader>1` through `<leader>9`. The web remote client lists pinned Sessions first with a `Pinned` label. Pinning does not change the last-activity timestamp. On first start, the TUI imports pins saved in its previous local `session.json` state file in their saved order, then removes that file; Sessions that no longer exist are skipped, and any other failure keeps the file for the next start.
+
 Automatic retention deletion is not performed. Standalone and managed processes can share one SQLite database, while execution ownership and active-work tracking are process-local. A safe retention policy requires cross-process coordination before it can permanently delete archived families. Archiving does not start a deletion timer.
 
 SQLite can still reclaim pages freed by explicit deletion without deleting additional records; see [automatic SQLite space reclamation](./configuration.md#automatic-sqlite-space-reclamation) for startup conversion and disk-space constraints.

@@ -207,6 +207,26 @@ export const Unarchived = Event.durable({
 })
 export type Unarchived = typeof Unarchived.Type
 
+export const Pinned = Event.durable({
+  type: "session.pinned",
+  durable: {
+    aggregate: "sessionID",
+    version: 1,
+  },
+  schema: Base,
+})
+export type Pinned = typeof Pinned.Type
+
+export const Unpinned = Event.durable({
+  type: "session.unpinned",
+  durable: {
+    aggregate: "sessionID",
+    version: 1,
+  },
+  schema: Base,
+})
+export type Unpinned = typeof Unpinned.Type
+
 export const Forked = Event.durable({
   type: "session.forked",
   durable: {
@@ -786,6 +806,8 @@ export const Definitions = Event.inventory(
   Deleted,
   Archived,
   Unarchived,
+  Pinned,
+  Unpinned,
   Forked,
   InputPromoted,
   InputAdmitted,

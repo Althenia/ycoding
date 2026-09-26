@@ -756,6 +756,7 @@ export default {
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
           \`time_archived\` integer,
+          \`time_pinned\` integer,
           \`time_suspended\` integer,
           CONSTRAINT \`fk_session_project_id_project_id_fk\` FOREIGN KEY (\`project_id\`) REFERENCES \`project\`(\`id\`) ON DELETE CASCADE
         );

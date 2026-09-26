@@ -7,7 +7,10 @@ import path from "path"
 import { useTuiPaths } from "./runtime"
 import { useArgs } from "./args"
 import { RGBA } from "@opentui/core"
-import { readJson, writeJsonAtomic } from "../util/persistence"
+import { rm } from "fs/promises"
+import { readJson } from "../util/persistence"
+import { errorMessage } from "../util/error"
+import { useClient } from "./client"
 import {
   createModelPreferenceRepository,
   cycleModelVariant,
@@ -57,6 +60,7 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
   name: "Local",
   init: () => {
     const data = useData()
+    const client = useClient()
     const toast = useToast()
     const { theme, themeV2, mode } = useTheme()
     const route = useRoute()
@@ -450,91 +454,46 @@ export const { use: useLocal, provider: LocalProvider, context: LocalContext } =
     const model = createModel()
 
     function createSession() {
-      const [sessionStore, setSessionStore] = createStore<{
-        ready: boolean
-        pinned: string[]
-      }>({
-        ready: false,
-        pinned: [],
-      })
+      const pinned = createMemo(() =>
+        data.session
+          .list()
+          .filter((x) => x.parentID === undefined && x.time.pinned !== undefined)
+          .toSorted((a, b) => a.time.pinned! - b.time.pinned! || a.id.localeCompare(b.id))
+          .map((x) => x.id),
+      )
+      const slots = createMemo(() => pinned().slice(0, 9))
 
-      const filePath = path.join(paths.state, "session.json")
-      const state = {
-        pending: false,
-      }
-
-      function save() {
-        if (!sessionStore.ready) {
-          state.pending = true
-          return
-        }
-        state.pending = false
-        void writeJsonAtomic(filePath, {
-          pinned: sessionStore.pinned,
-        })
-      }
-
-      readJson<unknown>(filePath)
-        .then((x) => {
-          if (!x || typeof x !== "object") return
-          const pinned = (x as Record<string, unknown>).pinned
-          if (Array.isArray(pinned))
-            setSessionStore(
-              "pinned",
-              pinned.filter((item): item is string => typeof item === "string"),
+      const legacyPins = path.join(paths.state, "session.json")
+      void readJson<unknown>(legacyPins)
+        .then(async (value) => {
+          const stored: unknown = value && typeof value === "object" ? Reflect.get(value, "pinned") : undefined
+          const ids = Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : []
+          let complete = true
+          for (const sessionID of ids) {
+            const imported = await client.api.session.pin({ sessionID }).then(
+              () => true,
+              (error: unknown) =>
+                typeof error === "object" && error !== null && Reflect.get(error, "_tag") === "SessionNotFoundError",
             )
+            complete = complete && imported
+          }
+          if (complete) await rm(legacyPins, { force: true })
         })
         .catch(() => {})
-        .finally(() => {
-          setSessionStore("ready", true)
-          if (state.pending) save()
-        })
-
-      const slots = createMemo(() => {
-        const existing = new Set(
-          data.session
-            .list()
-            .filter((x) => x.parentID === undefined)
-            .map((x) => x.id),
-        )
-        return sessionStore.pinned.filter((id) => existing.has(id)).slice(0, 9)
-      })
-
-      function prune(sessionID: string) {
-        batch(() => {
-          if (sessionStore.pinned.includes(sessionID)) {
-            setSessionStore(
-              "pinned",
-              sessionStore.pinned.filter((x) => x !== sessionID),
-            )
-          }
-          save()
-        })
-      }
-
-      event.on("session.deleted", (evt) => {
-        prune(evt.data.sessionID)
-      })
 
       return {
-        get ready() {
-          return sessionStore.ready
-        },
-        pinned() {
-          return sessionStore.pinned
-        },
+        pinned,
         slots,
-        isPinned(sessionID: string) {
-          return sessionStore.pinned.includes(sessionID)
-        },
         togglePin(sessionID: string) {
-          batch(() => {
-            const exists = sessionStore.pinned.includes(sessionID)
-            const next = exists
-              ? sessionStore.pinned.filter((x) => x !== sessionID)
-              : [...sessionStore.pinned, sessionID]
-            setSessionStore("pinned", next)
-            save()
+          const request = data.session.get(sessionID)?.time.pinned === undefined
+            ? client.api.session.pin({ sessionID })
+            : client.api.session.unpin({ sessionID })
+          void request.catch((error) => {
+            toast.show({
+              message: `Failed to update pin: ${errorMessage(error)}`,
+              variant: "error",
+              duration: 5000,
+            })
           })
         },
         quickSwitch(slot: number) {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { AssistantPart, PendingRequestView, SessionView } from "../projection"
-import type { SessionInfoView } from "../store"
+import { readSessionInfo, type SessionInfoView } from "../store"
+import { sessionStateChips } from "../view-model"
 import { partKey, toolPartExpanded } from "./conversation"
 import {
   awaitsApproval,
@@ -160,6 +161,36 @@ describe("resident session filter", () => {
     expect(filterSessions(classified, "", "running").map((entry) => entry.id)).toEqual(["ses_running"])
     expect(filterSessions(classified, "", "idle").map((entry) => entry.id)).toEqual(["ses_idle"])
     expect(filterSessions(classified, "", "all")).toHaveLength(3)
+  })
+})
+
+describe("pinned sessions", () => {
+  test("lists pinned sessions first in pin order and keeps the rest in their order", () => {
+    const listed = [
+      session({ id: "ses_recent" }),
+      session({ id: "ses_pinned_late", pinnedAt: 2_000 }),
+      session({ id: "ses_older" }),
+      session({ id: "ses_pinned_early", pinnedAt: 1_000 }),
+    ]
+    expect(filterSessions(listed, "").map((entry) => entry.id)).toEqual([
+      "ses_pinned_early",
+      "ses_pinned_late",
+      "ses_recent",
+      "ses_older",
+    ])
+  })
+
+  test("labels a pinned session", () => {
+    expect(sessionStateChips(summarizeSession(session({ pinnedAt: 1_000 }), undefined))).toContainEqual({
+      label: "Pinned",
+      tone: "neutral",
+    })
+    expect(sessionStateChips(summarizeSession(session(), undefined)).map((chip) => chip.label)).not.toContain("Pinned")
+  })
+
+  test("reads the server pin time from the session list", () => {
+    expect(readSessionInfo({ id: "ses_a", time: { updated: 5, pinned: 3 } })?.pinnedAt).toBe(3)
+    expect(readSessionInfo({ id: "ses_a", time: { updated: 5 } })?.pinnedAt).toBeUndefined()
   })
 })
 

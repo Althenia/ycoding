@@ -1066,6 +1066,18 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
               event.type === "session.archived" ? event.created : undefined,
             )
           break
+        case "session.pinned":
+        case "session.unpinned":
+          if (store.session.info[event.data.sessionID])
+            setStore(
+              "session",
+              "info",
+              event.data.sessionID,
+              "time",
+              "pinned",
+              event.type === "session.pinned" ? event.created : undefined,
+            )
+          break
         case "session.moved":
           if (store.session.info[event.data.sessionID]) {
             setStore("session", "info", event.data.sessionID, "location", event.data.location)

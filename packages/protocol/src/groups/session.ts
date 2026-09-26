@@ -442,6 +442,36 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S>(sessionLo
         ),
     )
     .add(
+      HttpApiEndpoint.post("session.pin", "/api/session/:sessionID/pin", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.pin",
+            summary: "Pin session",
+            description: "Pin a session so every client lists it with the pinned sessions.",
+          }),
+        ),
+    )
+    .add(
+      HttpApiEndpoint.delete("session.unpin", "/api/session/:sessionID/pin", {
+        params: { sessionID: Session.ID },
+        success: HttpApiSchema.NoContent,
+        error: SessionNotFoundError,
+      })
+        .middleware(sessionLocationMiddleware)
+        .annotateMerge(
+          OpenApi.annotations({
+            identifier: "v2.session.unpin",
+            summary: "Unpin session",
+            description: "Remove a session from the pinned sessions.",
+          }),
+        ),
+    )
+    .add(
       HttpApiEndpoint.get("session.subagent.list", "/api/session/:parentID/subagent", {
         params: { parentID: Session.ID },
         query: SessionSubagentListQuery,

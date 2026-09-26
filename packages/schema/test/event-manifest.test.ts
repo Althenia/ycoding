@@ -145,6 +145,8 @@ describe("public event manifest", () => {
         "session.deleted.2",
         "session.archived.2",
         "session.unarchived.2",
+        "session.pinned.1",
+        "session.unpinned.1",
         "session.agent.selected.1",
         "session.model.selected.1",
         "session.daybreak.set.1",

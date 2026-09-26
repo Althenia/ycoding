@@ -276,6 +276,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.pin",
+        Effect.fn(function* (ctx) {
+          yield* session.pin(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
+        "session.unpin",
+        Effect.fn(function* (ctx) {
+          yield* session.unpin(ctx.params.sessionID).pipe(Effect.mapError(mapSessionNotFound))
+          return HttpApiSchema.NoContent.make()
+        }),
+      )
+      .handle(
         "session.subagent.list",
         Effect.fn(function* (ctx) {
           const parsed =

@@ -273,6 +273,7 @@ export function summarizeSession(session: SessionInfoView, view: SessionView | u
     id: session.id,
     title: session.title,
     status: sessionStatus(session, active),
+    ...(session.pinnedAt === undefined ? {} : { pinned: true }),
     agent: active?.agent ?? session.agent,
     model,
     autonomy: autonomy?.mode,
@@ -305,7 +306,7 @@ export function sessionChips(session: SessionInfoView, view: SessionView | undef
 /**
  * The client-side session filter. It reads the sessions the workspace already holds and
  * issues no request, so an empty result means the filter matched nothing rather than that
- * the device advertises nothing.
+ * the device advertises nothing. Pinned sessions come first, in pin order.
  */
 export type SessionFilter = "all" | "running" | "idle"
 
@@ -315,7 +316,10 @@ export function filterSessions(
   filter: SessionFilter = "all",
 ): readonly SessionInfoView[] {
   const needle = query.trim().toLowerCase()
-  return sessions.filter((session) => {
+  const pinned = sessions
+    .filter((session) => session.pinnedAt !== undefined)
+    .toSorted((left, right) => left.pinnedAt! - right.pinnedAt!)
+  return [...pinned, ...sessions.filter((session) => session.pinnedAt === undefined)].filter((session) => {
     if (filter === "running" && session.running !== true) return false
     if (filter === "idle" && (session.running === true || session.archived)) return false
     if (needle.length === 0) return true

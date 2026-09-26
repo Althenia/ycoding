@@ -108,6 +108,7 @@ export type RemoteSessionSummary = {
   readonly id: string
   readonly title: string
   readonly status: RemoteSessionStatus
+  readonly pinned?: boolean
   readonly agent?: string
   readonly model?: string
   readonly autonomy?: RemoteAutonomyMode
@@ -280,6 +281,7 @@ export function sessionStateChips(session: RemoteSessionSummary): readonly Sessi
   if (session.status === "running") chips.push({ label: "Running", tone: "success" })
   if (session.status === "blocked") chips.push({ label: "Waiting for approval", tone: "attention" })
   if (session.status === "archived") chips.push({ label: "Archived", tone: "neutral" })
+  if (session.pinned) chips.push({ label: "Pinned", tone: "neutral" })
 
   if (session.autonomy === "goal") chips.push({ label: "Goal", tone: "neutral" })
   else if (session.autonomy === "yolo") {

@@ -59,6 +59,7 @@ export type SessionInfoView = {
   readonly modelLabel?: string
   readonly updatedAt: number
   readonly archived: boolean
+  readonly pinnedAt?: number
   /** Absent when the connection cannot report active sessions. */
   readonly running?: boolean
 }
@@ -1294,6 +1295,7 @@ export function readSessionInfo(value: unknown, options: { readonly running?: bo
     ...(model === undefined ? {} : { model, modelLabel: modelLabel(model) }),
     updatedAt: typeof time.updated === "number" ? time.updated : 0,
     archived: typeof time.archived === "number",
+    ...(typeof time.pinned === "number" ? { pinnedAt: time.pinned } : {}),
     ...(options.running === undefined ? {} : { running: options.running }),
   }
 }

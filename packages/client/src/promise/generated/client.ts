@@ -30,6 +30,10 @@ import type {
   SessionArchiveOutput,
   SessionUnarchiveInput,
   SessionUnarchiveOutput,
+  SessionPinInput,
+  SessionPinOutput,
+  SessionUnpinInput,
+  SessionUnpinOutput,
   SessionSubagentListInput,
   SessionSubagentListOutput,
   SessionSubagentLaunchInput,
@@ -682,6 +686,28 @@ export function make(options: ClientOptions) {
           {
             method: "DELETE",
             path: `/api/session/${encodeURIComponent(input.sessionID)}/archive`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      pin: (input: SessionPinInput, requestOptions?: RequestOptions) =>
+        request<SessionPinOutput>(
+          {
+            method: "POST",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/pin`,
+            successStatus: 204,
+            declaredStatuses: [404, 400, 401],
+            empty: true,
+          },
+          requestOptions,
+        ),
+      unpin: (input: SessionUnpinInput, requestOptions?: RequestOptions) =>
+        request<SessionUnpinOutput>(
+          {
+            method: "DELETE",
+            path: `/api/session/${encodeURIComponent(input.sessionID)}/pin`,
             successStatus: 204,
             declaredStatuses: [404, 400, 401],
             empty: true,

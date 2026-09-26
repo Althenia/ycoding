@@ -718,6 +718,24 @@ test("projects live archive and unarchive without changing session activity", as
     })
     await wait(() => data.session.get("ses_test")?.time.archived === undefined)
     expect(data.session.get("ses_test")?.time.updated).toBe(updated)
+    emitEvent(events, {
+      id: "evt_pinned",
+      created: 3_000,
+      type: "session.pinned",
+      durable: durable("ses_test", 3, 1),
+      data: { sessionID: "ses_test" },
+    })
+    await wait(() => data.session.get("ses_test")?.time.pinned === 3_000)
+    expect(data.session.get("ses_test")?.time.updated).toBe(updated)
+    emitEvent(events, {
+      id: "evt_unpinned",
+      created: 4_000,
+      type: "session.unpinned",
+      durable: durable("ses_test", 4, 1),
+      data: { sessionID: "ses_test" },
+    })
+    await wait(() => data.session.get("ses_test")?.time.pinned === undefined)
+    expect(data.session.get("ses_test")?.time.updated).toBe(updated)
   } finally {
     app.renderer.destroy()
   }

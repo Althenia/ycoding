@@ -696,6 +696,28 @@ export type SessionUnarchived = {
   data: { sessionID: string }
 }
 
+export type SessionPinned = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.pinned"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string }
+}
+
+export type SessionUnpinned = {
+  id: string
+  created: number
+  metadata?: { [x: string]: any }
+  sourceEpoch?: string
+  type: "session.unpinned"
+  durable: { aggregateID: string; seq: number; version: 1 }
+  location?: LocationRef
+  data: { sessionID: string }
+}
+
 export type SessionForked = {
   id: string
   created: number
@@ -2525,7 +2547,7 @@ export type SessionInfo = {
   permissionCeiling?: PermissionV2Ruleset
   cost: MoneyUSD
   tokens: TokenUsageInfo
-  time: { created: number; updated: number; archived?: number }
+  time: { created: number; updated: number; archived?: number; pinned?: number }
   title: string
   location: LocationRef
   subpath?: string
@@ -2842,6 +2864,26 @@ export type SessionLogItem =
       sourceEpoch: string
       type: "session.unarchived"
       durable: { aggregateID: string; seq: number; version: 2 }
+      location?: LocationRef
+      data: { sessionID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.pinned"
+      durable: { aggregateID: string; seq: number; version: 1 }
+      location?: LocationRef
+      data: { sessionID: string }
+    }
+  | {
+      id: string
+      created: number
+      metadata?: { [x: string]: any }
+      sourceEpoch: string
+      type: "session.unpinned"
+      durable: { aggregateID: string; seq: number; version: 1 }
       location?: LocationRef
       data: { sessionID: string }
     }
@@ -3388,6 +3430,8 @@ export type V2Event =
   | SessionDeleted
   | SessionArchived
   | SessionUnarchived
+  | SessionPinned
+  | SessionUnpinned
   | SessionForked
   | SessionInputPromoted
   | SessionInputAdmitted
@@ -3957,6 +4001,14 @@ export type SessionArchiveOutput = void
 export type SessionUnarchiveInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
 
 export type SessionUnarchiveOutput = void
+
+export type SessionPinInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionPinOutput = void
+
+export type SessionUnpinInput = { readonly sessionID: { readonly sessionID: string }["sessionID"] }
+
+export type SessionUnpinOutput = void
 
 export type SessionSubagentListInput = {
   readonly parentID: { readonly parentID: string }["parentID"]
