@@ -18,7 +18,7 @@ const StatusOperation = Schema.Struct({ operation: Schema.Literal("status"), mod
 const TabsOperation = Schema.Struct({ operation: Schema.Literal("tabs"), mode: Mode })
 const { sessionID: _observeSessionID, callID: _observeCallID, ...ObserveFields } = Browser.Schema.ObserveInput.fields
 const { sessionID: _actionSessionID, callID: _actionCallID, ...ActionFields } = Browser.Schema.ActionInput.fields
-const ActionPayload = Schema.Union([
+const ActionObject = Schema.Union([
   Browser.Schema.Navigate,
   Browser.Schema.Click,
   Browser.Schema.Type,
@@ -26,6 +26,10 @@ const ActionPayload = Schema.Union([
   Browser.Schema.Capture,
   Browser.Schema.Group,
   Schema.Struct({ ...Browser.Schema.Ungroup.fields, groupID: integer(Browser.Schema.Ungroup.fields.groupID) }),
+])
+const ActionPayload = Schema.Union([
+  ActionObject,
+  Schema.String.pipe(Schema.decodeTo(Schema.UnknownFromJsonString), Schema.decodeTo(ActionObject)),
 ])
 const ObserveOperation = Schema.Struct({
   operation: Schema.Literal("observe"),

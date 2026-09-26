@@ -550,7 +550,7 @@ describe("BrowserTool", () => {
     }),
   )
 
-  it.effect("accepts integer-valued numeric strings for every browser action fence and payload integer", () =>
+  it.effect("accepts integer-valued numeric strings and a JSON-encoded action payload", () =>
     Effect.gen(function* () {
       sequence.length = 0
       guardrailRequests.length = 0
@@ -604,6 +604,26 @@ describe("BrowserTool", () => {
         },
       })
       expect(ungroup).toMatchObject({ type: "text", value: expect.stringContaining('"callID":"numeric-browser-group-id"') })
+
+      const encoded = yield* executeTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "json-browser-action",
+          name: "browser",
+          input: {
+            operation: "action",
+            tabID: profileTab.id,
+            generation: "1",
+            documentGeneration: "1",
+            observationRevision: "1",
+            action: JSON.stringify({ type: "scroll", deltaY: "120" }),
+          },
+        },
+      })
+      expect(encoded).toMatchObject({ type: "text", value: expect.stringContaining('"callID":"json-browser-action"') })
+      expect(sequence).toContain("action:json-browser-action")
 
       const opened = yield* executeTool(registry, {
         sessionID,
