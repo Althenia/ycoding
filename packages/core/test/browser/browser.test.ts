@@ -202,6 +202,32 @@ describe("paired Chrome browser service", () => {
         generation: connected.generation, callID: "paused-observe" }).pipe(Effect.exit))).toBe(true)
     }))
   })
+  test("reports scripted input the extension used for a hidden tab", async () => {
+    await run(Effect.gen(function* () {
+      const browser = yield* Browser.Service
+      const outbox = yield* Queue.unbounded<BrowserProtocol.ServerMessage>()
+      const connected = yield* Effect.promise(() => attached(browser, outbox))
+      const tabID = Browser.TabID.make("btab_hidden_profile")
+      yield* connected.attachment.receive({ type: "shared", mode: "profile", tabID,
+        title: "Hidden", url: "https://example.test/hidden", documentGeneration: 1, active: false })
+      const observing = yield* browser.observe({ sessionID, tabID, generation: connected.generation,
+        callID: "hidden-observe" }).pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* connected.attachment.receive({ type: "observation", tabID, callID: "hidden-observe",
+        generation: connected.generation, documentGeneration: 1, revision: 1, title: "Hidden",
+        url: "https://example.test/hidden", elements: [{ ref: "b1", role: "button", name: "Go" }], truncated: false })
+      yield* Fiber.join(observing)
+      const acting = yield* browser.action({ sessionID, tabID, generation: connected.generation,
+        documentGeneration: 1, observationRevision: 1, callID: "hidden-click",
+        action: { type: "click", ref: "b1" } }).pipe(Effect.forkScoped)
+      yield* Queue.take(outbox)
+      yield* connected.attachment.receive({ type: "result", tabID, callID: "hidden-click",
+        generation: connected.generation, documentGeneration: 1, observationRevision: 1,
+        status: "completed", title: "Hidden", url: "https://example.test/hidden", input: "scripted" })
+      expect(yield* Fiber.join(acting)).toMatchObject({ status: "completed", input: "scripted" })
+    }))
+  })
+
   test("accepts profile tabs only after explicit extension grant and removes them on revocation", async () => {
     await run(Effect.gen(function* () {
       const browser = yield* Browser.Service

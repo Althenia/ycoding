@@ -24,6 +24,7 @@ test("pairs a private Chrome extension for owned and automatically listed existi
   const scope = await Effect.runPromise(Scope.make())
   let redirectLoads = 0
   const submissions: string[] = []
+  const ownedClicks: string[] = []
   const crossOrigin = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -40,6 +41,10 @@ test("pairs a private Chrome extension for owned and automatically listed existi
         redirectLoads++
         return Response.redirect(`http://127.0.0.1:${crossOrigin.port}/forbidden`)
       }
+      if (url.pathname === "/owned-clicked") {
+        ownedClicks.push(url.searchParams.get("visibility") ?? "")
+        return new Response("recorded")
+      }
       if (url.pathname === "/submitted") {
         submissions.push(url.searchParams.get("value") ?? "")
         return new Response("recorded")
@@ -52,7 +57,7 @@ test("pairs a private Chrome extension for owned and automatically listed existi
           },
         )
       return new Response(
-        "<!doctype html><title>Private fixture</title><button aria-label='Fixture button'>OK</button>",
+        "<!doctype html><title>Private fixture</title><button aria-label='Fixture button' onclick=\"fetch('/owned-clicked?visibility='+document.visibilityState)\">OK</button>",
         {
           headers: { "content-type": "text/html" },
         },
@@ -355,6 +360,28 @@ test("pairs a private Chrome extension for owned and automatically listed existi
       await observedHTTP.json(),
     ).data
     expect(observed.elements).toContainEqual(expect.objectContaining({ role: "button", name: "Fixture button" }))
+    const fixtureButton = observed.elements.find((element) => element.name === "Fixture button")
+    if (!fixtureButton) throw new Error("Private owned button was not observed")
+    const ownedClick = await request(`/api/session/${owner}/browser/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tabID: tab.id,
+        generation: tab.generation,
+        documentGeneration: observed.documentGeneration,
+        observationRevision: observed.revision,
+        callID: "background-owned-click",
+        action: { type: "click", ref: fixtureButton.ref },
+      }),
+    })
+    expect(ownedClick.status, await ownedClick.clone().text()).toBe(200)
+    expect(Schema.decodeUnknownSync(Schema.Struct({ data: Browser.ActionResult }))(await ownedClick.json()).data).toMatchObject({
+      status: "completed",
+      input: "scripted",
+    })
+    await eventually(async () => (ownedClicks.length === 1 ? true : undefined), "background owned click")
+    expect(ownedClicks).toEqual(["hidden"])
+    expect(await activeTabIDs(cdp, workerSession)).toEqual(activeBefore)
     const unsafe = await request(`/api/session/${owner}/browser/action`, {
       method: "POST",
       headers: { "content-type": "application/json" },

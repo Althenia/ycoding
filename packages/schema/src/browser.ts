@@ -188,6 +188,7 @@ export const ActionResult = Schema.Struct({
   message: Schema.String.check(Schema.isMaxLength(1024)).pipe(optional),
   capture: CaptureOutput.pipe(optional),
   groupID: NonNegativeInt.pipe(optional),
+  input: Schema.Literals(["trusted", "scripted"]).pipe(optional),
 }).annotate({ identifier: "Browser.ActionResult" })
 export interface ActionResult extends Schema.Schema.Type<typeof ActionResult> {}
 

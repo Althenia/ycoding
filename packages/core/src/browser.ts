@@ -911,6 +911,7 @@ export const layer = (options: Options = {}) =>
             message: message.message,
             capture: message.capture,
             groupID: message.groupID,
+            input: message.input,
           }
           remember(current, pending.fingerprint, result, `${pending.sessionID}\0${pending.callID}`)
           Deferred.doneUnsafe(pending.deferred, Effect.succeed(result))

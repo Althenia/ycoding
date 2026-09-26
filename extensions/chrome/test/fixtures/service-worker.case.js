@@ -887,6 +887,67 @@ describe("Chrome bridge service worker", () => {
     }
   }, 1500)
 
+  test("hidden tabs click and scroll with page scripts because Chrome drops CDP input there", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Background" }]
+    harness.cursorDOM.setVisibility("hidden")
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "k".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-hidden-input" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-hidden-input")
+      await socket.receive(action("hidden-click", shared.tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "hidden-click")).toMatchObject({
+        type: "result",
+        status: "completed",
+        input: "scripted",
+      })
+      expect(harness.page.scriptedClicks).toEqual(["node-91"])
+      await socket.receive(action("hidden-scroll", shared.tabID, observation, { type: "scroll", deltaY: 120 }))
+      expect(socket.outgoing.find((item) => item.callID === "hidden-scroll")).toMatchObject({
+        type: "result",
+        status: "completed",
+        input: "scripted",
+      })
+      expect(harness.cursorDOM.scrolls).toEqual([[0, 120]])
+      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(false)
+
+      harness.cursorDOM.setVisibility("visible")
+      await socket.receive(action("visible-click", shared.tabID, observation, { type: "click", ref: "b1" }))
+      expect(socket.outgoing.find((item) => item.callID === "visible-click")).toMatchObject({
+        type: "result",
+        input: "trusted",
+      })
+      expect(harness.commands.some((item) => item.method === "Input.dispatchMouseEvent")).toBe(true)
+    } finally {
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  }, 3000)
+
+  test("an unanswered CDP input command fails as dispatched instead of hanging the action", async () => {
+    harness.reset()
+    harness.page.profileTabs = [{ id: 17, active: false, url: "https://example.test/form", title: "Background" }]
+    harness.page.inputHangs = true
+    try {
+      await popup(harness.runtimeMessages, { type: "pair", serverURL: "http://127.0.0.1:4096", secret: "m".repeat(32) })
+      const socket = harness.FakeWebSocket.instance
+      const shared = socket.outgoing.find((message) => message.type === "shared")
+      await socket.receive({ type: "observe", tabID: shared.tabID, generation: "bridge-1", callID: "observe-hung-input" })
+      const observation = socket.outgoing.find((message) => message.callID === "observe-hung-input")
+      await socket.receive(action("hung-scroll", shared.tabID, observation, { type: "scroll", deltaY: 40 }))
+      expect(socket.outgoing.find((item) => item.callID === "hung-scroll")).toMatchObject({
+        type: "error",
+        dispatched: true,
+      })
+    } finally {
+      harness.page.inputHangs = false
+      if (harness.FakeWebSocket.instance?.readyState === harness.FakeWebSocket.OPEN)
+        await harness.FakeWebSocket.instance.receive({ type: "control", action: "stop" })
+    }
+  }, 4000)
+
   test("cursor CDP hangs cannot hold up browser input", async () => {
     harness.reset()
     harness.page.profileTabs = [{ id: 17, active: true, url: "https://example.test/form", title: "Active" }]
@@ -1251,9 +1312,16 @@ function createHarness() {
           if (method === "Runtime.evaluate" && page.cursorEvaluationFails)
             throw new Error("isolated world unavailable")
           if (method === "Runtime.evaluate" && page.cursorEvaluationHangs) return new Promise(() => {})
+          if (method === "Input.dispatchMouseEvent" && page.inputHangs) return new Promise(() => {})
+          if (method === "DOM.resolveNode") return { object: { objectId: `node-${params.backendNodeId}` } }
+          if (method === "Runtime.callFunctionOn") {
+            if (params.functionDeclaration.includes("click()")) page.scriptedClicks.push(params.objectId)
+            return { result: { type: "undefined" } }
+          }
           if (method === "Runtime.evaluate") {
             let frame = 0
-            return runInNewContext(params.expression, {
+            const value = await runInNewContext(params.expression, {
+              scrollBy: (x, y) => cursorDOM.scrolls.push([x, y]),
               document: cursorDOM.document,
               innerWidth: 100,
               innerHeight: 80,
@@ -1267,6 +1335,7 @@ function createHarness() {
               setTimeout,
               clearTimeout,
             })
+            return { result: { type: typeof value, value } }
           }
           if (method === "Accessibility.getFullAXTree")
             return {
@@ -1313,6 +1382,8 @@ function createHarness() {
       page.typeRedirect = undefined
       page.cursorEvaluationFails = false
       page.cursorEvaluationHangs = false
+      page.inputHangs = false
+      page.scriptedClicks = []
       page.documentRoot = node("#document")
       cursorDOM.reset()
       FakeWebSocket.failConnections = false
@@ -1364,9 +1435,11 @@ function createCursorDOM() {
     },
     querySelectorAll: () => hosts.filter((host) => host.dataset.ycodingAgentCursor !== undefined),
   }
+  const scrolls = []
   return {
     document,
     moves,
+    scrolls,
     frameRequests: 0,
     suppressFrames: false,
     hosts: () => hosts.filter((host) => host.dataset.ycodingAgentCursor !== undefined),
@@ -1374,6 +1447,7 @@ function createCursorDOM() {
     reset() {
       hosts.length = 0
       moves.length = 0
+      scrolls.length = 0
       this.frameRequests = 0
       this.suppressFrames = false
       document.visibilityState = "visible"

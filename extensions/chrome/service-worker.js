@@ -19,6 +19,7 @@ const MAX_CAPTURE_INSPECTION_NODES = 10_000
 const CURSOR_WORLD = "ycoding-agent-cursor"
 const CURSOR_ANIMATION_TIMEOUT_MS = 500
 const CURSOR_COMMAND_TIMEOUT_MS = 600
+const INPUT_COMMAND_TIMEOUT_MS = 2000
 const CURSOR_SCRIPT = `async ({x,y,click,remove}) => {
   const hosts = [...document.querySelectorAll('[data-ycoding-agent-cursor]')]
   const previous = hosts.at(-1)
@@ -780,6 +781,7 @@ async function observe(message) {
 
 async function act(message) {
   let dispatched = false
+  let input
   try {
     const tab = requireTab(message)
     if (requestedPause) return paused(message, tab)
@@ -791,22 +793,10 @@ async function act(message) {
     await attachProfile(tab)
     tab.allowedOrigins = new Set(message.allowedOrigins)
     if (message.action.type === "navigate") await navigate(tab, message.action.url, () => (dispatched = true))
-    if (message.action.type === "click") await click(tab, message.action.ref, () => (dispatched = true))
+    if (message.action.type === "click") input = await click(tab, message.action.ref, () => (dispatched = true))
     if (message.action.type === "type")
       await typeText(tab, message.action.ref, message.action.text, () => (dispatched = true))
-    if (message.action.type === "scroll") {
-      const { layoutViewport } = await command(tab.chromeTabID, "Page.getLayoutMetrics")
-      const x = (layoutViewport?.clientWidth ?? 0) / 2
-      const y = (layoutViewport?.clientHeight ?? 0) / 2
-      await moveCursor(tab, x, y)
-      await command(tab.chromeTabID, "Input.dispatchMouseEvent", {
-        type: "mouseWheel",
-        x,
-        y,
-        deltaX: 0,
-        deltaY: message.action.deltaY,
-      })
-    }
+    if (message.action.type === "scroll") input = await scroll(tab, message.action.deltaY, () => (dispatched = true))
     const captured = message.action.type === "capture" ? await capture(tab) : undefined
     await isActive(tab)
     const info = await tabInfo(tab)
@@ -831,6 +821,7 @@ async function act(message) {
       title: info.title ?? "",
       url: tab.url,
       capture: captured,
+      input,
     })
   } catch (error) {
     fail(message, safeError(error), dispatched)
@@ -891,21 +882,82 @@ async function click(tab, ref, markDispatched) {
   if (tabs.get(tab.id) !== tab || tab.documentGeneration !== documentGeneration)
     throw new Error("The shared tab observation is stale")
   await moveCursor(tab, x, y, true)
+  if (await pageHidden(tab)) {
+    const { object } = await command(tab.chromeTabID, "DOM.resolveNode", {
+      backendNodeId,
+      executionContextId: await isolatedWorld(tab),
+    })
+    markDispatched()
+    await command(tab.chromeTabID, "Runtime.callFunctionOn", {
+      objectId: object.objectId,
+      functionDeclaration: "function () { this.click() }",
+    })
+    return "scripted"
+  }
   markDispatched()
-  await command(tab.chromeTabID, "Input.dispatchMouseEvent", {
-    type: "mousePressed",
-    x,
-    y,
-    button: "left",
-    clickCount: 1,
+  for (const type of ["mousePressed", "mouseReleased"])
+    await inputCommand(tab, { type, x, y, button: "left", clickCount: 1 })
+  return "trusted"
+}
+
+async function scroll(tab, deltaY, markDispatched) {
+  const { layoutViewport } = await command(tab.chromeTabID, "Page.getLayoutMetrics")
+  const x = (layoutViewport?.clientWidth ?? 0) / 2
+  const y = (layoutViewport?.clientHeight ?? 0) / 2
+  await moveCursor(tab, x, y)
+  const hidden = await pageHidden(tab)
+  markDispatched()
+  if (hidden) {
+    await command(tab.chromeTabID, "Runtime.evaluate", {
+      expression: `scrollBy(0, ${Number(deltaY)})`,
+      contextId: await isolatedWorld(tab),
+    })
+    return "scripted"
+  }
+  await inputCommand(tab, { type: "mouseWheel", x, y, deltaX: 0, deltaY })
+  return "trusted"
+}
+
+async function isolatedWorld(tab) {
+  const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
+  const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
+    frameId: frameTree.frame.id,
+    worldName: CURSOR_WORLD,
   })
-  await command(tab.chromeTabID, "Input.dispatchMouseEvent", {
-    type: "mouseReleased",
-    x,
-    y,
-    button: "left",
-    clickCount: 1,
-  })
+  return executionContextId
+}
+
+async function pageHidden(tab) {
+  let timeout
+  const hidden = await Promise.race([
+    (async () => {
+      const { result } = await command(tab.chromeTabID, "Runtime.evaluate", {
+        expression: "document.visibilityState",
+        contextId: await isolatedWorld(tab),
+        returnByValue: true,
+      })
+      return result?.value === "hidden"
+    })().catch(() => false),
+    new Promise((resolve) => {
+      timeout = setTimeout(() => resolve(false), CURSOR_COMMAND_TIMEOUT_MS)
+    }),
+  ])
+  clearTimeout(timeout)
+  return hidden
+}
+
+async function inputCommand(tab, params) {
+  let timeout
+  try {
+    await Promise.race([
+      command(tab.chromeTabID, "Input.dispatchMouseEvent", params),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Chrome did not acknowledge browser input")), INPUT_COMMAND_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 async function typeText(tab, ref, text, markDispatched) {
@@ -934,14 +986,9 @@ async function moveCursor(tab, x, y, click = false) {
   await Promise.race([
     (async () => {
       try {
-        const { frameTree } = await command(tab.chromeTabID, "Page.getFrameTree")
-        const { executionContextId } = await command(tab.chromeTabID, "Page.createIsolatedWorld", {
-          frameId: frameTree.frame.id,
-          worldName: CURSOR_WORLD,
-        })
         await command(tab.chromeTabID, "Runtime.evaluate", {
           expression: `(${CURSOR_SCRIPT})(${JSON.stringify({ x, y, click })})`,
-          contextId: executionContextId,
+          contextId: await isolatedWorld(tab),
           awaitPromise: true,
           returnByValue: true,
         })
