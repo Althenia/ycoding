@@ -27,7 +27,7 @@ const managed = (mime: string, name: string, digest = "a".repeat(64), bytes = 4)
   })
 
 describe("toLLMMessages", () => {
-  test("omits empty assistant turns", () => {
+  test("omits empty and whitespace-only assistant content without trimming meaningful text or signed reasoning", () => {
     const assistant = (value: string, content: SessionMessage.Assistant["content"]) =>
       SessionMessage.Assistant.make({
         id: id(value),
@@ -41,8 +41,10 @@ describe("toLLMMessages", () => {
       [
         assistant("empty", []),
         assistant("empty-text", [SessionMessage.AssistantText.make({ type: "text", text: "" })]),
+        assistant("blank-text", [SessionMessage.AssistantText.make({ type: "text", text: " \n\t" })]),
         assistant("empty-reasoning", [SessionMessage.AssistantReasoning.make({ type: "reasoning", text: "" })]),
-        assistant("text", [SessionMessage.AssistantText.make({ type: "text", text: "Partial" })]),
+        assistant("blank-reasoning", [SessionMessage.AssistantReasoning.make({ type: "reasoning", text: " \n\t" })]),
+        assistant("text", [SessionMessage.AssistantText.make({ type: "text", text: " Partial\n" })]),
         assistant("reasoning", [
           SessionMessage.AssistantReasoning.make({
             type: "reasoning",
@@ -55,6 +57,7 @@ describe("toLLMMessages", () => {
     )
 
     expect(messages.map((message) => message.id)).toEqual([id("text"), id("reasoning")])
+    expect(messages[0]?.content).toMatchObject([{ type: "text", text: " Partial\n" }])
   })
 
   test("replays empty Anthropic reasoning in durable order before tool calls", () => {

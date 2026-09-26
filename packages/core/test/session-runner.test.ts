@@ -18,6 +18,8 @@ import * as AnthropicMessages from "@ycoding-ai/ai/protocols/anthropic-messages"
 import * as OpenAIChat from "@ycoding-ai/ai/protocols/openai-chat"
 import * as OpenAIResponses from "@ycoding-ai/ai/protocols/openai-responses"
 import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
+import { RequestExecutor } from "@ycoding-ai/ai/route"
+import { HttpClientResponse } from "effect/unstable/http"
 import { Catalog } from "@ycoding-ai/core/catalog"
 import { Database } from "@ycoding-ai/core/database/database"
 import { makeLocationNode } from "@ycoding-ai/core/effect/app-node"
@@ -97,7 +99,7 @@ import { McpInstructions } from "@ycoding-ai/core/mcp/instructions"
 import { ModelV2 } from "@ycoding-ai/core/model"
 import { Location } from "@ycoding-ai/core/location"
 import { ProviderV2 } from "@ycoding-ai/core/provider"
-import { Cause, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
+import { Cause, Clock, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { and, asc, eq, lte } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -111,6 +113,7 @@ let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
 let responseStream: Stream.Stream<LLMEvent, TestStreamError> | undefined
 let responseStreams: Stream.Stream<LLMEvent, TestStreamError>[] | undefined
+let nativeResponses: string[] | undefined
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
 let streamFailure: LLMError | undefined
@@ -125,6 +128,17 @@ const client = Layer.succeed(
     prepare: () => Effect.die("unused"),
     stream: ((request: LLMRequest) => {
       requests.push(request)
+      if (nativeResponses) return LLMClient.stream(request).pipe(Stream.provide(
+        LLMClient.layer.pipe(Layer.provide(Layer.succeed(RequestExecutor.Service, {
+          execute: (request) => Effect.sync(() => {
+            const body = nativeResponses?.shift()
+            if (body === undefined) throw new Error("Unexpected provider request")
+            return HttpClientResponse.fromWeb(request, new Response(body, {
+              headers: { "content-type": "text/event-stream" },
+            }))
+          }),
+        }))),
+      ))
       const observed = <E>(stream: Stream.Stream<LLMEvent, E>) =>
         Stream.unwrap(
           Effect.gen(function* () {
@@ -844,6 +858,7 @@ const setup = Effect.gen(function* () {
   streamFailure = undefined
   responseStream = undefined
   responseStreams = undefined
+  nativeResponses = undefined
   streamGate = undefined
   streamStarted = undefined
   toolExecutionGate = undefined
@@ -6309,6 +6324,211 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("retries a recognized provider error event before observable output", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Recover the server error")
+      responses = [
+        [LLMEvent.providerError({ message: "server_error: Please retry the request" })],
+        reply.text("Recovered", "event-recovery"),
+      ]
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      while (requests.length < 1) yield* Effect.yieldNow
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.join(run)
+
+      expect(requests).toHaveLength(2)
+      expect(requests[1]?.id).toBe(requests[0]?.id)
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        finish: "stop",
+        content: [{ type: "text", text: "Recovered" }],
+      })
+      expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.failed.1")).toHaveLength(0)
+    }),
+  )
+
+  for (const kind of ["read", "internal", "event"] as const) {
+    it.effect(`continues from durable tool results after a post-output ${kind} failure`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        currentModel = kind === "read" ? anthropicCacheModel : storedOpenAIResponsesModel
+        efficiencyConfig = new ConfigEfficiency.Info({ openai_responses_continuation: "on" })
+        yield* admit(session, "Finish the interrupted response")
+        const failure =
+          kind === "read"
+            ? streamReadFailure()
+            : new LLMError({
+                module: "openai-responses",
+                method: "stream",
+                reason: classifyProviderFailure({ message: "server_error: Please retry the request" }),
+              })
+        responseStreams = [
+          Stream.fromIterable(
+            reply.tool("completed-before-failure", "echo", { text: "run once" }).filter(
+              (event) => !LLMEvent.is.stepFinish(event) && !LLMEvent.is.finish(event),
+            ),
+          ).pipe(
+            Stream.concat(
+              kind === "event"
+                ? Stream.make(LLMEvent.providerError({ message: failure.reason.message }))
+                : Stream.fail(failure),
+            ),
+          ),
+          Stream.fromIterable(reply.text("Recovered answer", "after-provider-failure")),
+        ]
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(2)
+        expect(requests[1]?.id).not.toBe(requests[0]?.id)
+        expect(requests[1]?.providerOptions?.openai).not.toHaveProperty("previousResponseId")
+        expect(userTexts(requests[1])).toEqual(["Finish the interrupted response"])
+        expect(requests[1]?.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "tool",
+              content: expect.arrayContaining([
+                expect.objectContaining({
+                  type: "tool-result",
+                  id: "completed-before-failure",
+                  result: expect.objectContaining({ type: "text", value: "run once" }),
+                }),
+              ]),
+            }),
+          ]),
+        )
+        expect(executions).toEqual(["run once"])
+        const assistants = (yield* session.context(sessionID)).filter((message) => message.type === "assistant")
+        expect(assistants).toMatchObject([
+          { finish: "error", error: { type: kind === "read" ? "provider.transport" : "provider.internal" } },
+          { finish: "stop", content: [{ type: "text", text: "Recovered answer" }] },
+        ])
+        const providerRequests = yield* SessionProviderRequest.Service
+        expect(yield* providerRequests.summary(sessionID)).toMatchObject({ logical: 2, physical: 2, helpers: 0 })
+        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.retry.scheduled.1")
+      }),
+    )
+  }
+
+  it.effect("stops repeated post-output internal failures without a third logical request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Recover once")
+      const failure = new LLMError({
+        module: "openai-responses",
+        method: "stream",
+        reason: classifyProviderFailure({ message: "server_error: Please retry the request" }),
+      })
+      responseStreams = ["first", "recovery"].map((id) =>
+        Stream.fromIterable([
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.reasoningStart({ id }),
+          LLMEvent.reasoningDelta({ id, text: "Thinking" }),
+        ]).pipe(Stream.concat(Stream.fail(failure))),
+      )
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(2)
+      const eventTypes = yield* recordedEventTypes(sessionID)
+      expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(2)
+      expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(2)
+    }),
+  )
+
+  for (const outcome of ["resume", "interrupt", "retry-interrupt"] as const) {
+    it.effect(`honors logical provider recovery backoff with ${outcome}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        const runner = yield* SessionRunner.Service
+        const clock = yield* Clock.Clock
+        const sleeping = yield* Deferred.make<void>()
+        const retrySleeping = yield* Deferred.make<void>()
+        yield* admit(session, "Respect provider backoff")
+        responseStreams = [
+          ...(outcome === "retry-interrupt" ? [Stream.fail(providerUnavailable())] : []),
+          Stream.fromIterable([
+            LLMEvent.stepStart({ index: 0 }),
+            LLMEvent.reasoningStart({ id: "before-backoff" }),
+            LLMEvent.reasoningDelta({ id: "before-backoff", text: "Thinking" }),
+          ]).pipe(
+            Stream.concat(
+              Stream.fail(new LLMError({
+                module: "test",
+                method: "stream",
+                reason: classifyProviderFailure({ message: "server_error: Retry later", retryAfterMs: 5000 }),
+              })),
+            ),
+          ),
+          Stream.fromIterable(reply.text("Recovered", "after-backoff")),
+        ]
+
+        const run = yield* runner.drain({ sessionID, force: true }).pipe(
+          Effect.provideService(Clock.Clock, {
+            currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe(),
+            currentTimeMillis: clock.currentTimeMillis,
+            currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe(),
+            currentTimeNanos: clock.currentTimeNanos,
+            sleep: (duration) =>
+              Duration.toMillis(duration) === 5000
+                ? Deferred.succeed(sleeping, undefined).pipe(Effect.andThen(clock.sleep(duration)))
+                : Deferred.succeed(retrySleeping, undefined).pipe(Effect.andThen(clock.sleep(duration))),
+          }),
+          Effect.forkChild,
+        )
+        if (outcome === "retry-interrupt") {
+          yield* Deferred.await(retrySleeping)
+          yield* TestClock.adjust("2 seconds")
+        }
+        const boundary = yield* Effect.raceFirst(
+          Deferred.await(sleeping).pipe(Effect.as("sleeping")),
+          Fiber.join(run).pipe(Effect.as("completed")),
+        )
+        expect(boundary).toBe("sleeping")
+        if (outcome !== "resume") {
+          yield* Fiber.interrupt(run)
+          const exit = yield* Fiber.await(run)
+          expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+          expect(requests).toHaveLength(outcome === "retry-interrupt" ? 2 : 1)
+          const eventTypes = yield* recordedEventTypes(sessionID)
+          expect(eventTypes.filter((type) => type === "session.step.started.1")).toHaveLength(1)
+          expect(eventTypes.filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+          return
+        }
+        yield* TestClock.adjust("4999 millis")
+        expect(requests).toHaveLength(1)
+        yield* TestClock.adjust("1 millis")
+        yield* Fiber.join(run)
+        expect(requests).toHaveLength(2)
+        expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({ finish: "stop" })
+      }),
+    )
+  }
+
+  it.effect("does not recover a post-output internal failure beyond the retry-after ceiling", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      yield* admit(session, "Respect the retry ceiling")
+      const failure = new LLMError({
+        module: "test",
+        method: "stream",
+        reason: classifyProviderFailure({ message: "server_error: Retry later", retryAfterMs: 120_001 }),
+      })
+      responseStream = Stream.fromIterable([
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.reasoningStart({ id: "before-long-backoff" }),
+        LLMEvent.reasoningDelta({ id: "before-long-backoff", text: "Thinking" }),
+      ]).pipe(Stream.concat(Stream.fail(failure)))
+
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(1)
+      expect(requireAssistant(yield* session.context(sessionID))).toMatchObject({
+        finish: "error",
+        error: { type: "provider.internal" },
+      })
+    }),
+  )
+
   it.effect("does not retry eligible failures after observable output", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -7046,6 +7266,78 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("excludes whitespace-only output from the terminal recovery provider request", () =>
+    Effect.gen(function* () {
+      const session = yield* setup
+      currentModel = anthropicCacheModel
+      yield* admit(session, "Answer after blank output")
+      responses = [reply.text(" \n\t", "blank-response"), reply.text("Recovered answer", "after-blank-response")]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const prepared = yield* LLMClient.prepare<AnthropicMessages.AnthropicMessagesBody>(requests[1])
+      expect(prepared.body.messages.some((message) => message.role === "assistant")).toBe(false)
+      expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
+        finish: "stop",
+        content: [{ type: "text", text: "Recovered answer" }],
+      })
+    }),
+  )
+
+  for (const recovery of [false, true]) {
+    it.effect(`persists native completion-only answer text without false silence${recovery ? " during recovery" : ""}`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        currentModel = recovery
+          ? yield* SessionRunnerModel.fromCatalogModel(ModelV2.Info.make({
+              id: ModelV2.ID.make("deepseek/deepseek-v4.1-flash"),
+              modelID: ModelV2.ID.make("deepseek/deepseek-v4.1-flash"),
+              providerID: ProviderV2.ID.make("openrouter"),
+              name: "Reasoning model",
+              package: "@ycoding-ai/ai/providers/openrouter",
+              settings: { apiKey: "fixture-key", reasoning: { effort: "high" } },
+              headers: {},
+              body: {},
+              capabilities: { tools: true, input: ["text"], output: ["text"] },
+              variants: [],
+              status: "active",
+              enabled: true,
+              limit: testLimits,
+              cost: [],
+              time: { released: 0 },
+            }))
+          : storedOpenAIResponsesModel
+        yield* admit(session, "Give the final answer")
+        nativeResponses = [
+          ...(recovery ? [[
+            { type: "response.reasoning_text.delta", item_id: "rs_thinking", delta: "Thinking" },
+            { type: "response.completed", response: { id: "resp_silent" } },
+          ]] : []),
+          [{ type: "response.completed", response: {
+            id: "resp_answer",
+            output: [{ type: "message", id: "msg_answer", phase: "final_answer", content: [
+              { type: "output_text", text: "The final answer" },
+            ] }],
+            usage: { input_tokens: 12, output_tokens: 5, output_tokens_details: { reasoning_tokens: 1 } },
+          } }],
+        ].map((events) => events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""))
+
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(recovery ? 2 : 1)
+        expect(requests.at(-1)?.model.route.id).toBe(recovery ? "openrouter-responses" : "openai-responses")
+        expect(requireAssistant((yield* session.context(sessionID)).slice(-1))).toMatchObject({
+          finish: "stop",
+          content: [{ type: "text", text: "The final answer", phase: "final_answer" }],
+          tokens: { input: 12, output: 4, reasoning: 1 },
+        })
+        expect(yield* recordedEventTypes(sessionID)).not.toContain("session.step.failed.1")
+        expect(executions).toEqual([])
+      }),
+    )
+  }
+
   it.effect("recovers terminal silence after a settled local tool continuation", () =>
     Effect.gen(function* () {
       const session = yield* setup
@@ -7093,7 +7385,7 @@ describe("SessionRunnerLLM", () => {
       ]
 
       expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
-        "Terminal response recovery requires non-whitespace assistant text",
+        "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
       )
 
       expect(requests).toHaveLength(2)
@@ -7164,7 +7456,7 @@ describe("SessionRunnerLLM", () => {
           finish: "error",
           error: {
             type: "provider.invalid-output",
-            message: "Terminal response recovery requires non-whitespace assistant text",
+            message: "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
           },
         },
         { finish: "stop", content: [{ type: "text", text: "Steered answer" }] },
@@ -7209,21 +7501,29 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("fails repeated terminal silence without a third response step", () =>
-    Effect.gen(function* () {
-      const session = yield* setup
-      yield* admit(session, "Answer once")
-      responses = [reply.silence(), reply.silence()]
+  for (const content of ["empty", "reasoning-only"] as const) {
+    it.effect(`fails repeated ${content} responses without a third response step`, () =>
+      Effect.gen(function* () {
+        const session = yield* setup
+        yield* admit(session, "Answer once")
+        responses = ["initial", "recovery"].map((id) =>
+          content === "empty" ? reply.silence() : fragmentFixture("reasoning", id, ["Thinking"]).completeEvents,
+        )
 
-      expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
-        "Terminal response recovery requires non-whitespace assistant text",
-      )
+        expect((yield* session.resume(sessionID).pipe(Effect.flip)).message).toBe(
+          "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
+        )
 
-      expect(requests).toHaveLength(2)
-      expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1")).toHaveLength(2)
-      expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.failed.1")).toHaveLength(1)
-    }),
-  )
+        expect(requests).toHaveLength(2)
+        expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.started.1")).toHaveLength(2)
+        expect((yield* recordedEventTypes(sessionID)).filter((type) => type === "session.step.failed.1")).toHaveLength(1)
+        expect((yield* session.context(sessionID)).filter((message) => message.type === "assistant")).toMatchObject([
+          { finish: "stop", content: content === "empty" ? [] : [{ type: "reasoning", text: "Thinking" }] },
+          { finish: "error", content: content === "empty" ? [] : [{ type: "reasoning", text: "Thinking" }] },
+        ])
+      }),
+    )
+  }
 
   it.effect("fails a local tool emitted during terminal response recovery without executing it", () =>
     Effect.gen(function* () {

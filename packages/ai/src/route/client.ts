@@ -22,6 +22,7 @@ import {
   LLMEvent,
   PreparedRequest,
   ProviderID,
+  TransportReason,
   mergeGenerationOptions,
   mergeHttpOptions,
   mergeProviderOptions,
@@ -246,7 +247,16 @@ const requireTerminalEvent = (route: string) => (events: Stream.Stream<LLMEvent,
         Effect.suspend(() =>
           terminal
             ? Effect.void
-            : Effect.fail(ProviderShared.eventError(route, "Provider stream ended without a terminal finish event")),
+            : Effect.fail(
+                new LLMErrorClass({
+                  module: "ProviderShared",
+                  method: "stream",
+                  reason: new TransportReason({
+                    message: "Provider stream ended without a terminal finish event",
+                    kind: "read",
+                  }),
+                }),
+              ),
         ),
       ),
     )

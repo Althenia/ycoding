@@ -9,6 +9,7 @@ import {
   type ProviderErrorEvent,
 } from "@ycoding-ai/ai"
 import { Money } from "@ycoding-ai/schema/money"
+import { classifyProviderFailure } from "@ycoding-ai/ai/provider-error"
 import { SessionError } from "@ycoding-ai/schema/session-error"
 import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Option, Semaphore, Stream } from "effect"
 import { Config } from "../../config"
@@ -18,7 +19,6 @@ import { EventTable } from "../../event/sql"
 import { PermissionV2 } from "../../permission"
 import { QuestionTool } from "../../tool/question"
 import { ToolOutputStore } from "../../tool-output-store"
-import { OpenAICodex } from "../../plugin/provider/openai-codex"
 import { InstructionState } from "../instruction-state"
 import { SessionCompaction } from "../compaction"
 import { SessionCacheDiagnostics } from "../cache-diagnostics"
@@ -64,7 +64,7 @@ type AttemptState = {
   overflowRecovery?: "pending" | "used"
 }
 
-type RecoveryMode = "normal" | "terminal-response" | "transport"
+type RecoveryMode = "normal" | "terminal-response" | "provider"
 type ContextSource = "session-state" | "team-view" | "step-limit"
 type ObservationCandidate = {
   readonly source: ContextSource
@@ -445,6 +445,14 @@ const layer = Layer.effect(
               continuationFailure = event
               return
             }
+            if (LLMEvent.is.providerError(event)) {
+              const failure = new LLMError({
+                module: effectiveModel.route.id,
+                method: "stream",
+                reason: classifyProviderFailure({ message: event.message }),
+              })
+              if (SessionRunnerRetry.isRetryable(failure)) yield* failure
+            }
             yield* publish(event)
             if (LLMEvent.is.stepFinish(event)) {
               const settlement =
@@ -681,14 +689,15 @@ const layer = Layer.effect(
             yield* serialized(publisher.failAssistant(toSessionError(streamSettlementFailure)))
           // Provider error events only arrive from the stream, so the flag is final here.
           const providerFailed = publisher.hasProviderError()
-          const postOutputCodexReadFailure =
-            effectiveModel.route.id === OpenAICodex.routeID &&
+          const postOutputProviderFailure =
             !providerFailed &&
             !streamInterrupted &&
-            llmFailure?.reason._tag === "Transport" &&
-            llmFailure.reason.kind === "read" &&
+            llmFailure !== undefined &&
+            SessionRunnerRetry.isRetryable(llmFailure) &&
+            ((llmFailure.reason._tag === "Transport" && llmFailure.reason.kind === "read") ||
+              llmFailure.reason._tag === "ProviderInternal") &&
             publisher.hasRetryEvidence()
-          const recoverableTransportFailure = recoveryMode === "normal" && postOutputCodexReadFailure
+          const recoverableProviderFailure = recoveryMode === "normal" && postOutputProviderFailure
 
           // Settle every owned tool fiber. FiberSet.join returns on the first failure, so retain
           // the individual fibers and await all exits before publishing the terminal step event.
@@ -780,7 +789,8 @@ const layer = Layer.effect(
             yield* serialized(
               publisher.failAssistant({
                 type: "provider.invalid-output",
-                message: "Terminal response recovery requires non-whitespace assistant text",
+                message:
+                  "The provider returned no answer after text-only recovery. Retry the request or choose another model.",
               }),
             )
           const stepFailure = publisher.stepFailure() ?? carriedStepFailure
@@ -814,16 +824,16 @@ const layer = Layer.effect(
             !needsContinuation &&
             stepFailure?.type === "provider.invalid-output" &&
             (yield* SessionPending.has(db, session.id, "steer"))
-          const promotePendingSteerAfterTransportRecovery =
-            recoveryMode === "transport" &&
-            postOutputCodexReadFailure &&
+          const promotePendingSteerAfterProviderRecovery =
+            recoveryMode === "provider" &&
+            postOutputProviderFailure &&
             (yield* SessionPending.has(db, session.id, "steer"))
           if (overflowLimit) return yield* new StepFailedError({ error: overflowLimit })
           if (streamInterrupted) return yield* Effect.interrupt
           if (
             stream._tag === "Failure" &&
-            !recoverableTransportFailure &&
-            !promotePendingSteerAfterTransportRecovery
+            !recoverableProviderFailure &&
+            !promotePendingSteerAfterProviderRecovery
           )
             return yield* Effect.failCause(stream.cause)
           if (userDeclined) return yield* Effect.interrupt
@@ -834,8 +844,8 @@ const layer = Layer.effect(
             stepFailure &&
             !recoverableTerminalSilence &&
             !promotePendingSteerAfterExhaustedRecovery &&
-            !promotePendingSteerAfterTransportRecovery &&
-            !recoverableTransportFailure
+            !promotePendingSteerAfterProviderRecovery &&
+            !recoverableProviderFailure
           )
             return yield* new StepFailedError({ error: stepFailure })
           return {
@@ -843,10 +853,15 @@ const layer = Layer.effect(
             needsContinuation:
               needsContinuation ||
               promotePendingSteerAfterExhaustedRecovery ||
-              promotePendingSteerAfterTransportRecovery,
+              promotePendingSteerAfterProviderRecovery,
             step: currentStep,
             promoted,
-            transportRecovery: recoverableTransportFailure,
+            providerRecovery: recoverableProviderFailure
+              ? {
+                  delay:
+                    llmFailure.reason._tag === "ProviderInternal" ? Math.max(0, llmFailure.reason.retryAfterMs ?? 0) : 0,
+                }
+              : undefined,
             terminalSilence:
               recoverableTerminalSilence ||
               (stepSettlement !== undefined && !publisher.hasAssistantText() && !needsContinuation),
@@ -931,7 +946,7 @@ const layer = Layer.effect(
             needsContinuation: attempt.needsContinuation,
             step: attempt.step,
             promoted,
-            transportRecovery: attempt.transportRecovery,
+            providerRecovery: attempt.providerRecovery,
             terminalSilence: attempt.terminalSilence,
           }
         if (attempt._tag === "RestartWithoutContinuation") {
@@ -981,13 +996,14 @@ const layer = Layer.effect(
           needsContinuation = result.needsContinuation
           step = result.step + 1
           recoveryMode = "normal"
-          if (result.transportRecovery) {
+          if (result.providerRecovery) {
+            if (result.providerRecovery.delay > 0) yield* Effect.sleep(result.providerRecovery.delay)
             if (yield* SessionPending.has(db, input.sessionID, "steer")) {
               needsContinuation = true
               promotion = "steer"
               continue
             }
-            recoveryMode = "transport"
+            recoveryMode = "provider"
             needsContinuation = true
             promotion = undefined
             continue

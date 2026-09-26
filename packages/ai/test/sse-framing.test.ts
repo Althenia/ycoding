@@ -76,7 +76,8 @@ describe("SSE framing", () => {
         Effect.flip,
       )
       expect(error.reason).toMatchObject({
-        _tag: "InvalidProviderOutput",
+        _tag: "Transport",
+        kind: "read",
         message: "Provider stream ended without a terminal finish event",
       })
     }),

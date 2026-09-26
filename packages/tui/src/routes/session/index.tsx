@@ -486,7 +486,7 @@ export function Session(props: { viewports?: SessionViewportStore } = {}) {
     if (running) return { type: "working" } as const
     const latest = messages().findLast((item) => item.type === "assistant")
     if (latest?.type === "assistant" && latest.error?.type.startsWith("provider."))
-      return { type: "provider-error", message: safeProviderErrorMessage(latest.error.message) } as const
+      return { type: "provider-error", message: safeProviderErrorMessage(latest.error) } as const
     const waiting = data.session.subagent.summary(route.sessionID)?.active ?? 0
     if (waiting) return { type: "waiting", count: waiting } as const
     return { type: "ready" } as const
@@ -2253,7 +2253,7 @@ function AssistantFooter(props: { message: SessionMessageAssistant }) {
       <Show when={providerError()}>
         <box paddingLeft={3} flexDirection="column">
           <text fg={themeV2.text.feedback.error.default}>{Locale.titlecase(props.message.agent)}</text>
-          <text fg={themeV2.text.feedback.error.default}>{safeProviderErrorMessage(props.message.error?.message ?? "")}</text>
+          <text fg={themeV2.text.feedback.error.default}>{safeProviderErrorMessage(props.message.error)}</text>
         </box>
       </Show>
       <AssistantRetry retry={props.message.retry} />
@@ -2840,7 +2840,7 @@ function AssistantRetry(props: { retry: SessionMessageAssistant["retry"] }) {
       {(retry) => (
         <box paddingLeft={3} marginTop={1}>
           <text fg={themeV2.text.subdued}>
-            Retry attempt {retry().attempt} scheduled: {safeProviderErrorMessage(retry().error.message)}
+            Retry attempt {retry().attempt} scheduled: {safeProviderErrorMessage(retry().error)}
           </text>
         </box>
       )}
@@ -3561,8 +3561,29 @@ function safeToolDetailText(value: string) {
   return text
 }
 
-function safeProviderErrorMessage(value: string) {
-  return safeToolDetailText(value) || "Provider request failed."
+function safeProviderErrorMessage(error: SessionMessageAssistant["error"]) {
+  const message = safeToolDetailText(error?.message ?? "")
+  if (message && message !== "Sensitive response detail omitted.") return message
+  switch (error?.type) {
+    case "provider.auth":
+      return "Provider authentication failed. Check the provider connection."
+    case "provider.internal":
+      return "The provider encountered an internal error. Retry the request."
+    case "provider.transport":
+      return "The provider connection was interrupted. Retry the request."
+    case "provider.rate-limit":
+      return "The provider rate limit was reached. Try again later."
+    case "provider.quota":
+      return "The provider quota was exhausted. Check the provider account."
+    case "provider.content-filter":
+      return "The provider blocked the response."
+    case "provider.invalid-request":
+      return "The provider rejected the request. Sensitive details omitted."
+    case "provider.invalid-output":
+      return "The provider returned an incomplete or invalid response. Retry the request."
+    default:
+      return "Provider request failed. Sensitive details omitted."
+  }
 }
 
 function GenericTool(props: ToolProps) {

@@ -1327,8 +1327,9 @@ describe("OpenAI Chat route", () => {
         { type: "tool-input-delta", id: "call_1", name: "lookup", text: ':"weather"}' },
       ])
       expect(events.filter(LLMEvent.is.toolCall)).toEqual([])
-      expect(streamError.reason).toMatchObject({ _tag: "InvalidProviderOutput" })
+      expect(streamError.reason).toMatchObject({ _tag: "Transport", kind: "read" })
       expect(streamError.message).toContain("Provider stream ended without a terminal finish event")
+      expect(error.reason).toMatchObject({ _tag: "Transport", kind: "read" })
       expect(error.message).toContain("Provider stream ended without a terminal finish event")
     }),
   )

@@ -183,9 +183,12 @@ const assistant = (
     return result ? [call, result] : [call]
   })
   const meaningful = content.filter((part) => {
-    if (part.type === "text") return part.text !== ""
+    if (part.type === "text") return part.text.trim().length > 0
     if (part.type !== "reasoning") return true
-    return part.text !== "" || (part.providerMetadata !== undefined && Object.keys(part.providerMetadata).length > 0)
+    return (
+      part.text.trim().length > 0 ||
+      (part.providerMetadata !== undefined && Object.keys(part.providerMetadata).length > 0)
+    )
   })
   const results = message.content
     .flatMap((item, ordinal) => (item.type === "tool" && item.executed !== true ? [{ item, ordinal }] : []))

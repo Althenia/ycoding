@@ -99,8 +99,18 @@ const messages = [
     model: { providerID: "anthropic", id: "claude-opus-5" },
     content: [],
     finish: "error",
-    error: { type: "ProviderError", message: providerPayload },
+    error: { type: "provider.auth", message: providerPayload },
     time: { created: 8, completed: 9 },
+  },
+  {
+    id: "msg_provider_error_internal",
+    type: "assistant",
+    agent: "build",
+    model: { providerID: "anthropic", id: "claude-opus-5" },
+    content: [],
+    finish: "error",
+    error: { type: "provider.internal", message: "server_error: Please retry. Include request ID req_provider_123." },
+    time: { created: 9, completed: 10 },
   },
   {
     id: "msg_provider_error_safe",
@@ -239,7 +249,9 @@ test("renders typed transcript chat rows at the design gutter with safe expandab
     expectSafe(collapsed.join("\n"))
     expect(collapsed.join("\n")).toContain(providerMessage)
     expect(collapsed.join("\n")).toContain(`Retry attempt 2 scheduled: ${retryMessage}`)
-    expect(collapsed.join("\n")).toContain("Sensitive response detail omitted.")
+    expect(collapsed.join("\n")).not.toContain("Sensitive response detail omitted.")
+    expect(collapsed.join("\n")).toContain("Provider authentication failed. Check the provider connection.")
+    expect(collapsed.join("\n")).toContain("The provider encountered an internal error. Retry the request.")
     expect(collapsed.join("\n")).not.toContain("Provider request failed.")
     expect(collapsed.join("\n")).not.toContain("scheduled after a provider request failed")
 

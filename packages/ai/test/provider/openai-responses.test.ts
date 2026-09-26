@@ -1710,6 +1710,102 @@ describe("OpenAI Responses route", () => {
     }),
   )
 
+  for (const boundary of ["text", "part", "item", "response"] as const) {
+    it.effect(`retains final answer text supplied only at the ${boundary} completion boundary`, () =>
+      Effect.gen(function* () {
+        const part = { type: "output_text", text: "Recovered final answer" }
+        const item = { type: "message", id: "msg_final", phase: "final_answer", content: [part] }
+        const response = yield* LLMClient.generate(request).pipe(
+          Effect.provide(fixedResponse(sseEvents(
+            { type: "response.output_item.added", item: { type: "message", id: item.id, phase: item.phase } },
+            ...(boundary === "text" ? [{ type: "response.output_text.done", item_id: item.id, content_index: 0, text: part.text }] : []),
+            ...(boundary === "part" ? [{ type: "response.content_part.done", item_id: item.id, content_index: 0, part }] : []),
+            ...(boundary === "item" ? [{ type: "response.output_item.done", item }] : []),
+            { type: "response.completed", response: {
+              id: "resp_final",
+              ...(boundary === "response" ? { output: [item] } : {}),
+              usage: { input_tokens: 10, output_tokens: 6, output_tokens_details: { reasoning_tokens: 2 } },
+            } },
+          ))),
+        )
+
+        expect(response.text).toBe(part.text)
+        expect(response.message.content).toMatchObject([
+          { type: "text", text: part.text, providerMetadata: { openai: { phase: "final_answer" } } },
+        ])
+        expect(response.usage).toMatchObject({ outputTokens: 6, reasoningTokens: 2 })
+        expect(response.events.filter(LLMEvent.is.textStart)).toHaveLength(1)
+        expect(response.events.filter(LLMEvent.is.textEnd)).toHaveLength(1)
+        expect(response.events.filter(LLMEvent.is.finish)).toHaveLength(1)
+      }),
+    )
+  }
+
+  it.effect("reconciles partial text once across repeated completion snapshots and content parts", () =>
+    Effect.gen(function* () {
+      const first = { type: "output_text", text: "First answer" }
+      const second = { type: "output_text", text: "Second answer" }
+      const item = { type: "message", id: "msg_final", content: [first, second] }
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents(
+          { type: "response.output_text.delta", item_id: item.id, content_index: 0, delta: "First" },
+          { type: "response.output_text.done", item_id: item.id, content_index: 0, text: first.text },
+          { type: "response.content_part.done", item_id: item.id, content_index: 0, part: first },
+          { type: "response.output_text.done", item_id: item.id, content_index: 1, text: second.text },
+          { type: "response.output_item.done", item },
+          { type: "response.completed", response: { id: "resp_final", output: [item] } },
+        ))),
+      )
+
+      expect(response.message.content).toMatchObject([
+        { type: "text", text: first.text },
+        { type: "text", text: second.text },
+      ])
+      expect(response.events.filter(LLMEvent.is.textStart)).toHaveLength(2)
+      expect(response.events.filter(LLMEvent.is.textEnd)).toHaveLength(2)
+      expect(response.events.filter(LLMEvent.is.toolCall)).toEqual([])
+    }),
+  )
+
+  it.effect("rejects final text that contradicts already streamed text without rewriting it", () =>
+    Effect.gen(function* () {
+      const events: LLMEvent[] = []
+      const error = yield* LLMClient.stream(request).pipe(
+        Stream.runForEach((event) => Effect.sync(() => events.push(event))),
+        Effect.provide(fixedResponse(sseEvents(
+          { type: "response.output_text.delta", item_id: "msg_final", delta: "First" },
+          { type: "response.output_text.done", item_id: "msg_final", text: "Different" },
+          { type: "response.completed", response: { id: "resp_final" } },
+        ))),
+        Effect.flip,
+      )
+
+      expect(error.reason).toMatchObject({ _tag: "InvalidProviderOutput" })
+      expect(events.filter(LLMEvent.is.textDelta).map((event) => event.text)).toEqual(["First"])
+      expect(events.filter(LLMEvent.is.finish)).toEqual([])
+    }),
+  )
+
+  it.effect("does not repeat streamed tool calls while reconciling the completed response", () =>
+    Effect.gen(function* () {
+      const call = { type: "function_call", id: "fc_1", call_id: "call_1", name: "lookup", arguments: "{}" }
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(fixedResponse(sseEvents(
+          { type: "response.output_item.done", item: call },
+          { type: "response.completed", response: { id: "resp_final", output: [
+            call,
+            { type: "message", id: "msg_final", content: [{ type: "output_text", text: "Done" }] },
+          ] } },
+        ))),
+      )
+
+      expect(response.text).toBe("Done")
+      expect(response.events.filter(LLMEvent.is.toolCall)).toMatchObject([{ id: "call_1", name: "lookup", input: {} }])
+      expect(response.events.filter(LLMEvent.is.stepFinish)).toHaveLength(1)
+      expect(response.events.filter(LLMEvent.is.finish)).toHaveLength(1)
+    }),
+  )
+
   // OpenAI's documented stream orders output text within one message item; no
   // provider-valid same-kind overlap is evidenced, so done boundaries close it.
   it.effect("closes sequential output messages before starting the next", () =>
